@@ -23,17 +23,17 @@ interface Ship {
 }
 
 interface Employee {
-  id: string;
+  id: number;
   name: string;
-  role: string;
+  team: string | null;
 }
 
 interface ShipEmployee {
   id: string;
   ship_id: string;
-  employee_id: string;
+  employee_id: number;
   role_in_ship: string | null;
-  employees: { name: string; role: string } | null;
+  employees: { name: string; team: string | null } | null;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ export default function NaviosPage() {
     try {
       const { data } = await supabase
         .from("employees")
-        .select("id, name")
+        .select("id, name, team")
         .order("name");
       setEmployees((data as any[]) || []);
     } catch (err) {
@@ -131,7 +131,7 @@ export default function NaviosPage() {
     setCrewLoading(true);
     const { data } = await supabase
       .from("ship_employees")
-      .select("id, ship_id, employee_id, role_in_ship, employees(name, role)")
+      .select("id, ship_id, employee_id, role_in_ship, employees(name, team)")
       .eq("ship_id", shipId);
     setShipCrew((data as unknown as ShipEmployee[]) || []);
     setCrewLoading(false);
@@ -254,11 +254,8 @@ export default function NaviosPage() {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="flex flex-col items-center gap-2">
-          <svg className="animate-spin h-8 w-8 text-primary" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-          <span className="text-sm text-text-light">Carregando navios...</span>
+          <span className="text-4xl animate-bounce">🚢</span>
+          <span className="text-sm text-text-light animate-pulse">Carregando navios...</span>
         </div>
       </div>
     );
@@ -446,7 +443,14 @@ export default function NaviosPage() {
                   {shipCrew.map((c) => (
                     <li key={c.id} className="flex items-center justify-between gap-2 text-sm">
                       <div className="min-w-0">
-                        <p className="font-medium text-text truncate">{c.employees?.name || "—"}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-medium text-text truncate">{c.employees?.name || "—"}</p>
+                          {c.employees?.team && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${c.employees.team === "EQUIPE_1" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>
+                              {c.employees.team === "EQUIPE_1" ? "E1" : "E2"}
+                            </span>
+                          )}
+                        </div>
                         {c.role_in_ship && <p className="text-xs text-text-light">{c.role_in_ship}</p>}
                       </div>
                       {canEdit && (
@@ -472,9 +476,9 @@ export default function NaviosPage() {
                   >
                     <option value="">Adicionar colaborador...</option>
                     {employees
-                      .filter((e) => !shipCrew.some((c) => c.employee_id === e.id))
+                      .filter((e) => !shipCrew.some((c) => String(c.employee_id) === String(e.id)))
                       .map((e) => (
-                        <option key={e.id} value={e.id}>{e.name}</option>
+                        <option key={e.id} value={e.id}>{e.name}{e.team ? ` (${e.team === "EQUIPE_1" ? "E1" : "E2"})` : ""}</option>
                       ))}
                   </select>
                   {crewEmployeeId && (
