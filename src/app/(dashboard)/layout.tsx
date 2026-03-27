@@ -36,11 +36,11 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
         <style jsx>{`
           @keyframes ship-sail {
-            0% { transform: translateX(-30px) rotate(-2deg); }
-            25% { transform: translateX(10px) rotate(2deg); }
-            50% { transform: translateX(50px) rotate(-2deg); }
-            75% { transform: translateX(90px) rotate(2deg); }
-            100% { transform: translateX(-30px) rotate(-2deg); }
+            0% { transform: translateX(90px) rotate(2deg) scaleX(-1); }
+            25% { transform: translateX(50px) rotate(-2deg) scaleX(-1); }
+            50% { transform: translateX(10px) rotate(2deg) scaleX(-1); }
+            75% { transform: translateX(-20px) rotate(-2deg) scaleX(-1); }
+            100% { transform: translateX(90px) rotate(2deg) scaleX(-1); }
           }
           .animate-ship-sail {
             animation: ship-sail 4s ease-in-out infinite;
