@@ -88,7 +88,7 @@ export default function EquipamentosPage() {
     setSaving(false); setShowForm(false); setEditTool(null); loadAll();
   }
 
-  async function handleAction(empName: string, notes: string) {
+  async function handleAction(notes: string) {
     if (!actionTool) return;
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
@@ -101,7 +101,7 @@ export default function EquipamentosPage() {
     else if (action === "MANUTENCAO") newStatus = "MANUTENCAO";
 
     await supabase.from("tool_movements").insert({
-      tool_id: tool.id, employee_name: empName, movement_type: action,
+      tool_id: tool.id, employee_name: actor, movement_type: action,
       movement_date: new Date().toISOString().split("T")[0], notes, created_by: actor,
     } as any);
     await supabase.from("tools").update({ status: newStatus, updated_by: actor } as any).eq("id", tool.id);
@@ -305,7 +305,7 @@ export default function EquipamentosPage() {
         title="Excluir Equipamento" message={`Excluir "${deleteTool?.name}"?`} loading={saving} />
 
       {/* Action Modal */}
-      <ActionModal open={!!actionTool} onClose={() => setActionTool(null)} onConfirm={handleAction}
+      <ActionModal open={!!actionTool} onClose={() => setActionTool(null)} onConfirm={(notes) => handleAction(notes)}
         title={actionTool ? `${MOVEMENT_TYPE_LABELS[actionTool.action]}: ${actionTool.tool.name}` : ""} saving={saving} />
 
       {/* Request Form Modal */}
@@ -346,18 +346,16 @@ function ToolFormModal({ open, onClose, onSave, item, assetType, saving }: {
 }
 
 function ActionModal({ open, onClose, onConfirm, title, saving }: {
-  open: boolean; onClose: () => void; onConfirm: (emp: string, notes: string) => void; title: string; saving: boolean;
+  open: boolean; onClose: () => void; onConfirm: (notes: string) => void; title: string; saving: boolean;
 }) {
-  const [empName, setEmpName] = useState("");
   const [notes, setNotes] = useState("");
 
-  useEffect(() => { setEmpName(""); setNotes(""); }, [open]);
+  useEffect(() => { setNotes(""); }, [open]);
 
   return (
     <Modal open={open} onClose={onClose} title={title}>
-      <form onSubmit={(e) => { e.preventDefault(); onConfirm(empName, notes); }} className="space-y-4">
-        <div><label className="block text-sm font-medium mb-1">Responsável *</label><input type="text" value={empName} onChange={(e) => setEmpName(e.target.value)} required className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
-        <div><label className="block text-sm font-medium mb-1">Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" /></div>
+      <form onSubmit={(e) => { e.preventDefault(); onConfirm(notes); }} className="space-y-4">
+        <div><label className="block text-sm font-medium mb-1">Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Opcional..." className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" /></div>
         <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Registrando..." : "Confirmar"}</Button></div>
       </form>
     </Modal>
