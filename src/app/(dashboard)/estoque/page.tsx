@@ -164,15 +164,25 @@ export default function EstoquePage() {
       render: (i: StockItem) => i.location || "—",
     },
     {
+      key: "default_quantity",
+      label: "Padrão",
+      render: (i: StockItem) => (
+        <span className="text-text-light">{(i as any).default_quantity || "—"}</span>
+      ),
+    },
+    {
       key: "quantity",
       label: "Qtd",
-      render: (i: StockItem) => (
-        <span
-          className={`font-semibold ${i.quantity <= i.min_quantity ? "text-danger" : "text-success"}`}
-        >
-          {i.quantity}
-        </span>
-      ),
+      render: (i: StockItem) => {
+        const def = (i as any).default_quantity || 0;
+        const isLow = def > 0 && i.quantity < def * 0.5;
+        const isEmpty = i.quantity <= 0;
+        return (
+          <span className={`font-semibold ${isEmpty ? "text-danger" : isLow ? "text-amber-500" : "text-success"}`}>
+            {i.quantity}
+          </span>
+        );
+      },
     },
     {
       key: "expiry_date",
@@ -355,6 +365,7 @@ function StockFormModal({
   const [category, setCategory] = useState("SUPRIMENTOS");
   const [location, setLocation] = useState("");
   const [quantity, setQuantity] = useState(0);
+  const [defaultQuantity, setDefaultQuantity] = useState(0);
   const [expiryDate, setExpiryDate] = useState("");
 
   useEffect(() => {
@@ -363,12 +374,14 @@ function StockFormModal({
       setCategory(item.category);
       setLocation(item.location || "");
       setQuantity(item.quantity);
+      setDefaultQuantity((item as any).default_quantity || 0);
       setExpiryDate(item.expiry_date || "");
     } else {
       setName("");
       setCategory("SUPRIMENTOS");
       setLocation("");
       setQuantity(0);
+      setDefaultQuantity(0);
       setExpiryDate("");
     }
   }, [item, open]);
@@ -380,9 +393,10 @@ function StockFormModal({
       category: category as any,
       location: location || null,
       quantity,
+      default_quantity: defaultQuantity,
       expiry_date: expiryDate || null,
       min_quantity: 0,
-    });
+    } as any);
   }
 
   return (
@@ -434,10 +448,23 @@ function StockFormModal({
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-text mb-1">
-              Quantidade
+              Qtd Padrão
+            </label>
+            <input
+              type="number"
+              value={defaultQuantity}
+              onChange={(e) => setDefaultQuantity(Number(e.target.value))}
+              min={0}
+              placeholder="Ex: 10"
+              className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">
+              Qtd Atual
             </label>
             <input
               type="number"
@@ -447,7 +474,6 @@ function StockFormModal({
               className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
             />
           </div>
-
           <div>
             <label className="block text-sm font-medium text-text mb-1">
               Validade

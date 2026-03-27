@@ -5,6 +5,13 @@ import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { formatDateTime, MOVEMENT_TYPE_LABELS, CATEGORY_LABELS } from "@/lib/utils";
 
+interface StockChartItem {
+  name: string;
+  quantity: number;
+  default_quantity: number;
+  category: string;
+}
+
 interface DashboardStats {
   totalStock: number;
   totalEmployees: number;
@@ -38,13 +45,15 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({ totalStock: 0, totalEmployees: 0, totalTools: 0, totalEpis: 0 });
   const [movements, setMovements] = useState<RecentMovement[]>([]);
   const [dollar, setDollar] = useState<DollarQuote | null>(null);
+  const [stockItems, setStockItems] = useState<StockChartItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     try {
-      const [stockRes, employeesRes, toolsRes, episRes] = await Promise.all([
+      const [stockRes, stockFullRes, employeesRes, toolsRes, episRes] = await Promise.all([
         supabase.from("stock_items").select("id", { count: "exact", head: true }),
+        supabase.from("stock_items").select("name, quantity, default_quantity, category"),
         supabase.from("employees").select("id", { count: "exact", head: true }),
         supabase.from("tools").select("id", { count: "exact", head: true }),
         supabase.from("epis").select("id", { count: "exact", head: true }),
@@ -56,6 +65,8 @@ export default function DashboardPage() {
         totalTools: toolsRes.count || 0,
         totalEpis: episRes.count || 0,
       });
+
+      setStockItems((stockFullRes.data || []) as StockChartItem[]);
 
       // Load recent movements from all sources
       const [stockMov, epiMov, toolMov] = await Promise.all([
@@ -177,6 +188,23 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Stock Charts */}
+      {stockItems.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Category Distribution Pie */}
+          <div className="bg-card rounded-xl shadow-sm border border-border p-5">
+            <h2 className="font-semibold text-text mb-4">Estoque por Categoria</h2>
+            <PieChart data={getCategoryData(stockItems)} />
+          </div>
+
+          {/* Stock Level - Items below default */}
+          <div className="bg-card rounded-xl shadow-sm border border-border p-5">
+            <h2 className="font-semibold text-text mb-4">Nível de Estoque</h2>
+            <PieChart data={getStockLevelData(stockItems)} />
+          </div>
+        </div>
+      )}
+
       {/* Recent Movements - only for EXECUTIVO/FINANCEIRO/TECNOLOGIA */}
       {canSeeMovements && (
         <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
@@ -266,4 +294,121 @@ function getGreeting(): string {
   if (hour < 12) return "Bom dia";
   if (hour < 18) return "Boa tarde";
   return "Boa noite";
+}
+
+// --- Pie Chart ---
+interface PieSlice {
+  label: string;
+  value: number;
+  color: string;
+}
+
+function getCategoryData(items: StockChartItem[]): PieSlice[] {
+  const cats: Record<string, number> = {};
+  items.forEach((i) => {
+    const cat = i.category || "OUTROS";
+    cats[cat] = (cats[cat] || 0) + i.quantity;
+  });
+  const colorMap: Record<string, string> = {
+    SUPRIMENTOS: "#8b5cf6",
+    CARNE: "#ef4444",
+    FEIRA: "#22c55e",
+    OUTROS: "#6b7280",
+  };
+  const labelMap: Record<string, string> = {
+    SUPRIMENTOS: "Suprimentos",
+    CARNE: "Carne",
+    FEIRA: "Feira",
+    OUTROS: "Outros",
+  };
+  return Object.entries(cats).map(([k, v]) => ({
+    label: labelMap[k] || k,
+    value: v,
+    color: colorMap[k] || "#6b7280",
+  }));
+}
+
+function getStockLevelData(items: StockChartItem[]): PieSlice[] {
+  let ok = 0;
+  let low = 0;
+  let empty = 0;
+  items.forEach((i) => {
+    const def = i.default_quantity || 0;
+    if (i.quantity <= 0) empty++;
+    else if (def > 0 && i.quantity < def * 0.5) low++;
+    else ok++;
+  });
+  return [
+    { label: "Em Estoque", value: ok, color: "#22c55e" },
+    { label: "Estoque Baixo", value: low, color: "#f59e0b" },
+    { label: "Esgotado", value: empty, color: "#ef4444" },
+  ].filter((s) => s.value > 0);
+}
+
+function PieChart({ data }: { data: PieSlice[] }) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  if (total === 0) {
+    return <p className="text-center text-text-light text-sm py-8">Sem dados</p>;
+  }
+
+  // Build SVG pie chart
+  const size = 160;
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = 60;
+  let startAngle = -90;
+
+  const slices = data.map((slice) => {
+    const pct = slice.value / total;
+    const angle = pct * 360;
+    const endAngle = startAngle + angle;
+
+    const startRad = (startAngle * Math.PI) / 180;
+    const endRad = (endAngle * Math.PI) / 180;
+
+    const x1 = cx + r * Math.cos(startRad);
+    const y1 = cy + r * Math.sin(startRad);
+    const x2 = cx + r * Math.cos(endRad);
+    const y2 = cy + r * Math.sin(endRad);
+
+    const largeArc = angle > 180 ? 1 : 0;
+
+    const pathD = angle >= 359.99
+      ? `M ${cx - r} ${cy} A ${r} ${r} 0 1 1 ${cx + r} ${cy} A ${r} ${r} 0 1 1 ${cx - r} ${cy}`
+      : `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z`;
+
+    startAngle = endAngle;
+
+    return { ...slice, pathD, pct };
+  });
+
+  return (
+    <div className="flex flex-col sm:flex-row items-center gap-4">
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
+        {slices.map((s, i) => (
+          <path key={i} d={s.pathD} fill={s.color} stroke="white" strokeWidth="2" />
+        ))}
+        {/* Center hole for donut effect */}
+        <circle cx={cx} cy={cy} r={30} fill="white" />
+        <text x={cx} y={cy - 4} textAnchor="middle" className="text-xs font-bold fill-gray-700" fontSize="14">
+          {total}
+        </text>
+        <text x={cx} y={cy + 10} textAnchor="middle" className="fill-gray-400" fontSize="9">
+          itens
+        </text>
+      </svg>
+
+      <div className="flex flex-col gap-2">
+        {slices.map((s, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
+            <span className="text-sm text-text">
+              {s.label}: <strong>{s.value}</strong>
+              <span className="text-text-light ml-1">({(s.pct * 100).toFixed(0)}%)</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
