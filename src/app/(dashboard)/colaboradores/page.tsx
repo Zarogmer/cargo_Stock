@@ -156,6 +156,7 @@ export default function ColaboradoresPage() {
     { key: "name", label: "Nome", render: (e: Employee) => <span className="font-medium">{e.name}</span> },
     { key: "team", label: "Equipe", render: (e: Employee) => e.team ? <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${teamColors[e.team] || ""}`}>{teamLabels[e.team]}</span> : <span className="text-text-light text-xs">—</span> },
     { key: "phone", label: "Telefone", hideOnMobile: true, render: (e: Employee) => e.phone || "—" },
+    { key: "family_phone", label: "Tel. Familiar", hideOnMobile: true, render: (e: Employee) => e.family_phone || "—" },
     { key: "email", label: "Email", hideOnMobile: true, render: (e: Employee) => e.email || "—" },
     { key: "actions", label: "", className: "w-20", render: (e: Employee) => (
       <div className="flex gap-1">
