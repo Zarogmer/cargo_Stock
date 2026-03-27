@@ -53,7 +53,7 @@ export default function DashboardPage() {
     try {
       const [stockRes, stockFullRes, employeesRes, toolsRes, episRes] = await Promise.all([
         supabase.from("stock_items").select("id", { count: "exact", head: true }),
-        supabase.from("stock_items").select("name, quantity, default_quantity, category"),
+        supabase.from("stock_items").select("name, quantity, default_quantity, category, team"),
         supabase.from("employees").select("id", { count: "exact", head: true }),
         supabase.from("tools").select("id", { count: "exact", head: true }),
         supabase.from("epis").select("id", { count: "exact", head: true }),
@@ -188,12 +188,25 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Stock Chart - Embarque readiness */}
+      {/* Stock Charts - Embarque readiness per team */}
       {stockItems.length > 0 && (
-        <div className="bg-card rounded-xl shadow-sm border border-border p-5">
-          <h2 className="font-semibold text-text mb-1">Prontidão para Embarque</h2>
-          <p className="text-xs text-text-light mb-4">Baseado na quantidade padrão de cada item</p>
-          <EmbarqueChart items={stockItems} />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="bg-card rounded-xl shadow-sm border border-border p-5">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="w-3 h-3 rounded-full bg-blue-600"></span>
+              <h2 className="font-semibold text-text">Equipe 1</h2>
+            </div>
+            <p className="text-xs text-text-light mb-4">Prontidão para embarque</p>
+            <EmbarqueChart items={stockItems.filter((i) => (i as any).team === "EQUIPE_1")} />
+          </div>
+          <div className="bg-card rounded-xl shadow-sm border border-border p-5">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="w-3 h-3 rounded-full bg-purple-600"></span>
+              <h2 className="font-semibold text-text">Equipe 2</h2>
+            </div>
+            <p className="text-xs text-text-light mb-4">Prontidão para embarque</p>
+            <EmbarqueChart items={stockItems.filter((i) => (i as any).team === "EQUIPE_2")} />
+          </div>
         </div>
       )}
 

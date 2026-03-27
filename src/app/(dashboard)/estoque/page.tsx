@@ -29,6 +29,7 @@ export default function EstoquePage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("TODOS");
+  const [activeTeam, setActiveTeam] = useState<"EQUIPE_1" | "EQUIPE_2">("EQUIPE_1");
   const [editItem, setEditItem] = useState<StockItem | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [showBaixa, setShowBaixa] = useState(false);
@@ -67,7 +68,8 @@ export default function EstoquePage() {
       matchSearch(i.location || "", search);
     const matchesCategory =
       filterCategory === "TODOS" || i.category === filterCategory;
-    return matchesSearch && matchesCategory;
+    const matchesTeam = (i as any).team === activeTeam;
+    return matchesSearch && matchesCategory && matchesTeam;
   });
 
   function getCategoryLabel(cat: string) {
@@ -92,7 +94,7 @@ export default function EstoquePage() {
   async function handleSave(formData: Partial<StockItem>) {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
-    const payload = { ...formData, updated_by: actor } as any;
+    const payload = { ...formData, updated_by: actor, team: activeTeam } as any;
 
     if (editItem) {
       await supabase.from("stock_items").update(payload).eq("id", editItem.id);
@@ -265,7 +267,31 @@ export default function EstoquePage() {
     <div className="space-y-4">
       <h1 className="text-2xl font-bold text-text">Estoque</h1>
 
-      {/* Filter bar */}
+      {/* Team selector */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => setActiveTeam("EQUIPE_1")}
+          className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+            activeTeam === "EQUIPE_1"
+              ? "bg-blue-600 text-white shadow-md"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+          }`}
+        >
+          🚢 Equipe 1
+        </button>
+        <button
+          onClick={() => setActiveTeam("EQUIPE_2")}
+          className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+            activeTeam === "EQUIPE_2"
+              ? "bg-purple-600 text-white shadow-md"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+          }`}
+        >
+          🚢 Equipe 2
+        </button>
+      </div>
+
+      {/* Category filter */}
       <div className="flex flex-wrap gap-2">
         {[{ value: "TODOS", label: "Todos" }, ...STOCK_CATEGORIES].map(
           (cat) => (
