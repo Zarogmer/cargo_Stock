@@ -4,13 +4,20 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase-browser";
 import { useRouter } from "next/navigation";
 
+const EMAIL_DOMAIN = "@cargostock.local";
+
+function usernameToEmail(username: string): string {
+  const u = username.trim().toLowerCase();
+  // If already contains @, use as-is (backwards compat)
+  if (u.includes("@")) return u;
+  return `${u}${EMAIL_DOMAIN}`;
+}
+
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState<"login" | "forgot">("login");
   const router = useRouter();
   const supabase = createClient();
 
@@ -19,17 +26,18 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
 
+    const email = usernameToEmail(username);
+
     const { error: err } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
     if (err) {
-      // Show real error for debugging
       if (err.message.includes("Invalid login")) {
-        setError("Email ou senha inválidos.");
+        setError("Usuário ou senha inválidos.");
       } else if (err.message.includes("Email not confirmed")) {
-        setError("Email não confirmado. Verifique sua caixa de entrada.");
+        setError("Conta não confirmada. Fale com o administrador.");
       } else {
         setError(`Erro: ${err.message}`);
       }
@@ -41,28 +49,10 @@ export default function LoginPage() {
     router.refresh();
   }
 
-  async function handleForgotPassword(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    setSuccess("");
-    setLoading(true);
-
-    const { error: err } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/auth/reset-password`,
-    });
-
-    if (err) {
-      setError(`Erro: ${err.message}`);
-    } else {
-      setSuccess("Email de recuperação enviado! Verifique sua caixa de entrada.");
-    }
-    setLoading(false);
-  }
-
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-dark to-primary p-4">
       <div className="w-full max-w-sm">
-        {/* Logo / Title */}
+        {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-white/20 rounded-2xl mb-4">
             <span className="text-4xl">🚢</span>
@@ -75,58 +65,51 @@ export default function LoginPage() {
 
         {/* Login Form */}
         <form
-          onSubmit={mode === "login" ? handleLogin : handleForgotPassword}
+          onSubmit={handleLogin}
           className="bg-white rounded-2xl shadow-xl p-6 space-y-4"
         >
           <div>
             <label
-              htmlFor="email"
+              htmlFor="username"
               className="block text-sm font-medium text-gray-700 mb-1"
             >
-              Email
+              Usuário
             </label>
             <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              id="username"
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
               required
-              autoComplete="email"
-              placeholder="seu@email.com"
+              autoComplete="username"
+              autoCapitalize="none"
+              placeholder="seu usuário"
               className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition text-sm"
             />
           </div>
 
-          {mode === "login" && (
-            <div>
-              <label
-                htmlFor="password"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Senha
-              </label>
-              <input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoComplete="current-password"
-                placeholder="••••••••"
-                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition text-sm"
-              />
-            </div>
-          )}
+          <div>
+            <label
+              htmlFor="password"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Senha
+            </label>
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              autoComplete="current-password"
+              placeholder="••••••••"
+              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition text-sm"
+            />
+          </div>
 
           {error && (
             <div className="bg-red-50 text-red-600 text-sm p-3 rounded-xl">
               {error}
-            </div>
-          )}
-
-          {success && (
-            <div className="bg-green-50 text-green-600 text-sm p-3 rounded-xl">
-              {success}
             </div>
           )}
 
@@ -156,27 +139,11 @@ export default function LoginPage() {
                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                   />
                 </svg>
-                {mode === "login" ? "Entrando..." : "Enviando..."}
+                Entrando...
               </span>
-            ) : mode === "login" ? (
-              "Entrar"
             ) : (
-              "Enviar email de recuperação"
+              "Entrar"
             )}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setMode(mode === "login" ? "forgot" : "login");
-              setError("");
-              setSuccess("");
-            }}
-            className="w-full text-sm text-primary hover:text-primary-dark transition"
-          >
-            {mode === "login"
-              ? "Esqueci minha senha"
-              : "Voltar para o login"}
           </button>
         </form>
       </div>
