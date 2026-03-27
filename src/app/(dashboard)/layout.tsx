@@ -11,22 +11,41 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-bg">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center">
-            <svg className="w-7 h-7 text-white animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-            </svg>
+      <div className="min-h-screen flex items-center justify-center bg-bg overflow-hidden">
+        <div className="flex flex-col items-center gap-4">
+          {/* Ship sailing animation */}
+          <div className="relative w-48 h-20">
+            {/* Waves */}
+            <div className="absolute bottom-0 left-0 right-0 h-6">
+              <svg viewBox="0 0 200 20" className="w-full h-full text-blue-300/40" preserveAspectRatio="none">
+                <path d="M0,10 Q25,0 50,10 T100,10 T150,10 T200,10 V20 H0 Z" fill="currentColor">
+                  <animate attributeName="d" dur="2s" repeatCount="indefinite"
+                    values="M0,10 Q25,0 50,10 T100,10 T150,10 T200,10 V20 H0 Z;M0,10 Q25,20 50,10 T100,10 T150,10 T200,10 V20 H0 Z;M0,10 Q25,0 50,10 T100,10 T150,10 T200,10 V20 H0 Z" />
+                </path>
+              </svg>
+            </div>
+            {/* Ship emoji moving */}
+            <div className="absolute bottom-4 animate-ship-sail">
+              <span className="text-4xl">🚢</span>
+            </div>
           </div>
-          <p className="text-text-light text-sm font-medium">Cargo Stock</p>
-          <div className="flex items-center gap-2 text-xs text-text-light">
-            <svg className="animate-spin h-4 w-4 text-primary" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-            Carregando...
-          </div>
+
+          <p className="text-primary font-bold text-lg">Cargo Stock</p>
+          <p className="text-text-light text-sm animate-pulse">Carregando...</p>
         </div>
+
+        <style jsx>{`
+          @keyframes ship-sail {
+            0% { transform: translateX(-30px) rotate(-2deg); }
+            25% { transform: translateX(10px) rotate(2deg); }
+            50% { transform: translateX(50px) rotate(-2deg); }
+            75% { transform: translateX(90px) rotate(2deg); }
+            100% { transform: translateX(-30px) rotate(-2deg); }
+          }
+          .animate-ship-sail {
+            animation: ship-sail 4s ease-in-out infinite;
+          }
+        `}</style>
       </div>
     );
   }
@@ -46,9 +65,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           </button>
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 bg-primary rounded-lg flex items-center justify-center">
-              <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-              </svg>
+              <span className="text-sm">🚢</span>
             </div>
             <h1 className="font-bold text-primary text-sm">Cargo Stock</h1>
           </div>
