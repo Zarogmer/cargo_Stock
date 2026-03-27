@@ -25,25 +25,23 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  // Use getUser() to validate session with Supabase auth server
-  // This is more reliable than getSession() which only reads the local JWT
+  // Use getSession() - reads cookies only, no network call (fast on mobile)
   const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    data: { session },
+  } = await supabase.auth.getSession();
 
-  // If no user and not on login/auth page, redirect to login
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith("/login") &&
-    !request.nextUrl.pathname.startsWith("/auth")
-  ) {
+  const isLoginPage = request.nextUrl.pathname.startsWith("/login");
+  const isAuthPage = request.nextUrl.pathname.startsWith("/auth");
+
+  // If no session and not on login/auth page, redirect to login
+  if (!session && !isLoginPage && !isAuthPage) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
-  // If user is logged in and on login page, redirect to dashboard
-  if (user && request.nextUrl.pathname.startsWith("/login")) {
+  // If session exists and on login page, redirect to dashboard
+  if (session && isLoginPage) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);
