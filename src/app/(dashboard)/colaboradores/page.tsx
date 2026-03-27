@@ -150,8 +150,11 @@ export default function ColaboradoresPage() {
   }
 
   // --- COLUMNS ---
+  const teamLabels: Record<string, string> = { EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2" };
+  const teamColors: Record<string, string> = { EQUIPE_1: "bg-blue-100 text-blue-700", EQUIPE_2: "bg-purple-100 text-purple-700" };
   const empColumns = [
     { key: "name", label: "Nome", render: (e: Employee) => <span className="font-medium">{e.name}</span> },
+    { key: "team", label: "Equipe", render: (e: Employee) => e.team ? <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${teamColors[e.team] || ""}`}>{teamLabels[e.team]}</span> : <span className="text-text-light text-xs">—</span> },
     { key: "phone", label: "Telefone", hideOnMobile: true, render: (e: Employee) => e.phone || "—" },
     { key: "email", label: "Email", hideOnMobile: true, render: (e: Employee) => e.email || "—" },
     { key: "actions", label: "", className: "w-20", render: (e: Employee) => (
@@ -263,7 +266,7 @@ export default function ColaboradoresPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-text">Colaboradores / EPI</h1>
+      <h1 className="text-2xl font-bold text-text">Colaboradores</h1>
       <Tabs tabs={tabs} />
 
       {/* Employee Form */}
@@ -297,6 +300,7 @@ function formatPhoneMask(value: string): string {
 
 function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: boolean; onClose: () => void; onSave: (d: Partial<Employee>) => void; item: Employee | null; saving: boolean }) {
   const [name, setName] = useState("");
+  const [team, setTeam] = useState<string>("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [birthDate, setBirthDate] = useState("");
@@ -304,14 +308,24 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
   const [notes, setNotes] = useState("");
 
   useEffect(() => {
-    if (item) { setName(item.name); setPhone(item.phone || ""); setEmail(item.email || ""); setBirthDate(item.birth_date || ""); setFamilyPhone(item.family_phone || ""); setNotes(item.notes || ""); }
-    else { setName(""); setPhone(""); setEmail(""); setBirthDate(""); setFamilyPhone(""); setNotes(""); }
+    if (item) { setName(item.name); setTeam(item.team || ""); setPhone(item.phone || ""); setEmail(item.email || ""); setBirthDate(item.birth_date || ""); setFamilyPhone(item.family_phone || ""); setNotes(item.notes || ""); }
+    else { setName(""); setTeam(""); setPhone(""); setEmail(""); setBirthDate(""); setFamilyPhone(""); setNotes(""); }
   }, [item, open]);
 
   return (
     <Modal open={open} onClose={onClose} title={item ? "Editar Colaborador" : "Novo Colaborador"}>
-      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, phone: phone || null, email: email || null, birth_date: birthDate || null, family_phone: familyPhone || null, notes: notes || null }); }} className="space-y-4">
-        <div><label className="block text-sm font-medium mb-1">Nome *</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} required className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
+      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, team: (team as any) || null, phone: phone || null, email: email || null, birth_date: birthDate || null, family_phone: familyPhone || null, notes: notes || null }); }} className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className="block text-sm font-medium mb-1">Nome *</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} required className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Equipe</label>
+            <select value={team} onChange={(e) => setTeam(e.target.value)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none">
+              <option value="">Sem equipe</option>
+              <option value="EQUIPE_1">Equipe 1</option>
+              <option value="EQUIPE_2">Equipe 2</option>
+            </select>
+          </div>
+        </div>
         <div className="grid grid-cols-2 gap-4">
           <div><label className="block text-sm font-medium mb-1">Telefone</label><input type="text" value={phone} onChange={(e) => setPhone(formatPhoneMask(e.target.value))} placeholder="13 99999-9999" className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
           <div><label className="block text-sm font-medium mb-1">Nascimento</label><input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
