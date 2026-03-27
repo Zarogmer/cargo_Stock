@@ -107,7 +107,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Navios", href: "/navios", icon: "navios", module: "NAVIOS" },
   { label: "Embarque", href: "/embarque", icon: "embarque", module: "EMBARQUE" },
   { label: "Estoque", href: "/estoque", icon: "estoque", module: "ESTOQUE" },
-  { label: "Colaboradores / EPI", href: "/colaboradores", icon: "epi", module: "EPI" },
+  { label: "Colaboradores", href: "/colaboradores", icon: "epi", module: "EPI" },
   { label: "Equipamentos", href: "/equipamentos", icon: "equipamentos", module: "FERRAMENTAS" },
 ];
 
