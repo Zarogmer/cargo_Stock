@@ -340,34 +340,76 @@ function ShipsBarChart({ data }: { data: { month: string; count: number }[] }) {
     "05": "Mai", "06": "Jun", "07": "Jul", "08": "Ago",
     "09": "Set", "10": "Out", "11": "Nov", "12": "Dez",
   };
+  const chartHeight = 200;
+  const avg = data.length > 0 ? data.reduce((s, d) => s + d.count, 0) / data.length : 0;
+  const avgPct = maxCount > 0 ? (avg / maxCount) * 100 : 0;
 
   return (
-    <div className="space-y-3">
-      {data.map((d) => {
-        const [, mm] = d.month.split("-");
-        const label = monthNames[mm] || mm;
-        const pct = maxCount > 0 ? (d.count / maxCount) * 100 : 0;
-        return (
-          <div key={d.month} className="flex items-center gap-3">
-            <span className="text-xs text-text-light w-8 text-right font-medium">{label}</span>
-            <div className="flex-1 bg-gray-100 rounded-full h-7 relative overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-500 flex items-center justify-end pr-2"
-                style={{ width: `${Math.max(pct, d.count > 0 ? 12 : 0)}%` }}
-              >
-                {d.count > 0 && (
-                  <span className="text-xs font-bold text-white">{d.count}</span>
-                )}
-              </div>
-              {d.count === 0 && (
-                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-text-light">0</span>
-              )}
+    <div>
+      {/* Y-axis labels + bars area */}
+      <div className="flex">
+        {/* Y-axis */}
+        <div className="flex flex-col justify-between pr-2 text-right" style={{ height: chartHeight }}>
+          <span className="text-[10px] text-text-light">{maxCount}</span>
+          <span className="text-[10px] text-text-light">{Math.round(maxCount / 2)}</span>
+          <span className="text-[10px] text-text-light">0</span>
+        </div>
+
+        {/* Bars container */}
+        <div className="flex-1 relative border-l border-b border-gray-200" style={{ height: chartHeight }}>
+          {/* Average line */}
+          {avg > 0 && (
+            <div
+              className="absolute w-full border-t-2 border-dashed border-green-400 z-10"
+              style={{ bottom: `${avgPct}%` }}
+            >
+              <span className="absolute right-0 -top-4 text-[10px] text-green-600 font-medium bg-card px-1">
+                Média: {avg.toFixed(1)}
+              </span>
             </div>
+          )}
+
+          {/* Grid lines */}
+          <div className="absolute w-full h-full">
+            <div className="absolute w-full border-t border-gray-100" style={{ top: "25%" }} />
+            <div className="absolute w-full border-t border-gray-100" style={{ top: "50%" }} />
+            <div className="absolute w-full border-t border-gray-100" style={{ top: "75%" }} />
           </div>
-        );
-      })}
-      <div className="text-center text-xs text-text-light mt-2">
-        Total: <strong className="text-text">{data.reduce((s, d) => s + d.count, 0)}</strong> navios
+
+          {/* Bars */}
+          <div className="flex items-end justify-around h-full px-2 gap-1">
+            {data.map((d) => {
+              const pct = maxCount > 0 ? (d.count / maxCount) * 100 : 0;
+              return (
+                <div key={d.month} className="flex-1 flex flex-col items-center justify-end h-full">
+                  {d.count > 0 && (
+                    <span className="text-[10px] font-bold text-blue-600 mb-1">{d.count}</span>
+                  )}
+                  <div
+                    className="w-full max-w-[48px] bg-gradient-to-t from-blue-600 to-blue-400 rounded-t-md transition-all duration-700"
+                    style={{ height: `${Math.max(pct, d.count > 0 ? 4 : 0)}%` }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* X-axis labels */}
+      <div className="flex ml-8">
+        {data.map((d) => {
+          const [, mm] = d.month.split("-");
+          return (
+            <div key={d.month} className="flex-1 text-center">
+              <span className="text-[11px] text-text-light font-medium">{monthNames[mm] || mm}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="text-center text-xs text-text-light mt-3">
+        Total: <strong className="text-text">{data.reduce((s, d) => s + d.count, 0)}</strong> navios nos últimos 6 meses
       </div>
     </div>
   );
