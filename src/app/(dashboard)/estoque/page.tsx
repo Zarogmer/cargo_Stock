@@ -17,10 +17,9 @@ import {
 import type { StockItem } from "@/types/database";
 
 const STOCK_CATEGORIES = [
-  { value: "COMPRAS", label: "Compras" },
+  { value: "SUPRIMENTOS", label: "Suprimentos" },
   { value: "CARNE", label: "Carne" },
   { value: "FEIRA", label: "Feira" },
-  { value: "SUPRIMENTOS", label: "Suprimentos" },
 ];
 
 export default function EstoquePage() {
@@ -353,7 +352,7 @@ function StockFormModal({
   saving: boolean;
 }) {
   const [name, setName] = useState("");
-  const [category, setCategory] = useState("COMPRAS");
+  const [category, setCategory] = useState("SUPRIMENTOS");
   const [location, setLocation] = useState("");
   const [quantity, setQuantity] = useState(0);
   const [expiryDate, setExpiryDate] = useState("");
@@ -367,7 +366,7 @@ function StockFormModal({
       setExpiryDate(item.expiry_date || "");
     } else {
       setName("");
-      setCategory("COMPRAS");
+      setCategory("SUPRIMENTOS");
       setLocation("");
       setQuantity(0);
       setExpiryDate("");

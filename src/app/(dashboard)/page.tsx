@@ -136,6 +136,7 @@ export default function DashboardPage() {
   }
 
   const greeting = getGreeting();
+  const canSeeMovements = ["EXECUTIVO", "FINANCEIRO", "TECNOLOGIA"].includes(profile?.role || "");
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -190,57 +191,59 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Recent Movements */}
-      <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-          <div>
-            <h2 className="font-semibold text-text">Movimentações Recentes</h2>
-            <p className="text-xs text-text-light mt-0.5">Últimas 20 movimentações de estoque, EPI e equipamentos</p>
+      {/* Recent Movements - only for EXECUTIVO/FINANCEIRO/TECNOLOGIA */}
+      {canSeeMovements && (
+        <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
+          <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold text-text">Movimentações Recentes</h2>
+              <p className="text-xs text-text-light mt-0.5">Últimas 20 movimentações de estoque, EPI e equipamentos</p>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50/80 border-b border-border">
+                <tr>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Módulo</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Item</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider hidden sm:table-cell">Tipo</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider hidden md:table-cell">Qtd</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider hidden md:table-cell">Data</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider hidden lg:table-cell">Usuário</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {movements.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-12 text-center text-text-light">
+                      <div className="flex flex-col items-center gap-2">
+                        <span className="text-3xl">📋</span>
+                        <p>Nenhuma movimentação registrada ainda</p>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  movements.map((m) => (
+                    <tr key={m.id} className="hover:bg-gray-50/50 transition">
+                      <td className="px-5 py-3">
+                        <ModuleBadge type={m.type} />
+                      </td>
+                      <td className="px-5 py-3 font-medium text-text">{m.item_name}</td>
+                      <td className="px-5 py-3 hidden sm:table-cell">
+                        <span className="text-text-light">{MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type}</span>
+                      </td>
+                      <td className="px-5 py-3 hidden md:table-cell font-medium">{m.quantity || "—"}</td>
+                      <td className="px-5 py-3 hidden md:table-cell text-text-light text-xs">{formatDateTime(m.created_at)}</td>
+                      <td className="px-5 py-3 hidden lg:table-cell text-text-light text-xs uppercase">{m.created_by}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50/80 border-b border-border">
-              <tr>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Módulo</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Item</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider hidden sm:table-cell">Tipo</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider hidden md:table-cell">Qtd</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider hidden md:table-cell">Data</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider hidden lg:table-cell">Usuário</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {movements.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-5 py-12 text-center text-text-light">
-                    <div className="flex flex-col items-center gap-2">
-                      <span className="text-3xl">📋</span>
-                      <p>Nenhuma movimentação registrada ainda</p>
-                    </div>
-                  </td>
-                </tr>
-              ) : (
-                movements.map((m) => (
-                  <tr key={m.id} className="hover:bg-gray-50/50 transition">
-                    <td className="px-5 py-3">
-                      <ModuleBadge type={m.type} />
-                    </td>
-                    <td className="px-5 py-3 font-medium text-text">{m.item_name}</td>
-                    <td className="px-5 py-3 hidden sm:table-cell">
-                      <span className="text-text-light">{MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type}</span>
-                    </td>
-                    <td className="px-5 py-3 hidden md:table-cell font-medium">{m.quantity || "—"}</td>
-                    <td className="px-5 py-3 hidden md:table-cell text-text-light text-xs">{formatDateTime(m.created_at)}</td>
-                    <td className="px-5 py-3 hidden lg:table-cell text-text-light text-xs uppercase">{m.created_by}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
