@@ -540,13 +540,22 @@ export default function NaviosPage() {
 
               <div>
                 <label className="block text-sm font-medium text-text mb-1">Porto / Local</label>
-                <input
-                  type="text"
-                  value={form.port}
-                  onChange={(e) => setForm({ ...form, port: e.target.value })}
-                  placeholder="Ex: Porto de Santos"
-                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={form.port}
+                    onChange={(e) => setForm({ ...form, port: e.target.value })}
+                    placeholder="Selecione ou digite um porto..."
+                    list="port-options"
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                  />
+                  <datalist id="port-options">
+                    <option value="Santos" />
+                    <option value="Paranaguá" />
+                    <option value="São Francisco do Sul" />
+                  </datalist>
+                </div>
+                <p className="text-[10px] text-text-light mt-1">Selecione um porto ou digite um novo</p>
               </div>
 
               <div>
