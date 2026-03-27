@@ -150,18 +150,10 @@ export default function DashboardPage() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <StatCard label="Itens no Estoque" value={stats.totalStock} color="from-blue-500 to-blue-600"
-          iconSvg={<svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 3c-1.5 0-3 .5-3 2v1H6l-1 14h14L18 6h-3V5c0-1.5-1.5-2-3-2zm-3 3h6M9 9v2m6-2v2" /><circle cx="12" cy="15" r="1.5" fill="currentColor" /></svg>}
-        />
-        <StatCard label="Colaboradores" value={stats.totalEmployees} color="from-emerald-500 to-emerald-600"
-          iconSvg={<svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}><circle cx="12" cy="7" r="3" /><path d="M5.5 21v-1a5 5 0 0110 0v1" /><path strokeLinecap="round" d="M8 3.5c.5-.7 1.2-1 2-1h4c.8 0 1.5.3 2 1" /><path d="M7 7h10M9 4v0M15 4v0" /><rect x="9.5" y="1" width="5" height="3" rx="1" /></svg>}
-        />
-        <StatCard label="Equipamentos" value={stats.totalTools} color="from-amber-500 to-amber-600"
-          iconSvg={<svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" /></svg>}
-        />
-        <StatCard label="EPIs" value={stats.totalEpis} color="from-purple-500 to-purple-600"
-          iconSvg={<svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M4 16v-1a8 8 0 0116 0v1" /><path d="M4 16a2 2 0 002 2h12a2 2 0 002-2" /><path d="M12 4a5 5 0 00-5 5v3h10V9a5 5 0 00-5-5z" /><line x1="12" y1="4" x2="12" y2="2" /></svg>}
-        />
+        <StatCard label="Itens no Estoque" value={stats.totalStock} icon="🛒" color="from-blue-500 to-blue-600" />
+        <StatCard label="Colaboradores" value={stats.totalEmployees} icon="👷" color="from-emerald-500 to-emerald-600" />
+        <StatCard label="Equipamentos" value={stats.totalTools} icon="🔧" color="from-amber-500 to-amber-600" />
+        <StatCard label="EPIs" value={stats.totalEpis} icon="⛑️" color="from-purple-500 to-purple-600" />
 
         {/* Dollar Card */}
         <div className="col-span-2 lg:col-span-1 bg-gradient-to-br from-green-500 to-green-600 rounded-xl p-4 text-white shadow-sm">
@@ -247,13 +239,11 @@ export default function DashboardPage() {
 
 // --- Helper Components ---
 
-function StatCard({ label, value, color, iconSvg }: { label: string; value: number; color: string; iconSvg: React.ReactNode }) {
+function StatCard({ label, value, icon, color }: { label: string; value: number; icon: string; color: string }) {
   return (
     <div className={`bg-gradient-to-br ${color} rounded-xl p-4 text-white shadow-sm`}>
       <div className="flex items-center justify-between mb-2">
-        <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
-          {iconSvg}
-        </div>
+        <span className="text-2xl">{icon}</span>
       </div>
       <p className="text-2xl font-bold">{value}</p>
       <p className="text-white/80 text-xs mt-1">{label}</p>

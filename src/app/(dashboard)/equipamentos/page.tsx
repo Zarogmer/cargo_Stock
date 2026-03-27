@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { hasPermission } from "@/lib/rbac";
@@ -13,13 +13,28 @@ import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatDateTime, matchSearch, TOOL_STATUS_LABELS, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
 import type { Tool, ToolStatus, AssetType, ToolMovementType } from "@/types/database";
 
+interface ToolRequest {
+  id: string;
+  tool_name: string;
+  quantity: number;
+  reason: string;
+  status: "PENDENTE" | "APROVADO" | "RECUSADO";
+  requested_by: string;
+  responded_by: string | null;
+  response_notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export default function EquipamentosPage() {
   const { profile } = useAuth();
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const role = profile?.role || "RH";
 
   const [tools, setTools] = useState<Tool[]>([]);
   const [history, setHistory] = useState<Array<Record<string, unknown>>>([]);
+  const [requests, setRequests] = useState<ToolRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
@@ -29,25 +44,34 @@ export default function EquipamentosPage() {
   const [formAssetType, setFormAssetType] = useState<AssetType>("FERRAMENTA");
   const [deleteTool, setDeleteTool] = useState<Tool | null>(null);
   const [actionTool, setActionTool] = useState<{ tool: Tool; action: ToolMovementType } | null>(null);
+  const [showRequestForm, setShowRequestForm] = useState(false);
 
   const canCreate = hasPermission(role, "FERRAMENTAS", "create");
   const canEdit = hasPermission(role, "FERRAMENTAS", "edit");
   const canDelete = hasPermission(role, "FERRAMENTAS", "delete");
+  const canApproveRequests = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
-    const [toolsRes, movRes] = await Promise.all([
-      supabase.from("tools").select("*").order("name"),
-      supabase.from("tool_movements").select("*, tools(name, asset_type)").order("created_at", { ascending: false }).limit(50),
-    ]);
-    setTools(toolsRes.data || []);
+    try {
+      const [toolsRes, movRes, reqRes] = await Promise.all([
+        supabase.from("tools").select("*").order("name"),
+        supabase.from("tool_movements").select("*, tools(name, asset_type)").order("created_at", { ascending: false }).limit(50),
+        supabase.from("tool_requests").select("*").order("created_at", { ascending: false }),
+      ]);
+      setTools(toolsRes.data || []);
+      setRequests((reqRes.data as ToolRequest[]) || []);
 
-    const hist = (movRes.data || []).map((m: Record<string, unknown>) => {
-      const tool = m.tools as Record<string, unknown> | null;
-      return { ...m, tool_name: tool?.name || "—", asset_type: tool?.asset_type || "—" };
-    });
-    setHistory(hist);
-    setLoading(false);
+      const hist = (movRes.data || []).map((m: Record<string, unknown>) => {
+        const tool = m.tools as Record<string, unknown> | null;
+        return { ...m, tool_name: tool?.name || "—", asset_type: tool?.asset_type || "—" };
+      });
+      setHistory(hist);
+    } catch (err) {
+      console.error("loadAll error:", err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -126,6 +150,32 @@ export default function EquipamentosPage() {
   const ferramentas = tools.filter((t) => t.asset_type === "FERRAMENTA").filter((t) => matchSearch(t.name, search));
   const maquinarios = tools.filter((t) => t.asset_type === "MAQUINARIO").filter((t) => matchSearch(t.name, search));
 
+  async function handleCreateRequest(toolName: string, quantity: number, reason: string) {
+    setSaving(true);
+    await supabase.from("tool_requests").insert({
+      tool_name: toolName,
+      quantity,
+      reason,
+      status: "PENDENTE",
+      requested_by: profile?.full_name || "Sistema",
+    } as any);
+    setSaving(false);
+    setShowRequestForm(false);
+    loadAll();
+  }
+
+  async function handleRespondRequest(reqId: string, status: "APROVADO" | "RECUSADO", notes: string) {
+    await supabase.from("tool_requests").update({
+      status,
+      responded_by: profile?.full_name || "Sistema",
+      response_notes: notes || null,
+      updated_at: new Date().toISOString(),
+    } as any).eq("id", reqId);
+    loadAll();
+  }
+
+  const pendingCount = requests.filter((r) => r.status === "PENDENTE").length;
+
   const tabs = [
     {
       key: "ferramentas", label: "Ferramentas",
@@ -145,6 +195,81 @@ export default function EquipamentosPage() {
           searchPlaceholder="Buscar maquinário..."
           actions={canCreate ? <Button size="sm" onClick={() => { setEditTool(null); setFormAssetType("MAQUINARIO"); setShowForm(true); }}><PlusIcon className="w-4 h-4" />Adicionar</Button> : undefined}
         />
+      ),
+    },
+    {
+      key: "solicitacoes", label: `Solicitações${pendingCount > 0 ? ` (${pendingCount})` : ""}`,
+      content: (
+        <div className="space-y-4">
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => setShowRequestForm(true)}>
+              <PlusIcon className="w-4 h-4" />Nova Solicitação
+            </Button>
+          </div>
+          {requests.length === 0 ? (
+            <div className="text-center py-12 text-text-light">
+              <span className="text-3xl block mb-2">📋</span>
+              Nenhuma solicitação encontrada
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {requests.map((req) => {
+                const statusColors: Record<string, string> = {
+                  PENDENTE: "bg-amber-100 text-amber-700",
+                  APROVADO: "bg-green-100 text-green-700",
+                  RECUSADO: "bg-red-100 text-red-700",
+                };
+                return (
+                  <div key={req.id} className="bg-card border border-border rounded-xl p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-text">{req.tool_name}</span>
+                          <span className="text-xs text-text-light">x{req.quantity}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColors[req.status]}`}>
+                            {req.status === "PENDENTE" ? "Pendente" : req.status === "APROVADO" ? "Aprovado" : "Recusado"}
+                          </span>
+                        </div>
+                        <p className="text-sm text-text-light mt-1">{req.reason}</p>
+                        <div className="flex gap-3 mt-2 text-xs text-text-light">
+                          <span>Solicitado por: <strong>{req.requested_by}</strong></span>
+                          <span>{formatDateTime(req.created_at)}</span>
+                        </div>
+                        {req.responded_by && (
+                          <p className="text-xs text-text-light mt-1">
+                            Resposta de <strong>{req.responded_by}</strong>: {req.response_notes || "—"}
+                          </p>
+                        )}
+                      </div>
+                      {canApproveRequests && req.status === "PENDENTE" && (
+                        <div className="flex gap-1 shrink-0">
+                          <button
+                            onClick={() => {
+                              const notes = prompt("Observação (opcional):");
+                              handleRespondRequest(req.id, "APROVADO", notes || "");
+                            }}
+                            className="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 font-medium transition"
+                          >
+                            Aprovar
+                          </button>
+                          <button
+                            onClick={() => {
+                              const notes = prompt("Motivo da recusa:");
+                              if (notes) handleRespondRequest(req.id, "RECUSADO", notes);
+                            }}
+                            className="px-3 py-1.5 text-xs bg-red-50 text-red-700 rounded-lg hover:bg-red-100 font-medium transition"
+                          >
+                            Recusar
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       ),
     },
     {
@@ -182,6 +307,9 @@ export default function EquipamentosPage() {
       {/* Action Modal */}
       <ActionModal open={!!actionTool} onClose={() => setActionTool(null)} onConfirm={handleAction}
         title={actionTool ? `${MOVEMENT_TYPE_LABELS[actionTool.action]}: ${actionTool.tool.name}` : ""} saving={saving} />
+
+      {/* Request Form Modal */}
+      <RequestFormModal open={showRequestForm} onClose={() => setShowRequestForm(false)} onSave={handleCreateRequest} saving={saving} />
     </div>
   );
 }
@@ -231,6 +359,44 @@ function ActionModal({ open, onClose, onConfirm, title, saving }: {
         <div><label className="block text-sm font-medium mb-1">Responsável *</label><input type="text" value={empName} onChange={(e) => setEmpName(e.target.value)} required className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
         <div><label className="block text-sm font-medium mb-1">Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" /></div>
         <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Registrando..." : "Confirmar"}</Button></div>
+      </form>
+    </Modal>
+  );
+}
+
+function RequestFormModal({ open, onClose, onSave, saving }: {
+  open: boolean; onClose: () => void; onSave: (toolName: string, qty: number, reason: string) => void; saving: boolean;
+}) {
+  const [toolName, setToolName] = useState("");
+  const [quantity, setQuantity] = useState(1);
+  const [reason, setReason] = useState("");
+
+  useEffect(() => { setToolName(""); setQuantity(1); setReason(""); }, [open]);
+
+  return (
+    <Modal open={open} onClose={onClose} title="Nova Solicitação de Equipamento">
+      <form onSubmit={(e) => { e.preventDefault(); onSave(toolName, quantity, reason); }} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">Ferramenta / Equipamento *</label>
+          <input type="text" value={toolName} onChange={(e) => setToolName(e.target.value)} required
+            placeholder="Ex: Furadeira, Chave inglesa..."
+            className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Quantidade</label>
+          <input type="number" value={quantity} onChange={(e) => setQuantity(Number(e.target.value))} min={1}
+            className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Motivo / Justificativa *</label>
+          <textarea value={reason} onChange={(e) => setReason(e.target.value)} required rows={3}
+            placeholder="Para que será utilizado..."
+            className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" />
+        </div>
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={saving}>{saving ? "Enviando..." : "Enviar Solicitação"}</Button>
+        </div>
       </form>
     </Modal>
   );
