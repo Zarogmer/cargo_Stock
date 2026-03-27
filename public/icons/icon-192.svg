@@ -1,5 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
-  <rect width="192" height="192" rx="32" fill="#1e40af"/>
-  <path d="M96 40L48 64v64l48 24 48-24V64L96 40z" fill="none" stroke="white" stroke-width="6" stroke-linejoin="round"/>
-  <path d="M48 64l48 24m0 0l48-24m-48 24v64" fill="none" stroke="white" stroke-width="6" stroke-linejoin="round"/>
+  <rect width="192" height="192" rx="40" fill="#1e40af"/>
+  <!-- Ship hull -->
+  <path d="M32 120 L44 148 L148 148 L160 120 Z" fill="white" opacity="0.95"/>
+  <!-- Ship cabin -->
+  <rect x="60" y="80" width="56" height="40" rx="4" fill="white" opacity="0.9"/>
+  <!-- Bridge/top -->
+  <rect x="72" y="60" width="32" height="24" rx="3" fill="white" opacity="0.85"/>
+  <!-- Smokestack -->
+  <rect x="110" y="52" width="14" height="32" rx="3" fill="white" opacity="0.9"/>
+  <!-- Smoke puffs -->
+  <circle cx="117" cy="46" r="5" fill="white" opacity="0.5"/>
+  <circle cx="122" cy="38" r="4" fill="white" opacity="0.35"/>
+  <circle cx="126" cy="32" r="3" fill="white" opacity="0.2"/>
+  <!-- Windows -->
+  <rect x="68" y="90" width="8" height="8" rx="2" fill="#1e40af"/>
+  <rect x="82" y="90" width="8" height="8" rx="2" fill="#1e40af"/>
+  <rect x="96" y="90" width="8" height="8" rx="2" fill="#1e40af"/>
+  <!-- Water waves -->
+  <path d="M24 152 Q40 144 56 152 Q72 160 88 152 Q104 144 120 152 Q136 160 152 152 Q168 144 176 152" fill="none" stroke="white" stroke-width="3" opacity="0.5"/>
+  <path d="M28 160 Q44 152 60 160 Q76 168 92 160 Q108 152 124 160 Q140 168 156 160 Q172 152 180 160" fill="none" stroke="white" stroke-width="2.5" opacity="0.3"/>
 </svg>

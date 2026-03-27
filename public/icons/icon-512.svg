@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="100" fill="#1e40af"/>
+  <!-- Ship hull -->
+  <path d="M80 320 L112 400 L400 400 L432 320 Z" fill="white" opacity="0.95"/>
+  <!-- Ship cabin -->
+  <rect x="156" y="210" width="152" height="110" rx="10" fill="white" opacity="0.9"/>
+  <!-- Bridge/top -->
+  <rect x="190" y="155" width="88" height="62" rx="8" fill="white" opacity="0.85"/>
+  <!-- Smokestack -->
+  <rect x="296" y="132" width="38" height="88" rx="6" fill="white" opacity="0.9"/>
+  <!-- Smoke puffs -->
+  <circle cx="315" cy="120" r="14" fill="white" opacity="0.5"/>
+  <circle cx="328" cy="100" r="11" fill="white" opacity="0.35"/>
+  <circle cx="338" cy="82" r="8" fill="white" opacity="0.2"/>
+  <!-- Windows -->
+  <rect x="178" y="240" width="22" height="22" rx="5" fill="#1e40af"/>
+  <rect x="214" y="240" width="22" height="22" rx="5" fill="#1e40af"/>
+  <rect x="250" y="240" width="22" height="22" rx="5" fill="#1e40af"/>
+  <rect x="286" y="240" width="22" height="22" rx="5" fill="#1e40af"/>
+  <!-- Water waves -->
+  <path d="M60 410 Q100 390 140 410 Q180 430 220 410 Q260 390 300 410 Q340 430 380 410 Q420 390 460 410" fill="none" stroke="white" stroke-width="8" opacity="0.5"/>
+  <path d="M70 432 Q110 412 150 432 Q190 452 230 432 Q270 412 310 432 Q350 452 390 432 Q430 412 470 432" fill="none" stroke="white" stroke-width="6" opacity="0.3"/>
+</svg>
