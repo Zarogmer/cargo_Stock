@@ -48,7 +48,7 @@ export function NaviosIcon({ className = "w-5 h-5" }: { className?: string }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-        d="M3 17l1.5-6L12 4l7.5 7L21 17M3 17h18M3 17c0 2 1.5 3 3 3s3-1 3-3m12 0c0 2-1.5 3-3 3s-3-1-3-3m-6 0c0 2-1.5 3-3 3" />
+        d="M3 18h1l2-6h12l2 6h1M5 18l-2 2m16-2l2 2M7 12V8a1 1 0 011-1h3V4h2v3h3a1 1 0 011 1v4M12 7v5" />
     </svg>
   );
 }

@@ -8,17 +8,20 @@ import { DataTable } from "@/components/ui/data-table";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import {
   formatDate,
   formatDateTime,
   matchSearch,
-  CATEGORY_LABELS,
 } from "@/lib/utils";
-import type { StockItem, StockCategory } from "@/types/database";
+import type { StockItem } from "@/types/database";
 
-const CATEGORIES: StockCategory[] = ["COMPRAS", "CARNES", "FEIRA", "OUTROS"];
+const STOCK_CATEGORIES = [
+  { value: "COMPRAS", label: "Compras" },
+  { value: "CARNE", label: "Carne" },
+  { value: "FEIRA", label: "Feira" },
+  { value: "SUPRIMENTOS", label: "Suprimentos" },
+];
 
 export default function EstoquePage() {
   const { profile } = useAuth();
@@ -26,6 +29,7 @@ export default function EstoquePage() {
   const [items, setItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [filterCategory, setFilterCategory] = useState("TODOS");
   const [editItem, setEditItem] = useState<StockItem | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [showBaixa, setShowBaixa] = useState(false);
@@ -41,26 +45,49 @@ export default function EstoquePage() {
 
   const loadItems = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from("stock_items")
-      .select("*")
-      .order("updated_at", { ascending: false });
-    setItems(data || []);
-    setLoading(false);
+    try {
+      const { data } = await supabase
+        .from("stock_items")
+        .select("*")
+        .order("updated_at", { ascending: false });
+      setItems(data || []);
+    } catch (err) {
+      console.error("Erro ao carregar estoque:", err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
     loadItems();
   }, [loadItems]);
 
-  function getFilteredItems(category: StockCategory) {
-    return items
-      .filter((i) => i.category === category)
-      .filter(
-        (i) =>
-          matchSearch(i.name, search) ||
-          matchSearch(i.location || "", search)
-      );
+  const filteredItems = items.filter((i) => {
+    const matchesSearch =
+      matchSearch(i.name, search) ||
+      matchSearch(i.location || "", search);
+    const matchesCategory =
+      filterCategory === "TODOS" || i.category === filterCategory;
+    return matchesSearch && matchesCategory;
+  });
+
+  function getCategoryLabel(cat: string) {
+    return STOCK_CATEGORIES.find((c) => c.value === cat)?.label || cat;
+  }
+
+  function getCategoryColor(cat: string) {
+    switch (cat) {
+      case "CARNE":
+      case "CARNES":
+        return "bg-red-100 text-red-700";
+      case "FEIRA":
+        return "bg-green-100 text-green-700";
+      case "SUPRIMENTOS":
+      case "OUTROS":
+        return "bg-purple-100 text-purple-700";
+      default:
+        return "bg-blue-100 text-blue-700";
+    }
   }
 
   async function handleSave(formData: Partial<StockItem>) {
@@ -94,7 +121,6 @@ export default function EstoquePage() {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
 
-    // Create movement
     await supabase.from("stock_movements").insert({
       stock_item_id: baixaItem.id,
       movement_type: "BAIXA",
@@ -104,7 +130,6 @@ export default function EstoquePage() {
       created_by: actor,
     } as any);
 
-    // Update quantity
     await supabase
       .from("stock_items")
       .update({ quantity: baixaItem.quantity - qty, updated_by: actor } as any)
@@ -117,7 +142,22 @@ export default function EstoquePage() {
   }
 
   const columns = [
-    { key: "name", label: "Nome", render: (i: StockItem) => <span className="font-medium">{i.name}</span> },
+    {
+      key: "name",
+      label: "Nome",
+      render: (i: StockItem) => <span className="font-medium">{i.name}</span>,
+    },
+    {
+      key: "category",
+      label: "Categoria",
+      render: (i: StockItem) => (
+        <span
+          className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${getCategoryColor(i.category)}`}
+        >
+          {getCategoryLabel(i.category)}
+        </span>
+      ),
+    },
     {
       key: "location",
       label: "Local",
@@ -128,7 +168,9 @@ export default function EstoquePage() {
       key: "quantity",
       label: "Qtd",
       render: (i: StockItem) => (
-        <span className={`font-semibold ${i.quantity <= i.min_quantity ? "text-danger" : "text-success"}`}>
+        <span
+          className={`font-semibold ${i.quantity <= i.min_quantity ? "text-danger" : "text-success"}`}
+        >
           {i.quantity}
         </span>
       ),
@@ -144,7 +186,9 @@ export default function EstoquePage() {
       label: "Atualizado",
       hideOnMobile: true,
       render: (i: StockItem) => (
-        <span className="text-text-light text-xs">{formatDateTime(i.updated_at)}</span>
+        <span className="text-text-light text-xs">
+          {formatDateTime(i.updated_at)}
+        </span>
       ),
     },
     {
@@ -163,8 +207,18 @@ export default function EstoquePage() {
               className="p-1.5 text-amber-600 hover:bg-amber-50 rounded"
               title="Baixar"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M19 14l-7 7m0 0l-7-7m7 7V3"
+                />
               </svg>
             </button>
           )}
@@ -198,16 +252,35 @@ export default function EstoquePage() {
     },
   ];
 
-  const tabs = CATEGORIES.map((cat) => ({
-    key: cat,
-    label: CATEGORY_LABELS[cat],
-    content: (
+  return (
+    <div className="space-y-4">
+      <h1 className="text-2xl font-bold text-text">Estoque</h1>
+
+      {/* Filter bar */}
+      <div className="flex flex-wrap gap-2">
+        {[{ value: "TODOS", label: "Todos" }, ...STOCK_CATEGORIES].map(
+          (cat) => (
+            <button
+              key={cat.value}
+              onClick={() => setFilterCategory(cat.value)}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${
+                filterCategory === cat.value
+                  ? "bg-primary text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              }`}
+            >
+              {cat.label}
+            </button>
+          )
+        )}
+      </div>
+
       <DataTable
         columns={columns}
-        data={getFilteredItems(cat)}
+        data={filteredItems}
         loading={loading}
         keyExtractor={(i) => i.id}
-        emptyMessage="Nenhum item nesta categoria"
+        emptyMessage="Nenhum item encontrado"
         searchValue={search}
         onSearchChange={setSearch}
         searchPlaceholder="Buscar por nome ou local..."
@@ -226,13 +299,6 @@ export default function EstoquePage() {
           ) : undefined
         }
       />
-    ),
-  }));
-
-  return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-text">Estoque</h1>
-      <Tabs tabs={tabs} />
 
       {/* Form Modal */}
       <StockFormModal
@@ -287,7 +353,7 @@ function StockFormModal({
   saving: boolean;
 }) {
   const [name, setName] = useState("");
-  const [category, setCategory] = useState<StockCategory>("COMPRAS");
+  const [category, setCategory] = useState("COMPRAS");
   const [location, setLocation] = useState("");
   const [quantity, setQuantity] = useState(0);
   const [expiryDate, setExpiryDate] = useState("");
@@ -312,7 +378,7 @@ function StockFormModal({
     e.preventDefault();
     onSave({
       name,
-      category,
+      category: category as any,
       location: location || null,
       quantity,
       expiry_date: expiryDate || null,
@@ -346,12 +412,12 @@ function StockFormModal({
           </label>
           <select
             value={category}
-            onChange={(e) => setCategory(e.target.value as StockCategory)}
+            onChange={(e) => setCategory(e.target.value)}
             className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
           >
-            {CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {CATEGORY_LABELS[c]}
+            {STOCK_CATEGORIES.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
               </option>
             ))}
           </select>

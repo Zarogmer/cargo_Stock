@@ -1,6 +1,6 @@
 export type Role = "GESTOR" | "EXECUTIVO" | "MANUTENCAO" | "FINANCEIRO" | "RH" | "TECNOLOGIA";
 
-export type StockCategory = "COMPRAS" | "CARNES" | "FEIRA" | "OUTROS";
+export type StockCategory = "COMPRAS" | "CARNES" | "FEIRA" | "OUTROS" | "CARNE" | "SUPRIMENTOS";
 
 export type MovementType = "ENTRADA" | "BAIXA" | "AJUSTE";
 
