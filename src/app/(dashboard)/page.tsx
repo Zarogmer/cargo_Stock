@@ -46,6 +46,7 @@ export default function DashboardPage() {
   const [movements, setMovements] = useState<RecentMovement[]>([]);
   const [dollar, setDollar] = useState<DollarQuote | null>(null);
   const [stockItems, setStockItems] = useState<StockChartItem[]>([]);
+  const [shipsByMonth, setShipsByMonth] = useState<{ month: string; count: number }[]>([]);
   const [loading, setLoading] = useState(true);
 
   const loadDashboard = useCallback(async () => {
@@ -67,6 +68,26 @@ export default function DashboardPage() {
       });
 
       setStockItems((stockFullRes.data || []) as StockChartItem[]);
+
+      // Load ships for monthly chart
+      const shipsRes = await supabase.from("ships").select("arrival_date, created_at");
+      const shipsData = shipsRes.data || [];
+      const monthCounts: Record<string, number> = {};
+      const now = new Date();
+      // Last 6 months
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        monthCounts[key] = 0;
+      }
+      shipsData.forEach((s: any) => {
+        const dateStr = s.arrival_date || s.created_at;
+        if (!dateStr) return;
+        const d = new Date(dateStr);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        if (key in monthCounts) monthCounts[key]++;
+      });
+      setShipsByMonth(Object.entries(monthCounts).map(([month, count]) => ({ month, count })));
 
       // Load recent movements from all sources
       const [stockMov, epiMov, toolMov] = await Promise.all([
@@ -210,6 +231,15 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Ships per Month Bar Chart */}
+      {shipsByMonth.length > 0 && (
+        <div className="bg-card rounded-xl shadow-sm border border-border p-5">
+          <h2 className="font-semibold text-text mb-1">Navios por Mês</h2>
+          <p className="text-xs text-text-light mb-4">Últimos 6 meses — baseado na data de chegada</p>
+          <ShipsBarChart data={shipsByMonth} />
+        </div>
+      )}
+
       {/* Recent Movements - only for EXECUTIVO/FINANCEIRO/TECNOLOGIA */}
       {canSeeMovements && (
         <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
@@ -299,6 +329,48 @@ function getGreeting(): string {
   if (hour < 12) return "Bom dia";
   if (hour < 18) return "Boa tarde";
   return "Boa noite";
+}
+
+// --- Ships Bar Chart ---
+
+function ShipsBarChart({ data }: { data: { month: string; count: number }[] }) {
+  const maxCount = Math.max(...data.map((d) => d.count), 1);
+  const monthNames: Record<string, string> = {
+    "01": "Jan", "02": "Fev", "03": "Mar", "04": "Abr",
+    "05": "Mai", "06": "Jun", "07": "Jul", "08": "Ago",
+    "09": "Set", "10": "Out", "11": "Nov", "12": "Dez",
+  };
+
+  return (
+    <div className="space-y-3">
+      {data.map((d) => {
+        const [, mm] = d.month.split("-");
+        const label = monthNames[mm] || mm;
+        const pct = maxCount > 0 ? (d.count / maxCount) * 100 : 0;
+        return (
+          <div key={d.month} className="flex items-center gap-3">
+            <span className="text-xs text-text-light w-8 text-right font-medium">{label}</span>
+            <div className="flex-1 bg-gray-100 rounded-full h-7 relative overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-500 flex items-center justify-end pr-2"
+                style={{ width: `${Math.max(pct, d.count > 0 ? 12 : 0)}%` }}
+              >
+                {d.count > 0 && (
+                  <span className="text-xs font-bold text-white">{d.count}</span>
+                )}
+              </div>
+              {d.count === 0 && (
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-text-light">0</span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+      <div className="text-center text-xs text-text-light mt-2">
+        Total: <strong className="text-text">{data.reduce((s, d) => s + d.count, 0)}</strong> navios
+      </div>
+    </div>
+  );
 }
 
 // --- Embarque Chart ---
