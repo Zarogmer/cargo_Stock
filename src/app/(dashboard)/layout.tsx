@@ -32,7 +32,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen flex bg-bg">
+    <div className="h-screen flex bg-bg overflow-hidden">
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -56,7 +56,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         </header>
 
         {/* Main content */}
-        <main className="flex-1 p-4 md:p-8 overflow-auto animate-fade-in">
+        <main className="flex-1 p-4 md:p-8 overflow-y-auto animate-fade-in">
           {children}
         </main>
       </div>

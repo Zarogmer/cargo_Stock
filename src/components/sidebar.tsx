@@ -45,9 +45,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
       {/* Sidebar */}
       <aside
-        className={`fixed top-0 left-0 h-full w-64 bg-sidebar text-white z-50 transform transition-transform duration-300 ease-in-out
+        className={`fixed top-0 left-0 h-screen w-64 bg-sidebar text-white z-50 transform transition-transform duration-300 ease-in-out
           ${open ? "translate-x-0" : "-translate-x-full"}
-          md:translate-x-0 md:static md:z-auto`}
+          md:translate-x-0 md:sticky md:top-0 md:z-auto md:shrink-0`}
       >
         <div className="flex flex-col h-full">
           {/* Header */}

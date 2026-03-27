@@ -116,12 +116,15 @@ export default function NaviosPage() {
   }, []);
 
   const loadEmployees = useCallback(async () => {
-    const { data } = await supabase
-      .from("employees")
-      .select("id, name, role")
-      .eq("active", true)
-      .order("name");
-    setEmployees(data || []);
+    try {
+      const { data } = await supabase
+        .from("employees")
+        .select("id, name")
+        .order("name");
+      setEmployees((data as any[]) || []);
+    } catch (err) {
+      console.error("loadEmployees error:", err);
+    }
   }, []);
 
   const loadCrew = useCallback(async (shipId: string) => {
