@@ -188,20 +188,12 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Stock Charts */}
+      {/* Stock Chart - Embarque readiness */}
       {stockItems.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Category Distribution Pie */}
-          <div className="bg-card rounded-xl shadow-sm border border-border p-5">
-            <h2 className="font-semibold text-text mb-4">Estoque por Categoria</h2>
-            <PieChart data={getCategoryData(stockItems)} />
-          </div>
-
-          {/* Stock Level - Items below default */}
-          <div className="bg-card rounded-xl shadow-sm border border-border p-5">
-            <h2 className="font-semibold text-text mb-4">Nível de Estoque</h2>
-            <PieChart data={getStockLevelData(stockItems)} />
-          </div>
+        <div className="bg-card rounded-xl shadow-sm border border-border p-5">
+          <h2 className="font-semibold text-text mb-1">Prontidão para Embarque</h2>
+          <p className="text-xs text-text-light mb-4">Baseado na quantidade padrão de cada item</p>
+          <EmbarqueChart items={stockItems} />
         </div>
       )}
 
@@ -296,119 +288,81 @@ function getGreeting(): string {
   return "Boa noite";
 }
 
-// --- Pie Chart ---
-interface PieSlice {
-  label: string;
-  value: number;
-  color: string;
-}
+// --- Embarque Chart ---
 
-function getCategoryData(items: StockChartItem[]): PieSlice[] {
-  const cats: Record<string, number> = {};
-  items.forEach((i) => {
-    const cat = i.category || "OUTROS";
-    cats[cat] = (cats[cat] || 0) + i.quantity;
-  });
-  const colorMap: Record<string, string> = {
-    SUPRIMENTOS: "#8b5cf6",
-    CARNE: "#ef4444",
-    FEIRA: "#22c55e",
-    OUTROS: "#6b7280",
-  };
-  const labelMap: Record<string, string> = {
-    SUPRIMENTOS: "Suprimentos",
-    CARNE: "Carne",
-    FEIRA: "Feira",
-    OUTROS: "Outros",
-  };
-  return Object.entries(cats).map(([k, v]) => ({
-    label: labelMap[k] || k,
-    value: v,
-    color: colorMap[k] || "#6b7280",
-  }));
-}
-
-function getStockLevelData(items: StockChartItem[]): PieSlice[] {
-  let ok = 0;
-  let low = 0;
-  let empty = 0;
-  items.forEach((i) => {
-    const def = i.default_quantity || 0;
-    if (i.quantity <= 0) empty++;
-    else if (def > 0 && i.quantity < def * 0.5) low++;
-    else ok++;
-  });
-  return [
-    { label: "Em Estoque", value: ok, color: "#22c55e" },
-    { label: "Estoque Baixo", value: low, color: "#f59e0b" },
-    { label: "Esgotado", value: empty, color: "#ef4444" },
-  ].filter((s) => s.value > 0);
-}
-
-function PieChart({ data }: { data: PieSlice[] }) {
-  const total = data.reduce((s, d) => s + d.value, 0);
-  if (total === 0) {
-    return <p className="text-center text-text-light text-sm py-8">Sem dados</p>;
+function EmbarqueChart({ items }: { items: StockChartItem[] }) {
+  // Only items with a default_quantity set
+  const withDefault = items.filter((i) => i.default_quantity > 0);
+  if (withDefault.length === 0) {
+    return <p className="text-center text-text-light text-sm py-8">Defina a &quot;Qtd Padrão&quot; nos itens do estoque</p>;
   }
 
-  // Build SVG pie chart
+  const totalDefault = withDefault.reduce((s, i) => s + i.default_quantity, 0);
+  const totalCurrent = withDefault.reduce((s, i) => s + Math.min(i.quantity, i.default_quantity), 0);
+  const totalFalta = totalDefault - totalCurrent;
+  const pct = totalDefault > 0 ? Math.round((totalCurrent / totalDefault) * 100) : 0;
+
+  // Items missing
+  const missing = withDefault
+    .filter((i) => i.quantity < i.default_quantity)
+    .map((i) => ({ name: i.name, falta: i.default_quantity - i.quantity, category: i.category }))
+    .sort((a, b) => b.falta - a.falta);
+
+  // Donut
   const size = 160;
   const cx = size / 2;
   const cy = size / 2;
   const r = 60;
-  let startAngle = -90;
+  const strokeW = 16;
+  const circumference = 2 * Math.PI * r;
+  const filledLen = (pct / 100) * circumference;
 
-  const slices = data.map((slice) => {
-    const pct = slice.value / total;
-    const angle = pct * 360;
-    const endAngle = startAngle + angle;
-
-    const startRad = (startAngle * Math.PI) / 180;
-    const endRad = (endAngle * Math.PI) / 180;
-
-    const x1 = cx + r * Math.cos(startRad);
-    const y1 = cy + r * Math.sin(startRad);
-    const x2 = cx + r * Math.cos(endRad);
-    const y2 = cy + r * Math.sin(endRad);
-
-    const largeArc = angle > 180 ? 1 : 0;
-
-    const pathD = angle >= 359.99
-      ? `M ${cx - r} ${cy} A ${r} ${r} 0 1 1 ${cx + r} ${cy} A ${r} ${r} 0 1 1 ${cx - r} ${cy}`
-      : `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z`;
-
-    startAngle = endAngle;
-
-    return { ...slice, pathD, pct };
-  });
+  const color = pct >= 90 ? "#22c55e" : pct >= 60 ? "#f59e0b" : "#ef4444";
 
   return (
-    <div className="flex flex-col sm:flex-row items-center gap-4">
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
-        {slices.map((s, i) => (
-          <path key={i} d={s.pathD} fill={s.color} stroke="white" strokeWidth="2" />
-        ))}
-        {/* Center hole for donut effect */}
-        <circle cx={cx} cy={cy} r={30} fill="white" />
-        <text x={cx} y={cy - 4} textAnchor="middle" className="text-xs font-bold fill-gray-700" fontSize="14">
-          {total}
-        </text>
-        <text x={cx} y={cy + 10} textAnchor="middle" className="fill-gray-400" fontSize="9">
-          itens
-        </text>
-      </svg>
-
-      <div className="flex flex-col gap-2">
-        {slices.map((s, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
-            <span className="text-sm text-text">
-              {s.label}: <strong>{s.value}</strong>
-              <span className="text-text-light ml-1">({(s.pct * 100).toFixed(0)}%)</span>
-            </span>
-          </div>
-        ))}
+    <div className="flex flex-col lg:flex-row gap-6">
+      {/* Donut */}
+      <div className="flex flex-col items-center gap-2 shrink-0">
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+          <circle cx={cx} cy={cy} r={r} fill="none" stroke="#e5e7eb" strokeWidth={strokeW} />
+          <circle
+            cx={cx} cy={cy} r={r} fill="none"
+            stroke={color} strokeWidth={strokeW}
+            strokeDasharray={`${filledLen} ${circumference - filledLen}`}
+            strokeDashoffset={circumference / 4}
+            strokeLinecap="round"
+            style={{ transition: "stroke-dasharray 0.5s" }}
+          />
+          <text x={cx} y={cy - 6} textAnchor="middle" fontSize="22" fontWeight="bold" fill={color}>{pct}%</text>
+          <text x={cx} y={cy + 12} textAnchor="middle" fontSize="10" fill="#9ca3af">pronto</text>
+        </svg>
+        <div className="text-center text-xs text-text-light">
+          <span className="font-semibold text-text">{totalCurrent}</span> de <span className="font-semibold text-text">{totalDefault}</span> itens
+          {totalFalta > 0 && <span className="text-danger ml-1">(falta {totalFalta})</span>}
+        </div>
       </div>
+
+      {/* Missing items list */}
+      {missing.length > 0 ? (
+        <div className="flex-1 min-w-0">
+          <h3 className="text-sm font-semibold text-text mb-2">Itens em falta para embarque:</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto">
+            {missing.map((m, i) => (
+              <div key={i} className="flex items-center justify-between bg-red-50 rounded-lg px-3 py-1.5">
+                <span className="text-sm text-text truncate">{m.name}</span>
+                <span className="text-xs font-bold text-danger shrink-0 ml-2">-{m.falta}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <span className="text-4xl block mb-2">✅</span>
+            <p className="text-success font-semibold">Estoque completo para embarque!</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
