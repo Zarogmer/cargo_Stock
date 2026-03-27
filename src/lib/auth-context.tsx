@@ -27,7 +27,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const supabaseRef = useRef(createClient());
   const supabase = supabaseRef.current;
 
-  async function fetchProfile(userId: string) {
+  async function fetchProfile(userId: string): Promise<Profile | null> {
     try {
       const { data, error } = await supabase
         .from("profiles")
@@ -50,10 +50,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (initialized.current) return;
     initialized.current = true;
 
-    // Explicit session check first (more reliable than onAuthStateChange INITIAL_SESSION)
+    // Safety timeout: force loading=false after 8 seconds
+    const timeout = setTimeout(() => {
+      setLoading((prev) => {
+        if (prev) {
+          console.warn("Auth loading timed out, forcing load complete");
+          return false;
+        }
+        return prev;
+      });
+    }, 8000);
+
     async function init() {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        // Check if Supabase is configured
+        const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+        if (!url) {
+          console.error("NEXT_PUBLIC_SUPABASE_URL is not configured");
+          setLoading(false);
+          return;
+        }
+
+        const {
+          data: { session },
+          error,
+        } = await supabase.auth.getSession();
+
+        if (error) {
+          console.error("getSession error:", error.message);
+          setLoading(false);
+          return;
+        }
+
         const currentUser = session?.user ?? null;
         setUser(currentUser);
 
@@ -64,6 +92,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (err) {
         console.error("Auth init failed:", err);
       } finally {
+        clearTimeout(timeout);
         setLoading(false);
       }
     }
@@ -80,15 +109,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const currentUser = session?.user ?? null;
       setUser(currentUser);
 
-      if (currentUser && (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")) {
+      if (
+        currentUser &&
+        (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")
+      ) {
         const prof = await fetchProfile(currentUser.id);
         setProfile(prof);
       } else if (!currentUser) {
         setProfile(null);
       }
+
+      setLoading(false);
     });
 
     return () => {
+      clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);
