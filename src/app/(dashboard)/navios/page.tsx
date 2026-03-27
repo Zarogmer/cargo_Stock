@@ -17,6 +17,7 @@ interface Ship {
   departure_date: string | null;
   port: string | null;
   status: ShipStatus;
+  assigned_team: string | null;
   notes: string | null;
   created_at: string;
   created_by: string;
@@ -60,6 +61,7 @@ const EMPTY_FORM = {
   departure_date: "",
   port: "",
   status: "AGENDADO" as ShipStatus,
+  assigned_team: "" as string,
   notes: "",
 };
 
@@ -85,11 +87,8 @@ export default function NaviosPage() {
 
   // Ship detail / crew panel
   const [selectedShip, setSelectedShip] = useState<Ship | null>(null);
-  const [shipCrew, setShipCrew] = useState<ShipEmployee[]>([]);
-  const [crewLoading, setCrewLoading] = useState(false);
-  const [addingCrew, setAddingCrew] = useState(false);
-  const [crewEmployeeId, setCrewEmployeeId] = useState("");
-  const [crewRole, setCrewRole] = useState("");
+  const [shipTeam, setShipTeam] = useState<string | null>(null); // "EQUIPE_1" | "EQUIPE_2" | null
+  const [shipTeamLoading, setShipTeamLoading] = useState(false);
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -127,15 +126,11 @@ export default function NaviosPage() {
     }
   }, []);
 
-  const loadCrew = useCallback(async (shipId: string) => {
-    setCrewLoading(true);
-    const { data } = await supabase
-      .from("ship_employees")
-      .select("id, ship_id, employee_id, role_in_ship, employees(name, team)")
-      .eq("ship_id", shipId);
-    setShipCrew((data as unknown as ShipEmployee[]) || []);
-    setCrewLoading(false);
-  }, []);
+  // Get team members for a ship based on assigned_team
+  const getShipTeamMembers = useCallback((ship: Ship) => {
+    if (!ship.assigned_team) return [];
+    return employees.filter((e) => e.team === ship.assigned_team);
+  }, [employees]);
 
   useEffect(() => {
     loadShips();
@@ -169,6 +164,7 @@ export default function NaviosPage() {
       departure_date: ship.departure_date || "",
       port: ship.port || "",
       status: ship.status,
+      assigned_team: ship.assigned_team || "",
       notes: ship.notes || "",
     });
     setFormError("");
@@ -189,6 +185,7 @@ export default function NaviosPage() {
       departure_date: form.departure_date || null,
       port: form.port.trim() || null,
       status: form.status,
+      assigned_team: form.assigned_team || null,
       notes: form.notes.trim() || null,
       created_by: profile?.full_name || "sistema",
     };
@@ -223,29 +220,18 @@ export default function NaviosPage() {
 
   function openDetail(ship: Ship) {
     setSelectedShip(ship);
-    loadCrew(ship.id);
-    setAddingCrew(false);
-    setCrewEmployeeId("");
-    setCrewRole("");
+    setShipTeam(ship.assigned_team);
   }
 
-  async function handleAddCrew() {
-    if (!crewEmployeeId || !selectedShip) return;
-    setAddingCrew(true);
-    await supabase.from("ship_employees").upsert({
-      ship_id: selectedShip.id,
-      employee_id: crewEmployeeId,
-      role_in_ship: crewRole.trim() || null,
-    });
-    setCrewEmployeeId("");
-    setCrewRole("");
-    setAddingCrew(false);
-    loadCrew(selectedShip.id);
-  }
-
-  async function handleRemoveCrew(crewId: string) {
-    await supabase.from("ship_employees").delete().eq("id", crewId);
-    if (selectedShip) loadCrew(selectedShip.id);
+  async function handleAssignTeam(team: string | null) {
+    if (!selectedShip) return;
+    setShipTeamLoading(true);
+    await supabase.from("ships").update({ assigned_team: team } as any).eq("id", selectedShip.id);
+    setShipTeam(team);
+    setSelectedShip({ ...selectedShip, assigned_team: team });
+    // Refresh ship list
+    loadShips();
+    setShipTeamLoading(false);
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -352,6 +338,13 @@ export default function NaviosPage() {
                           {STATUS_LABELS[ship.status]}
                         </span>
                       </div>
+                      {ship.assigned_team && (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${
+                          ship.assigned_team === "EQUIPE_1" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"
+                        }`}>
+                          {ship.assigned_team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}
+                        </span>
+                      )}
                       {ship.port && (
                         <p className="text-xs text-text-light mt-1 flex items-center gap-1">
                           <span>📍</span> {ship.port}
@@ -431,75 +424,71 @@ export default function NaviosPage() {
 
             <div className="border-t border-border pt-3">
               <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-2">
-                Equipe ({shipCrew.length})
+                Equipe Designada
               </p>
 
-              {crewLoading ? (
-                <p className="text-xs text-text-light">Carregando...</p>
-              ) : shipCrew.length === 0 ? (
-                <p className="text-xs text-text-light italic">Nenhum colaborador atribuído</p>
-              ) : (
-                <ul className="space-y-1.5">
-                  {shipCrew.map((c) => (
-                    <li key={c.id} className="flex items-center justify-between gap-2 text-sm">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <p className="font-medium text-text truncate">{c.employees?.name || "—"}</p>
-                          {c.employees?.team && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${c.employees.team === "EQUIPE_1" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>
-                              {c.employees.team === "EQUIPE_1" ? "E1" : "E2"}
-                            </span>
-                          )}
-                        </div>
-                        {c.role_in_ship && <p className="text-xs text-text-light">{c.role_in_ship}</p>}
-                      </div>
-                      {canEdit && (
-                        <button
-                          onClick={() => handleRemoveCrew(c.id)}
-                          className="text-text-light hover:text-danger transition shrink-0"
-                          title="Remover"
-                        >
-                          <TrashIcon className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </li>
+              {canEdit ? (
+                <div className="flex gap-2 mb-3">
+                  {["EQUIPE_1", "EQUIPE_2"].map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => handleAssignTeam(shipTeam === t ? null : t)}
+                      disabled={shipTeamLoading}
+                      className={`flex-1 py-2 text-xs font-medium rounded-lg transition border ${
+                        shipTeam === t
+                          ? t === "EQUIPE_1"
+                            ? "bg-blue-500 text-white border-blue-500"
+                            : "bg-purple-500 text-white border-purple-500"
+                          : "border-border hover:bg-gray-50 text-text-light"
+                      }`}
+                    >
+                      {t === "EQUIPE_1" ? "⚓ Equipe 1" : "⚓ Equipe 2"}
+                    </button>
                   ))}
-                </ul>
+                </div>
+              ) : (
+                <p className="text-sm font-medium mb-3">
+                  {shipTeam === "EQUIPE_1" ? (
+                    <span className="text-blue-700">⚓ Equipe 1</span>
+                  ) : shipTeam === "EQUIPE_2" ? (
+                    <span className="text-purple-700">⚓ Equipe 2</span>
+                  ) : (
+                    <span className="text-text-light italic">Nenhuma equipe designada</span>
+                  )}
+                </p>
               )}
 
-              {canEdit && employees.length > 0 && (
-                <div className="mt-3 space-y-2">
-                  <select
-                    value={crewEmployeeId}
-                    onChange={(e) => setCrewEmployeeId(e.target.value)}
-                    className="w-full px-2 py-1.5 text-xs border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 bg-white"
-                  >
-                    <option value="">Adicionar colaborador...</option>
-                    {employees
-                      .filter((e) => !shipCrew.some((c) => String(c.employee_id) === String(e.id)))
-                      .map((e) => (
-                        <option key={e.id} value={e.id}>{e.name}{e.team ? ` (${e.team === "EQUIPE_1" ? "E1" : "E2"})` : ""}</option>
-                      ))}
-                  </select>
-                  {crewEmployeeId && (
-                    <>
-                      <input
-                        type="text"
-                        placeholder="Função na operação (opcional)"
-                        value={crewRole}
-                        onChange={(e) => setCrewRole(e.target.value)}
-                        className="w-full px-2 py-1.5 text-xs border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      />
-                      <button
-                        onClick={handleAddCrew}
-                        disabled={addingCrew}
-                        className="w-full py-1.5 bg-primary text-white text-xs rounded-lg hover:bg-primary-dark transition"
-                      >
-                        {addingCrew ? "Adicionando..." : "Adicionar à equipe"}
-                      </button>
-                    </>
-                  )}
-                </div>
+              {/* Show team members */}
+              {shipTeam ? (
+                <>
+                  {(() => {
+                    const members = getShipTeamMembers(selectedShip);
+                    return members.length === 0 ? (
+                      <p className="text-xs text-text-light italic">
+                        Nenhum colaborador cadastrado na {shipTeam === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}.
+                        Defina a equipe dos colaboradores em Colaboradores.
+                      </p>
+                    ) : (
+                      <div>
+                        <p className="text-xs text-text-light mb-2">{members.length} colaborador{members.length > 1 ? "es" : ""}</p>
+                        <ul className="space-y-1.5">
+                          {members.map((m) => (
+                            <li key={m.id} className="flex items-center gap-2 text-sm py-1 px-2 bg-gray-50 rounded-lg">
+                              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${
+                                shipTeam === "EQUIPE_1" ? "bg-blue-500" : "bg-purple-500"
+                              }`}>
+                                {m.name.charAt(0).toUpperCase()}
+                              </div>
+                              <span className="font-medium text-text truncate">{m.name}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })()}
+                </>
+              ) : (
+                <p className="text-xs text-text-light italic">Selecione Equipe 1 ou Equipe 2 para ver os colaboradores.</p>
               )}
             </div>
           </div>
@@ -570,6 +559,19 @@ export default function NaviosPage() {
                   {STATUS_OPTIONS.map((s) => (
                     <option key={s} value={s}>{STATUS_LABELS[s]}</option>
                   ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-text mb-1">Equipe Designada</label>
+                <select
+                  value={form.assigned_team}
+                  onChange={(e) => setForm({ ...form, assigned_team: e.target.value })}
+                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm bg-white"
+                >
+                  <option value="">Sem equipe</option>
+                  <option value="EQUIPE_1">Equipe 1</option>
+                  <option value="EQUIPE_2">Equipe 2</option>
                 </select>
               </div>
 
