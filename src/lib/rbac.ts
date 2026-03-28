@@ -8,7 +8,8 @@ export type Module =
   | "EPI"
   | "FERRAMENTAS"
   | "MAQUINARIO"
-  | "NAVIOS";
+  | "NAVIOS"
+  | "FINANCEIRO_MOD";
 
 // Permission actions
 export type Permission =
@@ -41,6 +42,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
+    FINANCEIRO_MOD: ["view"],
   },
   MANUTENCAO: {
     DASHBOARD: ["view"],
@@ -55,6 +57,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     ESTOQUE: ["view"],
     EPI: ["view"],
     NAVIOS: ["view"],
+    FINANCEIRO_MOD: ["view"],
   },
   RH: {
     DASHBOARD: ["view"],
@@ -69,6 +72,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
+    FINANCEIRO_MOD: ["view"],
   },
 };
 
@@ -109,6 +113,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Estoque", href: "/estoque", icon: "estoque", module: "ESTOQUE" },
   { label: "Colaboradores", href: "/colaboradores", icon: "epi", module: "EPI" },
   { label: "Equipamentos", href: "/equipamentos", icon: "equipamentos", module: "FERRAMENTAS" },
+  { label: "Financeiro", href: "/financeiro", icon: "financeiro", module: "FINANCEIRO_MOD" },
 ];
 
 export function getNavItemsForRole(role: Role): NavItem[] {
