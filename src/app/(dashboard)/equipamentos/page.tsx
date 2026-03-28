@@ -141,19 +141,25 @@ export default function EquipamentosPage() {
       },
       { key: "location", label: "Local", hideOnMobile: true, render: (t: Tool) => t.location || "—" },
       {
-        key: "actions", label: "", className: "w-48",
+        key: "actions", label: "",
         render: (t: Tool) => (
-          <div className="flex gap-1 flex-wrap">
+          <div className="flex items-center gap-1">
             {t.status === "DISPONIVEL" && (
               <>
-                <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "EQUIPE_1" }); }} className="px-2 py-1 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100">E1</button>
-                <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "EQUIPE_2" }); }} className="px-2 py-1 text-xs bg-purple-50 text-purple-700 rounded hover:bg-purple-100">E2</button>
+                <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "EQUIPE_1" }); }} className="px-2 py-1 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100 whitespace-nowrap">E1</button>
+                <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "EQUIPE_2" }); }} className="px-2 py-1 text-xs bg-purple-50 text-purple-700 rounded hover:bg-purple-100 whitespace-nowrap">E2</button>
+                <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "MANUTENCAO" }); }} className="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded hover:bg-amber-100 whitespace-nowrap">Man</button>
               </>
             )}
             {(t.status === "EQUIPE_1" || t.status === "EQUIPE_2") && (
-              <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "DEVOLUCAO" }); }} className="px-2 py-1 text-xs bg-green-50 text-green-700 rounded hover:bg-green-100">Dev</button>
+              <>
+                <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "DEVOLUCAO" }); }} className="px-2 py-1 text-xs bg-green-50 text-green-700 rounded hover:bg-green-100 whitespace-nowrap">Dev</button>
+                <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "MANUTENCAO" }); }} className="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded hover:bg-amber-100 whitespace-nowrap">Man</button>
+              </>
             )}
-            <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "MANUTENCAO" }); }} className="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded hover:bg-amber-100">Man</button>
+            {t.status === "MANUTENCAO" && (
+              <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "DEVOLUCAO" }); }} className="px-2 py-1 text-xs bg-green-50 text-green-700 rounded hover:bg-green-100 whitespace-nowrap">Disponível</button>
+            )}
             {canEdit && <button onClick={(e) => { e.stopPropagation(); setEditTool(t); setFormAssetType(t.asset_type); setShowForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded"><EditIcon /></button>}
             {canDelete && <button onClick={(e) => { e.stopPropagation(); setDeleteTool(t); }} className="p-1.5 text-danger hover:bg-red-50 rounded"><TrashIcon /></button>}
           </div>
