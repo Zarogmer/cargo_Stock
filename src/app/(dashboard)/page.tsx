@@ -176,10 +176,10 @@ export default function DashboardPage() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <StatCard label="Itens no Estoque" value={stats.totalStock} icon="🛒" color="from-blue-500 to-blue-600" />
-        <StatCard label="Colaboradores" value={stats.totalEmployees} icon="👷" color="from-emerald-500 to-emerald-600" />
-        <StatCard label="Equipamentos" value={stats.totalTools} icon="🔧" color="from-amber-500 to-amber-600" />
-        <StatCard label="EPIs" value={stats.totalEpis} icon="⛑️" color="from-purple-500 to-purple-600" />
+        <StatCard label="Itens no Estoque" value={stats.totalStock} icon="🛒" color="from-blue-500 to-blue-600" href="/estoque" />
+        <StatCard label="Colaboradores" value={stats.totalEmployees} icon="👷" color="from-emerald-500 to-emerald-600" href="/colaboradores" />
+        <StatCard label="Equipamentos" value={stats.totalTools} icon="🔧" color="from-amber-500 to-amber-600" href="/equipamentos" />
+        <StatCard label="EPIs" value={stats.totalEpis} icon="⛑️" color="from-purple-500 to-purple-600" href="/colaboradores" />
 
         {/* Dollar Card */}
         <div className="col-span-2 lg:col-span-1 bg-gradient-to-br from-green-500 to-green-600 rounded-xl p-4 text-white shadow-sm">
@@ -296,15 +296,15 @@ export default function DashboardPage() {
 
 // --- Helper Components ---
 
-function StatCard({ label, value, icon, color }: { label: string; value: number; icon: string; color: string }) {
+function StatCard({ label, value, icon, color, href }: { label: string; value: number; icon: string; color: string; href: string }) {
   return (
-    <div className={`bg-gradient-to-br ${color} rounded-xl p-4 text-white shadow-sm`}>
+    <a href={href} className={`bg-gradient-to-br ${color} rounded-xl p-4 text-white shadow-sm block cursor-pointer hover:scale-105 hover:shadow-lg transition-all duration-200`}>
       <div className="flex items-center justify-between mb-2">
         <span className="text-2xl">{icon}</span>
       </div>
       <p className="text-2xl font-bold">{value}</p>
       <p className="text-white/80 text-xs mt-1">{label}</p>
-    </div>
+    </a>
   );
 }
 
