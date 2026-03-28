@@ -28,7 +28,7 @@ export default function EmbarquePage() {
 
   const [ships, setShips] = useState<Ship[]>([]);
   const [selectedShip, setSelectedShip] = useState<string>("");
-  const [selectedTeam, setSelectedTeam] = useState<"EQUIPE_1" | "EQUIPE_2">("EQUIPE_1");
+  const [selectedTeam, setSelectedTeam] = useState<"EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3">("EQUIPE_1");
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmEmbark, setConfirmEmbark] = useState(false);
@@ -56,7 +56,7 @@ export default function EmbarquePage() {
     if (ships.length > 0 && !selectedShip) {
       setSelectedShip(ships[0].id);
       if (ships[0].assigned_team) {
-        setSelectedTeam(ships[0].assigned_team as "EQUIPE_1" | "EQUIPE_2");
+        setSelectedTeam(ships[0].assigned_team as "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3");
       }
     }
   }, [ships, selectedShip]);
@@ -172,11 +172,12 @@ export default function EmbarquePage() {
             <label className="block text-xs font-semibold text-text-light uppercase tracking-wider mb-1">Equipe</label>
             <select
               value={selectedTeam}
-              onChange={(e) => setSelectedTeam(e.target.value as "EQUIPE_1" | "EQUIPE_2")}
+              onChange={(e) => setSelectedTeam(e.target.value as "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3")}
               className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
             >
               <option value="EQUIPE_1">Equipe 1</option>
               <option value="EQUIPE_2">Equipe 2</option>
+              <option value="EQUIPE_3">Equipe 3</option>
             </select>
           </div>
 
