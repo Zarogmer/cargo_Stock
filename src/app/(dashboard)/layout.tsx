@@ -1,15 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { Sidebar } from "@/components/sidebar";
 import { MenuIcon } from "@/components/icons";
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { profile, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
+  const router = useRouter();
 
-  if (loading) {
+  // When loading finishes and there's no user, redirect to login
+  useEffect(() => {
+    if (!loading && !user) {
+      router.replace("/login");
+    }
+  }, [loading, user, router]);
+
+  if (loading || (!loading && !user)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-bg overflow-hidden">
         <div className="flex flex-col items-center gap-4">

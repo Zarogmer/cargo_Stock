@@ -71,7 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (initialized.current) return;
     initialized.current = true;
 
-    // Safety timeout: force loading=false after 8 seconds
+    // Safety timeout: force loading=false after 5 seconds
     const timeout = setTimeout(() => {
       setLoading((prev) => {
         if (prev) {
@@ -80,7 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         return prev;
       });
-    }, 8000);
+    }, 5000);
 
     async function init() {
       try {
