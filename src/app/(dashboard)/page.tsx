@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { formatDateTime, MOVEMENT_TYPE_LABELS, CATEGORY_LABELS } from "@/lib/utils";
@@ -300,13 +301,13 @@ export default function DashboardPage() {
 
 function StatCard({ label, value, icon, color, href }: { label: string; value: number; icon: string; color: string; href: string }) {
   return (
-    <a href={href} className={`bg-gradient-to-br ${color} rounded-xl p-4 text-white shadow-sm block cursor-pointer hover:scale-105 hover:shadow-lg transition-all duration-200`}>
+    <Link href={href} className={`bg-gradient-to-br ${color} rounded-xl p-4 text-white shadow-sm block cursor-pointer hover:scale-105 hover:shadow-lg transition-all duration-200`}>
       <div className="flex items-center justify-between mb-2">
         <span className="text-2xl">{icon}</span>
       </div>
       <p className="text-2xl font-bold">{value}</p>
       <p className="text-white/80 text-xs mt-1">{label}</p>
-    </a>
+    </Link>
   );
 }
 
