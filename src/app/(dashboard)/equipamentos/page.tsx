@@ -51,14 +51,27 @@ export default function EquipamentosPage() {
   const canDelete = hasPermission(role, "FERRAMENTAS", "delete");
   const canApproveRequests = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
 
+  const [dbError, setDbError] = useState<string | null>(null);
+
   const loadAll = useCallback(async () => {
     setLoading(true);
+    setDbError(null);
     try {
       const [toolsRes, movRes, reqRes] = await Promise.all([
         supabase.from("tools").select("*").order("name"),
         supabase.from("tool_movements").select("*, tools(name, asset_type)").order("created_at", { ascending: false }).limit(50),
         supabase.from("tool_requests").select("*").order("created_at", { ascending: false }),
       ]);
+
+      const errors: string[] = [];
+      if (toolsRes.error) errors.push(`tools: ${toolsRes.error.code} ${toolsRes.error.message}`);
+      if (movRes.error) errors.push(`tool_movements: ${movRes.error.code} ${movRes.error.message}`);
+      if (reqRes.error) errors.push(`tool_requests: ${reqRes.error.code} ${reqRes.error.message}`);
+      if (errors.length > 0) {
+        console.error("DB errors:", errors);
+        setDbError(errors.join(" | "));
+      }
+
       setTools(toolsRes.data || []);
       setRequests((reqRes.data as ToolRequest[]) || []);
 
@@ -69,6 +82,7 @@ export default function EquipamentosPage() {
       setHistory(hist);
     } catch (err) {
       console.error("loadAll error:", err);
+      setDbError(String(err));
     } finally {
       setLoading(false);
     }
@@ -294,6 +308,13 @@ export default function EquipamentosPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold text-text">Equipamentos</h1>
+
+      {dbError && (
+        <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700 font-mono break-all">
+          ⚠️ Erro ao carregar dados: {dbError}
+        </div>
+      )}
+
       <Tabs tabs={tabs} />
 
       {/* Form Modal */}

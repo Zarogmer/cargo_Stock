@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { hasPermission } from "@/lib/rbac";
@@ -24,9 +24,11 @@ const STOCK_CATEGORIES = [
 
 export default function EstoquePage() {
   const { profile } = useAuth();
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const [items, setItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dbError, setDbError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("TODOS");
   const [activeTeam, setActiveTeam] = useState<"EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3">("EQUIPE_1");
@@ -45,14 +47,20 @@ export default function EstoquePage() {
 
   const loadItems = useCallback(async () => {
     setLoading(true);
+    setDbError(null);
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("stock_items")
         .select("*")
         .order("updated_at", { ascending: false });
+      if (error) {
+        console.error("Supabase stock_items error:", error);
+        setDbError(`${error.code}: ${error.message} — ${error.hint || ""}`);
+      }
       setItems(data || []);
     } catch (err) {
       console.error("Erro ao carregar estoque:", err);
+      setDbError(String(err));
     } finally {
       setLoading(false);
     }
@@ -266,6 +274,12 @@ export default function EstoquePage() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold text-text">Estoque</h1>
+
+      {dbError && (
+        <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700 font-mono break-all">
+          ⚠️ Erro ao carregar dados: {dbError}
+        </div>
+      )}
 
       {/* Team selector */}
       <div className="flex gap-2">

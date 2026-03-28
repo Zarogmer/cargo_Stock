@@ -53,9 +53,11 @@ export default function ColaboradoresPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [dbError, setDbError] = useState<string | null>(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
+    setDbError(null);
     try {
       const [empRes, epiRes, uniRes, epiMovRes, uniMovRes] = await Promise.all([
         supabase.from("employees").select("*").order("name"),
@@ -64,6 +66,18 @@ export default function ColaboradoresPage() {
         supabase.from("epi_movements").select("*, epis(name)").order("created_at", { ascending: false }).limit(50),
         supabase.from("uniform_movements").select("*, uniforms(name)").order("created_at", { ascending: false }).limit(50),
       ]);
+
+      // Log all errors
+      const errors: string[] = [];
+      if (empRes.error) errors.push(`employees: ${empRes.error.code} ${empRes.error.message}`);
+      if (epiRes.error) errors.push(`epis: ${epiRes.error.code} ${epiRes.error.message}`);
+      if (uniRes.error) errors.push(`uniforms: ${uniRes.error.code} ${uniRes.error.message}`);
+      if (epiMovRes.error) errors.push(`epi_movements: ${epiMovRes.error.code} ${epiMovRes.error.message}`);
+      if (uniMovRes.error) errors.push(`uniform_movements: ${uniMovRes.error.code} ${uniMovRes.error.message}`);
+      if (errors.length > 0) {
+        console.error("DB errors:", errors);
+        setDbError(errors.join(" | "));
+      }
 
       setEmployees(empRes.data || []);
       setEpis(epiRes.data || []);
@@ -305,6 +319,13 @@ export default function ColaboradoresPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold text-text">Colaboradores</h1>
+
+      {dbError && (
+        <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700 font-mono break-all">
+          ⚠️ Erro ao carregar dados: {dbError}
+        </div>
+      )}
+
       <Tabs tabs={tabs} />
 
       {/* Employee Form */}
