@@ -45,6 +45,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  // Check if session token is expired
+  function isSessionExpired(session: { expires_at?: number } | null): boolean {
+    if (!session?.expires_at) return true;
+    // Add 60 second buffer
+    return session.expires_at * 1000 < Date.now() - 60000;
+  }
+
+  // Clear corrupted session cookies
+  async function clearCorruptedSession() {
+    try {
+      await supabase.auth.signOut({ scope: "local" });
+    } catch {
+      // If signOut fails, manually clear cookies
+      document.cookie.split(";").forEach((c) => {
+        const name = c.trim().split("=")[0];
+        if (name.includes("sb-") || name.includes("supabase")) {
+          document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`;
+        }
+      });
+    }
+  }
+
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
@@ -62,7 +84,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     async function init() {
       try {
-        // Check if Supabase is configured
         const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
         if (!url) {
           console.error("NEXT_PUBLIC_SUPABASE_URL is not configured");
@@ -70,13 +91,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        const {
-          data: { session },
-          error,
-        } = await supabase.auth.getSession();
+        // Try to get the current session
+        const { data: { session }, error } = await supabase.auth.getSession();
 
         if (error) {
           console.error("getSession error:", error.message);
+
+          // If it's a lock error or auth error, try to recover
+          if (error.message.includes("lock") || error.message.includes("stole")) {
+            console.warn("Lock contention detected, clearing session...");
+            await clearCorruptedSession();
+          }
+
+          setLoading(false);
+          return;
+        }
+
+        // Check if session exists and is not expired
+        if (session && isSessionExpired(session)) {
+          console.warn("Session expired, trying to refresh...");
+          const { data: { session: refreshedSession }, error: refreshError } =
+            await supabase.auth.refreshSession();
+
+          if (refreshError || !refreshedSession) {
+            console.warn("Refresh failed, clearing session");
+            await clearCorruptedSession();
+            setUser(null);
+            setProfile(null);
+            setLoading(false);
+            return;
+          }
+
+          // Use the refreshed session
+          setUser(refreshedSession.user);
+          const prof = await fetchProfile(refreshedSession.user.id);
+          setProfile(prof);
           setLoading(false);
           return;
         }
@@ -90,6 +139,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (err) {
         console.error("Auth init failed:", err);
+        // On any unexpected error, try to clear corrupted state
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes("lock") || errMsg.includes("stole")) {
+          await clearCorruptedSession();
+        }
       } finally {
         clearTimeout(timeout);
         setLoading(false);
@@ -98,7 +152,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     init();
 
-    // Listen for subsequent auth changes (login, logout, token refresh)
+    // Listen for subsequent auth changes
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
@@ -128,7 +182,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   async function signOut() {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // Force clear even if signOut fails
+      await clearCorruptedSession();
+    }
     setUser(null);
     setProfile(null);
     window.location.href = "/login";
