@@ -52,6 +52,14 @@ export const MOVEMENT_TYPE_LABELS: Record<string, string> = {
   EQUIPE_1: "Equipe 1",
   EQUIPE_2: "Equipe 2",
   MANUTENCAO: "Manutenção",
+  CADASTRO: "Cadastro",
+  PENDENTE: "Pendente",
+  APROVADO: "Aprovada",
+  REJEITADO: "Rejeitada",
+  AGENDADO: "Agendado",
+  EM_OPERACAO: "Em Operação",
+  CONCLUIDO: "Concluído",
+  CANCELADO: "Cancelado",
 };
 
 export const CATEGORY_LABELS: Record<string, string> = {

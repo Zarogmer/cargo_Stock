@@ -29,6 +29,7 @@ interface RecentMovement {
   quantity?: number;
   created_at: string;
   created_by: string;
+  detail?: string;
 }
 
 interface DollarQuote {
@@ -88,11 +89,14 @@ export default function DashboardPage() {
       });
       setShipsByMonth(Object.entries(monthCounts).map(([month, count]) => ({ month, count })));
 
-      // Load recent movements from all sources
-      const [stockMov, epiMov, toolMov] = await Promise.all([
+      // Load recent movements from ALL sources
+      const [stockMov, epiMov, toolMov, requestsMov, shipsMov, empMov] = await Promise.all([
         supabase.from("stock_movements").select("id, movement_type, quantity, created_at, created_by, stock_items(name)").order("created_at", { ascending: false }).limit(10),
         supabase.from("epi_movements").select("id, movement_type, quantity, created_at, created_by, epis(name)").order("created_at", { ascending: false }).limit(10),
         supabase.from("tool_movements").select("id, movement_type, created_at, created_by, tools(name)").order("created_at", { ascending: false }).limit(10),
+        supabase.from("tool_requests").select("id, tool_name, status, notes, created_at, requested_by").order("created_at", { ascending: false }).limit(10),
+        supabase.from("ships").select("id, name, status, created_at, assigned_team").order("created_at", { ascending: false }).limit(10),
+        supabase.from("employees").select("id, name, team, created_at").order("created_at", { ascending: false }).limit(10),
       ]);
 
       const combined: RecentMovement[] = [];
@@ -115,9 +119,32 @@ export default function DashboardPage() {
           movement_type: m.movement_type, created_at: m.created_at, created_by: m.created_by,
         });
       });
+      (requestsMov.data || []).forEach((m: any) => {
+        const statusLabel = m.status === "APROVADO" ? "Aprovada" : m.status === "REJEITADO" ? "Rejeitada" : "Pendente";
+        combined.push({
+          id: `req-${m.id}`, type: "Solicitação", item_name: m.tool_name || "—",
+          movement_type: m.status, created_at: m.created_at, created_by: m.requested_by || "—",
+          detail: statusLabel,
+        });
+      });
+      (shipsMov.data || []).forEach((m: any) => {
+        combined.push({
+          id: `ship-${m.id}`, type: "Navio", item_name: m.name || "—",
+          movement_type: m.status || "CADASTRO", created_at: m.created_at, created_by: m.assigned_team || "—",
+          detail: m.status,
+        });
+      });
+      (empMov.data || []).forEach((m: any) => {
+        const teamLabel = m.team === "EQUIPE_1" ? "Equipe 1" : m.team === "EQUIPE_2" ? "Equipe 2" : m.team === "EQUIPE_3" ? "Equipe 3" : m.team === "COSTADO" ? "Costado" : "Sem equipe";
+        combined.push({
+          id: `emp-${m.id}`, type: "Colaborador", item_name: m.name || "—",
+          movement_type: "CADASTRO", created_at: m.created_at, created_by: teamLabel,
+          detail: teamLabel,
+        });
+      });
 
       combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      setMovements(combined.slice(0, 20));
+      setMovements(combined.slice(0, 30));
     } catch (err) {
       console.error("Dashboard load error:", err);
     } finally {
@@ -246,7 +273,7 @@ export default function DashboardPage() {
           <div className="px-5 py-4 border-b border-border flex items-center justify-between">
             <div>
               <h2 className="font-semibold text-text">Movimentações Recentes</h2>
-              <p className="text-xs text-text-light mt-0.5">Últimas 20 movimentações de estoque, EPI e equipamentos</p>
+              <p className="text-xs text-text-light mt-0.5">Últimas 30 movimentações do sistema</p>
             </div>
           </div>
 
@@ -316,6 +343,9 @@ function ModuleBadge({ type }: { type: string }) {
     Estoque: "bg-blue-100 text-blue-700",
     EPI: "bg-purple-100 text-purple-700",
     Equipamento: "bg-amber-100 text-amber-700",
+    "Solicitação": "bg-orange-100 text-orange-700",
+    Navio: "bg-cyan-100 text-cyan-700",
+    Colaborador: "bg-green-100 text-green-700",
   };
   return (
     <span className={`inline-block px-2.5 py-1 text-xs rounded-full font-medium ${styles[type] || "bg-gray-100 text-gray-700"}`}>
