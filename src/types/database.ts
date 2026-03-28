@@ -49,7 +49,7 @@ export interface StockMovement {
   stock_item?: StockItem;
 }
 
-export type TeamType = "EQUIPE_1" | "EQUIPE_2" | null;
+export type TeamType = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "COSTADO" | null;
 
 export interface Employee {
   id: number;
