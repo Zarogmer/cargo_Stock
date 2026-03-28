@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { hasPermission } from "@/lib/rbac";
@@ -15,8 +15,7 @@ import type { Employee, Epi, Uniform, EpiMovement, UniformMovement, EpiMovementT
 
 export default function ColaboradoresPage() {
   const { profile } = useAuth();
-  const supabaseRef = useRef(createClient());
-  const supabase = supabaseRef.current;
+  const supabase = createClient();
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, "EPI", "create");
   const canEdit = hasPermission(role, "EPI", "edit");

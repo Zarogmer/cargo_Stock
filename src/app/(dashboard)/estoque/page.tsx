@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { hasPermission } from "@/lib/rbac";
@@ -24,8 +24,7 @@ const STOCK_CATEGORIES = [
 
 export default function EstoquePage() {
   const { profile } = useAuth();
-  const supabaseRef = useRef(createClient());
-  const supabase = supabaseRef.current;
+  const supabase = createClient();
   const [items, setItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [dbError, setDbError] = useState<string | null>(null);

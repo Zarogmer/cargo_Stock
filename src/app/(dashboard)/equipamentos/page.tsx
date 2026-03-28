@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { hasPermission } from "@/lib/rbac";
@@ -28,8 +28,7 @@ interface ToolRequest {
 
 export default function EquipamentosPage() {
   const { profile } = useAuth();
-  const supabaseRef = useRef(createClient());
-  const supabase = supabaseRef.current;
+  const supabase = createClient();
   const role = profile?.role || "RH";
 
   const [tools, setTools] = useState<Tool[]>([]);

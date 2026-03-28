@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase-browser";
 import { useAuth } from "@/lib/auth-context";
 
@@ -13,8 +13,7 @@ interface TableCheck {
 
 export default function DebugPage() {
   const { profile } = useAuth();
-  const supabaseRef = useRef(createClient());
-  const supabase = supabaseRef.current;
+  const supabase = createClient();
   const [checks, setChecks] = useState<TableCheck[]>([]);
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState<string>("checking...");

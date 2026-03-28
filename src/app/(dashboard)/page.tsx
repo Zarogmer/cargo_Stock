@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
@@ -42,8 +42,7 @@ interface DollarQuote {
 export default function DashboardPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
-  const supabaseRef = useRef(createClient());
-  const supabase = supabaseRef.current;
+  const supabase = createClient();
   const [stats, setStats] = useState<DashboardStats>({ totalStock: 0, totalEmployees: 0, totalTools: 0, totalEpis: 0 });
   const [movements, setMovements] = useState<RecentMovement[]>([]);
   const [dollar, setDollar] = useState<DollarQuote | null>(null);
