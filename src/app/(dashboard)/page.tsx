@@ -251,12 +251,12 @@ export default function DashboardPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50/80 border-b border-border">
                 <tr>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Módulo</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Item</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider hidden sm:table-cell">Tipo</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider hidden md:table-cell">Qtd</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider hidden md:table-cell">Data</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider hidden lg:table-cell">Usuário</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Módulo</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Item</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Tipo</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Qtd</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Data</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Usuário</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -272,16 +272,16 @@ export default function DashboardPage() {
                 ) : (
                   movements.map((m) => (
                     <tr key={m.id} className="hover:bg-gray-50/50 transition">
-                      <td className="px-5 py-3">
+                      <td className="px-5 py-3 whitespace-nowrap">
                         <ModuleBadge type={m.type} />
                       </td>
-                      <td className="px-5 py-3 font-medium text-text">{m.item_name}</td>
-                      <td className="px-5 py-3 hidden sm:table-cell">
+                      <td className="px-5 py-3 font-medium text-text whitespace-nowrap">{m.item_name}</td>
+                      <td className="px-5 py-3 whitespace-nowrap">
                         <span className="text-text-light">{MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type}</span>
                       </td>
-                      <td className="px-5 py-3 hidden md:table-cell font-medium">{m.quantity || "—"}</td>
-                      <td className="px-5 py-3 hidden md:table-cell text-text-light text-xs">{formatDateTime(m.created_at)}</td>
-                      <td className="px-5 py-3 hidden lg:table-cell text-text-light text-xs uppercase">{m.created_by}</td>
+                      <td className="px-5 py-3 font-medium whitespace-nowrap">{m.quantity || "—"}</td>
+                      <td className="px-5 py-3 text-text-light text-xs whitespace-nowrap">{formatDateTime(m.created_at)}</td>
+                      <td className="px-5 py-3 text-text-light text-xs uppercase whitespace-nowrap">{m.created_by}</td>
                     </tr>
                   ))
                 )}
