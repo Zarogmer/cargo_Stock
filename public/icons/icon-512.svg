@@ -1,23 +1,46 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <rect width="512" height="512" rx="100" fill="#1e40af"/>
-  <!-- Ship hull -->
-  <path d="M80 320 L112 400 L400 400 L432 320 Z" fill="white" opacity="0.95"/>
-  <!-- Ship cabin -->
-  <rect x="156" y="210" width="152" height="110" rx="10" fill="white" opacity="0.9"/>
-  <!-- Bridge/top -->
-  <rect x="190" y="155" width="88" height="62" rx="8" fill="white" opacity="0.85"/>
+  <!-- Water -->
+  <path d="M50 375 Q90 355 130 375 Q170 395 210 375 Q250 355 290 375 Q330 395 370 375 Q410 355 465 375" fill="none" stroke="#60a5fa" stroke-width="8" opacity="0.6"/>
+  <path d="M40 395 Q80 375 120 395 Q160 415 200 395 Q240 375 280 395 Q320 415 360 395 Q400 375 470 395" fill="none" stroke="#60a5fa" stroke-width="6" opacity="0.4"/>
+  <path d="M45 412 Q85 392 125 412 Q165 432 205 412 Q245 392 285 412 Q325 432 365 412 Q405 392 475 412" fill="none" stroke="#60a5fa" stroke-width="5" opacity="0.25"/>
+  <!-- Hull -->
+  <path d="M70 348 L110 370 L402 370 L442 348 L70 348Z" fill="#1a1a2e"/>
+  <path d="M110 370 L402 370 L442 348 L70 348 Z" fill="#dc2626"/>
+  <rect x="70" y="332" width="372" height="18" rx="3" fill="#1a1a2e"/>
+  <!-- Deck -->
+  <rect x="86" y="316" width="340" height="20" rx="3" fill="#e5e7eb"/>
+  <!-- Cargo holds -->
+  <rect x="150" y="288" width="48" height="32" rx="4" fill="#dc2626"/>
+  <rect x="208" y="288" width="48" height="32" rx="4" fill="#dc2626"/>
+  <rect x="266" y="288" width="48" height="32" rx="4" fill="#dc2626"/>
+  <rect x="324" y="288" width="48" height="32" rx="4" fill="#dc2626"/>
+  <!-- Cranes -->
+  <rect x="198" y="218" width="7" height="74" fill="#eab308"/>
+  <path d="M201.5 218 L230 258" stroke="#eab308" stroke-width="5" stroke-linecap="round"/>
+  <rect x="256" y="228" width="7" height="64" fill="#eab308"/>
+  <path d="M259.5 228 L288 264" stroke="#eab308" stroke-width="5" stroke-linecap="round"/>
+  <rect x="314" y="222" width="7" height="68" fill="#eab308"/>
+  <path d="M317.5 222 L346 258" stroke="#eab308" stroke-width="5" stroke-linecap="round"/>
+  <!-- Bridge -->
+  <rect x="90" y="234" width="76" height="86" rx="6" fill="#f8fafc"/>
+  <rect x="90" y="206" width="60" height="36" rx="5" fill="#f1f5f9"/>
+  <!-- Bridge windows -->
+  <rect x="100" y="214" width="14" height="10" rx="2" fill="#3b82f6"/>
+  <rect x="120" y="214" width="14" height="10" rx="2" fill="#3b82f6"/>
+  <!-- Cabin windows -->
+  <rect x="100" y="248" width="12" height="12" rx="2" fill="#3b82f6"/>
+  <rect x="118" y="248" width="12" height="12" rx="2" fill="#3b82f6"/>
+  <rect x="136" y="248" width="12" height="12" rx="2" fill="#3b82f6"/>
+  <rect x="100" y="268" width="12" height="12" rx="2" fill="#3b82f6"/>
+  <rect x="118" y="268" width="12" height="12" rx="2" fill="#3b82f6"/>
+  <rect x="136" y="268" width="12" height="12" rx="2" fill="#3b82f6"/>
   <!-- Smokestack -->
-  <rect x="296" y="132" width="38" height="88" rx="6" fill="white" opacity="0.9"/>
-  <!-- Smoke puffs -->
-  <circle cx="315" cy="120" r="14" fill="white" opacity="0.5"/>
-  <circle cx="328" cy="100" r="11" fill="white" opacity="0.35"/>
-  <circle cx="338" cy="82" r="8" fill="white" opacity="0.2"/>
-  <!-- Windows -->
-  <rect x="178" y="240" width="22" height="22" rx="5" fill="#1e40af"/>
-  <rect x="214" y="240" width="22" height="22" rx="5" fill="#1e40af"/>
-  <rect x="250" y="240" width="22" height="22" rx="5" fill="#1e40af"/>
-  <rect x="286" y="240" width="22" height="22" rx="5" fill="#1e40af"/>
-  <!-- Water waves -->
-  <path d="M60 410 Q100 390 140 410 Q180 430 220 410 Q260 390 300 410 Q340 430 380 410 Q420 390 460 410" fill="none" stroke="white" stroke-width="8" opacity="0.5"/>
-  <path d="M70 432 Q110 412 150 432 Q190 452 230 432 Q270 412 310 432 Q350 452 390 432 Q430 412 470 432" fill="none" stroke="white" stroke-width="6" opacity="0.3"/>
+  <rect x="108" y="176" width="28" height="34" rx="4" fill="#374151"/>
+  <rect x="108" y="176" width="28" height="10" rx="3" fill="#ef4444"/>
+  <!-- Smoke -->
+  <circle cx="122" cy="164" r="10" fill="white" opacity="0.4"/>
+  <circle cx="132" cy="148" r="8" fill="white" opacity="0.25"/>
+  <!-- Mast -->
+  <line x1="128" y1="206" x2="128" y2="186" stroke="#94a3b8" stroke-width="3"/>
 </svg>
