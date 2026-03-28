@@ -1,10 +1,6 @@
 "use client";
 
-import { useAuth } from "@/lib/auth-context";
-
 export default function FinanceiroPage() {
-  const { profile } = useAuth();
-
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-text">Financeiro</h1>
@@ -16,11 +12,6 @@ export default function FinanceiroPage() {
           <p className="text-text-light text-sm">
             O módulo financeiro está em desenvolvimento e estará disponível em breve.
           </p>
-          {profile && (
-            <p className="text-xs text-text-light mt-4 bg-gray-50 rounded-lg px-4 py-2">
-              Conectado como <span className="font-semibold">{profile.full_name}</span>
-            </p>
-          )}
         </div>
       </div>
     </div>
