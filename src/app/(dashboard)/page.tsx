@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { formatDateTime, MOVEMENT_TYPE_LABELS, CATEGORY_LABELS } from "@/lib/utils";
@@ -40,6 +41,7 @@ interface DollarQuote {
 
 export default function DashboardPage() {
   const { profile } = useAuth();
+  const pathname = usePathname();
   const supabaseRef = useRef(createClient());
   const supabase = supabaseRef.current;
   const [stats, setStats] = useState<DashboardStats>({ totalStock: 0, totalEmployees: 0, totalTools: 0, totalEpis: 0 });
@@ -148,7 +150,8 @@ export default function DashboardPage() {
     // Refresh dollar every 5 minutes
     const interval = setInterval(fetchDollar, 5 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [loadDashboard, fetchDollar]);
+    // pathname forces reload when navigating back to dashboard
+  }, [loadDashboard, fetchDollar, pathname]);
 
   if (loading) {
     return (
