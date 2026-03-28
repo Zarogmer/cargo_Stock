@@ -60,6 +60,14 @@ export interface Employee {
   email: string | null;
   family_phone: string | null;
   notes: string | null;
+  // Dados bancários
+  bank_name: string | null;
+  bank_agency: string | null;
+  bank_account: string | null;
+  bank_account_type: "CORRENTE" | "POUPANCA" | "CONTA_SAL" | "DIGITAL" | null;
+  // Documentos
+  has_vaccination_card: boolean | null;
+  has_cnh: boolean | null;
   updated_at: string;
   updated_by: string;
 }

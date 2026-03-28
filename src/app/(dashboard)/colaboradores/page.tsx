@@ -368,20 +368,55 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
   const [birthDate, setBirthDate] = useState("");
   const [familyPhone, setFamilyPhone] = useState("");
   const [notes, setNotes] = useState("");
+  // Dados bancários
+  const [bankName, setBankName] = useState("");
+  const [bankAgency, setBankAgency] = useState("");
+  const [bankAccount, setBankAccount] = useState("");
+  const [bankAccountType, setBankAccountType] = useState("");
+  // Documentos
+  const [hasVaccinationCard, setHasVaccinationCard] = useState(false);
+  const [hasCnh, setHasCnh] = useState(false);
 
   useEffect(() => {
-    if (item) { setName(item.name); setTeam(item.team || ""); setPhone(item.phone || ""); setEmail(item.email || ""); setBirthDate(item.birth_date || ""); setFamilyPhone(item.family_phone || ""); setNotes(item.notes || ""); }
-    else { setName(""); setTeam(""); setPhone(""); setEmail(""); setBirthDate(""); setFamilyPhone(""); setNotes(""); }
+    if (item) {
+      setName(item.name); setTeam(item.team || ""); setPhone(item.phone || "");
+      setEmail(item.email || ""); setBirthDate(item.birth_date || "");
+      setFamilyPhone(item.family_phone || ""); setNotes(item.notes || "");
+      setBankName(item.bank_name || ""); setBankAgency(item.bank_agency || "");
+      setBankAccount(item.bank_account || ""); setBankAccountType(item.bank_account_type || "");
+      setHasVaccinationCard(item.has_vaccination_card || false);
+      setHasCnh(item.has_cnh || false);
+    } else {
+      setName(""); setTeam(""); setPhone(""); setEmail(""); setBirthDate("");
+      setFamilyPhone(""); setNotes(""); setBankName(""); setBankAgency("");
+      setBankAccount(""); setBankAccountType(""); setHasVaccinationCard(false); setHasCnh(false);
+    }
   }, [item, open]);
+
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
   return (
     <Modal open={open} onClose={onClose} title={item ? "Editar Colaborador" : "Novo Colaborador"}>
-      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, team: (team as any) || null, phone: phone || null, email: email || null, birth_date: birthDate || null, family_phone: familyPhone || null, notes: notes || null }); }} className="space-y-4">
+      <form onSubmit={(e) => {
+        e.preventDefault();
+        onSave({
+          name, team: (team as any) || null, phone: phone || null,
+          email: email || null, birth_date: birthDate || null,
+          family_phone: familyPhone || null, notes: notes || null,
+          bank_name: bankName || null, bank_agency: bankAgency || null,
+          bank_account: bankAccount || null,
+          bank_account_type: (bankAccountType as any) || null,
+          has_vaccination_card: hasVaccinationCard,
+          has_cnh: hasCnh,
+        });
+      }} className="space-y-4">
+
+        {/* Dados pessoais */}
         <div className="grid grid-cols-2 gap-4">
-          <div><label className="block text-sm font-medium mb-1">Nome *</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} required className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
+          <div><label className="block text-sm font-medium mb-1">Nome *</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} /></div>
           <div>
             <label className="block text-sm font-medium mb-1">Equipe</label>
-            <select value={team} onChange={(e) => setTeam(e.target.value)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none">
+            <select value={team} onChange={(e) => setTeam(e.target.value)} className={inputCls}>
               <option value="">Sem equipe</option>
               <option value="EQUIPE_1">Equipe 1</option>
               <option value="EQUIPE_2">Equipe 2</option>
@@ -391,12 +426,52 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
           </div>
         </div>
         <div className="grid grid-cols-2 gap-4">
-          <div><label className="block text-sm font-medium mb-1">Telefone</label><input type="text" value={phone} onChange={(e) => setPhone(formatPhoneMask(e.target.value))} placeholder="(13) 99999-9999" className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
-          <div><label className="block text-sm font-medium mb-1">Nascimento</label><input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
+          <div><label className="block text-sm font-medium mb-1">Telefone</label><input type="text" value={phone} onChange={(e) => setPhone(formatPhoneMask(e.target.value))} placeholder="(13) 99999-9999" className={inputCls} /></div>
+          <div><label className="block text-sm font-medium mb-1">Nascimento</label><input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} className={inputCls} /></div>
         </div>
-        <div><label className="block text-sm font-medium mb-1">Email</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
-        <div><label className="block text-sm font-medium mb-1">Tel. Familiar</label><input type="text" value={familyPhone} onChange={(e) => setFamilyPhone(formatPhoneMask(e.target.value))} placeholder="(13) 99999-9999" className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
-        <div><label className="block text-sm font-medium mb-1">Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" /></div>
+        <div className="grid grid-cols-2 gap-4">
+          <div><label className="block text-sm font-medium mb-1">Email</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className={inputCls} /></div>
+          <div><label className="block text-sm font-medium mb-1">Tel. Familiar</label><input type="text" value={familyPhone} onChange={(e) => setFamilyPhone(formatPhoneMask(e.target.value))} placeholder="(13) 99999-9999" className={inputCls} /></div>
+        </div>
+
+        {/* Dados bancários */}
+        <div className="border-t border-border pt-4">
+          <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-3">💳 Dados Bancários</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className="block text-sm font-medium mb-1">Banco</label><input type="text" value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="Ex: Itaú, Bradesco..." className={inputCls} /></div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Tipo de Conta</label>
+              <select value={bankAccountType} onChange={(e) => setBankAccountType(e.target.value)} className={inputCls}>
+                <option value="">Selecionar...</option>
+                <option value="CORRENTE">Corrente</option>
+                <option value="POUPANCA">Poupança</option>
+                <option value="CONTA_SAL">Conta Salário</option>
+                <option value="DIGITAL">Digital</option>
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4 mt-4">
+            <div><label className="block text-sm font-medium mb-1">Agência</label><input type="text" value={bankAgency} onChange={(e) => setBankAgency(e.target.value)} placeholder="0000" className={inputCls} /></div>
+            <div><label className="block text-sm font-medium mb-1">Conta</label><input type="text" value={bankAccount} onChange={(e) => setBankAccount(e.target.value)} placeholder="00000-0" className={inputCls} /></div>
+          </div>
+        </div>
+
+        {/* Documentos */}
+        <div className="border-t border-border pt-4">
+          <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-3">📄 Documentos</p>
+          <div className="flex gap-6">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={hasVaccinationCard} onChange={(e) => setHasVaccinationCard(e.target.checked)} className="w-4 h-4 accent-primary" />
+              <span className="text-sm">Cartão de Vacinação</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={hasCnh} onChange={(e) => setHasCnh(e.target.checked)} className="w-4 h-4 accent-primary" />
+              <span className="text-sm">CNH</span>
+            </label>
+          </div>
+        </div>
+
+        <div><label className="block text-sm font-medium mb-1">Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`} /></div>
         <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button></div>
       </form>
     </Modal>
