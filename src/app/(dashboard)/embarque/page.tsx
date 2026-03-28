@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { hasPermission } from "@/lib/rbac";
@@ -21,6 +22,7 @@ interface Ship {
 
 export default function EmbarquePage() {
   const { profile } = useAuth();
+  const pathname = usePathname();
   const supabase = createClient();
   const role = profile?.role || "RH";
   const canEmbarcar = hasPermission(role, "EMBARQUE", "embarcar");
@@ -49,7 +51,7 @@ export default function EmbarquePage() {
     }
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData, pathname]);
 
   useEffect(() => {
     if (ships.length > 0 && !selectedShip) {

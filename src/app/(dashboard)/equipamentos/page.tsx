@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { hasPermission } from "@/lib/rbac";
@@ -28,6 +29,7 @@ interface ToolRequest {
 
 export default function EquipamentosPage() {
   const { profile } = useAuth();
+  const pathname = usePathname();
   const supabase = createClient();
   const role = profile?.role || "RH";
 
@@ -87,7 +89,7 @@ export default function EquipamentosPage() {
     }
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll, pathname]);
 
   async function saveTool(data: Partial<Tool>) {
     setSaving(true);

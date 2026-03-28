@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { hasPermission } from "@/lib/rbac";
@@ -15,6 +16,7 @@ import type { Employee, Epi, Uniform, EpiMovement, UniformMovement, EpiMovementT
 
 export default function ColaboradoresPage() {
   const { profile } = useAuth();
+  const pathname = usePathname();
   const supabase = createClient();
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, "EPI", "create");
@@ -100,7 +102,7 @@ export default function ColaboradoresPage() {
     }
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll, pathname]);
 
   // --- SAVE handlers ---
   async function saveEmployee(data: Partial<Employee>) {

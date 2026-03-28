@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { hasPermission } from "@/lib/rbac";
@@ -24,6 +25,7 @@ const STOCK_CATEGORIES = [
 
 export default function EstoquePage() {
   const { profile } = useAuth();
+  const pathname = usePathname();
   const supabase = createClient();
   const [items, setItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,7 +69,7 @@ export default function EstoquePage() {
 
   useEffect(() => {
     loadItems();
-  }, [loadItems]);
+  }, [loadItems, pathname]);
 
   const filteredItems = items.filter((i) => {
     const matchesSearch =
