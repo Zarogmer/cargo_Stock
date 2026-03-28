@@ -101,7 +101,7 @@ export default function EmbarquePage() {
         movement_type: "BAIXA",
         quantity: toConsume,
         movement_date: new Date().toISOString().split("T")[0],
-        notes: `Embarque: ${currentShip.name} (${selectedTeam === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"})`,
+        notes: `Embarque: ${currentShip.name} (${selectedTeam === "EQUIPE_1" ? "Equipe 1" : selectedTeam === "EQUIPE_2" ? "Equipe 2" : "Equipe 3"})`,
         created_by: actor,
       } as any);
 
@@ -214,7 +214,7 @@ export default function EmbarquePage() {
         </div>
         {canEmbarcar && teamItems.length > 0 && (
           <Button size="sm" variant="warning" onClick={() => setConfirmEmbark(true)}>
-            ⚓ Embarcar {selectedTeam === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}
+            ⚓ Embarcar {selectedTeam === "EQUIPE_1" ? "Equipe 1" : selectedTeam === "EQUIPE_2" ? "Equipe 2" : "Equipe 3"}
           </Button>
         )}
       </div>
@@ -274,7 +274,7 @@ export default function EmbarquePage() {
         onClose={() => setConfirmEmbark(false)}
         onConfirm={handleEmbarcar}
         title="Confirmar Embarque"
-        message={`Embarcar ${selectedTeam === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"} no navio "${currentShip?.name}"? As quantidades padrão serão retiradas do estoque desta equipe.`}
+        message={`Embarcar ${selectedTeam === "EQUIPE_1" ? "Equipe 1" : selectedTeam === "EQUIPE_2" ? "Equipe 2" : "Equipe 3"} no navio "${currentShip?.name}"? As quantidades padrão serão retiradas do estoque desta equipe.`}
         confirmLabel="⚓ Confirmar Embarque"
         variant="warning"
         loading={embarking}
