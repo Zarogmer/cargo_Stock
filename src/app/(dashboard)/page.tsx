@@ -165,7 +165,7 @@ export default function DashboardPage() {
   }
 
   const greeting = getGreeting();
-  const canSeeMovements = ["EXECUTIVO", "FINANCEIRO", "TECNOLOGIA"].includes(profile?.role || "");
+  const canSeeMovements = profile?.email === "chico@cargostock.local";
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
