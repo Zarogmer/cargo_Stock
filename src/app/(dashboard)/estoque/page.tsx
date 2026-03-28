@@ -29,7 +29,7 @@ export default function EstoquePage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("TODOS");
-  const [activeTeam, setActiveTeam] = useState<"EQUIPE_1" | "EQUIPE_2">("EQUIPE_1");
+  const [activeTeam, setActiveTeam] = useState<"EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3">("EQUIPE_1");
   const [editItem, setEditItem] = useState<StockItem | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [showBaixa, setShowBaixa] = useState(false);
@@ -288,6 +288,16 @@ export default function EstoquePage() {
           }`}
         >
           🚢 Equipe 2
+        </button>
+        <button
+          onClick={() => setActiveTeam("EQUIPE_3")}
+          className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+            activeTeam === "EQUIPE_3"
+              ? "bg-teal-600 text-white shadow-md"
+              : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+          }`}
+        >
+          🚢 Equipe 3
         </button>
       </div>
 
