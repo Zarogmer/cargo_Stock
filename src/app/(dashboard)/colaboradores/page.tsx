@@ -150,8 +150,8 @@ export default function ColaboradoresPage() {
   }
 
   // --- COLUMNS ---
-  const teamLabels: Record<string, string> = { EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2" };
-  const teamColors: Record<string, string> = { EQUIPE_1: "bg-blue-100 text-blue-700", EQUIPE_2: "bg-purple-100 text-purple-700" };
+  const teamLabels: Record<string, string> = { EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", COSTADO: "Costado" };
+  const teamColors: Record<string, string> = { EQUIPE_1: "bg-blue-100 text-blue-700", EQUIPE_2: "bg-purple-100 text-purple-700", COSTADO: "bg-amber-100 text-amber-700" };
   const empColumns = [
     { key: "name", label: "Nome", render: (e: Employee) => <span className="font-medium">{e.name}</span> },
     { key: "team", label: "Equipe", render: (e: Employee) => e.team ? <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${teamColors[e.team] || ""}`}>{teamLabels[e.team]}</span> : <span className="text-text-light text-xs">—</span> },
@@ -335,6 +335,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
               <option value="">Sem equipe</option>
               <option value="EQUIPE_1">Equipe 1</option>
               <option value="EQUIPE_2">Equipe 2</option>
+              <option value="COSTADO">Costado</option>
             </select>
           </div>
         </div>
