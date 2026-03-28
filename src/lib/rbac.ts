@@ -54,8 +54,11 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   },
   FINANCEIRO: {
     DASHBOARD: ["view"],
+    EMBARQUE: ["view"],
     ESTOQUE: ["view"],
     EPI: ["view"],
+    FERRAMENTAS: ["view"],
+    MAQUINARIO: ["view"],
     NAVIOS: ["view"],
     FINANCEIRO_MOD: ["view"],
   },
