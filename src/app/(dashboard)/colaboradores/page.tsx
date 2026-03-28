@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { hasPermission } from "@/lib/rbac";
@@ -15,7 +15,8 @@ import type { Employee, Epi, Uniform, EpiMovement, UniformMovement, EpiMovementT
 
 export default function ColaboradoresPage() {
   const { profile } = useAuth();
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, "EPI", "create");
   const canEdit = hasPermission(role, "EPI", "edit");
@@ -55,30 +56,35 @@ export default function ColaboradoresPage() {
 
   const loadAll = useCallback(async () => {
     setLoading(true);
-    const [empRes, epiRes, uniRes, epiMovRes, uniMovRes] = await Promise.all([
-      supabase.from("employees").select("*").order("name"),
-      supabase.from("epis").select("*").order("name"),
-      supabase.from("uniforms").select("*").order("name"),
-      supabase.from("epi_movements").select("*, epis(name)").order("created_at", { ascending: false }).limit(50),
-      supabase.from("uniform_movements").select("*, uniforms(name)").order("created_at", { ascending: false }).limit(50),
-    ]);
+    try {
+      const [empRes, epiRes, uniRes, epiMovRes, uniMovRes] = await Promise.all([
+        supabase.from("employees").select("*").order("name"),
+        supabase.from("epis").select("*").order("name"),
+        supabase.from("uniforms").select("*").order("name"),
+        supabase.from("epi_movements").select("*, epis(name)").order("created_at", { ascending: false }).limit(50),
+        supabase.from("uniform_movements").select("*, uniforms(name)").order("created_at", { ascending: false }).limit(50),
+      ]);
 
-    setEmployees(empRes.data || []);
-    setEpis(epiRes.data || []);
-    setUniforms(uniRes.data || []);
+      setEmployees(empRes.data || []);
+      setEpis(epiRes.data || []);
+      setUniforms(uniRes.data || []);
 
-    const combined: Array<Record<string, unknown>> = [];
-    (epiMovRes.data || []).forEach((m: Record<string, unknown>) => {
-      const epi = m.epis as Record<string, unknown> | null;
-      combined.push({ ...m, item_name: epi?.name || "—", source: "EPI" });
-    });
-    (uniMovRes.data || []).forEach((m: Record<string, unknown>) => {
-      const uni = m.uniforms as Record<string, unknown> | null;
-      combined.push({ ...m, item_name: uni?.name || "—", source: "Uniforme" });
-    });
-    combined.sort((a, b) => new Date(b.created_at as string).getTime() - new Date(a.created_at as string).getTime());
-    setHistory(combined);
-    setLoading(false);
+      const combined: Array<Record<string, unknown>> = [];
+      (epiMovRes.data || []).forEach((m: Record<string, unknown>) => {
+        const epi = m.epis as Record<string, unknown> | null;
+        combined.push({ ...m, item_name: epi?.name || "—", source: "EPI" });
+      });
+      (uniMovRes.data || []).forEach((m: Record<string, unknown>) => {
+        const uni = m.uniforms as Record<string, unknown> | null;
+        combined.push({ ...m, item_name: uni?.name || "—", source: "Uniforme" });
+      });
+      combined.sort((a, b) => new Date(b.created_at as string).getTime() - new Date(a.created_at as string).getTime());
+      setHistory(combined);
+    } catch (err) {
+      console.error("loadAll error:", err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
