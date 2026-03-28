@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface Tab {
   key: string;
@@ -15,6 +15,13 @@ interface TabsProps {
 
 export function Tabs({ tabs, defaultTab }: TabsProps) {
   const [active, setActive] = useState(defaultTab || tabs[0]?.key);
+
+  // Update active tab when defaultTab changes (e.g., from URL params)
+  useEffect(() => {
+    if (defaultTab) {
+      setActive(defaultTab);
+    }
+  }, [defaultTab]);
 
   return (
     <div>

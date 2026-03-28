@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
 import { hasPermission } from "@/lib/rbac";
@@ -17,6 +17,8 @@ import type { Employee, Epi, Uniform, EpiMovement, UniformMovement, EpiMovementT
 export default function ColaboradoresPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab") || "colaboradores";
   const supabase = createClient();
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, "EPI", "create");
@@ -327,7 +329,7 @@ export default function ColaboradoresPage() {
         </div>
       )}
 
-      <Tabs tabs={tabs} />
+      <Tabs tabs={tabs} defaultTab={initialTab} />
 
       {/* Employee Form */}
       <EmployeeFormModal open={empForm} onClose={() => { setEmpForm(false); setEditEmp(null); }} onSave={saveEmployee} item={editEmp} saving={saving} />
