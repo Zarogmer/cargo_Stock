@@ -70,7 +70,7 @@ export default function DashboardPage() {
       setStockItems((stockFullRes.data || []) as StockChartItem[]);
 
       // Load ships for monthly chart (Jan-Dec of current year)
-      const shipsRes = await supabase.from("ships").select("arrival_date, created_at");
+      const shipsRes = await supabase.from("ships").select("departure_date, created_at");
       const shipsData = shipsRes.data || [];
       const year = new Date().getFullYear();
       const monthCounts: Record<string, number> = {};
@@ -78,7 +78,7 @@ export default function DashboardPage() {
         monthCounts[`${year}-${String(m).padStart(2, "0")}`] = 0;
       }
       shipsData.forEach((s: any) => {
-        const dateStr = s.arrival_date || s.created_at;
+        const dateStr = s.departure_date || s.created_at;
         if (!dateStr) return;
         const d = new Date(dateStr);
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -232,7 +232,7 @@ export default function DashboardPage() {
       {shipsByMonth.length > 0 && (
         <div className="bg-card rounded-xl shadow-sm border border-border p-5">
           <h2 className="font-semibold text-text mb-1">Navios por Mês</h2>
-          <p className="text-xs text-text-light mb-4">{new Date().getFullYear()} — baseado na data de chegada</p>
+          <p className="text-xs text-text-light mb-4">{new Date().getFullYear()} — baseado na data de saída</p>
           <ShipsBarChart data={shipsByMonth} />
         </div>
       )}
