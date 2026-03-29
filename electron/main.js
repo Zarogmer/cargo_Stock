@@ -2,7 +2,7 @@ const { app, BrowserWindow, shell, Menu, Tray, nativeImage } = require("electron
 const path = require("path");
 
 // URL do site deployado no Netlify
-const APP_URL = "https://cargo-stock.netlify.app";
+const APP_URL = "https://cargostock.netlify.app";
 
 let mainWindow;
 let tray;
