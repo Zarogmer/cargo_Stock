@@ -90,13 +90,14 @@ export default function DashboardPage() {
       setShipsByMonth(Object.entries(monthCounts).map(([month, count]) => ({ month, count })));
 
       // Load recent movements from ALL sources
-      const [stockMov, epiMov, toolMov, requestsMov, shipsMov, empMov] = await Promise.all([
+      const [stockMov, epiMov, toolMov, requestsMov, shipsMov, empMov, loginMov] = await Promise.all([
         supabase.from("stock_movements").select("id, movement_type, quantity, created_at, created_by, stock_items(name)").order("created_at", { ascending: false }).limit(10),
         supabase.from("epi_movements").select("id, movement_type, quantity, created_at, created_by, epis(name)").order("created_at", { ascending: false }).limit(10),
         supabase.from("tool_movements").select("id, movement_type, created_at, created_by, tools(name)").order("created_at", { ascending: false }).limit(10),
         supabase.from("tool_requests").select("id, tool_name, status, notes, created_at, requested_by").order("created_at", { ascending: false }).limit(10),
         supabase.from("ships").select("id, name, status, created_at, assigned_team").order("created_at", { ascending: false }).limit(10),
         supabase.from("employees").select("id, name, team, created_at").order("created_at", { ascending: false }).limit(10),
+        supabase.from("login_logs").select("id, full_name, email, event_type, created_at").order("created_at", { ascending: false }).limit(10),
       ]);
 
       const combined: RecentMovement[] = [];
@@ -140,6 +141,13 @@ export default function DashboardPage() {
           id: `emp-${m.id}`, type: "Colaborador", item_name: m.name || "—",
           movement_type: "CADASTRO", created_at: m.created_at, created_by: teamLabel,
           detail: teamLabel,
+        });
+      });
+      (loginMov.data || []).forEach((m: any) => {
+        combined.push({
+          id: `login-${m.id}`, type: "Acesso", item_name: m.full_name || "—",
+          movement_type: m.event_type, created_at: m.created_at, created_by: m.full_name || "—",
+          detail: m.event_type === "LOGIN" ? "Entrou no sistema" : "Saiu do sistema",
         });
       });
 
@@ -346,6 +354,7 @@ function ModuleBadge({ type }: { type: string }) {
     "Solicitação": "bg-orange-100 text-orange-700",
     Navio: "bg-cyan-100 text-cyan-700",
     Colaborador: "bg-green-100 text-green-700",
+    Acesso: "bg-indigo-100 text-indigo-700",
   };
   return (
     <span className={`inline-block px-2.5 py-1 text-xs rounded-full font-medium ${styles[type] || "bg-gray-100 text-gray-700"}`}>

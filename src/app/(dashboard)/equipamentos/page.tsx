@@ -119,7 +119,9 @@ export default function EquipamentosPage() {
       tool_id: tool.id, employee_name: actor, movement_type: action,
       movement_date: new Date().toISOString().split("T")[0], notes, created_by: actor,
     } as any);
-    await supabase.from("tools").update({ status: newStatus, updated_by: actor } as any).eq("id", tool.id);
+    const toolUpdate: any = { status: newStatus, updated_by: actor };
+    if (notes) toolUpdate.notes = notes;
+    await supabase.from("tools").update(toolUpdate).eq("id", tool.id);
 
     setSaving(false); setActionTool(null); loadAll();
   }
@@ -140,6 +142,12 @@ export default function EquipamentosPage() {
         },
       },
       { key: "location", label: "Local", hideOnMobile: true, render: (t: Tool) => t.location || "—" },
+      {
+        key: "notes", label: "Obs", hideOnMobile: true,
+        render: (t: Tool) => t.notes ? (
+          <span className="text-xs text-text-light max-w-[200px] truncate block" title={t.notes}>{t.notes}</span>
+        ) : <span className="text-text-light">—</span>,
+      },
       {
         key: "actions", label: "",
         render: (t: Tool) => (

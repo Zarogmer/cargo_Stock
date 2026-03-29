@@ -26,6 +26,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const initialized = useRef(false);
   const supabase = useMemo(() => createClient(), []);
 
+  async function logLoginEvent(userId: string, fullName: string, email: string, eventType: "LOGIN" | "LOGOUT") {
+    try {
+      await supabase.from("login_logs").insert({
+        user_id: userId,
+        full_name: fullName,
+        email,
+        event_type: eventType,
+      });
+    } catch (err) {
+      console.error("Failed to log event:", err);
+    }
+  }
+
   async function fetchProfile(userId: string): Promise<Profile | null> {
     try {
       const { data, error } = await supabase
@@ -168,6 +181,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       ) {
         const prof = await fetchProfile(currentUser.id);
         setProfile(prof);
+        // Log login event (only on SIGNED_IN, not token refresh)
+        if (event === "SIGNED_IN" && prof) {
+          logLoginEvent(currentUser.id, prof.full_name, prof.email, "LOGIN");
+        }
       } else if (!currentUser) {
         setProfile(null);
       }
@@ -182,6 +199,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   async function signOut() {
+    // Log logout event before signing out
+    if (user && profile) {
+      await logLoginEvent(user.id, profile.full_name, profile.email, "LOGOUT");
+    }
     try {
       await supabase.auth.signOut();
     } catch {

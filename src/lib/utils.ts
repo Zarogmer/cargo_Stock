@@ -60,6 +60,8 @@ export const MOVEMENT_TYPE_LABELS: Record<string, string> = {
   EM_OPERACAO: "Em Operação",
   CONCLUIDO: "Concluído",
   CANCELADO: "Cancelado",
+  LOGIN: "Login",
+  LOGOUT: "Logout",
 };
 
 export const CATEGORY_LABELS: Record<string, string> = {

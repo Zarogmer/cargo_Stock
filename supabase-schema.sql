@@ -206,6 +206,17 @@ CREATE TABLE public.mission_standard_items (
   display_order INTEGER NOT NULL DEFAULT 0
 );
 
+-- 13. LOGIN LOGS (track user login/logout)
+-- ============================================================
+CREATE TABLE public.login_logs (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  full_name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  event_type TEXT NOT NULL DEFAULT 'LOGIN', -- LOGIN or LOGOUT
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ============================================================
 -- ROW LEVEL SECURITY (RLS)
 -- All authenticated users can read/write (5 trusted employees)
@@ -222,6 +233,7 @@ ALTER TABLE public.uniform_movements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tools ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tool_movements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.mission_standard_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.login_logs ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: users can read all, update only their own
 CREATE POLICY "profiles_select" ON public.profiles FOR SELECT TO authenticated USING (true);
@@ -240,7 +252,8 @@ BEGIN
       'epis', 'epi_movements',
       'uniforms', 'uniform_movements',
       'tools', 'tool_movements',
-      'mission_standard_items'
+      'mission_standard_items',
+      'login_logs'
     ])
   LOOP
     EXECUTE format('CREATE POLICY "%s_select" ON public.%I FOR SELECT TO authenticated USING (true)', tbl, tbl);
@@ -262,3 +275,4 @@ CREATE INDEX idx_tool_movements_tool ON public.tool_movements(tool_id);
 CREATE INDEX idx_tools_asset_type ON public.tools(asset_type);
 CREATE INDEX idx_tools_status ON public.tools(status);
 CREATE INDEX idx_mission_standard_items_embark ON public.mission_standard_items(embark_name);
+CREATE INDEX idx_login_logs_created_at ON public.login_logs(created_at DESC);
