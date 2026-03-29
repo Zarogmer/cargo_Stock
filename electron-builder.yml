@@ -1,0 +1,30 @@
+appId: com.cargostock.app
+productName: Cargo Stock
+copyright: Copyright © 2024-2026 Cargo Stock
+
+directories:
+  output: dist-electron
+
+files:
+  - electron/**/*
+  - public/icons/**/*
+  - public/favicon.png
+  - package.json
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: public/icons/icon-512.png
+
+nsis:
+  oneClick: true
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+  installerIcon: public/icons/icon-512.png
+  uninstallerIcon: public/icons/icon-512.png
+  installerHeaderIcon: public/icons/icon-512.png
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Cargo Stock
