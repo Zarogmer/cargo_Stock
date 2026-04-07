@@ -9,7 +9,8 @@ export type Module =
   | "FERRAMENTAS"
   | "MAQUINARIO"
   | "NAVIOS"
-  | "FINANCEIRO_MOD";
+  | "FINANCEIRO_MOD"
+  | "SOLICITACOES";
 
 // Permission actions
 export type Permission =
@@ -76,6 +77,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
     FINANCEIRO_MOD: ["view"],
+    SOLICITACOES: ["view", "create", "edit", "delete"],
   },
 };
 
@@ -116,6 +118,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Estoque", href: "/estoque", icon: "estoque", module: "ESTOQUE" },
   { label: "Colaboradores", href: "/colaboradores", icon: "epi", module: "EPI" },
   { label: "Equipamentos", href: "/equipamentos", icon: "equipamentos", module: "FERRAMENTAS" },
+  { label: "Solicitações", href: "/solicitacoes", icon: "solicitacoes", module: "SOLICITACOES" },
   { label: "Financeiro", href: "/financeiro", icon: "financeiro", module: "FINANCEIRO_MOD" },
 ];
 

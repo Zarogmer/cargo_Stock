@@ -50,6 +50,7 @@ export default function DashboardPage() {
   const [dollar, setDollar] = useState<DollarQuote | null>(null);
   const [stockItems, setStockItems] = useState<StockChartItem[]>([]);
   const [shipsByMonth, setShipsByMonth] = useState<{ month: string; count: number }[]>([]);
+  const [recentPurchases, setRecentPurchases] = useState<{ id: string; tool_name: string; quantity: number; requested_by: string; responded_by: string; updated_at: string }[]>([]);
   const [loading, setLoading] = useState(true);
 
   const loadDashboard = useCallback(async () => {
@@ -153,6 +154,15 @@ export default function DashboardPage() {
 
       combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       setMovements(combined.slice(0, 30));
+
+      // Load recent purchases (COMPRADO status)
+      const purchasesRes = await supabase
+        .from("tool_requests")
+        .select("id, tool_name, quantity, requested_by, responded_by, updated_at")
+        .eq("status", "COMPRADO")
+        .order("updated_at", { ascending: false })
+        .limit(10);
+      setRecentPurchases((purchasesRes.data as any[]) || []);
     } catch (err) {
       console.error("Dashboard load error:", err);
     } finally {
@@ -272,6 +282,41 @@ export default function DashboardPage() {
           <h2 className="font-semibold text-text mb-1">Navios por Mês</h2>
           <p className="text-xs text-text-light mb-4">{new Date().getFullYear()} — baseado na data de saída</p>
           <ShipsBarChart data={shipsByMonth} />
+        </div>
+      )}
+
+      {/* Recent Purchases */}
+      {recentPurchases.length > 0 && (
+        <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
+          <div className="px-5 py-4 border-b border-border">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">🛒</span>
+              <div>
+                <h2 className="font-semibold text-text">Compras Recentes</h2>
+                <p className="text-xs text-text-light mt-0.5">Solicitações marcadas como compradas</p>
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 p-4">
+            {recentPurchases.map((p) => (
+              <div key={p.id} className="flex items-center gap-3 bg-blue-50 rounded-xl p-3 border border-blue-100">
+                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center shrink-0">
+                  <span className="text-blue-600 font-bold text-sm">x{p.quantity}</span>
+                </div>
+                <div className="min-w-0">
+                  <p className="font-medium text-text text-sm truncate">{p.tool_name}</p>
+                  <p className="text-xs text-text-light">
+                    Comprado por {p.responded_by} &middot; {formatDateTime(p.updated_at)}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="px-5 py-3 border-t border-border bg-gray-50/50">
+            <Link href="/solicitacoes" className="text-xs text-primary hover:text-primary-dark font-medium">
+              Ver todas as solicitações &rarr;
+            </Link>
+          </div>
         </div>
       )}
 

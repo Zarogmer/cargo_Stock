@@ -360,7 +360,7 @@ export default function NaviosPage() {
                         )}
                       </div>
                       {ship.notes && (
-                        <p className="text-xs text-text-light mt-1.5 line-clamp-1 italic">"{ship.notes}"</p>
+                        <p className="text-xs text-text-light mt-1.5 line-clamp-1 italic">&ldquo;{ship.notes}&rdquo;</p>
                       )}
                     </div>
 
@@ -419,7 +419,7 @@ export default function NaviosPage() {
                 <p><span className="text-text-light">Saída:</span> <span className="font-medium">{formatDate(selectedShip.departure_date)}</span></p>
               )}
               {selectedShip.notes && (
-                <p className="text-text-light italic text-xs pt-1">"{selectedShip.notes}"</p>
+                <p className="text-text-light italic text-xs pt-1">&ldquo;{selectedShip.notes}&rdquo;</p>
               )}
             </div>
 

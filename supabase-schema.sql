@@ -217,6 +217,34 @@ CREATE TABLE public.login_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 14. TOOL REQUESTS (solicitações de compra)
+-- ============================================================
+CREATE TABLE public.tool_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tool_name TEXT NOT NULL,
+  quantity INTEGER NOT NULL DEFAULT 1,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDENTE', -- PENDENTE, APROVADO, RECUSADO, COMPRADO
+  requested_by TEXT NOT NULL,
+  responded_by TEXT,
+  response_notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 15. PRODUCT LINKS (catálogo de produtos)
+-- ============================================================
+CREATE TABLE public.product_links (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'Outros',
+  description TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ============================================================
 -- ROW LEVEL SECURITY (RLS)
 -- All authenticated users can read/write (5 trusted employees)
@@ -234,6 +262,8 @@ ALTER TABLE public.tools ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tool_movements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.mission_standard_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.login_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tool_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.product_links ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: users can read all, update only their own
 CREATE POLICY "profiles_select" ON public.profiles FOR SELECT TO authenticated USING (true);
@@ -253,7 +283,9 @@ BEGIN
       'uniforms', 'uniform_movements',
       'tools', 'tool_movements',
       'mission_standard_items',
-      'login_logs'
+      'login_logs',
+      'tool_requests',
+      'product_links'
     ])
   LOOP
     EXECUTE format('CREATE POLICY "%s_select" ON public.%I FOR SELECT TO authenticated USING (true)', tbl, tbl);
@@ -276,3 +308,6 @@ CREATE INDEX idx_tools_asset_type ON public.tools(asset_type);
 CREATE INDEX idx_tools_status ON public.tools(status);
 CREATE INDEX idx_mission_standard_items_embark ON public.mission_standard_items(embark_name);
 CREATE INDEX idx_login_logs_created_at ON public.login_logs(created_at DESC);
+CREATE INDEX idx_tool_requests_status ON public.tool_requests(status);
+CREATE INDEX idx_tool_requests_created_at ON public.tool_requests(created_at DESC);
+CREATE INDEX idx_product_links_category ON public.product_links(category);
