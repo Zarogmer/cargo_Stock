@@ -51,6 +51,8 @@ export default function EquipamentosPage() {
   const canEdit = hasPermission(role, "FERRAMENTAS", "edit");
   const canDelete = hasPermission(role, "FERRAMENTAS", "delete");
   const canApproveRequests = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
+  const canDeleteRequests = role === "TECNOLOGIA";
+  const [deleteRequest, setDeleteRequest] = useState<ToolRequest | null>(null);
 
   const [dbError, setDbError] = useState<string | null>(null);
 
@@ -203,6 +205,12 @@ export default function EquipamentosPage() {
     loadAll();
   }
 
+  async function handleDeleteRequest(reqId: string) {
+    await supabase.from("tool_requests").delete().eq("id", reqId);
+    setDeleteRequest(null);
+    loadAll();
+  }
+
   const pendingCount = requests.filter((r) => r.status === "PENDENTE").length;
 
   const tabs = [
@@ -270,28 +278,47 @@ export default function EquipamentosPage() {
                           </p>
                         )}
                       </div>
-                      {canApproveRequests && req.status === "PENDENTE" && (
-                        <div className="flex gap-1 shrink-0">
+                      <div className="flex gap-1 shrink-0">
+                        {canApproveRequests && req.status === "PENDENTE" && (
+                          <>
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                const notes = prompt("Observação (opcional):");
+                                if (notes !== null) handleRespondRequest(req.id, "APROVADO", notes);
+                              }}
+                              className="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 font-medium transition"
+                            >
+                              Aprovar
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                const notes = prompt("Motivo da recusa (opcional):");
+                                if (notes !== null) handleRespondRequest(req.id, "RECUSADO", notes);
+                              }}
+                              className="px-3 py-1.5 text-xs bg-red-50 text-red-700 rounded-lg hover:bg-red-100 font-medium transition"
+                            >
+                              Recusar
+                            </button>
+                          </>
+                        )}
+                        {canDeleteRequests && (
                           <button
-                            onClick={() => {
-                              const notes = prompt("Observação (opcional):");
-                              handleRespondRequest(req.id, "APROVADO", notes || "");
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setDeleteRequest(req);
                             }}
-                            className="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 font-medium transition"
+                            className="p-1.5 text-danger hover:bg-red-50 rounded"
+                            title="Excluir solicitação"
                           >
-                            Aprovar
+                            <TrashIcon />
                           </button>
-                          <button
-                            onClick={() => {
-                              const notes = prompt("Motivo da recusa:");
-                              if (notes) handleRespondRequest(req.id, "RECUSADO", notes);
-                            }}
-                            className="px-3 py-1.5 text-xs bg-red-50 text-red-700 rounded-lg hover:bg-red-100 font-medium transition"
-                          >
-                            Recusar
-                          </button>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -343,6 +370,11 @@ export default function EquipamentosPage() {
       {/* Action Modal */}
       <ActionModal open={!!actionTool} onClose={() => setActionTool(null)} onConfirm={(notes) => handleAction(notes)}
         title={actionTool ? `${MOVEMENT_TYPE_LABELS[actionTool.action]}: ${actionTool.tool.name}` : ""} saving={saving} />
+
+      {/* Delete Request */}
+      <ConfirmDialog open={!!deleteRequest} onClose={() => setDeleteRequest(null)}
+        onConfirm={() => handleDeleteRequest(deleteRequest!.id)}
+        title="Excluir Solicitação" message={`Excluir solicitação "${deleteRequest?.tool_name}"?`} loading={saving} />
 
       {/* Request Form Modal */}
       <RequestFormModal open={showRequestForm} onClose={() => setShowRequestForm(false)} onSave={handleCreateRequest} saving={saving} />

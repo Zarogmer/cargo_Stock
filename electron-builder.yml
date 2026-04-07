@@ -17,7 +17,6 @@ win:
       arch:
         - x64
   icon: public/icons/icon.ico
-  signAndEditExecutable: false
 
 nsis:
   oneClick: true
