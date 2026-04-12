@@ -209,7 +209,6 @@ export default function SolicitacoesPage() {
             </div>
           )}
         </div>
-      )
   );
 
   return (
