@@ -118,7 +118,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Estoque", href: "/estoque", icon: "estoque", module: "ESTOQUE" },
   { label: "Colaboradores", href: "/colaboradores", icon: "epi", module: "EPI" },
   { label: "Equipamentos", href: "/equipamentos", icon: "equipamentos", module: "FERRAMENTAS" },
-  { label: "Solicitações", href: "/solicitacoes", icon: "solicitacoes", module: "SOLICITACOES" },
+  { label: "Controle", href: "/solicitacoes", icon: "solicitacoes", module: "SOLICITACOES" },
   { label: "Financeiro", href: "/financeiro", icon: "financeiro", module: "FINANCEIRO_MOD" },
 ];
 

@@ -4,10 +4,26 @@ import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase-browser";
+import { hasPermission } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
+import { formatDateTime } from "@/lib/utils";
+
+interface ToolRequest {
+  id: string;
+  tool_name: string;
+  quantity: number;
+  reason: string;
+  status: "PENDENTE" | "APROVADO" | "RECUSADO" | "COMPRADO";
+  requested_by: string;
+  responded_by: string | null;
+  response_notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 interface ProductLink {
   id: string;
@@ -38,15 +54,20 @@ export default function SolicitacoesPage() {
   const supabase = createClient();
   const role = profile?.role || "RH";
 
+  const [requests, setRequests] = useState<ToolRequest[]>([]);
   const [productLinks, setProductLinks] = useState<ProductLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  const [showRequestForm, setShowRequestForm] = useState(false);
   const [showLinkForm, setShowLinkForm] = useState(false);
   const [editLink, setEditLink] = useState<ProductLink | null>(null);
+  const [deleteRequest, setDeleteRequest] = useState<ToolRequest | null>(null);
   const [deleteLink, setDeleteLink] = useState<ProductLink | null>(null);
 
+  const canApproveRequests = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
   const canManageLinks = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
+  const canDeleteRequests = hasPermission(role, "SOLICITACOES", "delete");
 
   const [dbError, setDbError] = useState<string | null>(null);
 
@@ -54,12 +75,21 @@ export default function SolicitacoesPage() {
     setLoading(true);
     setDbError(null);
     try {
-      const { data, error } = await supabase.from("product_links").select("*").order("category").order("name");
-      if (error) {
-        console.error("DB error:", error);
-        setDbError(`product_links: ${error.code} ${error.message}`);
+      const [reqRes, linksRes] = await Promise.all([
+        supabase.from("tool_requests").select("*").order("created_at", { ascending: false }),
+        supabase.from("product_links").select("*").order("category").order("name"),
+      ]);
+
+      const errors: string[] = [];
+      if (reqRes.error) errors.push(`tool_requests: ${reqRes.error.code} ${reqRes.error.message}`);
+      if (linksRes.error && linksRes.error.code !== "42P01") errors.push(`product_links: ${linksRes.error.code} ${linksRes.error.message}`);
+      if (errors.length > 0) {
+        console.error("DB errors:", errors);
+        setDbError(errors.join(" | "));
       }
-      setProductLinks((data as ProductLink[]) || []);
+
+      setRequests((reqRes.data as ToolRequest[]) || []);
+      setProductLinks((linksRes.data as ProductLink[]) || []);
     } catch (err) {
       console.error("loadAll error:", err);
       setDbError(String(err));
@@ -69,6 +99,74 @@ export default function SolicitacoesPage() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll, pathname]);
+
+  async function handleCreateRequest(toolName: string, quantity: number, reason: string) {
+    setSaving(true);
+    try {
+      const { error } = await supabase.from("tool_requests").insert({
+        tool_name: toolName,
+        quantity,
+        reason,
+        status: "PENDENTE",
+        requested_by: profile?.full_name || "Sistema",
+      } as any);
+      if (error) throw error;
+      setShowRequestForm(false);
+      loadAll();
+    } catch (err) {
+      console.error("Erro ao criar solicitação:", err);
+      alert("Erro ao criar solicitação. Tente novamente.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleRespondRequest(reqId: string, status: "APROVADO" | "RECUSADO", notes: string) {
+    try {
+      const { error } = await supabase.from("tool_requests").update({
+        status,
+        responded_by: profile?.full_name || "Sistema",
+        response_notes: notes || null,
+        updated_at: new Date().toISOString(),
+      } as any).eq("id", reqId);
+      if (error) throw error;
+      loadAll();
+    } catch (err) {
+      console.error("Erro ao responder solicitação:", err);
+      alert("Erro ao responder solicitação. Tente novamente.");
+    }
+  }
+
+  async function handleMarkPurchased(reqId: string) {
+    try {
+      const { error } = await supabase.from("tool_requests").update({
+        status: "COMPRADO",
+        responded_by: profile?.full_name || "Sistema",
+        updated_at: new Date().toISOString(),
+      } as any).eq("id", reqId);
+      if (error) throw error;
+      loadAll();
+    } catch (err) {
+      console.error("Erro ao marcar como comprado:", err);
+      alert("Erro ao marcar como comprado. Tente novamente.");
+    }
+  }
+
+  async function handleDeleteRequest() {
+    if (!deleteRequest) return;
+    setSaving(true);
+    try {
+      const { error } = await supabase.from("tool_requests").delete().eq("id", deleteRequest.id);
+      if (error) throw error;
+      setDeleteRequest(null);
+      loadAll();
+    } catch (err) {
+      console.error("Erro ao excluir solicitação:", err);
+      alert("Erro ao excluir solicitação. Tente novamente.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function handleSaveLink(data: { name: string; url: string; category: string; description: string }) {
     setSaving(true);
@@ -113,6 +211,8 @@ export default function SolicitacoesPage() {
     }
   }
 
+  const pendingCount = requests.filter((r) => r.status === "PENDENTE").length;
+
   // Group product links by category
   const linksByCategory = productLinks.reduce<Record<string, ProductLink[]>>((acc, link) => {
     if (!acc[link.category]) acc[link.category] = [];
@@ -120,12 +220,113 @@ export default function SolicitacoesPage() {
     return acc;
   }, {});
 
-  const productListContent = (
+  const tabs = [
+    {
+      key: "solicitacoes",
+      label: `Solicitações${pendingCount > 0 ? ` (${pendingCount})` : ""}`,
+      content: (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <p className="text-sm text-text-light">Solicitações de compra de equipamentos e materiais</p>
+            <Button size="sm" onClick={() => setShowRequestForm(true)}>
+              <PlusIcon className="w-4 h-4" />Nova Solicitação
+            </Button>
+          </div>
+          {requests.length === 0 ? (
+            <div className="text-center py-12 text-text-light">
+              <span className="text-4xl block mb-3">📋</span>
+              <p className="font-medium">Nenhuma solicitação encontrada</p>
+              <p className="text-xs mt-1">Clique em &quot;Nova Solicitação&quot; para criar uma</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {requests.map((req) => {
+                const statusConfig: Record<string, { color: string; label: string }> = {
+                  PENDENTE: { color: "bg-amber-100 text-amber-700", label: "Pendente" },
+                  APROVADO: { color: "bg-green-100 text-green-700", label: "Aprovado" },
+                  RECUSADO: { color: "bg-red-100 text-red-700", label: "Recusado" },
+                  COMPRADO: { color: "bg-blue-100 text-blue-700", label: "Comprado" },
+                };
+                const cfg = statusConfig[req.status] || statusConfig.PENDENTE;
+                return (
+                  <div key={req.id} className="bg-card border border-border rounded-xl p-4 hover:shadow-sm transition">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-text">{req.tool_name}</span>
+                          <span className="text-xs text-text-light bg-gray-100 px-2 py-0.5 rounded-full">x{req.quantity}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cfg.color}`}>
+                            {cfg.label}
+                          </span>
+                        </div>
+                        <p className="text-sm text-text-light mt-1.5">{req.reason}</p>
+                        <div className="flex gap-3 mt-2 text-xs text-text-light">
+                          <span>Solicitado por: <strong>{req.requested_by}</strong></span>
+                          <span>{formatDateTime(req.created_at)}</span>
+                        </div>
+                        {req.responded_by && (
+                          <p className="text-xs text-text-light mt-1">
+                            Resposta de <strong>{req.responded_by}</strong>: {req.response_notes || "—"}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex gap-1 shrink-0 flex-wrap justify-end">
+                        {canApproveRequests && req.status === "PENDENTE" && (
+                          <>
+                            <button
+                              onClick={() => {
+                                const notes = prompt("Observação (opcional):");
+                                handleRespondRequest(req.id, "APROVADO", notes || "");
+                              }}
+                              className="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 font-medium transition"
+                            >
+                              Aprovar
+                            </button>
+                            <button
+                              onClick={() => {
+                                const notes = prompt("Motivo da recusa:");
+                                if (notes) handleRespondRequest(req.id, "RECUSADO", notes);
+                              }}
+                              className="px-3 py-1.5 text-xs bg-red-50 text-red-700 rounded-lg hover:bg-red-100 font-medium transition"
+                            >
+                              Recusar
+                            </button>
+                          </>
+                        )}
+                        {canApproveRequests && req.status === "APROVADO" && (
+                          <button
+                            onClick={() => handleMarkPurchased(req.id)}
+                            className="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 font-medium transition"
+                          >
+                            Marcar Comprado
+                          </button>
+                        )}
+                        {canDeleteRequests && (
+                          <button
+                            onClick={() => setDeleteRequest(req)}
+                            className="p-1.5 text-danger hover:bg-red-50 rounded-lg transition"
+                            title="Excluir solicitação"
+                          >
+                            <TrashIcon />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "produtos",
+      label: "Lista de Produtos",
+      content: (
         <div className="space-y-6">
           <div className="flex justify-between items-center">
-            <div>
-              <p className="text-sm text-text-light">Links de produtos frequentemente comprados, organizados por categoria</p>
-            </div>
+            <p className="text-sm text-text-light">Links de produtos frequentemente comprados, organizados por categoria</p>
             {canManageLinks && (
               <Button size="sm" onClick={() => { setEditLink(null); setShowLinkForm(true); }}>
                 <PlusIcon className="w-4 h-4" />Adicionar Produto
@@ -136,7 +337,7 @@ export default function SolicitacoesPage() {
           {productLinks.length === 0 ? (
             <div className="text-center py-12 text-text-light">
               <span className="text-4xl block mb-3">🛒</span>
-              <p className="font-medium">Nenhum produto no catálogo</p>
+              <p className="font-medium">Nenhum produto na lista</p>
               <p className="text-xs mt-1">Adicione links de produtos para facilitar as compras</p>
             </div>
           ) : (
@@ -209,11 +410,13 @@ export default function SolicitacoesPage() {
             </div>
           )}
         </div>
-  );
+      ),
+    },
+  ];
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-text">Lista de Produtos</h1>
+      <h1 className="text-2xl font-bold text-text">Controle</h1>
 
       {dbError && (
         <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700 font-mono break-all">
@@ -221,10 +424,23 @@ export default function SolicitacoesPage() {
         </div>
       )}
 
-      {productListContent}
+      <Tabs tabs={tabs} />
+
+      {/* Request Form Modal */}
+      <RequestFormModal open={showRequestForm} onClose={() => setShowRequestForm(false)} onSave={handleCreateRequest} saving={saving} />
 
       {/* Product Link Form Modal */}
       <LinkFormModal open={showLinkForm} onClose={() => { setShowLinkForm(false); setEditLink(null); }} onSave={handleSaveLink} item={editLink} saving={saving} />
+
+      {/* Delete Request Confirm */}
+      <ConfirmDialog
+        open={!!deleteRequest}
+        onClose={() => setDeleteRequest(null)}
+        onConfirm={handleDeleteRequest}
+        title="Excluir Solicitação"
+        message={`Excluir a solicitação "${deleteRequest?.tool_name}"?`}
+        loading={saving}
+      />
 
       {/* Delete Link Confirm */}
       <ConfirmDialog
@@ -252,6 +468,44 @@ function getCategoryIcon(category: string): string {
     "Outros": "📋",
   };
   return icons[category] || "📦";
+}
+
+function RequestFormModal({ open, onClose, onSave, saving }: {
+  open: boolean; onClose: () => void; onSave: (toolName: string, qty: number, reason: string) => void; saving: boolean;
+}) {
+  const [toolName, setToolName] = useState("");
+  const [quantity, setQuantity] = useState(1);
+  const [reason, setReason] = useState("");
+
+  useEffect(() => { setToolName(""); setQuantity(1); setReason(""); }, [open]);
+
+  return (
+    <Modal open={open} onClose={onClose} title="Nova Solicitação">
+      <form onSubmit={(e) => { e.preventDefault(); onSave(toolName, quantity, reason); }} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">Produto / Equipamento *</label>
+          <input type="text" value={toolName} onChange={(e) => setToolName(e.target.value)} required
+            placeholder="Ex: Furadeira, Chave inglesa, Luvas..."
+            className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Quantidade</label>
+          <input type="number" value={quantity} onChange={(e) => setQuantity(Number(e.target.value))} min={1}
+            className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Motivo / Justificativa *</label>
+          <textarea value={reason} onChange={(e) => setReason(e.target.value)} required rows={3}
+            placeholder="Para que será utilizado..."
+            className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" />
+        </div>
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={saving}>{saving ? "Enviando..." : "Enviar Solicitação"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
 }
 
 function LinkFormModal({ open, onClose, onSave, item, saving }: {
