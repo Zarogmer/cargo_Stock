@@ -91,70 +91,19 @@ export default function DashboardPage() {
       });
       setShipsByMonth(Object.entries(monthCounts).map(([month, count]) => ({ month, count })));
 
-      // Load recent movements from ALL sources
-      const [stockMov, epiMov, toolMov, requestsMov, shipsMov, empMov, loginMov] = await Promise.all([
-        db.from("stock_movements").select("id, movement_type, quantity, created_at, created_by, stock_items(name)").order("created_at", { ascending: false }).limit(10),
-        db.from("epi_movements").select("id, movement_type, quantity, created_at, created_by, epis(name)").order("created_at", { ascending: false }).limit(10),
-        db.from("tool_movements").select("id, movement_type, created_at, created_by, tools(name)").order("created_at", { ascending: false }).limit(10),
-        db.from("tool_requests").select("id, tool_name, status, notes, created_at, requested_by").order("created_at", { ascending: false }).limit(10),
-        db.from("ships").select("id, name, status, created_at, assigned_team").order("created_at", { ascending: false }).limit(10),
-        db.from("employees").select("id, name, team, created_at").order("created_at", { ascending: false }).limit(10),
-        db.from("login_logs").select("id, full_name, email, event_type, created_at").order("created_at", { ascending: false }).limit(10),
-      ]);
+      // Load login/logout logs only
+      const loginMov = await db.from("login_logs").select("id, full_name, email, event_type, created_at").order("created_at", { ascending: false }).limit(30);
 
       const combined: RecentMovement[] = [];
-
-      (stockMov.data || []).forEach((m: any) => {
-        combined.push({
-          id: `stock-${m.id}`, type: "Estoque", item_name: m.stock_items?.name || "—",
-          movement_type: m.movement_type, quantity: m.quantity, created_at: m.created_at, created_by: m.created_by,
-        });
-      });
-      (epiMov.data || []).forEach((m: any) => {
-        combined.push({
-          id: `epi-${m.id}`, type: "EPI", item_name: m.epis?.name || "—",
-          movement_type: m.movement_type, quantity: m.quantity, created_at: m.created_at, created_by: m.created_by,
-        });
-      });
-      (toolMov.data || []).forEach((m: any) => {
-        combined.push({
-          id: `tool-${m.id}`, type: "Equipamento", item_name: m.tools?.name || "—",
-          movement_type: m.movement_type, created_at: m.created_at, created_by: m.created_by,
-        });
-      });
-      (requestsMov.data || []).forEach((m: any) => {
-        const statusLabel = m.status === "APROVADO" ? "Aprovada" : m.status === "REJEITADO" ? "Rejeitada" : "Pendente";
-        combined.push({
-          id: `req-${m.id}`, type: "Solicitação", item_name: m.tool_name || "—",
-          movement_type: m.status, created_at: m.created_at, created_by: m.requested_by || "—",
-          detail: statusLabel,
-        });
-      });
-      (shipsMov.data || []).forEach((m: any) => {
-        combined.push({
-          id: `ship-${m.id}`, type: "Navio", item_name: m.name || "—",
-          movement_type: m.status || "CADASTRO", created_at: m.created_at, created_by: m.assigned_team || "—",
-          detail: m.status,
-        });
-      });
-      (empMov.data || []).forEach((m: any) => {
-        const teamLabel = m.team === "EQUIPE_1" ? "Equipe 1" : m.team === "EQUIPE_2" ? "Equipe 2" : m.team === "EQUIPE_3" ? "Equipe 3" : m.team === "COSTADO" ? "Costado" : "Sem equipe";
-        combined.push({
-          id: `emp-${m.id}`, type: "Colaborador", item_name: m.name || "—",
-          movement_type: "CADASTRO", created_at: m.created_at, created_by: teamLabel,
-          detail: teamLabel,
-        });
-      });
       (loginMov.data || []).forEach((m: any) => {
         combined.push({
           id: `login-${m.id}`, type: "Acesso", item_name: m.full_name || "—",
-          movement_type: m.event_type, created_at: m.created_at, created_by: m.full_name || "—",
+          movement_type: m.event_type, created_at: m.created_at, created_by: m.email || "—",
           detail: m.event_type === "LOGIN" ? "Entrou no sistema" : "Saiu do sistema",
         });
       });
 
-      combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      setMovements(combined.slice(0, 30));
+      setMovements(combined);
 
       // Load recent purchases (COMPRADO status)
       const purchasesRes = await db
@@ -211,7 +160,8 @@ export default function DashboardPage() {
   }
 
   const greeting = getGreeting();
-  const canSeeMovements = profile?.role === "EXECUTIVO" || profile?.role === "TECNOLOGIA" || profile?.role === "FINANCEIRO";
+  const allowedEmails = ["chico@cargostock.local", "sandra@cargostock.local", "guigui12306@gmail.com"];
+  const canSeeMovements = allowedEmails.includes(profile?.email || "");
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -321,51 +271,45 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Recent Movements - only for EXECUTIVO/FINANCEIRO/TECNOLOGIA */}
+      {/* Login Logs - only for chico, sandra, guilherme */}
       {canSeeMovements && (
         <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-          <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-            <div>
-              <h2 className="font-semibold text-text">Movimentações Recentes</h2>
-              <p className="text-xs text-text-light mt-0.5">Últimas 30 movimentações do sistema</p>
-            </div>
+          <div className="px-5 py-4 border-b border-border">
+            <h2 className="font-semibold text-text">Registro de Acessos</h2>
+            <p className="text-xs text-text-light mt-0.5">Entradas e saídas do sistema</p>
           </div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50/80 border-b border-border">
                 <tr>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Módulo</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Item</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Tipo</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Qtd</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Data</th>
                   <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Usuário</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Ação</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold text-text-light uppercase tracking-wider whitespace-nowrap">Data / Hora</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {movements.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-5 py-12 text-center text-text-light">
+                    <td colSpan={3} className="px-5 py-12 text-center text-text-light">
                       <div className="flex flex-col items-center gap-2">
                         <span className="text-3xl">📋</span>
-                        <p>Nenhuma movimentação registrada ainda</p>
+                        <p>Nenhum registro de acesso ainda</p>
                       </div>
                     </td>
                   </tr>
                 ) : (
                   movements.map((m) => (
                     <tr key={m.id} className="hover:bg-gray-50/50 transition">
-                      <td className="px-5 py-3 whitespace-nowrap">
-                        <ModuleBadge type={m.type} />
-                      </td>
                       <td className="px-5 py-3 font-medium text-text whitespace-nowrap">{m.item_name}</td>
                       <td className="px-5 py-3 whitespace-nowrap">
-                        <span className="text-text-light">{MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type}</span>
+                        <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${
+                          m.movement_type === "LOGIN" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                        }`}>
+                          {m.movement_type === "LOGIN" ? "🟢 Entrou" : "🔴 Saiu"}
+                        </span>
                       </td>
-                      <td className="px-5 py-3 font-medium whitespace-nowrap">{m.quantity || "—"}</td>
                       <td className="px-5 py-3 text-text-light text-xs whitespace-nowrap">{formatDateTime(m.created_at)}</td>
-                      <td className="px-5 py-3 text-text-light text-xs uppercase whitespace-nowrap">{m.created_by}</td>
                     </tr>
                   ))
                 )}
