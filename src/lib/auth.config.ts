@@ -23,6 +23,7 @@ export const authConfig = {
         path.startsWith("/auth") ||
         path.startsWith("/api/auth") ||
         path.startsWith("/api/seed") ||
+        path.startsWith("/api/seed-stock") ||
         path.startsWith("/debug");
 
       if (isPublic) return true;
