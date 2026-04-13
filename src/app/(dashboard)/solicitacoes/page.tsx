@@ -170,6 +170,29 @@ export default function SolicitacoesPage() {
     }
   }
 
+  // Usa fetch direto na API REST do Supabase (bypassa o cliente JS que trava no insert)
+  async function supabaseRest(method: "POST" | "PATCH" | "DELETE", path: string, body?: Record<string, unknown>) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error("Sessão expirada. Faça login novamente.");
+
+    const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        "Authorization": `Bearer ${token}`,
+        "Prefer": "return=minimal",
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+  }
+
   async function handleSaveLink(data: { name: string; url: string; category: string; description: string }) {
     setSaving(true);
     setSaveError(null);
@@ -182,11 +205,9 @@ export default function SolicitacoesPage() {
       };
 
       if (editLink) {
-        const { error } = await supabase.from("product_links").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", editLink.id);
-        if (error) throw new Error(error.message);
+        await supabaseRest("PATCH", `product_links?id=eq.${editLink.id}`, { ...payload, updated_at: new Date().toISOString() });
       } else {
-        const { error } = await supabase.from("product_links").insert({ ...payload, created_by: profile?.full_name || "Sistema" });
-        if (error) throw new Error(error.message);
+        await supabaseRest("POST", "product_links", { ...payload, created_by: profile?.full_name || "Sistema" });
       }
 
       setSaveError(null);
@@ -205,8 +226,7 @@ export default function SolicitacoesPage() {
     if (!deleteLink) return;
     setSaving(true);
     try {
-      const { error } = await supabase.from("product_links").delete().eq("id", deleteLink.id);
-      if (error) throw error;
+      await supabaseRest("DELETE", `product_links?id=eq.${deleteLink.id}`);
       setDeleteLink(null);
       loadAll();
     } catch (err) {
