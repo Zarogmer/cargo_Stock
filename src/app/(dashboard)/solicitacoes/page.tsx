@@ -180,13 +180,27 @@ export default function SolicitacoesPage() {
         category: data.category,
         description: data.description || null,
       };
+
+      // Timeout de 10s para nunca travar
+      const timeoutPromise = new Promise<{ error: { message: string } }>((resolve) =>
+        setTimeout(() => resolve({ error: { message: "Timeout: servidor não respondeu em 10 segundos. Verifique sua conexão." } }), 10000)
+      );
+
+      let result;
       if (editLink) {
-        const { error } = await supabase.from("product_links").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", editLink.id);
-        if (error) throw error;
+        result = await Promise.race([
+          supabase.from("product_links").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", editLink.id),
+          timeoutPromise,
+        ]);
       } else {
-        const { error } = await supabase.from("product_links").insert({ ...payload, created_by: profile?.full_name || "Sistema" });
-        if (error) throw error;
+        result = await Promise.race([
+          supabase.from("product_links").insert({ ...payload, created_by: profile?.full_name || "Sistema" }),
+          timeoutPromise,
+        ]);
       }
+
+      if (result.error) throw new Error(result.error.message);
+
       setSaveError(null);
       setShowLinkForm(false);
       setEditLink(null);
