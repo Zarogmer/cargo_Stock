@@ -511,49 +511,52 @@ export default function SolicitacoesPage() {
               <p className="font-medium">{suppliers.length === 0 ? "Nenhum fornecedor cadastrado" : "Nenhum resultado"}</p>
             </div>
           ) : (
-            <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-border">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Nome</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase hidden md:table-cell">Contato</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase hidden lg:table-cell">Endereço</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Categoria</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase hidden md:table-cell">Website</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase hidden lg:table-cell">Obs.</th>
-                      <th className="px-4 py-3 w-20"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {filteredSuppliers.map((s) => (
-                      <tr key={s.id} className="hover:bg-gray-50 transition">
-                        <td className="px-4 py-3 font-medium text-text whitespace-nowrap">{s.name}</td>
-                        <td className="px-4 py-3 text-text-light hidden md:table-cell whitespace-nowrap">{s.contact || "—"}</td>
-                        <td className="px-4 py-3 text-text-light hidden lg:table-cell text-xs max-w-[200px] truncate">{s.address || "—"}</td>
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          {s.category ? <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">{s.category}</span> : "—"}
-                        </td>
-                        <td className="px-4 py-3 hidden md:table-cell">
-                          {s.website ? (
+            <div className="space-y-3">
+              {filteredSuppliers.map((s) => (
+                <div key={s.id} className="bg-card border border-border rounded-xl p-4 hover:shadow-sm transition">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-text">{s.name}</span>
+                        {s.category && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">{s.category}</span>}
+                      </div>
+                      <div className="mt-2 space-y-1">
+                        {s.contact && (
+                          <div className="flex items-center gap-2 text-sm text-text-light">
+                            <span className="shrink-0">📞</span>
+                            <span>{s.contact}</span>
+                          </div>
+                        )}
+                        {s.address && (
+                          <div className="flex items-center gap-2 text-sm text-text-light">
+                            <span className="shrink-0">📍</span>
+                            <span>{s.address}</span>
+                          </div>
+                        )}
+                        {s.website && (
+                          <div className="flex items-center gap-2 text-sm">
+                            <span className="shrink-0">🌐</span>
                             <a href={s.website.startsWith("http") ? s.website : `https://${s.website}`} target="_blank" rel="noopener noreferrer"
-                              className="text-xs text-primary hover:underline truncate block max-w-[160px]">{s.website}</a>
-                          ) : "—"}
-                        </td>
-                        <td className="px-4 py-3 text-text-light text-xs hidden lg:table-cell max-w-[150px] truncate">{s.notes || "—"}</td>
-                        <td className="px-4 py-3">
-                          {canManageLinks && (
-                            <div className="flex gap-1">
-                              <button onClick={() => { setEditSupplier(s); setShowSupplierForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded"><EditIcon /></button>
-                              <button onClick={() => setDeleteSupplier(s)} className="p-1.5 text-danger hover:bg-red-50 rounded"><TrashIcon /></button>
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                              className="text-primary hover:underline truncate">{s.website}</a>
+                          </div>
+                        )}
+                        {s.notes && (
+                          <div className="flex items-center gap-2 text-sm text-text-light">
+                            <span className="shrink-0">📝</span>
+                            <span>{s.notes}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {canManageLinks && (
+                      <div className="flex gap-1 shrink-0">
+                        <button onClick={() => { setEditSupplier(s); setShowSupplierForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded"><EditIcon /></button>
+                        <button onClick={() => setDeleteSupplier(s)} className="p-1.5 text-danger hover:bg-red-50 rounded"><TrashIcon /></button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

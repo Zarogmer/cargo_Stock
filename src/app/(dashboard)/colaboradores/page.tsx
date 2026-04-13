@@ -239,18 +239,6 @@ export default function ColaboradoresPage() {
 
   const epiColumns = [
     { key: "name", label: "EPI", render: (e: Epi) => <span className="font-medium">{e.name}</span> },
-    { key: "ca_code", label: "CA", hideOnMobile: true, render: (e: Epi) => {
-      if (!e.ca_code) return "—";
-      const cas = e.ca_code.split(",").map((c) => c.trim()).filter(Boolean);
-      if (cas.length <= 1) return cas[0] || "—";
-      return (
-        <div className="flex flex-col gap-0.5">
-          {cas.map((ca, i) => (
-            <span key={i} className="text-xs"><span className="text-text-light">#{i + 1}:</span> {ca}</span>
-          ))}
-        </div>
-      );
-    }},
     { key: "size", label: "Tam.", render: (e: Epi) => e.size || "—" },
     { key: "stock_qty", label: "Qtd", render: (e: Epi) => <span className="font-semibold">{e.stock_qty}</span> },
     { key: "actions", label: "", className: "w-36", render: (e: Epi) => (
@@ -563,72 +551,23 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
 
 function EpiFormModal({ open, onClose, onSave, item, saving }: { open: boolean; onClose: () => void; onSave: (d: Partial<Epi>) => void; item: Epi | null; saving: boolean }) {
   const [name, setName] = useState("");
-  const [caList, setCaList] = useState<string[]>([""]);
   const [size, setSize] = useState("");
+  const [stockQty, setStockQty] = useState(0);
 
   useEffect(() => {
-    if (item) {
-      setName(item.name);
-      setSize(item.size || "");
-      // Parse existing CAs from comma-separated string
-      const existingCAs = item.ca_code ? item.ca_code.split(",").map((c) => c.trim()) : [];
-      // Ensure we have at least stock_qty fields
-      const count = Math.max(item.stock_qty, existingCAs.length, 1);
-      const padded = [...existingCAs];
-      while (padded.length < count) padded.push("");
-      setCaList(padded);
-    } else {
-      setName(""); setCaList([""]); setSize("");
-    }
+    if (item) { setName(item.name); setSize(item.size || ""); setStockQty(item.stock_qty); }
+    else { setName(""); setSize(""); setStockQty(0); }
   }, [item, open]);
 
-  function handleQtyChange(newQty: number) {
-    const qty = Math.max(1, newQty);
-    const newList = [...caList];
-    while (newList.length < qty) newList.push("");
-    while (newList.length > qty) newList.pop();
-    setCaList(newList);
-  }
-
-  function handleCaChange(index: number, value: string) {
-    const newList = [...caList];
-    newList[index] = value;
-    setCaList(newList);
-  }
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const caString = caList.filter((c) => c.trim()).join(", ");
-    onSave({ name, ca_code: caString || null, size: size || null, stock_qty: caList.length });
-  }
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
   return (
     <Modal open={open} onClose={onClose} title={item ? "Editar EPI" : "Novo EPI"}>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div><label className="block text-sm font-medium mb-1">Nome *</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} required className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
+      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, size: size || null, stock_qty: stockQty }); }} className="space-y-4">
+        <div><label className="block text-sm font-medium mb-1">Nome *</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} /></div>
         <div className="grid grid-cols-2 gap-4">
-          <div><label className="block text-sm font-medium mb-1">Tamanho</label><input type="text" value={size} onChange={(e) => setSize(e.target.value)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Quantidade</label>
-            <input type="number" value={caList.length} onChange={(e) => handleQtyChange(Number(e.target.value))} min={1} max={50} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" />
-          </div>
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-2">Certificados de Aprovação (CA) — 1 por unidade</label>
-          <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-            {caList.map((ca, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <span className="text-xs text-text-light w-6 text-right shrink-0">#{i + 1}</span>
-                <input
-                  type="text"
-                  value={ca}
-                  onChange={(e) => handleCaChange(i, e.target.value)}
-                  placeholder={`CA da unidade ${i + 1}`}
-                  className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
-                />
-              </div>
-            ))}
-          </div>
+          <div><label className="block text-sm font-medium mb-1">Tamanho</label><input type="text" value={size} onChange={(e) => setSize(e.target.value)} className={inputCls} /></div>
+          <div><label className="block text-sm font-medium mb-1">Quantidade</label><input type="number" value={stockQty} onChange={(e) => setStockQty(Number(e.target.value))} min={0} className={inputCls} /></div>
         </div>
         <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button></div>
       </form>
