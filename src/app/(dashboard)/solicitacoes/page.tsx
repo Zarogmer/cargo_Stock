@@ -70,6 +70,7 @@ export default function SolicitacoesPage() {
   const canDeleteRequests = hasPermission(role, "SOLICITACOES", "delete");
 
   const [dbError, setDbError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -82,7 +83,7 @@ export default function SolicitacoesPage() {
 
       const errors: string[] = [];
       if (reqRes.error) errors.push(`tool_requests: ${reqRes.error.code} ${reqRes.error.message}`);
-      if (linksRes.error && linksRes.error.code !== "42P01") errors.push(`product_links: ${linksRes.error.code} ${linksRes.error.message}`);
+      if (linksRes.error) errors.push(`product_links: ${linksRes.error.code} ${linksRes.error.message}`);
       if (errors.length > 0) {
         console.error("DB errors:", errors);
         setDbError(errors.join(" | "));
@@ -102,6 +103,7 @@ export default function SolicitacoesPage() {
 
   async function handleCreateRequest(toolName: string, quantity: number, reason: string) {
     setSaving(true);
+    setSaveError(null);
     try {
       const { error } = await supabase.from("tool_requests").insert({
         tool_name: toolName,
@@ -113,9 +115,9 @@ export default function SolicitacoesPage() {
       if (error) throw error;
       setShowRequestForm(false);
       loadAll();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Erro ao criar solicitação:", err);
-      alert("Erro ao criar solicitação. Tente novamente.");
+      setSaveError(`Erro ao criar solicitação: ${err?.message || String(err)}`);
     } finally {
       setSaving(false);
     }
@@ -133,7 +135,7 @@ export default function SolicitacoesPage() {
       loadAll();
     } catch (err) {
       console.error("Erro ao responder solicitação:", err);
-      alert("Erro ao responder solicitação. Tente novamente.");
+      setSaveError(`Erro ao responder solicitação: ${(err as any)?.message || String(err)}`);
     }
   }
 
@@ -148,7 +150,7 @@ export default function SolicitacoesPage() {
       loadAll();
     } catch (err) {
       console.error("Erro ao marcar como comprado:", err);
-      alert("Erro ao marcar como comprado. Tente novamente.");
+      setSaveError(`Erro ao marcar como comprado: ${(err as any)?.message || String(err)}`);
     }
   }
 
@@ -162,7 +164,7 @@ export default function SolicitacoesPage() {
       loadAll();
     } catch (err) {
       console.error("Erro ao excluir solicitação:", err);
-      alert("Erro ao excluir solicitação. Tente novamente.");
+      setSaveError(`Erro ao excluir solicitação: ${(err as any)?.message || String(err)}`);
     } finally {
       setSaving(false);
     }
@@ -170,6 +172,7 @@ export default function SolicitacoesPage() {
 
   async function handleSaveLink(data: { name: string; url: string; category: string; description: string }) {
     setSaving(true);
+    setSaveError(null);
     try {
       const payload = {
         name: data.name,
@@ -184,12 +187,13 @@ export default function SolicitacoesPage() {
         const { error } = await supabase.from("product_links").insert({ ...payload, created_by: profile?.full_name || "Sistema" });
         if (error) throw error;
       }
+      setSaveError(null);
       setShowLinkForm(false);
       setEditLink(null);
       loadAll();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Erro ao salvar produto:", err);
-      alert("Erro ao salvar produto. Tente novamente.");
+      setSaveError(`Erro ao salvar produto: ${err?.message || String(err)}`);
     } finally {
       setSaving(false);
     }
@@ -205,7 +209,7 @@ export default function SolicitacoesPage() {
       loadAll();
     } catch (err) {
       console.error("Erro ao excluir produto:", err);
-      alert("Erro ao excluir produto. Tente novamente.");
+      setSaveError(`Erro ao excluir produto: ${(err as any)?.message || String(err)}`);
     } finally {
       setSaving(false);
     }
@@ -424,13 +428,20 @@ export default function SolicitacoesPage() {
         </div>
       )}
 
+      {saveError && (
+        <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700 flex justify-between items-start gap-2">
+          <span>{saveError}</span>
+          <button onClick={() => setSaveError(null)} className="text-red-500 hover:text-red-700 font-bold shrink-0">✕</button>
+        </div>
+      )}
+
       <Tabs tabs={tabs} />
 
       {/* Request Form Modal */}
       <RequestFormModal open={showRequestForm} onClose={() => setShowRequestForm(false)} onSave={handleCreateRequest} saving={saving} />
 
       {/* Product Link Form Modal */}
-      <LinkFormModal open={showLinkForm} onClose={() => { setShowLinkForm(false); setEditLink(null); }} onSave={handleSaveLink} item={editLink} saving={saving} />
+      <LinkFormModal open={showLinkForm} onClose={() => { setShowLinkForm(false); setEditLink(null); setSaveError(null); }} onSave={handleSaveLink} item={editLink} saving={saving} error={saveError} />
 
       {/* Delete Request Confirm */}
       <ConfirmDialog
@@ -508,10 +519,10 @@ function RequestFormModal({ open, onClose, onSave, saving }: {
   );
 }
 
-function LinkFormModal({ open, onClose, onSave, item, saving }: {
+function LinkFormModal({ open, onClose, onSave, item, saving, error }: {
   open: boolean; onClose: () => void;
   onSave: (data: { name: string; url: string; category: string; description: string }) => void;
-  item: ProductLink | null; saving: boolean;
+  item: ProductLink | null; saving: boolean; error: string | null;
 }) {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
@@ -557,6 +568,11 @@ function LinkFormModal({ open, onClose, onSave, item, saving }: {
             placeholder="Observações sobre o produto, tamanho, cor..."
             className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" />
         </div>
+        {error && (
+          <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>
