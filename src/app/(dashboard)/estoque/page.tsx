@@ -76,7 +76,7 @@ export default function EstoquePage() {
       matchSearch(i.location || "", search);
     const matchesCategory =
       filterCategory === "TODOS" || i.category === filterCategory;
-    const matchesTeam = (i as any).team === activeTeam;
+    const matchesTeam = i.team === activeTeam;
     return matchesSearch && matchesCategory && matchesTeam;
   });
 
@@ -177,14 +177,14 @@ export default function EstoquePage() {
       key: "default_quantity",
       label: "Padrão",
       render: (i: StockItem) => (
-        <span className="text-text-light">{(i as any).default_quantity || "—"}</span>
+        <span className="text-text-light">{i.default_quantity || "—"}</span>
       ),
     },
     {
       key: "quantity",
       label: "Qtd",
       render: (i: StockItem) => {
-        const def = (i as any).default_quantity || 0;
+        const def = i.default_quantity || 0;
         const isLow = def > 0 && i.quantity < def * 0.5;
         const isEmpty = i.quantity <= 0;
         return (
@@ -424,7 +424,7 @@ function StockFormModal({
       setCategory(item.category);
       setLocation(item.location || "");
       setQuantity(item.quantity);
-      setDefaultQuantity((item as any).default_quantity || 0);
+      setDefaultQuantity(item.default_quantity || 0);
       setExpiryDate(item.expiry_date || "");
     } else {
       setName("");

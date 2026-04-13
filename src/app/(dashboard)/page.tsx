@@ -12,6 +12,7 @@ interface StockChartItem {
   quantity: number;
   default_quantity: number;
   category: string;
+  team: string | null;
 }
 
 interface DashboardStats {
@@ -263,7 +264,7 @@ export default function DashboardPage() {
               <h2 className="font-semibold text-text">Equipe 1</h2>
             </div>
             <p className="text-xs text-text-light mb-4">Prontidão para embarque</p>
-            <EmbarqueChart items={stockItems.filter((i) => (i as any).team === "EQUIPE_1")} />
+            <EmbarqueChart items={stockItems.filter((i) => i.team === "EQUIPE_1")} />
           </div>
           <div className="bg-card rounded-xl shadow-sm border border-border p-5">
             <div className="flex items-center gap-2 mb-1">
@@ -271,7 +272,7 @@ export default function DashboardPage() {
               <h2 className="font-semibold text-text">Equipe 2</h2>
             </div>
             <p className="text-xs text-text-light mb-4">Prontidão para embarque</p>
-            <EmbarqueChart items={stockItems.filter((i) => (i as any).team === "EQUIPE_2")} />
+            <EmbarqueChart items={stockItems.filter((i) => i.team === "EQUIPE_2")} />
           </div>
         </div>
       )}

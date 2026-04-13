@@ -31,6 +31,8 @@ export interface StockItem {
   category: StockCategory;
   location: string | null;
   quantity: number;
+  default_quantity: number;
+  team: string | null;
   expiry_date: string | null;
   min_quantity: number;
   updated_at: string;

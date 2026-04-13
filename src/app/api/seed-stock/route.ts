@@ -6,6 +6,10 @@ import { prisma } from "@/lib/prisma";
 // DELETE THIS FILE after use!
 export async function GET() {
   try {
+    // Clear ALL existing stock items first (and their movements)
+    await prisma.stockMovement.deleteMany({});
+    await prisma.stockItem.deleteMany({});
+
     const items = [
       // ── SUPRIMENTOS (Compras + Compras/KG) ──
       { name: "Pães", category: "SUPRIMENTOS", qty: 15 },
@@ -56,38 +60,36 @@ export async function GET() {
     ];
 
     const teams = ["EQUIPE_1", "EQUIPE_2"];
-    const created = [];
+    let totalCreated = 0;
 
     for (const team of teams) {
-      for (const item of items) {
-        const record = await prisma.stockItem.create({
-          data: {
-            name: item.name,
-            category: item.category as any,
-            quantity: item.qty,
-            default_quantity: item.qty,
-            team: team,
-            min_quantity: 0,
-            updated_by: "Sistema",
-          },
-        });
-        created.push({
-          id: record.id,
-          name: record.name,
-          category: record.category,
-          team: record.team,
-          qty: record.quantity,
-          padrao: record.default_quantity,
-        });
-      }
+      // Use createMany for faster bulk insert
+      await prisma.stockItem.createMany({
+        data: items.map((item) => ({
+          name: item.name,
+          category: item.category as any,
+          quantity: item.qty,
+          default_quantity: item.qty,
+          team: team,
+          min_quantity: 0,
+          updated_by: "Sistema",
+        })),
+      });
+      totalCreated += items.length;
     }
+
+    // Verify what was created
+    const verify = await prisma.stockItem.groupBy({
+      by: ["team"],
+      _count: { id: true },
+    });
 
     return NextResponse.json({
       success: true,
-      message: `${created.length} itens criados (${items.length} por equipe x ${teams.length} equipes). Estoque cheio = Qtd Padrão.`,
-      total: created.length,
+      message: `${totalCreated} itens criados (${items.length} por equipe x ${teams.length} equipes). Estoque cheio = Qtd Padrão.`,
+      total: totalCreated,
       per_team: items.length,
-      items: created,
+      verification: verify,
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

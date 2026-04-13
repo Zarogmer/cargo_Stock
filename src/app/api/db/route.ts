@@ -237,8 +237,12 @@ export async function POST(request: NextRequest) {
         }
 
         const updateData = { ...spec.data };
-        // Set updated_at for tables that have it
-        if ("updated_at" in (model.fields || {})) {
+        // Auto-set updated_at for tables that have it
+        const TABLES_WITH_UPDATED_AT = [
+          "stock_items", "users", "employees", "epis", "uniforms",
+          "tools", "tool_requests", "product_links",
+        ];
+        if (TABLES_WITH_UPDATED_AT.includes(spec.table)) {
           updateData.updated_at = new Date();
         }
 
