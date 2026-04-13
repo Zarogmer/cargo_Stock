@@ -5,6 +5,9 @@
   "main": "electron/main.js",
   "author": "Cargo Stock",
   "description": "Sistema de gestão de estoque e equipamentos para embarcações",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
