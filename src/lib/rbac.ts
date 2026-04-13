@@ -35,6 +35,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
+    SOLICITACOES: ["view", "create", "edit", "delete"],
   },
   EXECUTIVO: {
     DASHBOARD: ["view"],
@@ -44,6 +45,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
     FINANCEIRO_MOD: ["view"],
+    SOLICITACOES: ["view", "create", "edit", "delete"],
   },
   MANUTENCAO: {
     DASHBOARD: ["view"],
@@ -52,6 +54,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view"],
+    SOLICITACOES: ["view", "create", "edit", "delete"],
   },
   FINANCEIRO: {
     DASHBOARD: ["view"],
@@ -62,6 +65,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     MAQUINARIO: ["view"],
     NAVIOS: ["view"],
     FINANCEIRO_MOD: ["view"],
+    SOLICITACOES: ["view", "create", "edit", "delete"],
   },
   RH: {
     DASHBOARD: ["view"],
