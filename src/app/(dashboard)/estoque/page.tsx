@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { createClient } from "@/lib/supabase-browser";
+import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
 import { DataTable } from "@/components/ui/data-table";
 import { Button } from "@/components/ui/button";
@@ -26,7 +26,6 @@ const STOCK_CATEGORIES = [
 export default function EstoquePage() {
   const { profile } = useAuth();
   const pathname = usePathname();
-  const supabase = createClient();
   const [items, setItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [dbError, setDbError] = useState<string | null>(null);
@@ -50,12 +49,12 @@ export default function EstoquePage() {
     setLoading(true);
     setDbError(null);
     try {
-      const { data, error } = await supabase
+      const { data, error } = await db
         .from("stock_items")
         .select("*")
         .order("updated_at", { ascending: false });
       if (error) {
-        console.error("Supabase stock_items error:", error);
+        console.error("DB stock_items error:", error);
         setDbError(`${error.code}: ${error.message} — ${error.hint || ""}`);
       }
       setItems(data || []);
@@ -106,9 +105,9 @@ export default function EstoquePage() {
     const payload = { ...formData, updated_by: actor, team: activeTeam } as any;
 
     if (editItem) {
-      await supabase.from("stock_items").update(payload).eq("id", editItem.id);
+      await db.from("stock_items").update(payload).eq("id", editItem.id);
     } else {
-      await supabase.from("stock_items").insert(payload);
+      await db.from("stock_items").insert(payload);
     }
 
     setSaving(false);
@@ -120,7 +119,7 @@ export default function EstoquePage() {
   async function handleDelete() {
     if (!deleteItem) return;
     setSaving(true);
-    await supabase.from("stock_items").delete().eq("id", deleteItem.id);
+    await db.from("stock_items").delete().eq("id", deleteItem.id);
     setSaving(false);
     setDeleteItem(null);
     loadItems();
@@ -131,7 +130,7 @@ export default function EstoquePage() {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
 
-    await supabase.from("stock_movements").insert({
+    await db.from("stock_movements").insert({
       stock_item_id: baixaItem.id,
       movement_type: "BAIXA",
       quantity: qty,
@@ -140,7 +139,7 @@ export default function EstoquePage() {
       created_by: actor,
     } as any);
 
-    await supabase
+    await db
       .from("stock_items")
       .update({ quantity: baixaItem.quantity - qty, updated_by: actor } as any)
       .eq("id", baixaItem.id);

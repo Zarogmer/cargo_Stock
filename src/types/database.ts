@@ -149,39 +149,42 @@ export interface MissionStandardItem {
   display_order: number;
 }
 
-// Simplified Database type - uses Record<string, any> for Insert/Update
-// to avoid complex type inference issues with Supabase client
-type TableDef<T> = {
-  Row: T;
-  Insert: Record<string, any>;
-  Update: Record<string, any>;
-};
+// Ship type
+export interface Ship {
+  id: string;
+  name: string;
+  arrival_date: string | null;
+  departure_date: string | null;
+  port: string | null;
+  status: "AGENDADO" | "EM_OPERACAO" | "CONCLUIDO" | "CANCELADO";
+  assigned_team: string | null;
+  notes: string | null;
+  created_by: string;
+  created_at: string;
+}
 
-export interface Database {
-  public: {
-    Tables: {
-      profiles: TableDef<Profile>;
-      stock_items: TableDef<StockItem>;
-      stock_movements: TableDef<StockMovement>;
-      employees: TableDef<Employee>;
-      epis: TableDef<Epi>;
-      epi_movements: TableDef<EpiMovement>;
-      uniforms: TableDef<Uniform>;
-      uniform_movements: TableDef<UniformMovement>;
-      tools: TableDef<Tool>;
-      tool_movements: TableDef<ToolMovement>;
-      mission_standard_items: TableDef<MissionStandardItem>;
-    };
-    Views: Record<string, never>;
-    Functions: Record<string, never>;
-    Enums: {
-      role: Role;
-      stock_category: StockCategory;
-      movement_type: MovementType;
-      epi_movement_type: EpiMovementType;
-      tool_status: ToolStatus;
-      tool_movement_type: ToolMovementType;
-      asset_type: AssetType;
-    };
-  };
+// Product Link type
+export interface ProductLink {
+  id: string;
+  name: string;
+  url: string;
+  category: string;
+  description: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Tool Request type
+export interface ToolRequest {
+  id: string;
+  tool_name: string;
+  quantity: number;
+  reason: string;
+  status: "PENDENTE" | "APROVADO" | "RECUSADO" | "COMPRADO";
+  requested_by: string;
+  responded_by: string | null;
+  response_notes: string | null;
+  created_at: string;
+  updated_at: string;
 }

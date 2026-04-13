@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { createClient } from "@/lib/supabase-browser";
+import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
@@ -49,9 +49,8 @@ const PRODUCT_CATEGORIES = [
 ];
 
 export default function SolicitacoesPage() {
-  const { profile, accessToken } = useAuth();
+  const { profile } = useAuth();
   const pathname = usePathname();
-  const supabase = createClient();
   const role = profile?.role || "RH";
 
   const [requests, setRequests] = useState<ToolRequest[]>([]);
@@ -77,8 +76,8 @@ export default function SolicitacoesPage() {
     setDbError(null);
     try {
       const [reqRes, linksRes] = await Promise.all([
-        supabase.from("tool_requests").select("*").order("created_at", { ascending: false }),
-        supabase.from("product_links").select("*").order("category").order("name"),
+        db.from("tool_requests").select("*").order("created_at", { ascending: false }),
+        db.from("product_links").select("*").order("category").order("name"),
       ]);
 
       const errors: string[] = [];
@@ -105,7 +104,7 @@ export default function SolicitacoesPage() {
     setSaving(true);
     setSaveError(null);
     try {
-      const { error } = await supabase.from("tool_requests").insert({
+      const { error } = await db.from("tool_requests").insert({
         tool_name: toolName,
         quantity,
         reason,
@@ -125,7 +124,7 @@ export default function SolicitacoesPage() {
 
   async function handleRespondRequest(reqId: string, status: "APROVADO" | "RECUSADO", notes: string) {
     try {
-      const { error } = await supabase.from("tool_requests").update({
+      const { error } = await db.from("tool_requests").update({
         status,
         responded_by: profile?.full_name || "Sistema",
         response_notes: notes || null,
@@ -141,7 +140,7 @@ export default function SolicitacoesPage() {
 
   async function handleMarkPurchased(reqId: string) {
     try {
-      const { error } = await supabase.from("tool_requests").update({
+      const { error } = await db.from("tool_requests").update({
         status: "COMPRADO",
         responded_by: profile?.full_name || "Sistema",
         updated_at: new Date().toISOString(),
@@ -158,7 +157,7 @@ export default function SolicitacoesPage() {
     if (!deleteRequest) return;
     setSaving(true);
     try {
-      const { error } = await supabase.from("tool_requests").delete().eq("id", deleteRequest.id);
+      const { error } = await db.from("tool_requests").delete().eq("id", deleteRequest.id);
       if (error) throw error;
       setDeleteRequest(null);
       loadAll();
@@ -167,27 +166,6 @@ export default function SolicitacoesPage() {
       setSaveError(`Erro ao excluir solicitação: ${(err as any)?.message || String(err)}`);
     } finally {
       setSaving(false);
-    }
-  }
-
-  // Usa fetch direto na API REST do Supabase (bypassa o cliente JS que trava no insert)
-  async function supabaseRest(method: "POST" | "PATCH" | "DELETE", path: string, body?: Record<string, unknown>) {
-    if (!accessToken) throw new Error("Sessão expirada. Faça login novamente.");
-
-    const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/${path}`, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        "apikey": process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        "Authorization": `Bearer ${accessToken}`,
-        "Prefer": "return=minimal",
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(text || `HTTP ${res.status}`);
     }
   }
 
@@ -203,9 +181,11 @@ export default function SolicitacoesPage() {
       };
 
       if (editLink) {
-        await supabaseRest("PATCH", `product_links?id=eq.${editLink.id}`, { ...payload, updated_at: new Date().toISOString() });
+        const { error } = await db.from("product_links").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", editLink.id);
+        if (error) throw error;
       } else {
-        await supabaseRest("POST", "product_links", { ...payload, created_by: profile?.full_name || "Sistema" });
+        const { error } = await db.from("product_links").insert({ ...payload, created_by: profile?.full_name || "Sistema" });
+        if (error) throw error;
       }
 
       setSaveError(null);
@@ -224,7 +204,8 @@ export default function SolicitacoesPage() {
     if (!deleteLink) return;
     setSaving(true);
     try {
-      await supabaseRest("DELETE", `product_links?id=eq.${deleteLink.id}`);
+      const { error } = await db.from("product_links").delete().eq("id", deleteLink.id);
+      if (error) throw error;
       setDeleteLink(null);
       loadAll();
     } catch (err) {

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase-browser";
+import { db } from "@/lib/db";
 import { useAuth } from "@/lib/auth-context";
+import { useSession } from "next-auth/react";
 
 interface TableCheck {
   name: string;
@@ -13,21 +14,18 @@ interface TableCheck {
 
 export default function DebugPage() {
   const { profile } = useAuth();
-  const supabase = createClient();
+  const { data: session } = useSession();
   const [checks, setChecks] = useState<TableCheck[]>([]);
   const [loading, setLoading] = useState(true);
-  const [session, setSession] = useState<string>("checking...");
+  const [sessionInfo, setSessionInfo] = useState<string>("checking...");
 
   useEffect(() => {
     async function run() {
       // Check session
-      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError) {
-        setSession(`ERROR: ${sessionError.message}`);
-      } else if (sessionData.session) {
-        setSession(`OK — user: ${sessionData.session.user.email} | role: ${sessionData.session.user.role}`);
+      if (session?.user) {
+        setSessionInfo(`OK — user: ${session.user.email} | role: ${(session.user as any).role || "?"}`);
       } else {
-        setSession("NO SESSION — user not authenticated!");
+        setSessionInfo("NO SESSION — user not authenticated!");
       }
 
       const tables = [
@@ -42,21 +40,21 @@ export default function DebugPage() {
         "stock_movements",
         "epi_movements",
         "uniform_movements",
-        "profiles",
+        "users",
       ];
 
       const results: TableCheck[] = [];
 
       for (const table of tables) {
-        const { data, error, count } = await supabase
+        const { data, error } = await db
           .from(table)
-          .select("*", { count: "exact", head: false })
+          .select("*")
           .limit(3);
 
         results.push({
           name: table,
           count: data ? data.length : null,
-          error: error ? `${error.code}: ${error.message} (${error.details || ""} ${error.hint || ""})` : null,
+          error: error ? `${error.code}: ${error.message}` : null,
           data: data ? data.slice(0, 2) : null,
         });
       }
@@ -65,29 +63,28 @@ export default function DebugPage() {
       setLoading(false);
     }
     run();
-  }, []);
+  }, [session]);
 
   return (
     <div className="space-y-4 p-4">
-      <h1 className="text-2xl font-bold text-text">🔍 Diagnóstico do Sistema</h1>
+      <h1 className="text-2xl font-bold text-text">Diagnostico do Sistema</h1>
 
       <div className="bg-card rounded-xl border border-border p-4">
-        <h2 className="font-bold mb-2">Sessão de Autenticação</h2>
-        <p className="text-sm font-mono break-all">{session}</p>
+        <h2 className="font-bold mb-2">Sessao de Autenticacao</h2>
+        <p className="text-sm font-mono break-all">{sessionInfo}</p>
       </div>
 
       <div className="bg-card rounded-xl border border-border p-4">
-        <h2 className="font-bold mb-2">Perfil do Usuário</h2>
+        <h2 className="font-bold mb-2">Perfil do Usuario</h2>
         <pre className="text-xs font-mono break-all whitespace-pre-wrap">
           {JSON.stringify(profile, null, 2)}
         </pre>
       </div>
 
       <div className="bg-card rounded-xl border border-border p-4">
-        <h2 className="font-bold mb-2">Variáveis de Ambiente</h2>
+        <h2 className="font-bold mb-2">Plataforma</h2>
         <p className="text-sm font-mono break-all">
-          URL: {process.env.NEXT_PUBLIC_SUPABASE_URL || "NÃO DEFINIDO"}<br/>
-          KEY: {process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? `${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY.substring(0, 20)}...` : "NÃO DEFINIDO"}
+          Railway + PostgreSQL + NextAuth.js
         </p>
       </div>
 

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
-import { createClient } from "@/lib/supabase-browser";
+import { db } from "@/lib/db";
 import { formatDateTime, MOVEMENT_TYPE_LABELS, CATEGORY_LABELS } from "@/lib/utils";
 
 interface StockChartItem {
@@ -44,7 +44,7 @@ interface DollarQuote {
 export default function DashboardPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
-  const supabase = createClient();
+
   const [stats, setStats] = useState<DashboardStats>({ totalStock: 0, totalEmployees: 0, totalTools: 0, totalEpis: 0 });
   const [movements, setMovements] = useState<RecentMovement[]>([]);
   const [dollar, setDollar] = useState<DollarQuote | null>(null);
@@ -57,11 +57,11 @@ export default function DashboardPage() {
     setLoading(true);
     try {
       const [stockRes, stockFullRes, employeesRes, toolsRes, episRes] = await Promise.all([
-        supabase.from("stock_items").select("id", { count: "exact", head: true }),
-        supabase.from("stock_items").select("name, quantity, default_quantity, category, team"),
-        supabase.from("employees").select("id", { count: "exact", head: true }),
-        supabase.from("tools").select("id", { count: "exact", head: true }),
-        supabase.from("epis").select("id", { count: "exact", head: true }),
+        db.from("stock_items").select("id", { count: "exact", head: true }),
+        db.from("stock_items").select("name, quantity, default_quantity, category, team"),
+        db.from("employees").select("id", { count: "exact", head: true }),
+        db.from("tools").select("id", { count: "exact", head: true }),
+        db.from("epis").select("id", { count: "exact", head: true }),
       ]);
 
       setStats({
@@ -74,7 +74,7 @@ export default function DashboardPage() {
       setStockItems((stockFullRes.data || []) as StockChartItem[]);
 
       // Load ships for monthly chart (Jan-Dec of current year)
-      const shipsRes = await supabase.from("ships").select("departure_date, created_at");
+      const shipsRes = await db.from("ships").select("departure_date, created_at");
       const shipsData = shipsRes.data || [];
       const year = new Date().getFullYear();
       const monthCounts: Record<string, number> = {};
@@ -92,13 +92,13 @@ export default function DashboardPage() {
 
       // Load recent movements from ALL sources
       const [stockMov, epiMov, toolMov, requestsMov, shipsMov, empMov, loginMov] = await Promise.all([
-        supabase.from("stock_movements").select("id, movement_type, quantity, created_at, created_by, stock_items(name)").order("created_at", { ascending: false }).limit(10),
-        supabase.from("epi_movements").select("id, movement_type, quantity, created_at, created_by, epis(name)").order("created_at", { ascending: false }).limit(10),
-        supabase.from("tool_movements").select("id, movement_type, created_at, created_by, tools(name)").order("created_at", { ascending: false }).limit(10),
-        supabase.from("tool_requests").select("id, tool_name, status, notes, created_at, requested_by").order("created_at", { ascending: false }).limit(10),
-        supabase.from("ships").select("id, name, status, created_at, assigned_team").order("created_at", { ascending: false }).limit(10),
-        supabase.from("employees").select("id, name, team, created_at").order("created_at", { ascending: false }).limit(10),
-        supabase.from("login_logs").select("id, full_name, email, event_type, created_at").order("created_at", { ascending: false }).limit(10),
+        db.from("stock_movements").select("id, movement_type, quantity, created_at, created_by, stock_items(name)").order("created_at", { ascending: false }).limit(10),
+        db.from("epi_movements").select("id, movement_type, quantity, created_at, created_by, epis(name)").order("created_at", { ascending: false }).limit(10),
+        db.from("tool_movements").select("id, movement_type, created_at, created_by, tools(name)").order("created_at", { ascending: false }).limit(10),
+        db.from("tool_requests").select("id, tool_name, status, notes, created_at, requested_by").order("created_at", { ascending: false }).limit(10),
+        db.from("ships").select("id, name, status, created_at, assigned_team").order("created_at", { ascending: false }).limit(10),
+        db.from("employees").select("id, name, team, created_at").order("created_at", { ascending: false }).limit(10),
+        db.from("login_logs").select("id, full_name, email, event_type, created_at").order("created_at", { ascending: false }).limit(10),
       ]);
 
       const combined: RecentMovement[] = [];
@@ -156,7 +156,7 @@ export default function DashboardPage() {
       setMovements(combined.slice(0, 30));
 
       // Load recent purchases (COMPRADO status)
-      const purchasesRes = await supabase
+      const purchasesRes = await db
         .from("tool_requests")
         .select("id, tool_name, quantity, requested_by, responded_by, updated_at")
         .eq("status", "COMPRADO")

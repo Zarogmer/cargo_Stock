@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { createClient } from "@/lib/supabase-browser";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
@@ -10,28 +10,10 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [ready, setReady] = useState(false);
   const router = useRouter();
-  const supabase = createClient();
+  const { data: session } = useSession();
 
-  useEffect(() => {
-    // Check if there's a session (user came from reset link)
-    supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY") {
-        setReady(true);
-      }
-    });
-
-    // Also check hash params (Supabase sends tokens in URL hash)
-    if (window.location.hash.includes("access_token")) {
-      setReady(true);
-    }
-
-    // Fallback: check if user has a session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) setReady(true);
-    });
-  }, []);
+  const ready = !!session?.user;
 
   async function handleResetPassword(e: React.FormEvent) {
     e.preventDefault();
@@ -49,20 +31,28 @@ export default function ResetPasswordPage() {
 
     setLoading(true);
 
-    const { error: err } = await supabase.auth.updateUser({
-      password,
-    });
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
 
-    if (err) {
-      setError(`Erro: ${err.message}`);
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error || "Erro ao alterar senha.");
+        setLoading(false);
+        return;
+      }
+
+      setSuccess(true);
+      setTimeout(() => {
+        router.push("/");
+      }, 2000);
+    } catch {
+      setError("Erro ao conectar com o servidor.");
       setLoading(false);
-      return;
     }
-
-    setSuccess(true);
-    setTimeout(() => {
-      router.push("/");
-    }, 2000);
   }
 
   return (
@@ -104,10 +94,7 @@ export default function ResetPasswordPage() {
           </div>
         ) : !ready ? (
           <div className="bg-white rounded-2xl shadow-xl p-6 text-center">
-            <p className="text-gray-600">Verificando link de recuperação...</p>
-            <p className="text-gray-400 text-sm mt-2">
-              Se esta página não carregar, solicite um novo link de recuperação.
-            </p>
+            <p className="text-gray-600">Faça login para alterar sua senha.</p>
             <button
               onClick={() => router.push("/login")}
               className="mt-4 text-primary hover:text-primary-dark text-sm"

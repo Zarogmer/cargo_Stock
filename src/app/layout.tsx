@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { PwaRegister } from "@/components/pwa-register";
+import { SessionProvider } from "next-auth/react";
 
 export const metadata: Metadata = {
   title: "Cargo Stock",
@@ -32,8 +33,10 @@ export default function RootLayout({
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
       </head>
       <body className="antialiased">
-        <PwaRegister />
-        {children}
+        <SessionProvider>
+          <PwaRegister />
+          {children}
+        </SessionProvider>
       </body>
     </html>
   );

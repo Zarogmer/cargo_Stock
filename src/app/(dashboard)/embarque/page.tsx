@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { createClient } from "@/lib/supabase-browser";
+import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -23,7 +23,6 @@ interface Ship {
 export default function EmbarquePage() {
   const { profile } = useAuth();
   const pathname = usePathname();
-  const supabase = createClient();
   const role = profile?.role || "RH";
   const canEmbarcar = hasPermission(role, "EMBARQUE", "embarcar");
 
@@ -39,8 +38,8 @@ export default function EmbarquePage() {
     setLoading(true);
     try {
       const [shipsRes, stockRes] = await Promise.all([
-        supabase.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
-        supabase.from("stock_items").select("*").order("name"),
+        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
+        db.from("stock_items").select("*").order("name"),
       ]);
       setShips((shipsRes.data as Ship[]) || []);
       setStockItems(stockRes.data || []);
@@ -97,7 +96,7 @@ export default function EmbarquePage() {
       const toConsume = Math.min(item.quantity, item.default_quantity);
 
       // Create stock movement (BAIXA)
-      await supabase.from("stock_movements").insert({
+      await db.from("stock_movements").insert({
         stock_item_id: item.id,
         movement_type: "BAIXA",
         quantity: toConsume,
@@ -107,7 +106,7 @@ export default function EmbarquePage() {
       } as any);
 
       // Update stock quantity
-      await supabase.from("stock_items").update({
+      await db.from("stock_items").update({
         quantity: item.quantity - toConsume,
         updated_by: actor,
       } as any).eq("id", item.id);
@@ -115,7 +114,7 @@ export default function EmbarquePage() {
 
     // Update ship status
     if (currentShip.status === "AGENDADO") {
-      await supabase.from("ships").update({ status: "EM_OPERACAO" } as any).eq("id", selectedShip);
+      await db.from("ships").update({ status: "EM_OPERACAO" } as any).eq("id", selectedShip);
     }
 
     setEmbarking(false);

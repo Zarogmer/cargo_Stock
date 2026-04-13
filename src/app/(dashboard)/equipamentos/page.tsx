@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { createClient } from "@/lib/supabase-browser";
+import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
 import { DataTable } from "@/components/ui/data-table";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,6 @@ import type { Tool, ToolStatus, AssetType, ToolMovementType } from "@/types/data
 export default function EquipamentosPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
-  const supabase = createClient();
   const role = profile?.role || "RH";
 
   const [tools, setTools] = useState<Tool[]>([]);
@@ -43,8 +42,8 @@ export default function EquipamentosPage() {
     setDbError(null);
     try {
       const [toolsRes, movRes] = await Promise.all([
-        supabase.from("tools").select("*").order("name"),
-        supabase.from("tool_movements").select("*, tools(name, asset_type)").order("created_at", { ascending: false }).limit(50),
+        db.from("tools").select("*").order("name"),
+        db.from("tool_movements").select("*, tools(name, asset_type)").order("created_at", { ascending: false }).limit(50),
       ]);
 
       const errors: string[] = [];
@@ -77,9 +76,9 @@ export default function EquipamentosPage() {
     const actor = profile?.full_name || "Sistema";
     const payload = { ...data, updated_by: actor } as any;
     if (editTool) {
-      await supabase.from("tools").update(payload).eq("id", editTool.id);
+      await db.from("tools").update(payload).eq("id", editTool.id);
     } else {
-      await supabase.from("tools").insert(payload);
+      await db.from("tools").insert(payload);
     }
     setSaving(false); setShowForm(false); setEditTool(null); loadAll();
   }
@@ -96,13 +95,13 @@ export default function EquipamentosPage() {
     else if (action === "DEVOLUCAO") newStatus = "DISPONIVEL";
     else if (action === "MANUTENCAO") newStatus = "MANUTENCAO";
 
-    await supabase.from("tool_movements").insert({
+    await db.from("tool_movements").insert({
       tool_id: tool.id, employee_name: actor, movement_type: action,
       movement_date: new Date().toISOString().split("T")[0], notes, created_by: actor,
     } as any);
     const toolUpdate: any = { status: newStatus, updated_by: actor };
     if (notes) toolUpdate.notes = notes;
-    await supabase.from("tools").update(toolUpdate).eq("id", tool.id);
+    await db.from("tools").update(toolUpdate).eq("id", tool.id);
 
     setSaving(false); setActionTool(null); loadAll();
   }
@@ -217,7 +216,7 @@ export default function EquipamentosPage() {
 
       {/* Delete */}
       <ConfirmDialog open={!!deleteTool} onClose={() => setDeleteTool(null)}
-        onConfirm={async () => { setSaving(true); await supabase.from("tools").delete().eq("id", deleteTool!.id); setSaving(false); setDeleteTool(null); loadAll(); }}
+        onConfirm={async () => { setSaving(true); await db.from("tools").delete().eq("id", deleteTool!.id); setSaving(false); setDeleteTool(null); loadAll(); }}
         title="Excluir Equipamento" message={`Excluir "${deleteTool?.name}"?`} loading={saving} />
 
       {/* Action Modal */}

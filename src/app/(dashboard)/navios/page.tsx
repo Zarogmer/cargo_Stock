@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { hasPermission } from "@/lib/rbac";
-import { createClient } from "@/lib/supabase-browser";
+import { db } from "@/lib/db";
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -71,7 +71,6 @@ const EMPTY_FORM = {
 export default function NaviosPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
-  const supabase = createClient();
 
   const [ships, setShips] = useState<Ship[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -103,7 +102,7 @@ export default function NaviosPage() {
   const loadShips = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await supabase
+      const { data } = await db
         .from("ships")
         .select("*")
         .order("arrival_date", { ascending: false });
@@ -117,7 +116,7 @@ export default function NaviosPage() {
 
   const loadEmployees = useCallback(async () => {
     try {
-      const { data } = await supabase
+      const { data } = await db
         .from("employees")
         .select("id, name, team")
         .order("name");
@@ -192,7 +191,7 @@ export default function NaviosPage() {
     };
 
     if (editingShip) {
-      const { error } = await supabase
+      const { error } = await db
         .from("ships")
         .update(payload)
         .eq("id", editingShip.id);
@@ -201,7 +200,7 @@ export default function NaviosPage() {
         setSelectedShip({ ...editingShip, ...payload });
       }
     } else {
-      const { error } = await supabase.from("ships").insert(payload);
+      const { error } = await db.from("ships").insert(payload);
       if (error) { setFormError(error.message); setSaving(false); return; }
     }
 
@@ -211,7 +210,7 @@ export default function NaviosPage() {
   }
 
   async function handleDelete(id: string) {
-    await supabase.from("ships").delete().eq("id", id);
+    await db.from("ships").delete().eq("id", id);
     if (selectedShip?.id === id) setSelectedShip(null);
     setDeleteId(null);
     loadShips();
@@ -227,7 +226,7 @@ export default function NaviosPage() {
   async function handleAssignTeam(team: string | null) {
     if (!selectedShip) return;
     setShipTeamLoading(true);
-    await supabase.from("ships").update({ assigned_team: team } as any).eq("id", selectedShip.id);
+    await db.from("ships").update({ assigned_team: team } as any).eq("id", selectedShip.id);
     setShipTeam(team);
     setSelectedShip({ ...selectedShip, assigned_team: team });
     // Refresh ship list

@@ -1,0 +1,313 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  GESTOR
+  EXECUTIVO
+  MANUTENCAO
+  FINANCEIRO
+  RH
+  TECNOLOGIA
+}
+
+enum StockCategory {
+  COMPRAS
+  CARNES
+  CARNE
+  FEIRA
+  SUPRIMENTOS
+  OUTROS
+}
+
+enum MovementType {
+  ENTRADA
+  BAIXA
+  AJUSTE
+}
+
+enum EpiMovementType {
+  ENTREGA
+  DEVOLUCAO
+}
+
+enum ToolStatus {
+  DISPONIVEL
+  EQUIPE_1
+  EQUIPE_2
+  MANUTENCAO
+}
+
+enum ToolMovementType {
+  EQUIPE_1
+  EQUIPE_2
+  DEVOLUCAO
+  MANUTENCAO
+}
+
+enum AssetType {
+  FERRAMENTA
+  MAQUINARIO
+}
+
+enum ShipStatus {
+  AGENDADO
+  EM_OPERACAO
+  CONCLUIDO
+  CANCELADO
+}
+
+// ── Users (replaces Supabase auth.users + profiles) ─────────────────────────
+
+model User {
+  id            String     @id @default(uuid()) @db.Uuid
+  email         String     @unique
+  password_hash String
+  full_name     String
+  role          Role       @default(RH)
+  created_at    DateTime   @default(now()) @db.Timestamptz()
+  updated_at    DateTime   @default(now()) @updatedAt @db.Timestamptz()
+  login_logs    LoginLog[]
+
+  @@map("users")
+}
+
+// ── Stock ────────────────────────────────────────────────────────────────────
+
+model StockItem {
+  id               Int             @id @default(autoincrement())
+  name             String
+  category         StockCategory   @default(OUTROS)
+  location         String?
+  quantity         Int             @default(0)
+  default_quantity Int             @default(0)
+  team             String?
+  expiry_date      DateTime?       @db.Date
+  min_quantity     Int             @default(0)
+  updated_at       DateTime        @default(now()) @db.Timestamptz()
+  updated_by       String
+  stock_movements  StockMovement[]
+
+  @@index([category])
+  @@map("stock_items")
+}
+
+model StockMovement {
+  id             Int          @id @default(autoincrement())
+  stock_item_id  Int
+  movement_type  MovementType
+  quantity       Int
+  movement_date  DateTime     @default(now()) @db.Date
+  notes          String?
+  created_by     String
+  created_at     DateTime     @default(now()) @db.Timestamptz()
+  stock_items    StockItem    @relation(fields: [stock_item_id], references: [id], onDelete: Cascade)
+
+  @@index([stock_item_id])
+  @@map("stock_movements")
+}
+
+// ── Employees ────────────────────────────────────────────────────────────────
+
+model Employee {
+  id                 Int       @id @default(autoincrement())
+  name               String
+  team               String?
+  birth_date         DateTime? @db.Date
+  phone              String?
+  email              String?
+  family_phone       String?
+  notes              String?
+  bank_name          String?
+  bank_agency        String?
+  bank_account       String?
+  bank_account_type  String?
+  has_vaccination_card Boolean? @default(false)
+  has_cnh            Boolean?  @default(false)
+  updated_at         DateTime  @default(now()) @db.Timestamptz()
+  updated_by         String
+
+  @@map("employees")
+}
+
+// ── EPIs ─────────────────────────────────────────────────────────────────────
+
+model Epi {
+  id            Int            @id @default(autoincrement())
+  name          String
+  ca_code       String?
+  size          String?
+  stock_qty     Int            @default(0)
+  updated_at    DateTime       @default(now()) @db.Timestamptz()
+  updated_by    String
+  epi_movements EpiMovement[]
+
+  @@map("epis")
+}
+
+model EpiMovement {
+  id            Int             @id @default(autoincrement())
+  epi_id        Int
+  employee_name String
+  movement_type EpiMovementType
+  quantity      Int             @default(1)
+  movement_date DateTime        @default(now()) @db.Date
+  notes         String?
+  created_by    String
+  created_at    DateTime        @default(now()) @db.Timestamptz()
+  epis          Epi             @relation(fields: [epi_id], references: [id], onDelete: Cascade)
+
+  @@index([epi_id])
+  @@map("epi_movements")
+}
+
+// ── Uniforms ─────────────────────────────────────────────────────────────────
+
+model Uniform {
+  id                Int                @id @default(autoincrement())
+  name              String
+  size              String?
+  stock_qty         Int                @default(0)
+  updated_at        DateTime           @default(now()) @db.Timestamptz()
+  updated_by        String
+  uniform_movements UniformMovement[]
+
+  @@map("uniforms")
+}
+
+model UniformMovement {
+  id            Int             @id @default(autoincrement())
+  uniform_id    Int
+  employee_name String
+  movement_type EpiMovementType
+  quantity      Int             @default(1)
+  movement_date DateTime        @default(now()) @db.Date
+  notes         String?
+  created_by    String
+  created_at    DateTime        @default(now()) @db.Timestamptz()
+  uniforms      Uniform         @relation(fields: [uniform_id], references: [id], onDelete: Cascade)
+
+  @@index([uniform_id])
+  @@map("uniform_movements")
+}
+
+// ── Tools / Machinery ────────────────────────────────────────────────────────
+
+model Tool {
+  id              Int              @id @default(autoincrement())
+  name            String
+  status          ToolStatus       @default(DISPONIVEL)
+  location        String?
+  notes           String?
+  asset_type      AssetType        @default(FERRAMENTA)
+  updated_at      DateTime         @default(now()) @db.Timestamptz()
+  updated_by      String
+  tool_movements  ToolMovement[]
+
+  @@index([asset_type])
+  @@index([status])
+  @@map("tools")
+}
+
+model ToolMovement {
+  id            Int              @id @default(autoincrement())
+  tool_id       Int
+  employee_name String
+  movement_type ToolMovementType
+  movement_date DateTime         @default(now()) @db.Date
+  notes         String?
+  created_by    String
+  created_at    DateTime         @default(now()) @db.Timestamptz()
+  tools         Tool             @relation(fields: [tool_id], references: [id], onDelete: Cascade)
+
+  @@index([tool_id])
+  @@map("tool_movements")
+}
+
+// ── Mission Standard Items ───────────────────────────────────────────────────
+
+model MissionStandardItem {
+  id            Int    @id @default(autoincrement())
+  name          String
+  embark_name   String
+  category      String
+  required_qty  Int    @default(0)
+  display_order Int    @default(0)
+
+  @@index([embark_name])
+  @@map("mission_standard_items")
+}
+
+// ── Ships ────────────────────────────────────────────────────────────────────
+
+model Ship {
+  id             String     @id @default(uuid()) @db.Uuid
+  name           String
+  arrival_date   DateTime?  @db.Date
+  departure_date DateTime?  @db.Date
+  port           String?
+  status         ShipStatus @default(AGENDADO)
+  assigned_team  String?
+  notes          String?
+  created_by     String
+  created_at     DateTime   @default(now()) @db.Timestamptz()
+
+  @@map("ships")
+}
+
+// ── Login Logs ───────────────────────────────────────────────────────────────
+
+model LoginLog {
+  id         Int      @id @default(autoincrement())
+  user_id    String?  @db.Uuid
+  full_name  String
+  email      String
+  event_type String   @default("LOGIN")
+  created_at DateTime @default(now()) @db.Timestamptz()
+  user       User?    @relation(fields: [user_id], references: [id], onDelete: SetNull)
+
+  @@index([created_at(sort: Desc)])
+  @@map("login_logs")
+}
+
+// ── Tool Requests ────────────────────────────────────────────────────────────
+
+model ToolRequest {
+  id             String   @id @default(uuid()) @db.Uuid
+  tool_name      String
+  quantity       Int      @default(1)
+  reason         String
+  status         String   @default("PENDENTE")
+  requested_by   String
+  responded_by   String?
+  response_notes String?
+  created_at     DateTime @default(now()) @db.Timestamptz()
+  updated_at     DateTime @default(now()) @db.Timestamptz()
+
+  @@index([status])
+  @@index([created_at(sort: Desc)])
+  @@map("tool_requests")
+}
+
+// ── Product Links ────────────────────────────────────────────────────────────
+
+model ProductLink {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  url         String
+  category    String   @default("Outros")
+  description String?
+  created_by  String
+  created_at  DateTime @default(now()) @db.Timestamptz()
+  updated_at  DateTime @default(now()) @db.Timestamptz()
+
+  @@index([category])
+  @@map("product_links")
+}

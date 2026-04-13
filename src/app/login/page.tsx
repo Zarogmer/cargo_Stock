@@ -1,14 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { createClient } from "@/lib/supabase-browser";
+import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
 const EMAIL_DOMAIN = "@cargostock.local";
 
 function usernameToEmail(username: string): string {
   const u = username.trim().toLowerCase();
-  // If already contains @, use as-is (backwards compat)
   if (u.includes("@")) return u;
   return `${u}${EMAIL_DOMAIN}`;
 }
@@ -19,7 +18,6 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
-  const supabase = createClient();
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -28,25 +26,25 @@ export default function LoginPage() {
 
     const email = usernameToEmail(username);
 
-    const { error: err } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+      });
 
-    if (err) {
-      if (err.message.includes("Invalid login")) {
+      if (result?.error) {
         setError("Usuário ou senha inválidos.");
-      } else if (err.message.includes("Email not confirmed")) {
-        setError("Conta não confirmada. Fale com o administrador.");
-      } else {
-        setError(`Erro: ${err.message}`);
+        setLoading(false);
+        return;
       }
-      setLoading(false);
-      return;
-    }
 
-    router.push("/");
-    router.refresh();
+      router.push("/");
+      router.refresh();
+    } catch {
+      setError("Erro ao conectar. Tente novamente.");
+      setLoading(false);
+    }
   }
 
   return (

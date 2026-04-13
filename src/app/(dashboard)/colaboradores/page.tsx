@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { createClient } from "@/lib/supabase-browser";
+import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
 import { DataTable } from "@/components/ui/data-table";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,7 @@ export default function ColaboradoresPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") || "colaboradores";
-  const supabase = createClient();
+
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, "EPI", "create");
   const canEdit = hasPermission(role, "EPI", "edit");
@@ -63,11 +63,11 @@ export default function ColaboradoresPage() {
     setDbError(null);
     try {
       const [empRes, epiRes, uniRes, epiMovRes, uniMovRes] = await Promise.all([
-        supabase.from("employees").select("*").order("name"),
-        supabase.from("epis").select("*").order("name"),
-        supabase.from("uniforms").select("*").order("name"),
-        supabase.from("epi_movements").select("*, epis(name)").order("created_at", { ascending: false }).limit(50),
-        supabase.from("uniform_movements").select("*, uniforms(name)").order("created_at", { ascending: false }).limit(50),
+        db.from("employees").select("*").order("name"),
+        db.from("epis").select("*").order("name"),
+        db.from("uniforms").select("*").order("name"),
+        db.from("epi_movements").select("*, epis(name)").order("created_at", { ascending: false }).limit(50),
+        db.from("uniform_movements").select("*, uniforms(name)").order("created_at", { ascending: false }).limit(50),
       ]);
 
       // Log all errors
@@ -112,9 +112,9 @@ export default function ColaboradoresPage() {
     const actor = profile?.full_name || "Sistema";
     const payload = { ...data, updated_by: actor } as any;
     if (editEmp) {
-      await supabase.from("employees").update(payload).eq("id", editEmp.id);
+      await db.from("employees").update(payload).eq("id", editEmp.id);
     } else {
-      await supabase.from("employees").insert(payload);
+      await db.from("employees").insert(payload);
     }
     setSaving(false); setEmpForm(false); setEditEmp(null); loadAll();
   }
@@ -124,9 +124,9 @@ export default function ColaboradoresPage() {
     const actor = profile?.full_name || "Sistema";
     const payload = { ...data, updated_by: actor } as any;
     if (editEpi) {
-      await supabase.from("epis").update(payload).eq("id", editEpi.id);
+      await db.from("epis").update(payload).eq("id", editEpi.id);
     } else {
-      await supabase.from("epis").insert(payload);
+      await db.from("epis").insert(payload);
     }
     setSaving(false); setEpiForm(false); setEditEpi(null); loadAll();
   }
@@ -136,9 +136,9 @@ export default function ColaboradoresPage() {
     const actor = profile?.full_name || "Sistema";
     const payload = { ...data, updated_by: actor } as any;
     if (editUni) {
-      await supabase.from("uniforms").update(payload).eq("id", editUni.id);
+      await db.from("uniforms").update(payload).eq("id", editUni.id);
     } else {
-      await supabase.from("uniforms").insert(payload);
+      await db.from("uniforms").insert(payload);
     }
     setSaving(false); setUniForm(false); setEditUni(null); loadAll();
   }
@@ -149,11 +149,11 @@ export default function ColaboradoresPage() {
     const actor = profile?.full_name || "Sistema";
     const delta = movEpi.type === "ENTREGA" ? -qty : qty;
 
-    await supabase.from("epi_movements").insert({
+    await db.from("epi_movements").insert({
       epi_id: movEpi.epi.id, employee_name: empName, movement_type: movEpi.type,
       quantity: qty, movement_date: new Date().toISOString().split("T")[0], notes, created_by: actor,
     } as any);
-    await supabase.from("epis").update({ stock_qty: movEpi.epi.stock_qty + delta, updated_by: actor } as any).eq("id", movEpi.epi.id);
+    await db.from("epis").update({ stock_qty: movEpi.epi.stock_qty + delta, updated_by: actor } as any).eq("id", movEpi.epi.id);
 
     setSaving(false); setMovEpi(null); loadAll();
   }
@@ -164,11 +164,11 @@ export default function ColaboradoresPage() {
     const actor = profile?.full_name || "Sistema";
     const delta = movUni.type === "ENTREGA" ? -qty : qty;
 
-    await supabase.from("uniform_movements").insert({
+    await db.from("uniform_movements").insert({
       uniform_id: movUni.uniform.id, employee_name: empName, movement_type: movUni.type,
       quantity: qty, movement_date: new Date().toISOString().split("T")[0], notes, created_by: actor,
     } as any);
-    await supabase.from("uniforms").update({ stock_qty: movUni.uniform.stock_qty + delta, updated_by: actor } as any).eq("id", movUni.uniform.id);
+    await db.from("uniforms").update({ stock_qty: movUni.uniform.stock_qty + delta, updated_by: actor } as any).eq("id", movUni.uniform.id);
 
     setSaving(false); setMovUni(null); loadAll();
   }
@@ -333,15 +333,15 @@ export default function ColaboradoresPage() {
 
       {/* Employee Form */}
       <EmployeeFormModal open={empForm} onClose={() => { setEmpForm(false); setEditEmp(null); }} onSave={saveEmployee} item={editEmp} saving={saving} />
-      <ConfirmDialog open={!!deleteEmp} onClose={() => setDeleteEmp(null)} onConfirm={async () => { setSaving(true); await supabase.from("employees").delete().eq("id", deleteEmp!.id); setSaving(false); setDeleteEmp(null); loadAll(); }} title="Excluir Colaborador" message={`Excluir "${deleteEmp?.name}"?`} loading={saving} />
+      <ConfirmDialog open={!!deleteEmp} onClose={() => setDeleteEmp(null)} onConfirm={async () => { setSaving(true); await db.from("employees").delete().eq("id", deleteEmp!.id); setSaving(false); setDeleteEmp(null); loadAll(); }} title="Excluir Colaborador" message={`Excluir "${deleteEmp?.name}"?`} loading={saving} />
 
       {/* EPI Form */}
       <EpiFormModal open={epiForm} onClose={() => { setEpiForm(false); setEditEpi(null); }} onSave={saveEpi} item={editEpi} saving={saving} />
-      <ConfirmDialog open={!!deleteEpi} onClose={() => setDeleteEpi(null)} onConfirm={async () => { setSaving(true); await supabase.from("epis").delete().eq("id", deleteEpi!.id); setSaving(false); setDeleteEpi(null); loadAll(); }} title="Excluir EPI" message={`Excluir "${deleteEpi?.name}"?`} loading={saving} />
+      <ConfirmDialog open={!!deleteEpi} onClose={() => setDeleteEpi(null)} onConfirm={async () => { setSaving(true); await db.from("epis").delete().eq("id", deleteEpi!.id); setSaving(false); setDeleteEpi(null); loadAll(); }} title="Excluir EPI" message={`Excluir "${deleteEpi?.name}"?`} loading={saving} />
 
       {/* Uniform Form */}
       <UniformFormModal open={uniForm} onClose={() => { setUniForm(false); setEditUni(null); }} onSave={saveUniform} item={editUni} saving={saving} />
-      <ConfirmDialog open={!!deleteUni} onClose={() => setDeleteUni(null)} onConfirm={async () => { setSaving(true); await supabase.from("uniforms").delete().eq("id", deleteUni!.id); setSaving(false); setDeleteUni(null); loadAll(); }} title="Excluir Uniforme" message={`Excluir "${deleteUni?.name}"?`} loading={saving} />
+      <ConfirmDialog open={!!deleteUni} onClose={() => setDeleteUni(null)} onConfirm={async () => { setSaving(true); await db.from("uniforms").delete().eq("id", deleteUni!.id); setSaving(false); setDeleteUni(null); loadAll(); }} title="Excluir Uniforme" message={`Excluir "${deleteUni?.name}"?`} loading={saving} />
 
       {/* EPI Movement */}
       <MovementModal open={!!movEpi} onClose={() => setMovEpi(null)} onConfirm={handleEpiMovement} title={movEpi?.type === "ENTREGA" ? `Entregar: ${movEpi?.epi.name}` : `Devolver: ${movEpi?.epi.name}`} saving={saving} employees={employees} />

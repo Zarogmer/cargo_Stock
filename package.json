@@ -1,30 +1,35 @@
 {
   "name": "cargo-stock",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "main": "electron/main.js",
   "author": "Cargo Stock",
   "description": "Sistema de gestão de estoque e equipamentos para embarcações",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
+    "postinstall": "prisma generate",
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:migrate": "prisma migrate deploy",
     "electron:dev": "electron .",
     "electron:build": "electron-builder --win",
     "dist": "electron-builder --win"
   },
   "dependencies": {
     "@eslint/eslintrc": "^3.3.5",
-    "@supabase/ssr": "^0.6.0",
-    "@supabase/supabase-js": "^2.49.0",
+    "@prisma/client": "^6.9.0",
+    "bcryptjs": "^2.4.3",
     "next": "~15.3.9",
+    "next-auth": "^5.0.0-beta.25",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@netlify/plugin-nextjs": "^5.15.9",
     "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
@@ -32,7 +37,9 @@
     "electron-builder": "^25.0.0",
     "eslint": "^9",
     "eslint-config-next": "15.3.2",
+    "prisma": "^6.9.0",
     "tailwindcss": "^4",
+    "tsx": "^4.19.0",
     "typescript": "^5"
   }
 }

@@ -1,15 +1,14 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, useRef, useMemo } from "react";
-import { createClient } from "@/lib/supabase-browser";
+import { useSession, signOut as nextAuthSignOut } from "next-auth/react";
 import type { Profile } from "@/types/database";
-import type { User } from "@supabase/supabase-js";
+import { db } from "@/lib/db";
 
 interface AuthContextType {
-  user: User | null;
+  user: { id: string; email: string; name: string } | null;
   profile: Profile | null;
   loading: boolean;
-  accessToken: string | null;
   signOut: () => Promise<void>;
 }
 
@@ -17,199 +16,77 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   profile: null,
   loading: true,
-  accessToken: null,
   signOut: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const { data: session, status } = useSession();
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const initialized = useRef(false);
-  const supabase = useMemo(() => createClient(), []);
+  const profileFetched = useRef(false);
 
-  async function logLoginEvent(userId: string, fullName: string, email: string, eventType: "LOGIN" | "LOGOUT") {
-    try {
-      await supabase.from("login_logs").insert({
-        user_id: userId,
-        full_name: fullName,
-        email,
-        event_type: eventType,
-      });
-    } catch (err) {
-      console.error("Failed to log event:", err);
-    }
-  }
+  const loading = status === "loading";
+  const user = useMemo(() => {
+    if (!session?.user) return null;
+    return {
+      id: session.user.id as string,
+      email: session.user.email || "",
+      name: session.user.name || "",
+    };
+  }, [session?.user]);
 
-  async function fetchProfile(userId: string): Promise<Profile | null> {
-    try {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", userId)
-        .single();
-
-      if (error) {
-        console.error("Error fetching profile:", error.message);
-        return null;
-      }
-      return data as Profile;
-    } catch (err) {
-      console.error("Profile fetch failed:", err);
-      return null;
-    }
-  }
-
-  // Check if session token is expired
-  function isSessionExpired(session: { expires_at?: number } | null): boolean {
-    if (!session?.expires_at) return true;
-    // Add 60 second buffer
-    return session.expires_at * 1000 < Date.now() - 60000;
-  }
-
-  // Clear corrupted session cookies
-  async function clearCorruptedSession() {
-    try {
-      await supabase.auth.signOut({ scope: "local" });
-    } catch {
-      // If signOut fails, manually clear cookies
-      document.cookie.split(";").forEach((c) => {
-        const name = c.trim().split("=")[0];
-        if (name.includes("sb-") || name.includes("supabase")) {
-          document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`;
-        }
-      });
-    }
-  }
+  const userRole = (session?.user as any)?.role || "RH";
 
   useEffect(() => {
-    if (initialized.current) return;
-    initialized.current = true;
+    if (!user || profileFetched.current) return;
+    profileFetched.current = true;
 
-    // Safety timeout: force loading=false after 15 seconds
-    const timeout = setTimeout(() => {
-      setLoading((prev) => {
-        if (prev) {
-          console.warn("Auth loading timed out, forcing load complete");
-          return false;
-        }
-        return prev;
-      });
-    }, 15000);
-
-    async function init() {
-      try {
-        const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-        if (!url) {
-          console.error("NEXT_PUBLIC_SUPABASE_URL is not configured");
-          setLoading(false);
-          return;
-        }
-
-        // Try to get the current session
-        const { data: { session }, error } = await supabase.auth.getSession();
-
-        if (error) {
-          console.error("getSession error:", error.message);
-          setLoading(false);
-          return;
-        }
-
-        // Check if session exists and is not expired
-        if (session && isSessionExpired(session)) {
-          console.warn("Session expired, trying to refresh...");
-          const { data: { session: refreshedSession }, error: refreshError } =
-            await supabase.auth.refreshSession();
-
-          if (refreshError || !refreshedSession) {
-            console.warn("Refresh failed, clearing session");
-            await clearCorruptedSession();
-            setUser(null);
-            setProfile(null);
-            setLoading(false);
-            return;
-          }
-
-          // Use the refreshed session
-          setUser(refreshedSession.user);
-          setAccessToken(refreshedSession.access_token);
-          const prof = await fetchProfile(refreshedSession.user.id);
-          setProfile(prof);
-          setLoading(false);
-          return;
-        }
-
-        const currentUser = session?.user ?? null;
-        setUser(currentUser);
-        setAccessToken(session?.access_token ?? null);
-
-        if (currentUser) {
-          const prof = await fetchProfile(currentUser.id);
-          setProfile(prof);
-        }
-      } catch (err) {
-        console.error("Auth init failed:", err);
-      } finally {
-        clearTimeout(timeout);
-        setLoading(false);
-      }
-    }
-
-    init();
-
-    // Listen for subsequent auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      // Skip INITIAL_SESSION — already handled by init()
-      if (event === "INITIAL_SESSION") return;
-
-      const currentUser = session?.user ?? null;
-      setUser(currentUser);
-      setAccessToken(session?.access_token ?? null);
-
-      if (
-        currentUser &&
-        (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")
-      ) {
-        const prof = await fetchProfile(currentUser.id);
-        setProfile(prof);
-        // Log login event (only on SIGNED_IN, not token refresh)
-        if (event === "SIGNED_IN" && prof) {
-          logLoginEvent(currentUser.id, prof.full_name, prof.email, "LOGIN");
-        }
-      } else if (!currentUser) {
-        setProfile(null);
-      }
-
-      setLoading(false);
-    });
-
-    return () => {
-      clearTimeout(timeout);
-      subscription.unsubscribe();
+    // Build profile from session data (user table has all profile fields)
+    const sessionProfile: Profile = {
+      id: user.id,
+      email: user.email,
+      full_name: user.name,
+      role: userRole,
+      created_at: "",
+      updated_at: "",
     };
-  }, []);
+    setProfile(sessionProfile);
 
-  async function signOut() {
-    // Log logout event before signing out
+    // Log login event (fire and forget)
+    db.from("login_logs").insert({
+      user_id: user.id,
+      full_name: user.name,
+      email: user.email,
+      event_type: "LOGIN",
+    }).then(() => {}).catch(() => {});
+  }, [user, userRole]);
+
+  // Reset profile when user signs out
+  useEffect(() => {
+    if (!user) {
+      setProfile(null);
+      profileFetched.current = false;
+    }
+  }, [user]);
+
+  async function handleSignOut() {
+    // Log logout event
     if (user && profile) {
-      await logLoginEvent(user.id, profile.full_name, profile.email, "LOGOUT");
+      try {
+        await db.from("login_logs").insert({
+          user_id: user.id,
+          full_name: profile.full_name,
+          email: profile.email,
+          event_type: "LOGOUT",
+        });
+      } catch {
+        // ignore
+      }
     }
-    try {
-      await supabase.auth.signOut();
-    } catch {
-      // Force clear even if signOut fails
-      await clearCorruptedSession();
-    }
-    setUser(null);
-    setProfile(null);
-    window.location.href = "/login";
+    await nextAuthSignOut({ callbackUrl: "/login" });
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, accessToken, signOut }}>
+    <AuthContext.Provider value={{ user, profile, loading, signOut: handleSignOut }}>
       {children}
     </AuthContext.Provider>
   );
