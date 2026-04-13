@@ -25,6 +25,19 @@ interface ToolRequest {
   updated_at: string;
 }
 
+interface Supplier {
+  id: number;
+  name: string;
+  contact: string | null;
+  address: string | null;
+  category: string | null;
+  website: string | null;
+  notes: string | null;
+  created_by: string;
+  updated_at: string;
+  updated_by: string;
+}
+
 interface ProductLink {
   id: string;
   name: string;
@@ -55,6 +68,7 @@ export default function SolicitacoesPage() {
 
   const [requests, setRequests] = useState<ToolRequest[]>([]);
   const [productLinks, setProductLinks] = useState<ProductLink[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -63,6 +77,12 @@ export default function SolicitacoesPage() {
   const [editLink, setEditLink] = useState<ProductLink | null>(null);
   const [deleteRequest, setDeleteRequest] = useState<ToolRequest | null>(null);
   const [deleteLink, setDeleteLink] = useState<ProductLink | null>(null);
+
+  // Fornecedores
+  const [showSupplierForm, setShowSupplierForm] = useState(false);
+  const [editSupplier, setEditSupplier] = useState<Supplier | null>(null);
+  const [deleteSupplier, setDeleteSupplier] = useState<Supplier | null>(null);
+  const [supplierSearch, setSupplierSearch] = useState("");
 
   const canApproveRequests = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
   const canManageLinks = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
@@ -75,14 +95,16 @@ export default function SolicitacoesPage() {
     setLoading(true);
     setDbError(null);
     try {
-      const [reqRes, linksRes] = await Promise.all([
+      const [reqRes, linksRes, suppRes] = await Promise.all([
         db.from("tool_requests").select("*").order("created_at", { ascending: false }),
         db.from("product_links").select("*").order("category").order("name"),
+        db.from("suppliers").select("*").order("name"),
       ]);
 
       const errors: string[] = [];
       if (reqRes.error) errors.push(`tool_requests: ${reqRes.error.code} ${reqRes.error.message}`);
       if (linksRes.error) errors.push(`product_links: ${linksRes.error.code} ${linksRes.error.message}`);
+      if (suppRes.error) errors.push(`suppliers: ${suppRes.error.code} ${suppRes.error.message}`);
       if (errors.length > 0) {
         console.error("DB errors:", errors);
         setDbError(errors.join(" | "));
@@ -90,6 +112,7 @@ export default function SolicitacoesPage() {
 
       setRequests((reqRes.data as ToolRequest[]) || []);
       setProductLinks((linksRes.data as ProductLink[]) || []);
+      setSuppliers((suppRes.data as Supplier[]) || []);
     } catch (err) {
       console.error("loadAll error:", err);
       setDbError(String(err));
@@ -215,6 +238,50 @@ export default function SolicitacoesPage() {
       setSaving(false);
     }
   }
+
+  // --- Supplier handlers ---
+  async function handleSaveSupplier(data: Partial<Supplier>) {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const actor = profile?.full_name || "Sistema";
+      if (editSupplier) {
+        const { error } = await db.from("suppliers").update({ ...data, updated_by: actor } as any).eq("id", editSupplier.id);
+        if (error) throw error;
+      } else {
+        const { error } = await db.from("suppliers").insert({ ...data, created_by: actor, updated_by: actor } as any);
+        if (error) throw error;
+      }
+      setShowSupplierForm(false);
+      setEditSupplier(null);
+      loadAll();
+    } catch (err: any) {
+      setSaveError(`Erro ao salvar fornecedor: ${err?.message || String(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeleteSupplier() {
+    if (!deleteSupplier) return;
+    setSaving(true);
+    try {
+      const { error } = await db.from("suppliers").delete().eq("id", deleteSupplier.id);
+      if (error) throw error;
+      setDeleteSupplier(null);
+      loadAll();
+    } catch (err: any) {
+      setSaveError(`Erro ao excluir fornecedor: ${err?.message || String(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const filteredSuppliers = suppliers.filter((s) => {
+    const q = supplierSearch.toLowerCase();
+    if (!q) return true;
+    return (s.name?.toLowerCase().includes(q)) || (s.category?.toLowerCase().includes(q)) || (s.contact?.toLowerCase().includes(q));
+  });
 
   const pendingCount = requests.filter((r) => r.status === "PENDENTE").length;
 
@@ -417,6 +484,81 @@ export default function SolicitacoesPage() {
         </div>
       ),
     },
+    {
+      key: "fornecedores",
+      label: "Fornecedores",
+      content: (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <p className="text-sm text-text-light">Cadastro de fornecedores e contatos</p>
+            {canManageLinks && (
+              <Button size="sm" onClick={() => { setEditSupplier(null); setShowSupplierForm(true); }}>
+                <PlusIcon className="w-4 h-4" />Adicionar
+              </Button>
+            )}
+          </div>
+
+          {/* Search */}
+          <div className="relative">
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-light" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+            <input type="text" value={supplierSearch} onChange={(e) => setSupplierSearch(e.target.value)} placeholder="Buscar fornecedor..."
+              className="w-full pl-10 pr-4 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" />
+          </div>
+
+          {filteredSuppliers.length === 0 ? (
+            <div className="text-center py-12 text-text-light">
+              <span className="text-4xl block mb-3">🏭</span>
+              <p className="font-medium">{suppliers.length === 0 ? "Nenhum fornecedor cadastrado" : "Nenhum resultado"}</p>
+            </div>
+          ) : (
+            <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-border">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Nome</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase hidden md:table-cell">Contato</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase hidden lg:table-cell">Endereço</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Categoria</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase hidden md:table-cell">Website</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase hidden lg:table-cell">Obs.</th>
+                      <th className="px-4 py-3 w-20"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {filteredSuppliers.map((s) => (
+                      <tr key={s.id} className="hover:bg-gray-50 transition">
+                        <td className="px-4 py-3 font-medium text-text whitespace-nowrap">{s.name}</td>
+                        <td className="px-4 py-3 text-text-light hidden md:table-cell whitespace-nowrap">{s.contact || "—"}</td>
+                        <td className="px-4 py-3 text-text-light hidden lg:table-cell text-xs max-w-[200px] truncate">{s.address || "—"}</td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          {s.category ? <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">{s.category}</span> : "—"}
+                        </td>
+                        <td className="px-4 py-3 hidden md:table-cell">
+                          {s.website ? (
+                            <a href={s.website.startsWith("http") ? s.website : `https://${s.website}`} target="_blank" rel="noopener noreferrer"
+                              className="text-xs text-primary hover:underline truncate block max-w-[160px]">{s.website}</a>
+                          ) : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-text-light text-xs hidden lg:table-cell max-w-[150px] truncate">{s.notes || "—"}</td>
+                        <td className="px-4 py-3">
+                          {canManageLinks && (
+                            <div className="flex gap-1">
+                              <button onClick={() => { setEditSupplier(s); setShowSupplierForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded"><EditIcon /></button>
+                              <button onClick={() => setDeleteSupplier(s)} className="p-1.5 text-danger hover:bg-red-50 rounded"><TrashIcon /></button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      ),
+    },
   ];
 
   return (
@@ -461,6 +603,19 @@ export default function SolicitacoesPage() {
         onConfirm={handleDeleteLink}
         title="Excluir Produto"
         message={`Excluir "${deleteLink?.name}" da lista?`}
+        loading={saving}
+      />
+
+      {/* Supplier Form Modal */}
+      <SupplierFormModal open={showSupplierForm} onClose={() => { setShowSupplierForm(false); setEditSupplier(null); }} onSave={handleSaveSupplier} item={editSupplier} saving={saving} />
+
+      {/* Delete Supplier Confirm */}
+      <ConfirmDialog
+        open={!!deleteSupplier}
+        onClose={() => setDeleteSupplier(null)}
+        onConfirm={handleDeleteSupplier}
+        title="Excluir Fornecedor"
+        message={`Excluir "${deleteSupplier?.name}"?`}
         loading={saving}
       />
     </div>
@@ -574,6 +729,76 @@ function LinkFormModal({ open, onClose, onSave, item, saving, error }: {
             {error}
           </div>
         )}
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+const SUPPLIER_CATEGORIES = [
+  "EPI", "EMBALAGENS", "TECNOLOGIA", "AGUA", "FILTROS", "CARNES",
+  "HORTI FRUTI", "TINTAS", "ELETRICA", "ESPUMAS", "MANUT, MAQUINAS",
+  "VEDACOES", "FITAS", "PISTOLAS", "MANGUEIRA E NIPLE", "RODAS MAQUINA", "OUTROS",
+];
+
+function SupplierFormModal({ open, onClose, onSave, item, saving }: {
+  open: boolean; onClose: () => void;
+  onSave: (data: Partial<Supplier>) => void;
+  item: Supplier | null; saving: boolean;
+}) {
+  const [name, setName] = useState("");
+  const [contact, setContact] = useState("");
+  const [address, setAddress] = useState("");
+  const [category, setCategory] = useState("");
+  const [website, setWebsite] = useState("");
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => {
+    if (item) {
+      setName(item.name); setContact(item.contact || ""); setAddress(item.address || "");
+      setCategory(item.category || ""); setWebsite(item.website || ""); setNotes(item.notes || "");
+    } else {
+      setName(""); setContact(""); setAddress(""); setCategory(""); setWebsite(""); setNotes("");
+    }
+  }, [item, open]);
+
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+
+  return (
+    <Modal open={open} onClose={onClose} title={item ? "Editar Fornecedor" : "Novo Fornecedor"}>
+      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, contact: contact || null, address: address || null, category: category || null, website: website || null, notes: notes || null }); }} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">Nome do Fornecedor *</label>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} required placeholder="Ex: POTENCYA" className={inputCls} />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Contato</label>
+            <input type="text" value={contact} onChange={(e) => setContact(e.target.value)} placeholder="13 3229-9350" className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Categoria</label>
+            <select value={category} onChange={(e) => setCategory(e.target.value)} className={inputCls}>
+              <option value="">Selecionar...</option>
+              {SUPPLIER_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Endereço</label>
+          <input type="text" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="R. Lucas Fortunato, 96 - Loja 01" className={inputCls} />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Website / Link</label>
+          <input type="text" value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="https://www.exemplo.com.br/" className={inputCls} />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Observações</label>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Conexões, pistola latão, etc" className={`${inputCls} resize-none`} />
+        </div>
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>

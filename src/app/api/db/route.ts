@@ -19,6 +19,7 @@ const TABLE_MAP: Record<string, string> = {
   login_logs: "loginLog",
   tool_requests: "toolRequest",
   product_links: "productLink",
+  suppliers: "supplier",
   // Also support "profiles" alias -> reads from users table
   profiles: "user",
 };
@@ -153,6 +154,18 @@ function getModel(tableName: string): any {
   return (prisma as any)[modelName];
 }
 
+// Convert date-like strings to Date objects for Prisma
+function convertDates(data: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...data };
+  for (const key of Object.keys(result)) {
+    const val = result[key];
+    if (typeof val === "string" && /^\d{4}-\d{2}-\d{2}(T.*)?$/.test(val)) {
+      result[key] = new Date(val);
+    }
+  }
+  return result;
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Check authentication
@@ -214,8 +227,7 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        // Handle updatedAt for tables that have it
-        const insertData = { ...spec.data };
+        const insertData = convertDates(spec.data);
 
         const data = await model.create({ data: insertData });
         return NextResponse.json({ data, error: null, count: null });
@@ -236,7 +248,7 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const updateData = { ...spec.data };
+        const updateData = convertDates(spec.data);
         // Auto-set updated_at for tables that have it
         const TABLES_WITH_UPDATED_AT = [
           "stock_items", "users", "employees", "epis", "uniforms",

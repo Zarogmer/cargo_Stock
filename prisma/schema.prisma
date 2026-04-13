@@ -296,6 +296,23 @@ model ToolRequest {
   @@map("tool_requests")
 }
 
+// ── Suppliers (Fornecedores) ─────────────────────────────────────────────────
+
+model Supplier {
+  id          Int      @id @default(autoincrement())
+  name        String
+  contact     String?
+  address     String?
+  category    String?
+  website     String?
+  notes       String?
+  created_by  String
+  updated_at  DateTime @default(now()) @db.Timestamptz()
+  updated_by  String
+
+  @@map("suppliers")
+}
+
 // ── Product Links ────────────────────────────────────────────────────────────
 
 model ProductLink {
