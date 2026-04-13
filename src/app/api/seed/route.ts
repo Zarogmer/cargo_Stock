@@ -13,11 +13,11 @@ export async function GET() {
       { email: "camila@cargostock.local", full_name: "Camila", role: "RH" as const },
       { email: "chico@cargostock.local", full_name: "Chico", role: "EXECUTIVO" as const },
       { email: "damiao@cargostock.local", full_name: "Damião", role: "MANUTENCAO" as const },
-      { email: "diogo@cargostock.local", full_name: "Diogo", role: "MANUTENCAO" as const },
+      { email: "diogo@cargostock.local", full_name: "Diogo", role: "GESTOR" as const },
       { email: "guigui12306@gmail.com", full_name: "Guilherme", role: "TECNOLOGIA" as const },
       { email: "josue@cargostock.local", full_name: "Josué", role: "MANUTENCAO" as const },
-      { email: "lucas@cargostock.local", full_name: "Lucas", role: "MANUTENCAO" as const },
-      { email: "rose@cargostock.local", full_name: "Rose", role: "RH" as const },
+      { email: "lucas@cargostock.local", full_name: "Lucas", role: "GESTOR" as const },
+      { email: "rose@cargostock.local", full_name: "Rose", role: "EXECUTIVO" as const },
       { email: "sandra@cargostock.local", full_name: "Sandra", role: "FINANCEIRO" as const },
     ];
 
