@@ -54,6 +54,11 @@ export default function ColaboradoresPage() {
   const [histSearch, setHistSearch] = useState("");
   const [histType, setHistType] = useState("Todos");
 
+  // --- EMPLOYEE DETAIL ---
+  const [selectedEmp, setSelectedEmp] = useState<Employee | null>(null);
+  const [empItems, setEmpItems] = useState<{ name: string; qty: number; source: string }[]>([]);
+  const [loadingEmpItems, setLoadingEmpItems] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
@@ -106,6 +111,42 @@ export default function ColaboradoresPage() {
 
   useEffect(() => { loadAll(); }, [loadAll, pathname]);
 
+  // --- LOAD EMPLOYEE ITEMS ---
+  async function loadEmployeeItems(emp: Employee) {
+    setSelectedEmp(emp);
+    setLoadingEmpItems(true);
+    try {
+      const [epiRes, uniRes] = await Promise.all([
+        db.from("epi_movements").select("*, epis(name)").eq("employee_name", emp.name),
+        db.from("uniform_movements").select("*, uniforms(name)").eq("employee_name", emp.name),
+      ]);
+
+      const items: { name: string; qty: number; source: string }[] = [];
+
+      const epiMap = new Map<string, number>();
+      (epiRes.data || []).forEach((m: any) => {
+        const name = m.epis?.name || "?";
+        const current = epiMap.get(name) || 0;
+        epiMap.set(name, current + (m.movement_type === "ENTREGA" ? m.quantity : -m.quantity));
+      });
+      epiMap.forEach((qty, name) => { if (qty > 0) items.push({ name, qty, source: "EPI" }); });
+
+      const uniMap = new Map<string, number>();
+      (uniRes.data || []).forEach((m: any) => {
+        const name = m.uniforms?.name || "?";
+        const current = uniMap.get(name) || 0;
+        uniMap.set(name, current + (m.movement_type === "ENTREGA" ? m.quantity : -m.quantity));
+      });
+      uniMap.forEach((qty, name) => { if (qty > 0) items.push({ name, qty, source: "Uniforme" }); });
+
+      setEmpItems(items);
+    } catch (err) {
+      console.error("Error loading employee items:", err);
+    } finally {
+      setLoadingEmpItems(false);
+    }
+  }
+
   // --- SAVE handlers ---
   async function saveEmployee(data: Partial<Employee>) {
     setSaving(true);
@@ -149,11 +190,14 @@ export default function ColaboradoresPage() {
     const actor = profile?.full_name || "Sistema";
     const delta = movEpi.type === "ENTREGA" ? -qty : qty;
 
-    await db.from("epi_movements").insert({
+    const { error: moveErr } = await db.from("epi_movements").insert({
       epi_id: movEpi.epi.id, employee_name: empName, movement_type: movEpi.type,
       quantity: qty, movement_date: new Date().toISOString().split("T")[0], notes, created_by: actor,
     } as any);
-    await db.from("epis").update({ stock_qty: movEpi.epi.stock_qty + delta, updated_by: actor } as any).eq("id", movEpi.epi.id);
+    if (moveErr) { alert(`Erro ao registrar movimentação: ${moveErr.message}`); setSaving(false); return; }
+
+    const { error: updateErr } = await db.from("epis").update({ stock_qty: movEpi.epi.stock_qty + delta, updated_by: actor } as any).eq("id", movEpi.epi.id);
+    if (updateErr) { alert(`Erro ao atualizar estoque: ${updateErr.message}`); setSaving(false); return; }
 
     setSaving(false); setMovEpi(null); loadAll();
   }
@@ -164,11 +208,14 @@ export default function ColaboradoresPage() {
     const actor = profile?.full_name || "Sistema";
     const delta = movUni.type === "ENTREGA" ? -qty : qty;
 
-    await db.from("uniform_movements").insert({
+    const { error: moveErr } = await db.from("uniform_movements").insert({
       uniform_id: movUni.uniform.id, employee_name: empName, movement_type: movUni.type,
       quantity: qty, movement_date: new Date().toISOString().split("T")[0], notes, created_by: actor,
     } as any);
-    await db.from("uniforms").update({ stock_qty: movUni.uniform.stock_qty + delta, updated_by: actor } as any).eq("id", movUni.uniform.id);
+    if (moveErr) { alert(`Erro ao registrar movimentação: ${moveErr.message}`); setSaving(false); return; }
+
+    const { error: updateErr } = await db.from("uniforms").update({ stock_qty: movUni.uniform.stock_qty + delta, updated_by: actor } as any).eq("id", movUni.uniform.id);
+    if (updateErr) { alert(`Erro ao atualizar estoque: ${updateErr.message}`); setSaving(false); return; }
 
     setSaving(false); setMovUni(null); loadAll();
   }
@@ -261,6 +308,7 @@ export default function ColaboradoresPage() {
           })}
             loading={loading} keyExtractor={(e) => e.id} searchValue={empSearch} onSearchChange={setEmpSearch}
             searchPlaceholder="Buscar colaborador..."
+            onRowClick={(e) => loadEmployeeItems(e)}
             actions={canCreate ? <Button size="sm" onClick={() => { setEditEmp(null); setEmpForm(true); }}><PlusIcon className="w-4 h-4" />Adicionar</Button> : undefined}
           />
         </div>
@@ -348,6 +396,41 @@ export default function ColaboradoresPage() {
 
       {/* Uniform Movement */}
       <MovementModal open={!!movUni} onClose={() => setMovUni(null)} onConfirm={handleUniMovement} title={movUni?.type === "ENTREGA" ? `Entregar: ${movUni?.uniform.name}` : `Devolver: ${movUni?.uniform.name}`} saving={saving} employees={employees} />
+
+      {/* Employee Detail */}
+      <Modal open={!!selectedEmp} onClose={() => setSelectedEmp(null)} title={selectedEmp?.name || ""}>
+        {selectedEmp && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div><span className="text-text-light">Equipe:</span> <span className="font-medium">{selectedEmp.team ? teamLabels[selectedEmp.team] : "Sem equipe"}</span></div>
+              <div><span className="text-text-light">Telefone:</span> <span className="font-medium">{selectedEmp.phone || "—"}</span></div>
+              {selectedEmp.email && <div><span className="text-text-light">Email:</span> <span className="font-medium">{selectedEmp.email}</span></div>}
+              {selectedEmp.family_phone && <div><span className="text-text-light">Tel. Familiar:</span> <span className="font-medium">{selectedEmp.family_phone}</span></div>}
+            </div>
+
+            <div className="border-t border-border pt-4">
+              <h3 className="text-sm font-semibold text-text mb-3">EPIs e Uniformes em posse</h3>
+              {loadingEmpItems ? (
+                <p className="text-sm text-text-light text-center py-4">Carregando...</p>
+              ) : empItems.length === 0 ? (
+                <p className="text-sm text-text-light text-center py-4">Nenhum item entregue a este colaborador</p>
+              ) : (
+                <div className="space-y-2">
+                  {empItems.map((item, i) => (
+                    <div key={i} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${item.source === "EPI" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>{item.source}</span>
+                        <span className="text-sm font-medium">{item.name}</span>
+                      </div>
+                      <span className="text-sm font-bold text-text">x{item.qty}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
