@@ -49,7 +49,7 @@ const PRODUCT_CATEGORIES = [
 ];
 
 export default function SolicitacoesPage() {
-  const { profile } = useAuth();
+  const { profile, accessToken } = useAuth();
   const pathname = usePathname();
   const supabase = createClient();
   const role = profile?.role || "RH";
@@ -172,16 +172,14 @@ export default function SolicitacoesPage() {
 
   // Usa fetch direto na API REST do Supabase (bypassa o cliente JS que trava no insert)
   async function supabaseRest(method: "POST" | "PATCH" | "DELETE", path: string, body?: Record<string, unknown>) {
-    const { data: { session } } = await supabase.auth.getSession();
-    const token = session?.access_token;
-    if (!token) throw new Error("Sessão expirada. Faça login novamente.");
+    if (!accessToken) throw new Error("Sessão expirada. Faça login novamente.");
 
     const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/${path}`, {
       method,
       headers: {
         "Content-Type": "application/json",
         "apikey": process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        "Authorization": `Bearer ${token}`,
+        "Authorization": `Bearer ${accessToken}`,
         "Prefer": "return=minimal",
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
