@@ -1,43 +1,22 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { Sidebar } from "@/components/sidebar";
 import { MenuIcon } from "@/components/icons";
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [countdown, setCountdown] = useState(5);
   const { user, profile, loading } = useAuth();
-  const router = useRouter();
 
-  // When loading finishes and there's no user, redirect to login immediately
+  // When loading finishes and there's no user, redirect to login
   useEffect(() => {
     if (!loading && !user) {
       window.location.href = "/login";
     }
   }, [loading, user]);
 
-  // Safety timer: if still loading after 5s, force redirect to login
-  useEffect(() => {
-    if (!loading) return;
-
-    const interval = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          window.location.href = "/login";
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [loading]);
-
-  if (loading || (!loading && !user)) {
+  if (loading || !user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-bg overflow-hidden">
         <div className="flex flex-col items-center gap-4">
@@ -60,11 +39,6 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
           <p className="text-primary font-bold text-lg">Cargo Stock</p>
           <p className="text-text-light text-sm animate-pulse">Carregando...</p>
-          {countdown <= 3 && (
-            <p className="text-xs text-text-light">
-              Redirecionando ao login em {countdown}s...
-            </p>
-          )}
         </div>
 
         <style jsx>{`

@@ -84,7 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (initialized.current) return;
     initialized.current = true;
 
-    // Safety timeout: force loading=false after 5 seconds
+    // Safety timeout: force loading=false after 15 seconds
     const timeout = setTimeout(() => {
       setLoading((prev) => {
         if (prev) {
@@ -93,7 +93,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         return prev;
       });
-    }, 5000);
+    }, 15000);
 
     async function init() {
       try {
@@ -109,13 +109,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (error) {
           console.error("getSession error:", error.message);
-
-          // If it's a lock error or auth error, try to recover
-          if (error.message.includes("lock") || error.message.includes("stole")) {
-            console.warn("Lock contention detected, clearing session...");
-            await clearCorruptedSession();
-          }
-
           setLoading(false);
           return;
         }
@@ -152,11 +145,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (err) {
         console.error("Auth init failed:", err);
-        // On any unexpected error, try to clear corrupted state
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes("lock") || errMsg.includes("stole")) {
-          await clearCorruptedSession();
-        }
       } finally {
         clearTimeout(timeout);
         setLoading(false);
