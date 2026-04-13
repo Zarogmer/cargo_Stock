@@ -22,6 +22,7 @@ export const authConfig = {
         path.startsWith("/login") ||
         path.startsWith("/auth") ||
         path.startsWith("/api/auth") ||
+        path.startsWith("/api/seed") ||
         path.startsWith("/debug");
 
       if (isPublic) return true;
