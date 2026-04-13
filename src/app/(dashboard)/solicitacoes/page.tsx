@@ -520,28 +520,26 @@ export default function SolicitacoesPage() {
                         <span className="font-semibold text-text">{s.name}</span>
                         {s.category && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">{s.category}</span>}
                       </div>
-                      <div className="mt-2 space-y-1">
-                        {s.contact && (
-                          <div className="flex items-center gap-2 text-sm text-text-light">
-                            <span className="shrink-0">📞</span>
-                            <span>{s.contact}</span>
-                          </div>
-                        )}
+                      <div className="mt-2 space-y-1 text-sm text-text-light">
+                        <div className="flex items-center gap-2">
+                          <span className="shrink-0">📞</span>
+                          <span>{s.contact || "—"}</span>
+                        </div>
                         {s.address && (
-                          <div className="flex items-center gap-2 text-sm text-text-light">
+                          <div className="flex items-center gap-2">
                             <span className="shrink-0">📍</span>
                             <span>{s.address}</span>
                           </div>
                         )}
                         {s.website && (
-                          <div className="flex items-center gap-2 text-sm">
+                          <div className="flex items-center gap-2">
                             <span className="shrink-0">🌐</span>
                             <a href={s.website.startsWith("http") ? s.website : `https://${s.website}`} target="_blank" rel="noopener noreferrer"
                               className="text-primary hover:underline truncate">{s.website}</a>
                           </div>
                         )}
                         {s.notes && (
-                          <div className="flex items-center gap-2 text-sm text-text-light">
+                          <div className="flex items-center gap-2">
                             <span className="shrink-0">📝</span>
                             <span>{s.notes}</span>
                           </div>
