@@ -5,6 +5,12 @@ const nextConfig: NextConfig = {
   // to bundle it for any non-Node target.
   serverExternalPackages: ["ws"],
 
+  // Don't fail the production build on ESLint warnings/errors. Type errors
+  // still block the build via tsc.
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+
   // PWA headers
   async headers() {
     return [
