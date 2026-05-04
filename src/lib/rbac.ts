@@ -44,7 +44,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
-    FINANCEIRO_MOD: ["view"],
+    FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
   },
   MANUTENCAO: {
@@ -64,7 +64,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FERRAMENTAS: ["view"],
     MAQUINARIO: ["view"],
     NAVIOS: ["view"],
-    FINANCEIRO_MOD: ["view"],
+    FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
   },
   RH: {
@@ -80,7 +80,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
-    FINANCEIRO_MOD: ["view"],
+    FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
   },
 };
@@ -120,7 +120,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Navios", href: "/navios", icon: "navios", module: "NAVIOS" },
   { label: "Embarque", href: "/embarque", icon: "embarque", module: "EMBARQUE" },
   { label: "Estoque", href: "/estoque", icon: "estoque", module: "ESTOQUE" },
-  { label: "Colaboradores", href: "/colaboradores", icon: "epi", module: "EPI" },
+  { label: "RH", href: "/colaboradores", icon: "epi", module: "EPI" },
   { label: "Equipamentos", href: "/equipamentos", icon: "equipamentos", module: "FERRAMENTAS" },
   { label: "Controle", href: "/solicitacoes", icon: "solicitacoes", module: "SOLICITACOES" },
   { label: "Financeiro", href: "/financeiro", icon: "financeiro", module: "FINANCEIRO_MOD" },

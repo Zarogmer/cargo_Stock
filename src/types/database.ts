@@ -70,6 +70,33 @@ export interface Employee {
   // Documentos
   has_vaccination_card: boolean | null;
   has_cnh: boolean | null;
+  // Identificação (planilha oficial)
+  cpf: string | null;
+  rg: string | null;
+  isps_code: string | null;
+  e_social: string | null;
+  subestipulante: number | null;
+  modulo: number | null;
+  // Vínculo / Status
+  status: "ATIVO" | "INATIVO" | "PENDENCIA" | null;
+  sector: "OPERACIONAL" | "ADMINISTRATIVO" | null;
+  role: string | null;
+  salary: string | number | null;
+  admission_date: string | null;
+  // Treinamentos
+  nrs_training: string | null;
+  meio_ambiente_training: string | null;
+  lifeguard_training: boolean | null;
+  rubber_boot: boolean | null;
+  // Tamanhos
+  boot_size: string | null;
+  shirt_size: string | null;
+  bermuda_size: string | null;
+  // ASO
+  last_aso_date: string | null;
+  aso_status: string | null;
+  // Operacional
+  realiza_limpeza: boolean | null;
   updated_at: string;
   updated_by: string;
 }
@@ -190,3 +217,89 @@ export interface ToolRequest {
   created_at: string;
   updated_at: string;
 }
+
+// ── Sistema Financeiro ────────────────────────────────────────────────────────
+
+export type JobUnit = "POR_NAVIO" | "POR_DIA" | "POR_HORA" | "POR_OPERACAO";
+export type JobStatus = "ABERTO" | "EM_ANDAMENTO" | "VERIFICADO" | "FECHADO" | "CANCELADO";
+export type AdjustmentType = "ADICIONAL" | "REDUCAO";
+
+export interface JobFunction {
+  id: number;
+  name: string;
+  description: string | null;
+  default_rate: string | number;
+  unit: JobUnit;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface JobFunctionRate {
+  id: number;
+  function_id: number;
+  rate: string | number;
+  valid_from: string;
+  valid_until: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface Job {
+  id: string;
+  name: string;
+  ship_id: string | null;
+  start_date: string;
+  end_date: string | null;
+  status: JobStatus;
+  contract_value: string | number | null;
+  notes: string | null;
+  // Metadata fechamento
+  client: string | null;
+  supervisor: string | null;
+  cargo_type: string | null;
+  holds_count: number | null;
+  port: string | null;
+  // Workflow
+  verified_at: string | null;
+  verified_by: string | null;
+  closed_at: string | null;
+  closed_by: string | null;
+  payroll_value: string | number | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  ships?: { name: string } | null;
+}
+
+export type AllocationStatus = "ATIVO" | "REMOVIDO" | "SUBSTITUIDO";
+
+export interface JobAllocation {
+  id: number;
+  job_id: string;
+  function_id: number;
+  employee_id: number | null;
+  quantity: number;
+  rate: string | number;
+  pluxee_value: string | number | null;
+  notes: string | null;
+  status: AllocationStatus;
+  replaces_id: number | null;
+  added_by: string;
+  added_at: string;
+  removed_by: string | null;
+  removed_at: string | null;
+  removal_reason: string | null;
+  job_functions?: { name: string; unit: JobUnit } | null;
+  employees?: { name: string; bank_name: string | null; bank_agency: string | null; bank_account: string | null; bank_account_type: string | null } | null;
+}
+
+export interface JobAdjustment {
+  id: number;
+  job_id: string;
+  type: AdjustmentType;
+  description: string;
+  amount: string | number;
+  created_at: string;
+}
+

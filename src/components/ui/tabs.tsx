@@ -30,6 +30,7 @@ export function Tabs({ tabs, defaultTab }: TabsProps) {
         {tabs.map((tab) => (
           <button
             key={tab.key}
+            type="button"
             onClick={() => setActive(tab.key)}
             className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition shrink-0
               ${

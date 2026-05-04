@@ -100,15 +100,15 @@ model StockItem {
 }
 
 model StockMovement {
-  id             Int          @id @default(autoincrement())
-  stock_item_id  Int
-  movement_type  MovementType
-  quantity       Int
-  movement_date  DateTime     @default(now()) @db.Date
-  notes          String?
-  created_by     String
-  created_at     DateTime     @default(now()) @db.Timestamptz()
-  stock_items    StockItem    @relation(fields: [stock_item_id], references: [id], onDelete: Cascade)
+  id            Int          @id @default(autoincrement())
+  stock_item_id Int
+  movement_type MovementType
+  quantity      Int
+  movement_date DateTime     @default(now()) @db.Date
+  notes         String?
+  created_by    String
+  created_at    DateTime     @default(now()) @db.Timestamptz()
+  stock_items   StockItem    @relation(fields: [stock_item_id], references: [id], onDelete: Cascade)
 
   @@index([stock_item_id])
   @@map("stock_movements")
@@ -117,22 +117,58 @@ model StockMovement {
 // ── Employees ────────────────────────────────────────────────────────────────
 
 model Employee {
-  id                 Int       @id @default(autoincrement())
-  name               String
-  team               String?
-  birth_date         DateTime? @db.Date
-  phone              String?
-  email              String?
-  family_phone       String?
-  notes              String?
-  bank_name          String?
-  bank_agency        String?
-  bank_account       String?
-  bank_account_type  String?
-  has_vaccination_card Boolean? @default(false)
-  has_cnh            Boolean?  @default(false)
-  updated_at         DateTime  @default(now()) @db.Timestamptz()
-  updated_by         String
+  id                   Int       @id @default(autoincrement())
+  name                 String
+  team                 String?
+  birth_date           DateTime? @db.Date
+  phone                String?
+  email                String?
+  family_phone         String?
+  notes                String?
+  bank_name            String?
+  bank_agency          String?
+  bank_account         String?
+  bank_account_type    String?
+  has_vaccination_card Boolean?  @default(false)
+  has_cnh              Boolean?  @default(false)
+
+  // ── Identificação (planilha oficial) ───────────────────────────────────────
+  cpf                  String?   @unique
+  rg                   String?
+  isps_code            String?
+  e_social             String?
+  subestipulante       Int?
+  modulo               Int?
+
+  // ── Vínculo / Status ───────────────────────────────────────────────────────
+  status               String?   @default("ATIVO")           // ATIVO, INATIVO, PENDENCIA
+  sector               String?                                // OPERACIONAL, ADMINISTRATIVO
+  role                 String?                                // WAP, AJUDANTE, ESFREGAO, ANALISTA_RH, OPERACIONAL...
+  salary               Decimal?  @db.Decimal(10, 2)           // futuro: cálculo de folha
+  admission_date       DateTime? @db.Date
+
+  // ── Treinamentos (datas em texto livre vindas da planilha) ─────────────────
+  nrs_training         String?                                // NR 1,6,7,17,29,35
+  meio_ambiente_training String?
+  lifeguard_training   Boolean?  @default(false)              // SALVA VIDAS
+  rubber_boot          Boolean?  @default(false)              // BOTA BORRACHA
+
+  // ── Tamanhos de EPI/uniforme ───────────────────────────────────────────────
+  boot_size            String?
+  shirt_size           String?
+  bermuda_size         String?
+
+  // ── ASO (atestado médico) ──────────────────────────────────────────────────
+  last_aso_date        String?                                // texto livre da planilha
+  aso_status           String?                                // OK, INATIVO, VENCIDO
+
+  // ── Operacional ────────────────────────────────────────────────────────────
+  realiza_limpeza      Boolean?  @default(false)
+
+  updated_at           DateTime  @default(now()) @db.Timestamptz()
+  updated_by           String
+
+  job_allocations      JobAllocation[]
 
   @@map("employees")
 }
@@ -140,12 +176,12 @@ model Employee {
 // ── EPIs ─────────────────────────────────────────────────────────────────────
 
 model Epi {
-  id            Int            @id @default(autoincrement())
+  id            Int           @id @default(autoincrement())
   name          String
   ca_code       String?
   size          String?
-  stock_qty     Int            @default(0)
-  updated_at    DateTime       @default(now()) @db.Timestamptz()
+  stock_qty     Int           @default(0)
+  updated_at    DateTime      @default(now()) @db.Timestamptz()
   updated_by    String
   epi_movements EpiMovement[]
 
@@ -171,11 +207,11 @@ model EpiMovement {
 // ── Uniforms ─────────────────────────────────────────────────────────────────
 
 model Uniform {
-  id                Int                @id @default(autoincrement())
+  id                Int               @id @default(autoincrement())
   name              String
   size              String?
-  stock_qty         Int                @default(0)
-  updated_at        DateTime           @default(now()) @db.Timestamptz()
+  stock_qty         Int               @default(0)
+  updated_at        DateTime          @default(now()) @db.Timestamptz()
   updated_by        String
   uniform_movements UniformMovement[]
 
@@ -201,15 +237,15 @@ model UniformMovement {
 // ── Tools / Machinery ────────────────────────────────────────────────────────
 
 model Tool {
-  id              Int              @id @default(autoincrement())
-  name            String
-  status          ToolStatus       @default(DISPONIVEL)
-  location        String?
-  notes           String?
-  asset_type      AssetType        @default(FERRAMENTA)
-  updated_at      DateTime         @default(now()) @db.Timestamptz()
-  updated_by      String
-  tool_movements  ToolMovement[]
+  id             Int            @id @default(autoincrement())
+  name           String
+  status         ToolStatus     @default(DISPONIVEL)
+  location       String?
+  notes          String?
+  asset_type     AssetType      @default(FERRAMENTA)
+  updated_at     DateTime       @default(now()) @db.Timestamptz()
+  updated_by     String
+  tool_movements ToolMovement[]
 
   @@index([asset_type])
   @@index([status])
@@ -248,18 +284,149 @@ model MissionStandardItem {
 // ── Ships ────────────────────────────────────────────────────────────────────
 
 model Ship {
-  id             String     @id @default(uuid()) @db.Uuid
+  id             String        @id @default(uuid()) @db.Uuid
   name           String
-  arrival_date   DateTime?  @db.Date
-  departure_date DateTime?  @db.Date
+  arrival_date   DateTime?     @db.Date
+  departure_date DateTime?     @db.Date
   port           String?
-  status         ShipStatus @default(AGENDADO)
+  status         ShipStatus    @default(AGENDADO)
   assigned_team  String?
   notes          String?
   created_by     String
-  created_at     DateTime   @default(now()) @db.Timestamptz()
+  created_at     DateTime      @default(now()) @db.Timestamptz()
+  externalShipId String?
+  externalShip   ExternalShip? @relation(fields: [externalShipId], references: [id])
+  jobs           Job[]
 
   @@map("ships")
+}
+
+// ── Sistema Financeiro: Funções, Trabalhos, Alocações ───────────────────────
+
+model JobFunction {
+  id           Int               @id @default(autoincrement())
+  name         String            @unique
+  description  String?
+  default_rate Decimal           @default(0) @db.Decimal(10, 2)
+  unit         String            @default("POR_NAVIO") // POR_NAVIO, POR_DIA, POR_HORA, POR_OPERACAO
+  active       Boolean           @default(true)
+  rates        JobFunctionRate[]
+  allocations  JobAllocation[]
+  created_at   DateTime          @default(now()) @db.Timestamptz()
+  updated_at   DateTime          @updatedAt @db.Timestamptz()
+
+  @@map("job_functions")
+}
+
+model JobFunctionRate {
+  id            Int         @id @default(autoincrement())
+  function_id   Int
+  job_functions JobFunction @relation(fields: [function_id], references: [id], onDelete: Cascade)
+  rate          Decimal     @db.Decimal(10, 2)
+  valid_from    DateTime    @db.Date
+  valid_until   DateTime?   @db.Date // null = vigente
+  notes         String?
+  created_at    DateTime    @default(now()) @db.Timestamptz()
+
+  @@index([function_id, valid_from])
+  @@map("job_function_rates")
+}
+
+model Job {
+  id             String          @id @default(cuid())
+  name           String
+  ship_id        String?         @db.Uuid
+  ships          Ship?           @relation(fields: [ship_id], references: [id])
+  start_date     DateTime        @db.Date
+  end_date       DateTime?       @db.Date
+  status         String          @default("ABERTO") // ABERTO, EM_ANDAMENTO, VERIFICADO, FECHADO, CANCELADO
+  contract_value Decimal?        @db.Decimal(12, 2) // valor que o cliente paga
+  notes          String?
+
+  // ── Metadata para fechamento ─────────────────────────────────────────────
+  client      String? // ex: DEEP
+  supervisor  String? // ex: ADELMO
+  cargo_type  String? // ex: CARVÃO
+  holds_count Int? // nº de porões (5 PORÕES)
+  port        String? // SANTOS, etc.
+
+  // ── Workflow / Audit Trail ───────────────────────────────────────────────
+  verified_at   DateTime? @db.Timestamptz()
+  verified_by   String? // quem conferiu os valores totais
+  closed_at     DateTime? @db.Timestamptz() // último OK
+  closed_by     String? // quem fechou junto à contabilidade
+  payroll_value Decimal?  @db.Decimal(12, 2) // valor da folha (preenchido pelo gerente — vem da contabilidade)
+
+  allocations JobAllocation[]
+  adjustments JobAdjustment[]
+  created_at  DateTime        @default(now()) @db.Timestamptz()
+  updated_at  DateTime        @updatedAt @db.Timestamptz()
+  created_by  String
+
+  @@index([status])
+  @@index([start_date])
+  @@map("jobs")
+}
+
+model JobAllocation {
+  id            Int         @id @default(autoincrement())
+  job_id        String
+  jobs          Job         @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  function_id   Int
+  job_functions JobFunction @relation(fields: [function_id], references: [id])
+  employee_id   Int? // opcional — registra exatamente quem
+  employees     Employee?   @relation(fields: [employee_id], references: [id], onDelete: SetNull)
+  quantity      Int         @default(1) // dias trabalhados
+  rate          Decimal     @db.Decimal(10, 2) // valor diário aplicado
+  pluxee_value  Decimal?    @default(0) @db.Decimal(10, 2) // parte paga via Pluxee
+  notes         String?
+
+  // ── Status & Histórico ─────────────────────────────────────────────────
+  status         String    @default("ATIVO") // ATIVO, REMOVIDO, SUBSTITUIDO
+  replaces_id    Int? // se for substituto, aponta para a alocação substituída
+  replaces       JobAllocation?  @relation("AllocReplacement", fields: [replaces_id], references: [id])
+  replaced_by    JobAllocation[] @relation("AllocReplacement")
+  added_by       String    @default("")
+  added_at       DateTime  @default(now()) @db.Timestamptz()
+  removed_by     String?
+  removed_at     DateTime? @db.Timestamptz()
+  removal_reason String?
+
+  @@index([job_id])
+  @@index([status])
+  @@map("job_allocations")
+}
+
+model JobAdjustment {
+  id          Int      @id @default(autoincrement())
+  job_id      String
+  jobs        Job      @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  type        String // ADICIONAL, REDUCAO
+  description String
+  amount      Decimal  @db.Decimal(10, 2) // sempre positivo; type define se soma ou subtrai
+  created_at  DateTime @default(now()) @db.Timestamptz()
+
+  @@index([job_id])
+  @@map("job_adjustments")
+}
+
+// ── External Ships (MarineTraffic cache) ─────────────────────────────────────
+
+model ExternalShip {
+  id        String    @id @default(cuid())
+  name      String
+  imo       String?
+  mmsi      String?   @unique
+  lat       Float?
+  lng       Float?
+  status    String?
+  eta       DateTime?
+  source    String    @default("marinetraffic")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  ships     Ship[]
+
+  @@map("external_ships")
 }
 
 // ── Login Logs ───────────────────────────────────────────────────────────────
@@ -299,16 +466,16 @@ model ToolRequest {
 // ── Suppliers (Fornecedores) ─────────────────────────────────────────────────
 
 model Supplier {
-  id          Int      @id @default(autoincrement())
-  name        String
-  contact     String?
-  address     String?
-  category    String?
-  website     String?
-  notes       String?
-  created_by  String
-  updated_at  DateTime @default(now()) @db.Timestamptz()
-  updated_by  String
+  id         Int      @id @default(autoincrement())
+  name       String
+  contact    String?
+  address    String?
+  category   String?
+  website    String?
+  notes      String?
+  created_by String
+  updated_at DateTime @default(now()) @db.Timestamptz()
+  updated_by String
 
   @@map("suppliers")
 }

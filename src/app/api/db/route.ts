@@ -20,6 +20,12 @@ const TABLE_MAP: Record<string, string> = {
   tool_requests: "toolRequest",
   product_links: "productLink",
   suppliers: "supplier",
+  // Sistema financeiro
+  job_functions: "jobFunction",
+  job_function_rates: "jobFunctionRate",
+  jobs: "job",
+  job_allocations: "jobAllocation",
+  job_adjustments: "jobAdjustment",
   // Also support "profiles" alias -> reads from users table
   profiles: "user",
 };
