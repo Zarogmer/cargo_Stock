@@ -192,6 +192,17 @@ export default function FinanceiroPage() {
             ),
           },
           {
+            key: "faturar",
+            label: "🧾 Faturar",
+            content: (
+              <FaturarTab
+                jobs={jobs}
+                allocations={allocations}
+                loading={loading}
+              />
+            ),
+          },
+          {
             key: "resumo",
             label: "📊 Resumo",
             content: (
@@ -1803,5 +1814,673 @@ function ResumoTab({
         )}
       </div>
     </div>
+  );
+}
+
+// ─── FATURAR TAB ────────────────────────────────────────────────────────────
+
+function FaturarTab({
+  jobs, allocations, loading,
+}: {
+  jobs: Job[];
+  allocations: JobAllocation[];
+  loading: boolean;
+}) {
+  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [search, setSearch] = useState("");
+
+  // Apenas trabalhos com alocações fazem sentido para faturar
+  const billable = useMemo(
+    () => jobs.filter((j) => allocations.some((a) => a.job_id === j.id && a.status === "ATIVO")),
+    [jobs, allocations]
+  );
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return billable;
+    return billable.filter(
+      (j) =>
+        j.name.toLowerCase().includes(q) ||
+        j.ships?.name?.toLowerCase().includes(q) ||
+        j.client?.toLowerCase().includes(q)
+    );
+  }, [billable, search]);
+
+  return (
+    <div className="space-y-3">
+      <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-900">
+        🧾 Selecione um trabalho para gerar a planilha de pagamento. Você poderá importar o PDF da
+        <strong> Relação de Líquidos</strong> da contabilidade para preencher a coluna <strong>PAGTO NA FOLHA</strong> automaticamente.
+      </div>
+
+      <input
+        type="text"
+        placeholder="Buscar trabalho, navio, cliente..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none w-full max-w-md"
+      />
+
+      {loading ? (
+        <p className="text-center text-text-light py-12">Carregando...</p>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-12 bg-card rounded-xl border border-border">
+          <p className="text-3xl mb-2">🧾</p>
+          <p className="text-sm text-text-light">
+            {billable.length === 0
+              ? "Nenhum trabalho com equipe alocada. Aloque equipe na aba Trabalhos."
+              : "Nenhum trabalho encontrado."}
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-2">
+          {filtered.map((j) => {
+            const jobAllocs = allocations.filter((a) => a.job_id === j.id && a.status === "ATIVO");
+            const total = jobAllocs.reduce((s, a) => s + Number(a.rate) * a.quantity, 0);
+            return (
+              <button
+                key={j.id}
+                onClick={() => setSelectedJob(j)}
+                className="bg-card rounded-xl border border-border p-4 hover:shadow-md hover:border-primary transition cursor-pointer text-left"
+              >
+                <div className="flex flex-wrap justify-between items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-semibold">{j.name}</h3>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[j.status]}`}>
+                        {STATUS_LABELS[j.status]}
+                      </span>
+                      {j.ships?.name && <span className="text-xs text-text-light">⚓ {j.ships.name}</span>}
+                    </div>
+                    <p className="text-xs text-text-light mt-1">
+                      {j.client && <>Cliente: <strong>{j.client}</strong> · </>}
+                      {jobAllocs.length} funcionário(s) · {j.start_date}
+                      {j.end_date ? ` → ${j.end_date}` : ""}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-text-light text-[10px]">Total Alocado</p>
+                    <p className="font-semibold text-emerald-700">{brl(total)}</p>
+                    <span className="text-[10px] text-primary">🧾 Faturar →</span>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <FaturamentoModal
+        open={!!selectedJob}
+        job={selectedJob}
+        allocations={allocations.filter((a) => a.job_id === selectedJob?.id && a.status === "ATIVO")}
+        onClose={() => setSelectedJob(null)}
+      />
+    </div>
+  );
+}
+
+// ─── Faturamento helpers ────────────────────────────────────────────────────
+
+type FaturamentoRow = {
+  allocId: number;
+  name: string;
+  agencia: string;
+  conta: string;
+  banco: string;
+  pluxee: number;
+  folha: number;
+  desconto: number;
+  perda: number;
+  navio: number;
+};
+
+function normalizeName(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseBrlNumber(s: string): number {
+  // "1.234,56" → 1234.56  ;  "395,65" → 395.65
+  const cleaned = s.replace(/\./g, "").replace(",", ".");
+  const n = parseFloat(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
+// Reconstrói linhas a partir dos itens do pdfjs (que vêm fragmentados),
+// agrupando pelo Y aproximado e ordenando por X dentro da linha.
+function reconstructLinesFromPdfItems(items: { str: string; transform: number[] }[]): string[] {
+  type Item = { str: string; x: number; y: number };
+  const rows = new Map<number, Item[]>();
+  for (const it of items) {
+    if (!it.str || !it.str.trim()) continue;
+    const x = it.transform[4];
+    const y = Math.round(it.transform[5]);
+    // tolerância de Y: arredonda em janelas de 2pt para juntar fragmentos da mesma linha
+    const yKey = Math.round(y / 2) * 2;
+    if (!rows.has(yKey)) rows.set(yKey, []);
+    rows.get(yKey)!.push({ str: it.str, x, y });
+  }
+  // ordena Y desc (PDF é bottom-up) e X asc (esquerda → direita)
+  const orderedY = Array.from(rows.keys()).sort((a, b) => b - a);
+  return orderedY.map((y) => {
+    const line = rows.get(y)!.sort((a, b) => a.x - b.x);
+    return line.map((i) => i.str).join(" ").replace(/\s+/g, " ").trim();
+  });
+}
+
+function parseLiquidosPdf(lines: string[]): { name: string; value: number }[] {
+  // Padrão típico de cada linha:
+  //   "94 ADINAELSON FERREIRA DE SOUZA   449172466    395,65"
+  //   "66 MATHEUS OLIVEIRA SUPPA DOS SA  548548158    463,19"
+  // - inicia com código (1+ dígitos)
+  // - nome em maiúsculas (com possíveis espaços)
+  // - identidade alfanumérica
+  // - valor com vírgula
+  const out: { name: string; value: number }[] = [];
+  const re = /^(\d{1,5})\s+([A-ZÁÊÍÔÚÃÕÇÂÉÓÀ' .-]+?)\s+([0-9.\-X]{4,})\s+([\d.]+,\d{2})$/i;
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    // Pula linhas óbvias de cabeçalho/rodapé
+    if (/^(empregados|empresa|cnpj|cálculo|calculo|competência|competencia|relação|relacao|código|codigo|santos|responsável|responsavel|total da empresa|estagiários|contribuintes|página|pagina)/i.test(line)) {
+      continue;
+    }
+    const m = line.match(re);
+    if (m) {
+      const name = m[2].replace(/\s+/g, " ").trim();
+      const value = parseBrlNumber(m[4]);
+      if (name.length >= 3 && value > 0) {
+        out.push({ name, value });
+      }
+    }
+  }
+  return out;
+}
+
+function findBestPdfMatch(
+  allocName: string,
+  pdfEntries: { name: string; value: number }[],
+  used: Set<number>
+): { idx: number; entry: { name: string; value: number } } | null {
+  const target = normalizeName(allocName);
+  if (!target) return null;
+
+  // 1) match exato
+  for (let i = 0; i < pdfEntries.length; i++) {
+    if (used.has(i)) continue;
+    if (normalizeName(pdfEntries[i].name) === target) return { idx: i, entry: pdfEntries[i] };
+  }
+  // 2) PDF é prefixo do alocado (truncamento no relatório)
+  for (let i = 0; i < pdfEntries.length; i++) {
+    if (used.has(i)) continue;
+    const pdfNorm = normalizeName(pdfEntries[i].name);
+    if (pdfNorm.length >= 6 && target.startsWith(pdfNorm)) return { idx: i, entry: pdfEntries[i] };
+  }
+  // 3) alocado é prefixo do PDF
+  for (let i = 0; i < pdfEntries.length; i++) {
+    if (used.has(i)) continue;
+    const pdfNorm = normalizeName(pdfEntries[i].name);
+    if (target.length >= 6 && pdfNorm.startsWith(target)) return { idx: i, entry: pdfEntries[i] };
+  }
+  // 4) Mesmo primeiro nome + último sobrenome significativo
+  const targetParts = target.split(" ");
+  if (targetParts.length >= 2) {
+    const first = targetParts[0];
+    const last = targetParts[targetParts.length - 1];
+    for (let i = 0; i < pdfEntries.length; i++) {
+      if (used.has(i)) continue;
+      const pdfNorm = normalizeName(pdfEntries[i].name);
+      const pdfParts = pdfNorm.split(" ");
+      if (pdfParts.length >= 2 && pdfParts[0] === first) {
+        const pdfLast = pdfParts[pdfParts.length - 1];
+        // último sobrenome bate, OU é prefixo (para casos de truncamento)
+        if (pdfLast === last || last.startsWith(pdfLast) || pdfLast.startsWith(last)) {
+          return { idx: i, entry: pdfEntries[i] };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function formatBankLabel(name: string | null, type: string | null): string {
+  if (!name) return "";
+  const cleanName = name.toUpperCase();
+  if (!type) return cleanName;
+  const tMap: Record<string, string> = {
+    POUPANCA: "POUPANÇA",
+    CONTA_SAL: "Salário",
+    DIGITAL: "Digital",
+    CORRENTE: "",
+  };
+  const suffix = tMap[type] ?? type;
+  return suffix ? `${cleanName}-${suffix}` : cleanName;
+}
+
+function formatDateBR(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = iso.slice(0, 10).split("-");
+  if (d.length !== 3) return "";
+  return `${d[2]}/${d[1]}/${d[0].slice(2)}`;
+}
+
+// ─── Faturamento Modal ──────────────────────────────────────────────────────
+
+function FaturamentoModal({
+  open, job, allocations, onClose,
+}: {
+  open: boolean;
+  job: Job | null;
+  allocations: JobAllocation[];
+  onClose: () => void;
+}) {
+  const [rows, setRows] = useState<FaturamentoRow[]>([]);
+  const [paymentDate, setPaymentDate] = useState("");
+  const [pdfStatus, setPdfStatus] = useState<{
+    kind: "idle" | "parsing" | "done" | "error";
+    msg?: string;
+    matched?: number;
+    total?: number;
+    unmatchedPdf?: { name: string; value: number }[];
+  }>({ kind: "idle" });
+  const [exporting, setExporting] = useState(false);
+
+  // (Re)carrega linhas quando abrir
+  useEffect(() => {
+    if (!open || !job) return;
+    const initial: FaturamentoRow[] = allocations.map((a) => {
+      const e = a.employees;
+      const subtotal = Number(a.rate) * a.quantity;
+      const pluxee = Number(a.pluxee_value || 0);
+      return {
+        allocId: a.id,
+        name: e?.name || a.job_functions?.name || `#${a.function_id}`,
+        agencia: e?.bank_agency || "",
+        conta: e?.bank_account || "",
+        banco: formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null),
+        pluxee,
+        folha: 0, // será preenchido pelo PDF ou manualmente
+        desconto: 0,
+        perda: 0,
+        navio: subtotal,
+      };
+    });
+    setRows(initial);
+    setPaymentDate(job.end_date?.slice(0, 10) || job.start_date.slice(0, 10) || "");
+    setPdfStatus({ kind: "idle" });
+  }, [open, job, allocations]);
+
+  if (!open || !job) return null;
+
+  function updateRow(idx: number, patch: Partial<FaturamentoRow>) {
+    setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  }
+
+  async function handlePdfUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // permite re-upload do mesmo arquivo
+    if (!file) return;
+    setPdfStatus({ kind: "parsing", msg: "Lendo PDF…" });
+    try {
+      const buf = await file.arrayBuffer();
+      const pdfjs: typeof import("pdfjs-dist") = await import("pdfjs-dist");
+      // Configura worker (servido em /pdf.worker.min.mjs)
+      (pdfjs as { GlobalWorkerOptions: { workerSrc: string } }).GlobalWorkerOptions.workerSrc =
+        "/pdf.worker.min.mjs";
+      const doc = await pdfjs.getDocument({ data: buf }).promise;
+      const allLines: string[] = [];
+      for (let p = 1; p <= doc.numPages; p++) {
+        const page = await doc.getPage(p);
+        const content = await page.getTextContent();
+        const items = content.items as { str: string; transform: number[] }[];
+        const lines = reconstructLinesFromPdfItems(items);
+        allLines.push(...lines);
+      }
+      const entries = parseLiquidosPdf(allLines);
+      if (entries.length === 0) {
+        setPdfStatus({
+          kind: "error",
+          msg: "Nenhum registro reconhecido. Confira se é a 'Relação Geral dos Líquidos'.",
+        });
+        return;
+      }
+
+      // Match com as linhas atuais
+      const used = new Set<number>();
+      let matched = 0;
+      const next = rows.map((r) => {
+        const m = findBestPdfMatch(r.name, entries, used);
+        if (m) {
+          used.add(m.idx);
+          matched++;
+          return { ...r, folha: m.entry.value };
+        }
+        return r;
+      });
+      setRows(next);
+      const unmatched = entries.filter((_, i) => !used.has(i));
+      setPdfStatus({
+        kind: "done",
+        matched,
+        total: entries.length,
+        unmatchedPdf: unmatched,
+      });
+    } catch (err) {
+      console.error(err);
+      setPdfStatus({
+        kind: "error",
+        msg: "Falha ao ler PDF: " + (err as Error).message,
+      });
+    }
+  }
+
+  async function handleExportExcel() {
+    setExporting(true);
+    try {
+      const XLSX = await import("xlsx");
+      const aoa: (string | number | null)[][] = [];
+      const dateLabel = paymentDate
+        ? formatDateBR(paymentDate)
+        : formatDateBR(job!.start_date);
+
+      // Linha 1: título de pagamento (mesclado visualmente; aqui só posicionamos)
+      aoa.push([null, null, null, null, `PAGAMENTO EM ${dateLabel}`]);
+      aoa.push([]);
+      aoa.push([]);
+      // Cabeçalho de coluna K com cliente
+      aoa.push([null, null, null, null, null, null, null, null, null, null, job!.client || ""]);
+
+      // Cabeçalho principal
+      aoa.push([
+        null,
+        null,
+        "FUNCIONÁRIOS",
+        "AGÊNCIA",
+        "CONTA",
+        "ITAÚ/SANTANDER",
+        "PAGTO PLUXEE",
+        "PAGTO NA FOLHA",
+        "DESCONTO GERAL",
+        "Perda de Material",
+        `MV 1: ${job!.name}${
+          job!.start_date || job!.end_date
+            ? ` ${formatDateBR(job!.start_date)}${
+                job!.end_date ? ` a ${formatDateBR(job!.end_date)}` : ""
+              }`
+            : ""
+        }${dateLabel ? ` - VENCTO: ${dateLabel}` : ""}`,
+      ]);
+      aoa.push([
+        null,
+        null,
+        "Limpeza de porão\nPAGAMENTO:",
+      ]);
+
+      let totalPluxee = 0,
+        totalFolha = 0,
+        totalDesconto = 0,
+        totalPerda = 0,
+        totalNavio = 0;
+
+      rows.forEach((r, idx) => {
+        aoa.push([
+          null,
+          idx + 1,
+          r.name,
+          r.agencia,
+          r.conta,
+          r.banco,
+          r.pluxee || 0,
+          r.folha || 0,
+          r.desconto || 0,
+          r.perda || 0,
+          r.navio || 0,
+        ]);
+        totalPluxee += r.pluxee || 0;
+        totalFolha += r.folha || 0;
+        totalDesconto += r.desconto || 0;
+        totalPerda += r.perda || 0;
+        totalNavio += r.navio || 0;
+      });
+
+      // Linha em branco antes do TOTAL
+      aoa.push([]);
+      aoa.push([
+        null,
+        null,
+        null,
+        null,
+        null,
+        "TOTAL",
+        totalPluxee,
+        totalFolha,
+        totalDesconto,
+        totalPerda,
+        totalNavio,
+      ]);
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      // Larguras de colunas amigáveis
+      ws["!cols"] = [
+        { wch: 4 },
+        { wch: 4 },
+        { wch: 36 },
+        { wch: 9 },
+        { wch: 12 },
+        { wch: 16 },
+        { wch: 13 },
+        { wch: 14 },
+        { wch: 14 },
+        { wch: 16 },
+        { wch: 38 },
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "PAGAMENTO");
+      const safeName = (job!.name || "pagamento").replace(/[^a-zA-Z0-9_-]+/g, "_");
+      const dateForFile = (paymentDate || job!.start_date).slice(0, 10);
+      XLSX.writeFile(wb, `${dateForFile}_${safeName}.xlsx`);
+    } catch (err) {
+      console.error(err);
+      alert("Falha ao gerar XLSX: " + (err as Error).message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const totals = rows.reduce(
+    (acc, r) => {
+      acc.pluxee += r.pluxee || 0;
+      acc.folha += r.folha || 0;
+      acc.desconto += r.desconto || 0;
+      acc.perda += r.perda || 0;
+      acc.navio += r.navio || 0;
+      return acc;
+    },
+    { pluxee: 0, folha: 0, desconto: 0, perda: 0, navio: 0 }
+  );
+
+  const titleStr = `🧾 Faturar — ${job.name}`;
+  const inputCls =
+    "w-full px-2 py-1 border border-border rounded text-xs focus:ring-2 focus:ring-primary outline-none text-right";
+
+  return (
+    <Modal open={open} onClose={onClose} title={titleStr} maxWidth="max-w-7xl">
+      <div className="space-y-4">
+        {/* Cabeçalho */}
+        <div className="bg-gray-50 rounded-lg p-3 grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+          <div>
+            <p className="text-text-light text-[10px] uppercase tracking-wider">Cliente</p>
+            <p className="font-semibold">{job.client || "—"}</p>
+          </div>
+          <div>
+            <p className="text-text-light text-[10px] uppercase tracking-wider">Navio / Operação</p>
+            <p className="font-semibold">{job.ships?.name || job.name}</p>
+          </div>
+          <div>
+            <p className="text-text-light text-[10px] uppercase tracking-wider">Período</p>
+            <p className="font-semibold">
+              {formatDateBR(job.start_date)}
+              {job.end_date ? ` → ${formatDateBR(job.end_date)}` : ""}
+            </p>
+          </div>
+          <div>
+            <label className="text-text-light text-[10px] uppercase tracking-wider block">
+              Data do Pagamento
+            </label>
+            <input
+              type="date"
+              value={paymentDate}
+              onChange={(e) => setPaymentDate(e.target.value)}
+              className="mt-0.5 w-full px-2 py-1 border border-border rounded text-xs focus:ring-2 focus:ring-primary outline-none"
+            />
+          </div>
+        </div>
+
+        {/* PDF importer */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
+          <div className="flex flex-wrap gap-2 items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-blue-900">📄 Importar Relação de Líquidos (PDF)</p>
+              <p className="text-[11px] text-blue-800">
+                O sistema lerá o PDF da contabilidade e preencherá <strong>PAGTO NA FOLHA</strong> casando pelo nome.
+              </p>
+            </div>
+            <label className="px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition cursor-pointer">
+              {pdfStatus.kind === "parsing" ? "Lendo…" : "Selecionar PDF"}
+              <input
+                type="file"
+                accept="application/pdf"
+                onChange={handlePdfUpload}
+                disabled={pdfStatus.kind === "parsing"}
+                className="hidden"
+              />
+            </label>
+          </div>
+
+          {pdfStatus.kind === "done" && (
+            <div className="text-[11px] space-y-1">
+              <p className="text-emerald-800">
+                ✓ Casados <strong>{pdfStatus.matched}</strong> de <strong>{pdfStatus.total}</strong> registros do PDF.
+              </p>
+              {pdfStatus.unmatchedPdf && pdfStatus.unmatchedPdf.length > 0 && (
+                <details className="text-amber-800">
+                  <summary className="cursor-pointer">
+                    ⚠ {pdfStatus.unmatchedPdf.length} sem match (clique para ver e preencher manualmente)
+                  </summary>
+                  <ul className="mt-1 ml-4 list-disc">
+                    {pdfStatus.unmatchedPdf.map((u, i) => (
+                      <li key={i}>
+                        {u.name} — <strong>{brl(u.value)}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
+          {pdfStatus.kind === "error" && (
+            <p className="text-[11px] text-red-800">{pdfStatus.msg}</p>
+          )}
+        </div>
+
+        {/* Tabela editável */}
+        <div className="overflow-x-auto bg-card border border-border rounded-lg">
+          <table className="w-full text-xs">
+            <thead className="bg-gray-50 border-b border-border">
+              <tr>
+                <th className="px-2 py-2 text-left font-semibold text-text-light">#</th>
+                <th className="px-2 py-2 text-left font-semibold text-text-light">FUNCIONÁRIOS</th>
+                <th className="px-2 py-2 text-left font-semibold text-text-light">AGÊNCIA</th>
+                <th className="px-2 py-2 text-left font-semibold text-text-light">CONTA</th>
+                <th className="px-2 py-2 text-left font-semibold text-text-light">BANCO</th>
+                <th className="px-2 py-2 text-right font-semibold text-text-light">PAGTO PLUXEE</th>
+                <th className="px-2 py-2 text-right font-semibold text-text-light">PAGTO NA FOLHA</th>
+                <th className="px-2 py-2 text-right font-semibold text-text-light">DESCONTO</th>
+                <th className="px-2 py-2 text-right font-semibold text-text-light">PERDA MATERIAL</th>
+                <th className="px-2 py-2 text-right font-semibold text-text-light">NAVIO ({job.client || "TOTAL"})</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, idx) => (
+                <tr key={r.allocId} className="border-b border-border last:border-0 hover:bg-gray-50">
+                  <td className="px-2 py-1 text-text-light">{idx + 1}</td>
+                  <td className="px-2 py-1 font-medium whitespace-nowrap">{r.name}</td>
+                  <td className="px-2 py-1 text-text-light">{r.agencia || "—"}</td>
+                  <td className="px-2 py-1 text-text-light">{r.conta || "—"}</td>
+                  <td className="px-2 py-1 text-text-light">{r.banco || "—"}</td>
+                  <td className="px-1 py-1">
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={r.pluxee || ""}
+                      onChange={(e) => updateRow(idx, { pluxee: parseFloat(e.target.value) || 0 })}
+                      className={inputCls}
+                      placeholder="0,00"
+                    />
+                  </td>
+                  <td className="px-1 py-1">
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={r.folha || ""}
+                      onChange={(e) => updateRow(idx, { folha: parseFloat(e.target.value) || 0 })}
+                      className={`${inputCls} ${r.folha > 0 ? "bg-emerald-50 border-emerald-300" : ""}`}
+                      placeholder="0,00"
+                    />
+                  </td>
+                  <td className="px-1 py-1">
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={r.desconto || ""}
+                      onChange={(e) => updateRow(idx, { desconto: parseFloat(e.target.value) || 0 })}
+                      className={inputCls}
+                      placeholder="0,00"
+                    />
+                  </td>
+                  <td className="px-1 py-1">
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={r.perda || ""}
+                      onChange={(e) => updateRow(idx, { perda: parseFloat(e.target.value) || 0 })}
+                      className={inputCls}
+                      placeholder="0,00"
+                    />
+                  </td>
+                  <td className="px-2 py-1 text-right font-semibold text-emerald-700">{brl(r.navio)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="bg-gray-50 border-t-2 border-border font-semibold">
+              <tr>
+                <td colSpan={5} className="px-2 py-2 text-right text-text-light">TOTAL</td>
+                <td className="px-2 py-2 text-right text-amber-700">{brl(totals.pluxee)}</td>
+                <td className="px-2 py-2 text-right text-purple-700">{brl(totals.folha)}</td>
+                <td className="px-2 py-2 text-right text-red-700">{brl(totals.desconto)}</td>
+                <td className="px-2 py-2 text-right text-red-700">{brl(totals.perda)}</td>
+                <td className="px-2 py-2 text-right text-emerald-700">{brl(totals.navio)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <div className="flex flex-wrap gap-2 justify-end pt-2 border-t border-border">
+          <Button variant="secondary" type="button" onClick={onClose}>
+            Fechar
+          </Button>
+          <Button type="button" onClick={handleExportExcel} disabled={exporting || rows.length === 0}>
+            {exporting ? "Gerando…" : "📥 Gerar Planilha de Pagamento"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
