@@ -87,24 +87,33 @@ export function EscalacaoCostadoPage() {
   const currentShip = ships.find((s) => s.id === selectedShip);
   const shipJob = useMemo(() => jobs.find((j) => j.ship_id === selectedShip) ?? null, [jobs, selectedShip]);
 
+  const [view, setView] = useState<"escalacao" | "historico">("escalacao");
+
+  // All ACTIVE Costado allocations for the selected ship (any date).
+  const shipCostadoAllocations = useMemo(() => {
+    if (!shipJob) return [] as JobAllocation[];
+    return allocations.filter(
+      (a) => a.job_id === shipJob.id
+        && (a.kind || "EMBARQUE") === "COSTADO"
+        && a.status === "ATIVO"
+        && a.shift_date
+        && a.shift_period,
+    );
+  }, [shipJob, allocations]);
+
   // Group active Costado allocations for the selected ship + date, by period.
   const allocationsByPeriod = useMemo(() => {
     const empty: Record<ShiftPeriod, JobAllocation[]> = {
       "07-13": [], "13-19": [], "19-01": [], "01-07": [],
     };
-    if (!shipJob) return empty;
-    for (const a of allocations) {
-      if (a.job_id !== shipJob.id) continue;
-      if ((a.kind || "EMBARQUE") !== "COSTADO") continue;
-      if (a.status !== "ATIVO") continue;
-      if (!a.shift_date || !a.shift_period) continue;
-      const shiftDate = a.shift_date.slice(0, 10);
+    for (const a of shipCostadoAllocations) {
+      const shiftDate = a.shift_date!.slice(0, 10);
       if (shiftDate !== selectedDate) continue;
       const period = a.shift_period as ShiftPeriod;
       if (period in empty) empty[period].push(a);
     }
     return empty;
-  }, [shipJob, allocations, selectedDate]);
+  }, [shipCostadoAllocations, selectedDate]);
 
   async function ensureJob(): Promise<string> {
     if (shipJob) return shipJob.id;
@@ -163,74 +172,100 @@ export function EscalacaoCostadoPage() {
     <div className="space-y-4 max-w-7xl mx-auto">
       <h1 className="text-2xl font-bold text-text">Escalação de Costado ⛏️</h1>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
-        <div className="md:col-span-2">
-          <ShipSelector ships={ships} selectedShip={selectedShip} onSelect={setSelectedShip} />
-        </div>
-        <div>
-          <label className="block text-xs font-semibold text-text-light uppercase tracking-wider mb-1.5">📅 Dia</label>
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="w-full bg-card border border-border rounded-xl p-4 text-sm focus:ring-2 focus:ring-primary outline-none"
-          />
-        </div>
+      <ShipSelector ships={ships} selectedShip={selectedShip} onSelect={setSelectedShip} />
+
+      {/* In-page sub-tabs */}
+      <div className="flex gap-1 border-b border-border">
+        <button
+          type="button"
+          onClick={() => setView("escalacao")}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition ${
+            view === "escalacao"
+              ? "border-primary text-primary"
+              : "border-transparent text-text-light hover:text-text"
+          }`}
+        >
+          📅 Escalação do dia
+        </button>
+        <button
+          type="button"
+          onClick={() => setView("historico")}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition ${
+            view === "historico"
+              ? "border-primary text-primary"
+              : "border-transparent text-text-light hover:text-text"
+          }`}
+        >
+          📋 Histórico ({shipCostadoAllocations.length})
+        </button>
       </div>
 
       {!currentShip ? (
         <div className="text-center py-12 text-text-light">Selecione um navio para escalar.</div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-          {SHIFT_PERIODS.map((period) => {
-            const crew = allocationsByPeriod[period];
-            return (
-              <section key={period} className={`rounded-xl border ${PERIOD_TONES[period]} flex flex-col`}>
-                <header className="px-4 pt-3 pb-2 border-b border-border flex items-center justify-between">
-                  <div>
-                    <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Turno</p>
-                    <h3 className="text-base font-bold text-text">{PERIOD_LABELS[period]}</h3>
-                  </div>
-                  <span className="text-xs px-2 py-1 rounded-full bg-white border border-border font-semibold text-text">
-                    {crew.length}
-                  </span>
-                </header>
-                <ul className="flex-1 divide-y divide-border/60 min-h-[60px]">
-                  {crew.length === 0 ? (
-                    <li className="px-4 py-6 text-center text-xs text-text-light italic">
-                      Ninguém escalado neste turno
-                    </li>
-                  ) : (
-                    crew.map((a, idx) => (
-                      <li key={a.id} className="px-4 py-2 flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium truncate">{idx + 1}. {a.employees?.name || "—"}</p>
-                          <p className="text-[10px] text-text-light">{a.job_functions?.name || "—"}</p>
-                        </div>
-                        {canEdit && (
-                          <button
-                            onClick={() => handleRemove(a)}
-                            className="p-1 text-danger hover:bg-red-50 rounded"
-                            title="Remover"
-                          >
-                            <TrashIcon className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+      ) : view === "escalacao" ? (
+        <>
+          <div>
+            <label className="block text-xs font-semibold text-text-light uppercase tracking-wider mb-1.5">📅 Dia</label>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="w-full md:w-64 bg-card border border-border rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-primary outline-none"
+            />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            {SHIFT_PERIODS.map((period) => {
+              const crew = allocationsByPeriod[period];
+              return (
+                <section key={period} className={`rounded-xl border ${PERIOD_TONES[period]} flex flex-col`}>
+                  <header className="px-4 pt-3 pb-2 border-b border-border flex items-center justify-between">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Turno</p>
+                      <h3 className="text-base font-bold text-text">{PERIOD_LABELS[period]}</h3>
+                    </div>
+                    <span className="text-xs px-2 py-1 rounded-full bg-white border border-border font-semibold text-text">
+                      {crew.length}
+                    </span>
+                  </header>
+                  <ul className="flex-1 divide-y divide-border/60 min-h-[60px]">
+                    {crew.length === 0 ? (
+                      <li className="px-4 py-6 text-center text-xs text-text-light italic">
+                        Ninguém escalado neste turno
                       </li>
-                    ))
+                    ) : (
+                      crew.map((a, idx) => (
+                        <li key={a.id} className="px-4 py-2 flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate">{idx + 1}. {a.employees?.name || "—"}</p>
+                            <p className="text-[10px] text-text-light">{a.job_functions?.name || "—"}</p>
+                          </div>
+                          {canEdit && (
+                            <button
+                              onClick={() => handleRemove(a)}
+                              className="p-1 text-danger hover:bg-red-50 rounded"
+                              title="Remover"
+                            >
+                              <TrashIcon className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                  {canEdit && (
+                    <div className="px-3 pb-3 pt-2">
+                      <Button size="sm" className="w-full" onClick={() => setAddPeriod(period)}>
+                        + Adicionar
+                      </Button>
+                    </div>
                   )}
-                </ul>
-                {canEdit && (
-                  <div className="px-3 pb-3 pt-2">
-                    <Button size="sm" className="w-full" onClick={() => setAddPeriod(period)}>
-                      + Adicionar
-                    </Button>
-                  </div>
-                )}
-              </section>
-            );
-          })}
-        </div>
+                </section>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <HistoricoView allocations={shipCostadoAllocations} shipName={currentShip.name} />
       )}
 
       <AddCostadoCrewModal
@@ -247,6 +282,175 @@ export function EscalacaoCostadoPage() {
         onSaved={() => { setAddPeriod(null); loadData(); }}
       />
     </div>
+  );
+}
+
+// ─── Histórico (per-employee aggregation for the whole ship) ────────────────
+
+interface EmployeeSummary {
+  employee_id: number;
+  employee_name: string;
+  function_name: string;
+  shifts: { date: string; period: ShiftPeriod }[];
+  total_shifts: number;
+  unique_days: number;
+}
+
+function HistoricoView({ allocations, shipName }: { allocations: JobAllocation[]; shipName: string }) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
+  const summary = useMemo(() => {
+    const byEmp = new Map<number, EmployeeSummary>();
+    for (const a of allocations) {
+      if (!a.employee_id || !a.shift_date || !a.shift_period) continue;
+      const id = a.employee_id;
+      if (!byEmp.has(id)) {
+        byEmp.set(id, {
+          employee_id: id,
+          employee_name: a.employees?.name || "—",
+          function_name: a.job_functions?.name || "—",
+          shifts: [],
+          total_shifts: 0,
+          unique_days: 0,
+        });
+      }
+      byEmp.get(id)!.shifts.push({
+        date: a.shift_date.slice(0, 10),
+        period: a.shift_period as ShiftPeriod,
+      });
+    }
+    for (const s of byEmp.values()) {
+      s.total_shifts = s.shifts.length;
+      s.unique_days = new Set(s.shifts.map((x) => x.date)).size;
+      s.shifts.sort((a, b) => (a.date === b.date ? a.period.localeCompare(b.period) : a.date.localeCompare(b.date)));
+    }
+    return Array.from(byEmp.values()).sort((a, b) => b.total_shifts - a.total_shifts);
+  }, [allocations]);
+
+  const totalShifts = summary.reduce((acc, s) => acc + s.total_shifts, 0);
+  const totalUniqueDays = new Set(allocations.map((a) => a.shift_date?.slice(0, 10))).size;
+  const totalPeople = summary.length;
+
+  if (allocations.length === 0) {
+    return (
+      <div className="bg-card rounded-xl border border-border p-12 text-center text-text-light">
+        <p className="text-3xl mb-2">📋</p>
+        <p className="text-sm">Nenhuma escalação registrada para este navio ainda.</p>
+      </div>
+    );
+  }
+
+  function toggleExpand(id: number) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Summary cards */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-card rounded-xl border border-border p-4">
+          <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Total de turnos</p>
+          <p className="text-2xl font-bold text-text mt-1">{totalShifts}</p>
+        </div>
+        <div className="bg-card rounded-xl border border-border p-4">
+          <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Dias trabalhados</p>
+          <p className="text-2xl font-bold text-text mt-1">{totalUniqueDays}</p>
+        </div>
+        <div className="bg-card rounded-xl border border-border p-4">
+          <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Colaboradores</p>
+          <p className="text-2xl font-bold text-text mt-1">{totalPeople}</p>
+        </div>
+      </div>
+
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        <header className="px-6 pt-4 pb-3 border-b border-border">
+          <h2 className="text-base font-semibold text-text">Por colaborador · {shipName}</h2>
+          <p className="text-xs text-text-light mt-0.5">Base para fechamento de pagamento — quantos turnos e dias cada um trabalhou.</p>
+        </header>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-border">
+              <tr>
+                <th className="px-4 py-2 text-left text-xs font-semibold text-text-light">#</th>
+                <th className="px-4 py-2 text-left text-xs font-semibold text-text-light">Funcionário</th>
+                <th className="px-4 py-2 text-left text-xs font-semibold text-text-light">Função</th>
+                <th className="px-4 py-2 text-center text-xs font-semibold text-text-light">Dias</th>
+                <th className="px-4 py-2 text-center text-xs font-semibold text-text-light">Turnos</th>
+                <th className="px-4 py-2 text-right text-xs font-semibold text-text-light w-20">Detalhe</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.map((s, idx) => {
+                const isOpen = expanded.has(s.employee_id);
+                return (
+                  <FragmentRow
+                    key={s.employee_id}
+                    idx={idx + 1}
+                    summary={s}
+                    isOpen={isOpen}
+                    onToggle={() => toggleExpand(s.employee_id)}
+                  />
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FragmentRow({
+  idx, summary: s, isOpen, onToggle,
+}: {
+  idx: number;
+  summary: EmployeeSummary;
+  isOpen: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <>
+      <tr className="border-b border-border last:border-0 hover:bg-gray-50">
+        <td className="px-4 py-2 text-text-light tabular-nums">{idx}</td>
+        <td className="px-4 py-2 font-medium">{s.employee_name}</td>
+        <td className="px-4 py-2">
+          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
+            {s.function_name}
+          </span>
+        </td>
+        <td className="px-4 py-2 text-center font-bold tabular-nums">{s.unique_days}</td>
+        <td className="px-4 py-2 text-center font-bold tabular-nums">{s.total_shifts}</td>
+        <td className="px-4 py-2 text-right">
+          <button
+            onClick={onToggle}
+            className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded font-medium"
+          >
+            {isOpen ? "▲ Ocultar" : "▼ Ver"}
+          </button>
+        </td>
+      </tr>
+      {isOpen && (
+        <tr className="bg-gray-50/60">
+          <td colSpan={6} className="px-4 py-3">
+            <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold mb-2">
+              Turnos trabalhados ({s.total_shifts})
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {s.shifts.map((sh, i) => (
+                <span key={`${sh.date}-${sh.period}-${i}`} className="text-[11px] px-2 py-1 rounded-md bg-white border border-border font-mono">
+                  {sh.date.split("-").reverse().join("/")} · {PERIOD_LABELS[sh.period]}
+                </span>
+              ))}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
