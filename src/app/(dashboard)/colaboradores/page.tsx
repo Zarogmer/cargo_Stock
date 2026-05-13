@@ -1181,9 +1181,8 @@ function MovementModal({ open, onClose, onConfirm, title, saving, employees }: {
 
 // --- SPREADSHEET VIEW (matches the original .xlsx layout) ---
 
-const SHEET_COLUMNS: { key: keyof Employee | "actions"; label: string; w?: string }[] = [
-  { key: "subestipulante", label: "Subest", w: "w-16" },
-  { key: "modulo", label: "Mód", w: "w-12" },
+const SHEET_COLUMNS: { key: keyof Employee | "__index" | "actions"; label: string; w?: string }[] = [
+  { key: "__index", label: "#", w: "w-10" },
   { key: "e_social", label: "E SOCIAL", w: "w-20" },
   { key: "status", label: "Status", w: "w-20" },
   { key: "name", label: "Funcionário", w: "w-56" },
@@ -1322,7 +1321,9 @@ function EmployeeSpreadsheetView({
                       key={String(c.key)}
                       className={`${c.w || ""} px-2 py-1.5 border-b border-r border-border overflow-hidden text-ellipsis`}
                     >
-                      {renderCell(emp, c.key as keyof Employee)}
+                      {c.key === "__index"
+                        ? <span className="text-text-light tabular-nums">{idx + 1}</span>
+                        : renderCell(emp, c.key as keyof Employee)}
                     </td>
                   ))}
                 </tr>
