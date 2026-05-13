@@ -26,6 +26,7 @@ const TABLE_MAP: Record<string, string> = {
   jobs: "job",
   job_allocations: "jobAllocation",
   job_adjustments: "jobAdjustment",
+  costado_period_status: "costadoPeriodStatus",
   // Also support "profiles" alias -> reads from users table
   profiles: "user",
 };

@@ -16,6 +16,7 @@ import type {
   JobAllocation,
   Employee,
   ShiftPeriod,
+  CostadoPeriodStatus,
 } from "@/types/database";
 
 const PERIOD_LABELS: Record<ShiftPeriod, string> = {
@@ -50,6 +51,7 @@ export function EscalacaoCostadoPage() {
   const [functions, setFunctions] = useState<JobFunction[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [allocations, setAllocations] = useState<JobAllocation[]>([]);
+  const [periodStatus, setPeriodStatus] = useState<CostadoPeriodStatus[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [addPeriod, setAddPeriod] = useState<ShiftPeriod | null>(null);
@@ -57,18 +59,20 @@ export function EscalacaoCostadoPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [shipsRes, empRes, fnRes, jobsRes, allocsRes] = await Promise.all([
+      const [shipsRes, empRes, fnRes, jobsRes, allocsRes, marksRes] = await Promise.all([
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
         db.from("employees").select("id, name, role, status").order("name"),
         db.from("job_functions").select("*").order("name"),
         db.from("jobs").select("*"),
         db.from("job_allocations").select("*, job_functions(name, unit), employees(name)").order("added_at", { ascending: true }),
+        db.from("costado_period_status").select("*"),
       ]);
       setShips((shipsRes.data as Ship[]) || []);
       setEmployees((empRes.data as Employee[]) || []);
       setFunctions((fnRes.data as JobFunction[]) || []);
       setJobs((jobsRes.data as Job[]) || []);
       setAllocations((allocsRes.data as JobAllocation[]) || []);
+      setPeriodStatus((marksRes.data as CostadoPeriodStatus[]) || []);
     } catch (err) {
       console.error("Load error:", err);
     } finally {
@@ -143,6 +147,36 @@ export function EscalacaoCostadoPage() {
     }).eq("id", alloc.id);
     loadData();
   }
+
+  // Mark/unmark a (date, period) as "não requisitado" — toggles the row.
+  async function togglePeriodMark(date: string, period: ShiftPeriod) {
+    if (!shipJob) {
+      // Need a job first; reuse ensureJob to create it.
+      await ensureJob();
+      return;
+    }
+    const existing = periodStatus.find(
+      (p) => p.job_id === shipJob.id && p.shift_date.slice(0, 10) === date && p.shift_period === period,
+    );
+    if (existing) {
+      await db.from("costado_period_status").delete().eq("id", existing.id);
+    } else {
+      await db.from("costado_period_status").insert({
+        job_id: shipJob.id,
+        shift_date: date,
+        shift_period: period,
+        status: "NAO_REQUISITADO",
+        created_by: profileName,
+      });
+    }
+    loadData();
+  }
+
+  // Period marks scoped to the current ship's job.
+  const shipPeriodMarks = useMemo(
+    () => (shipJob ? periodStatus.filter((p) => p.job_id === shipJob.id) : []),
+    [shipJob, periodStatus],
+  );
 
   if (loading) {
     return (
@@ -265,7 +299,13 @@ export function EscalacaoCostadoPage() {
           </div>
         </>
       ) : (
-        <HistoricoView allocations={shipCostadoAllocations} shipName={currentShip.name} />
+        <HistoricoView
+          allocations={shipCostadoAllocations}
+          periodMarks={shipPeriodMarks}
+          shipName={currentShip.name}
+          canEdit={canEdit}
+          onTogglePeriodMark={togglePeriodMark}
+        />
       )}
 
       <AddCostadoCrewModal
@@ -296,9 +336,27 @@ interface EmployeeSummary {
   unique_days: number;
 }
 
-function HistoricoView({ allocations, shipName }: { allocations: JobAllocation[]; shipName: string }) {
+function HistoricoView({
+  allocations, periodMarks, shipName, canEdit, onTogglePeriodMark,
+}: {
+  allocations: JobAllocation[];
+  periodMarks: CostadoPeriodStatus[];
+  shipName: string;
+  canEdit: boolean;
+  onTogglePeriodMark: (date: string, period: ShiftPeriod) => void;
+}) {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set());
+
+  // Set of `${date}|${period}` strings marked as não requisitado.
+  const markedKeys = useMemo(() => {
+    const s = new Set<string>();
+    for (const m of periodMarks) {
+      s.add(`${m.shift_date.slice(0, 10)}|${m.shift_period}`);
+    }
+    return s;
+  }, [periodMarks]);
+  const isMarked = (date: string, period: ShiftPeriod) => markedKeys.has(`${date}|${period}`);
 
   const summary = useMemo(() => {
     const byEmp = new Map<number, EmployeeSummary>();
@@ -328,21 +386,27 @@ function HistoricoView({ allocations, shipName }: { allocations: JobAllocation[]
     return Array.from(byEmp.values()).sort((a, b) => b.total_shifts - a.total_shifts);
   }, [allocations]);
 
-  // Date → period → list of allocations
+  // Date → period → list of allocations. Includes dates that have only NR marks
+  // (so an entire day marked "não requisitado" still shows up in the history).
   const byDate = useMemo(() => {
     const map = new Map<string, Record<ShiftPeriod, JobAllocation[]>>();
-    for (const a of allocations) {
-      if (!a.shift_date || !a.shift_period) continue;
-      const date = a.shift_date.slice(0, 10);
+    function ensure(date: string) {
       if (!map.has(date)) {
         map.set(date, { "07-13": [], "13-19": [], "19-01": [], "01-07": [] });
       }
+    }
+    for (const a of allocations) {
+      if (!a.shift_date || !a.shift_period) continue;
+      const date = a.shift_date.slice(0, 10);
+      ensure(date);
       const period = a.shift_period as ShiftPeriod;
       if (period in map.get(date)!) map.get(date)![period].push(a);
     }
-    // newest day first
+    for (const m of periodMarks) {
+      ensure(m.shift_date.slice(0, 10));
+    }
     return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
-  }, [allocations]);
+  }, [allocations, periodMarks]);
 
   const totalShifts = summary.reduce((acc, s) => acc + s.total_shifts, 0);
   const totalUniqueDays = new Set(allocations.map((a) => a.shift_date?.slice(0, 10))).size;
@@ -393,6 +457,95 @@ function HistoricoView({ allocations, shipName }: { allocations: JobAllocation[]
         </div>
       </div>
 
+      {/* Por dia (movido pra cima) */}
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        <header className="px-6 pt-4 pb-3 border-b border-border">
+          <h2 className="text-base font-semibold text-text">Por dia · {shipName}</h2>
+          <p className="text-xs text-text-light mt-0.5">
+            Cada dia escalado, com os 4 períodos e quem estava em cada um. Marque períodos como <strong>não requisitado</strong> quando o navio não operou.
+          </p>
+        </header>
+        <ul className="divide-y divide-border">
+          {byDate.map(([date, byPeriod]) => {
+            const isOpen = expandedDates.has(date);
+            // Period counter: how many of the 4 períodos têm gente OU estão marcados como NR.
+            const periodsAccounted = SHIFT_PERIODS.reduce(
+              (acc, p) => acc + (byPeriod[p].length > 0 || isMarked(date, p) ? 1 : 0),
+              0,
+            );
+            return (
+              <li key={date}>
+                <button
+                  type="button"
+                  onClick={() => toggleDate(date)}
+                  className="w-full px-6 py-3 flex items-center justify-between gap-3 hover:bg-gray-50 transition text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-base font-semibold tabular-nums">{date.split("-").reverse().join("/")}</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-text-light font-medium">
+                      {periodsAccounted} de 4 {periodsAccounted === 1 ? "período" : "períodos"}
+                    </span>
+                  </div>
+                  <span className="text-xs text-text-light">{isOpen ? "▲" : "▼"}</span>
+                </button>
+                {isOpen && (
+                  <div className="px-6 pb-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                    {SHIFT_PERIODS.map((period) => {
+                      const crew = byPeriod[period];
+                      const marked = isMarked(date, period);
+                      const hasCrew = crew.length > 0;
+                      return (
+                        <div
+                          key={period}
+                          className={`rounded-lg border p-3 ${marked ? "border-gray-300 bg-gray-50/80" : PERIOD_TONES[period]}`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-xs font-bold text-text">{PERIOD_LABELS[period]}</p>
+                            {marked ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-700 font-semibold">
+                                NÃO REQ.
+                              </span>
+                            ) : (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white border border-border font-semibold">
+                                {crew.length}
+                              </span>
+                            )}
+                          </div>
+                          {hasCrew ? (
+                            <ul className="space-y-1">
+                              {crew.map((a, idx) => (
+                                <li key={a.id} className="text-xs">
+                                  <span className="font-medium">{idx + 1}. {a.employees?.name || "—"}</span>
+                                  <span className="ml-1 text-[10px] text-text-light">· {a.job_functions?.name || "—"}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : marked ? (
+                            <p className="text-[11px] text-gray-600 italic">Período não requisitado</p>
+                          ) : (
+                            <p className="text-[11px] text-text-light italic">Ninguém</p>
+                          )}
+                          {canEdit && !hasCrew && (
+                            <button
+                              type="button"
+                              onClick={() => onTogglePeriodMark(date, period)}
+                              className="mt-2 w-full text-[10px] px-2 py-1 rounded bg-white border border-border hover:bg-gray-100 font-medium text-text-light"
+                            >
+                              {marked ? "Desmarcar" : "Marcar como não requisitado"}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
+      {/* Por colaborador */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <header className="px-6 pt-4 pb-3 border-b border-border">
           <h2 className="text-base font-semibold text-text">Por colaborador · {shipName}</h2>
@@ -426,66 +579,6 @@ function HistoricoView({ allocations, shipName }: { allocations: JobAllocation[]
             </tbody>
           </table>
         </div>
-      </div>
-
-      {/* Por dia */}
-      <div className="bg-card rounded-xl border border-border overflow-hidden">
-        <header className="px-6 pt-4 pb-3 border-b border-border">
-          <h2 className="text-base font-semibold text-text">Por dia · {shipName}</h2>
-          <p className="text-xs text-text-light mt-0.5">Cada dia escalado, com os 4 turnos e quem estava em cada um.</p>
-        </header>
-        <ul className="divide-y divide-border">
-          {byDate.map(([date, byPeriod]) => {
-            const isOpen = expandedDates.has(date);
-            const dayTotal = SHIFT_PERIODS.reduce((acc, p) => acc + byPeriod[p].length, 0);
-            return (
-              <li key={date}>
-                <button
-                  type="button"
-                  onClick={() => toggleDate(date)}
-                  className="w-full px-6 py-3 flex items-center justify-between gap-3 hover:bg-gray-50 transition text-left"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-base font-semibold tabular-nums">{date.split("-").reverse().join("/")}</span>
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-text-light font-medium">
-                      {dayTotal} {dayTotal === 1 ? "turno" : "turnos"}
-                    </span>
-                  </div>
-                  <span className="text-xs text-text-light">{isOpen ? "▲" : "▼"}</span>
-                </button>
-                {isOpen && (
-                  <div className="px-6 pb-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-                    {SHIFT_PERIODS.map((period) => {
-                      const crew = byPeriod[period];
-                      return (
-                        <div key={period} className={`rounded-lg border ${PERIOD_TONES[period]} p-3`}>
-                          <div className="flex items-center justify-between mb-2">
-                            <p className="text-xs font-bold text-text">{PERIOD_LABELS[period]}</p>
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white border border-border font-semibold">
-                              {crew.length}
-                            </span>
-                          </div>
-                          {crew.length === 0 ? (
-                            <p className="text-[11px] text-text-light italic">Ninguém</p>
-                          ) : (
-                            <ul className="space-y-1">
-                              {crew.map((a, idx) => (
-                                <li key={a.id} className="text-xs">
-                                  <span className="font-medium">{idx + 1}. {a.employees?.name || "—"}</span>
-                                  <span className="ml-1 text-[10px] text-text-light">· {a.job_functions?.name || "—"}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
       </div>
     </div>
   );

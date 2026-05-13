@@ -406,6 +406,24 @@ model JobAllocation {
   @@map("job_allocations")
 }
 
+// ── Costado: marca de período "não requisitado" ─────────────────────────────
+// Quando o navio não opera num turno (ex.: 19-01 do dia 12/05 está parado),
+// o gestor marca pra deixar registrado que aquele período não precisava de
+// equipe. Difere do "ninguém escalado" (que seria uma falta).
+model CostadoPeriodStatus {
+  id            Int      @id @default(autoincrement())
+  job_id        String
+  shift_date    DateTime @db.Date
+  shift_period  String // "07-13" | "13-19" | "19-01" | "01-07"
+  status        String   @default("NAO_REQUISITADO") // futuro: outros estados
+  created_by    String
+  created_at    DateTime @default(now()) @db.Timestamptz()
+
+  @@unique([job_id, shift_date, shift_period])
+  @@index([job_id])
+  @@map("costado_period_status")
+}
+
 model JobAdjustment {
   id          Int      @id @default(autoincrement())
   job_id      String

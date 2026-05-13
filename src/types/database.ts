@@ -302,6 +302,16 @@ export interface JobAllocation {
   employees?: { name: string; bank_name: string | null; bank_agency: string | null; bank_account: string | null; bank_account_type: string | null } | null;
 }
 
+export interface CostadoPeriodStatus {
+  id: number;
+  job_id: string;
+  shift_date: string;
+  shift_period: ShiftPeriod;
+  status: string;
+  created_by: string;
+  created_at: string;
+}
+
 export interface JobAdjustment {
   id: number;
   job_id: string;
