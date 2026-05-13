@@ -78,7 +78,7 @@ cargo-stock/
 │   │   ├── auth.config.ts
 │   │   ├── auth-context.tsx
 │   │   ├── prisma.ts       # Singleton Prisma client
-│   │   ├── db.ts           # Wrapper estilo Supabase em cima do /api/db
+│   │   ├── db.ts           # Query builder client-side em cima do /api/db
 │   │   ├── rbac.ts         # Matriz de permissões + nav items
 │   │   └── utils.ts
 │   ├── types/
@@ -90,13 +90,12 @@ cargo-stock/
 ├── next.config.ts
 ├── package.json
 ├── railway.json
-├── supabase-schema.sql     # Histórico (origem foi Supabase, migrado pra Prisma/Railway)
 └── tsconfig.json
 ```
 
 **Notas arquiteturais relevantes:**
 
-- O cliente acessa o banco via **`src/lib/db.ts`**, um *query builder* estilo Supabase que monta um `QuerySpec` JSON e dispara contra **`/api/db/route.ts`** (proxy genérico). Resquício da migração Supabase → Prisma. **Se for criar feature nova, prefira chamar Prisma diretamente em route handlers tipados** (mais seguro), e considerar refatorar `db.ts` em paralelo.
+- O cliente acessa o banco via **`src/lib/db.ts`**, um *query builder* JSON que monta um `QuerySpec` e dispara contra **`/api/db/route.ts`** (proxy genérico que delega para Prisma). **Se for criar feature nova, prefira chamar Prisma diretamente em route handlers tipados** (mais seguro), e considerar refatorar `db.ts` em paralelo.
 - Não existe pasta `prisma/migrations/`. O schema é aplicado via `prisma db push` direto (ver §7).
 - `(dashboard)` é um *route group* — não aparece na URL, serve só pra agrupar rotas autenticadas sob um layout comum.
 - Páginas têm muito código (várias > 600 LOC): client components com formulários grandes e múltiplas modais. Há espaço pra extrair componentes.
@@ -258,7 +257,7 @@ Trabalho recente concentrado em: dashboard de logs, layout mobile, módulo Forne
 - **Ícones:** componente único `src/components/icons.tsx` (centralizado).
 - **Tema:** tema escuro como padrão (a julgar pelo print do Railway e estética do sidebar).
 - **Tailwind v4:** sintaxe nova (`@theme`, `@tailwindcss/postcss`).
-- **Acesso a dados em client component:** via `db.from(...)` (wrapper Supabase em `src/lib/db.ts`) que bate em `/api/db`. Em **server components** ou route handlers novos, prefira **Prisma direto**.
+- **Acesso a dados em client component:** via `db.from(...)` (query builder em `src/lib/db.ts`) que bate em `/api/db`. Em **server components** ou route handlers novos, prefira **Prisma direto**.
 
 ---
 

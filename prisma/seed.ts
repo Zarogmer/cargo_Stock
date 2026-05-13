@@ -6,8 +6,7 @@ const prisma = new PrismaClient();
 async function main() {
   console.log("Seeding database...");
 
-  // Create default users (matching existing Supabase auth users)
-  // Update the passwords below to match your actual passwords
+  // Create default users — update the passwords below to match your actual passwords
   const users = [
     {
       email: "chico@cargostock.local",

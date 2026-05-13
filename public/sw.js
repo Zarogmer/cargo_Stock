@@ -29,9 +29,6 @@ self.addEventListener("fetch", (event) => {
   // Skip non-GET requests
   if (event.request.method !== "GET") return;
 
-  // Skip Supabase API calls
-  if (event.request.url.includes("supabase.co")) return;
-
   event.respondWith(
     fetch(event.request)
       .then((response) => {

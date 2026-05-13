@@ -1,6 +1,6 @@
 /**
- * Client-side database query builder.
- * Drop-in replacement for Supabase client's .from() API.
+ * Client-side database query builder. Posts a JSON QuerySpec to /api/db,
+ * which executes against Prisma on Railway Postgres.
  *
  * Usage:
  *   import { db } from "@/lib/db";
