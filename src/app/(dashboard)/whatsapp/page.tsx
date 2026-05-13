@@ -44,14 +44,38 @@ export default function WhatsappPage() {
     return () => clearInterval(interval);
   }, [loadStatus]);
 
+  // Pull a QR code (base64) out of whatever shape Evolution sends — varies
+  // slightly between endpoints. Returns null if none present.
+  function extractQr(raw: unknown): { base64?: string; code?: string; pairingCode?: string } | null {
+    if (!raw || typeof raw !== "object") return null;
+    const r = raw as Record<string, unknown>;
+    if (r.base64 || r.code || r.pairingCode) {
+      return r as { base64?: string; code?: string; pairingCode?: string };
+    }
+    if (r.qrcode && typeof r.qrcode === "object") {
+      return r.qrcode as { base64?: string; code?: string; pairingCode?: string };
+    }
+    if (r.result) return extractQr(r.result);
+    return null;
+  }
+
   async function handleCreate() {
     setBusy(true);
     setMessage(null);
+    setQr(null);
     try {
       const res = await fetch("/api/whatsapp/instance/create", { method: "POST" });
       const body = await res.json();
       if (res.ok) {
-        setMessage({ kind: "ok", text: "Instância criada/verificada com sucesso." });
+        // Evolution returns the QR right in the create response — surface it
+        // immediately so the user doesn't need a second click.
+        const qrFromCreate = extractQr(body.result);
+        if (qrFromCreate?.base64 || qrFromCreate?.code) {
+          setQr(qrFromCreate);
+          setMessage({ kind: "ok", text: "QR Code gerado. Escaneie no WhatsApp." });
+        } else {
+          setMessage({ kind: "ok", text: "Instância pronta — clique em 'Gerar QR Code' se precisar reconectar." });
+        }
         loadStatus();
       } else {
         setMessage({ kind: "err", text: body.error || "Erro" });
@@ -70,8 +94,13 @@ export default function WhatsappPage() {
     try {
       const res = await fetch("/api/whatsapp/instance/connect");
       const body = (await res.json()) as ConnectResponse;
-      if (res.ok && body.result) {
-        setQr(body.result);
+      if (res.ok) {
+        const qr = extractQr(body.result);
+        if (qr) {
+          setQr(qr);
+        } else {
+          setMessage({ kind: "err", text: "Sem QR na resposta — tente recriar a instância (logout + criar)." });
+        }
       } else {
         setMessage({ kind: "err", text: body.error || "Erro" });
       }
