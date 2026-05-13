@@ -68,6 +68,43 @@ export function parseLegacyDate(value: string | null | undefined): string {
   return "";
 }
 
+// NR training storage: JSON map of { "1": "2025-01-14", "6": "", ... }.
+// "" means NR is checked but date not yet filled. Absence means not checked.
+// Backwards compat: legacy CSV ("1,6,7,17,29,35") returns each NR with empty date.
+export const VALID_NRS = ["1", "6", "7", "17", "29", "35"] as const;
+export type NrCode = (typeof VALID_NRS)[number];
+export type NrDates = Partial<Record<NrCode, string>>;
+
+export function parseNrsWithDates(value: string | null | undefined): NrDates {
+  if (!value) return {};
+  const s = String(value).trim();
+  if (s.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(s) as Record<string, unknown>;
+      const out: NrDates = {};
+      for (const nr of VALID_NRS) {
+        if (nr in parsed) {
+          const v = parsed[nr];
+          out[nr] = typeof v === "string" ? v : "";
+        }
+      }
+      return out;
+    } catch {
+      /* fall through to legacy parser */
+    }
+  }
+  const out: NrDates = {};
+  for (const nr of VALID_NRS) {
+    const re = new RegExp(`(^|[^\\d])${nr}([^\\d]|$)`);
+    if (re.test(s)) out[nr] = "";
+  }
+  return out;
+}
+
+export function formatNrsWithDates(map: NrDates): string {
+  return JSON.stringify(map);
+}
+
 export const TOOL_STATUS_LABELS: Record<string, string> = {
   DISPONIVEL: "Disponível",
   EQUIPE_1: "Equipe 1",

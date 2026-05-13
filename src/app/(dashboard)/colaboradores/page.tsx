@@ -11,7 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDate, formatDateTime, formatPhone, matchSearch, parseLegacyDate, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
+import { formatDate, formatDateTime, formatPhone, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, type NrCode, type NrDates, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
 import type { Employee, Epi, Uniform, EpiMovement, UniformMovement, EpiMovementType } from "@/types/database";
 
 export default function ColaboradoresPage() {
@@ -593,22 +593,25 @@ export default function ColaboradoresPage() {
                 <h3 className="text-xs font-semibold text-text-light uppercase tracking-wider mb-2">🎓 Treinamentos / ASO</h3>
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   {selectedEmp.nrs_training && (() => {
-                    const nrs = parseNrs(selectedEmp.nrs_training);
-                    if (nrs.size === 0) {
+                    const map = parseNrsWithDates(selectedEmp.nrs_training);
+                    const entries = Object.entries(map);
+                    if (entries.length === 0) {
                       return <div className="col-span-2"><span className="text-text-light">NRs:</span> <span className="font-medium">{selectedEmp.nrs_training}</span></div>;
                     }
                     return (
                       <div className="col-span-2">
                         <span className="text-text-light">NRs:</span>{" "}
                         <span className="inline-flex flex-wrap gap-1 align-middle">
-                          {Array.from(nrs).map((nr) => (
-                            <span key={nr} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">NR-{nr}</span>
+                          {entries.map(([nr, date]) => (
+                            <span key={nr} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">
+                              NR-{nr}{date ? ` · ${date.split("-").reverse().join("/")}` : ""}
+                            </span>
                           ))}
                         </span>
                       </div>
                     );
                   })()}
-                  {selectedEmp.meio_ambiente_training && <div><span className="text-text-light">Meio Ambiente:</span> <span className="font-medium">{selectedEmp.meio_ambiente_training}</span></div>}
+                  {selectedEmp.meio_ambiente_training && <div><span className="text-text-light">Meio Ambiente:</span> <span className="font-medium">{(() => { const iso = parseLegacyDate(selectedEmp.meio_ambiente_training); return iso ? iso.split("-").reverse().join("/") : selectedEmp.meio_ambiente_training; })()}</span></div>}
                   {selectedEmp.last_aso_date && <div><span className="text-text-light">Último ASO:</span> <span className="font-medium">{(() => { const iso = parseLegacyDate(selectedEmp.last_aso_date); return iso ? iso.split("-").reverse().join("/") : selectedEmp.last_aso_date; })()}</span></div>}
                   {selectedEmp.aso_status && <div><span className="text-text-light">Status ASO:</span> <span className="font-medium">{selectedEmp.aso_status}</span></div>}
                 </div>
@@ -667,23 +670,20 @@ export default function ColaboradoresPage() {
 // Parse a CSV/legacy NRs string into a Set of NR numbers ("1", "6", "7", ...).
 // Accepts: "1,6,7,17,29,35" (CSV) or legacy text like "14 e 15 janeiro 2025"
 // (returns empty Set in that case — user will re-check the boxes).
-function parseNrs(value: string): Set<string> {
-  if (!value) return new Set();
-  const result = new Set<string>();
-  // Match only standalone NR numbers from the canonical list
-  const valid = ["1", "6", "7", "17", "29", "35"];
-  for (const nr of valid) {
-    // Word boundary to avoid matching "1" inside "14"
-    const re = new RegExp(`(^|[^\\d])${nr}([^\\d]|$)`);
-    if (re.test(value)) result.add(nr);
+function toggleNr(current: string, nr: NrCode, checked: boolean): string {
+  const map = parseNrsWithDates(current);
+  if (checked) {
+    if (!(nr in map)) map[nr] = "";
+  } else {
+    delete map[nr];
   }
-  return result;
+  return formatNrsWithDates(map);
 }
 
-function toggleNr(current: string, nr: string, checked: boolean): string {
-  const set = parseNrs(current);
-  if (checked) set.add(nr); else set.delete(nr);
-  return Array.from(set).sort((a, b) => Number(a) - Number(b)).join(",");
+function setNrDate(current: string, nr: NrCode, date: string): string {
+  const map = parseNrsWithDates(current);
+  map[nr] = date;
+  return formatNrsWithDates(map);
 }
 
 function formatPhoneMask(value: string): string {
@@ -759,7 +759,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
       setHasVaccinationCard(item.has_vaccination_card || false);
       setHasCnh(item.has_cnh || false);
       setNrsTraining(item.nrs_training || "");
-      setMeioAmbienteTraining(item.meio_ambiente_training || "");
+      setMeioAmbienteTraining(parseLegacyDate(item.meio_ambiente_training));
       setLifeguardTraining(item.lifeguard_training || false);
       setRubberBoot(item.rubber_boot || false);
       setBootSize(item.boot_size || "");
@@ -963,26 +963,41 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-2">NRs realizadas</label>
-            <div className="flex gap-3 flex-wrap p-3 bg-gray-50 border border-border rounded-lg">
-              {["1", "6", "7", "17", "29", "35"].map((nr) => {
-                const selected = parseNrs(nrsTraining).has(nr);
+            <div className="space-y-2 p-3 bg-gray-50 border border-border rounded-lg">
+              {VALID_NRS.map((nr) => {
+                const map = parseNrsWithDates(nrsTraining);
+                const selected = nr in map;
+                const date = map[nr] || "";
                 return (
-                  <label key={nr} className="flex items-center gap-2 cursor-pointer">
+                  <div key={nr} className="flex items-center gap-3">
+                    <label className="flex items-center gap-2 cursor-pointer w-20 shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={(e) => setNrsTraining(toggleNr(nrsTraining, nr, e.target.checked))}
+                        className="w-4 h-4 accent-primary"
+                      />
+                      <span className="text-sm font-medium">NR-{nr}</span>
+                    </label>
                     <input
-                      type="checkbox"
-                      checked={selected}
-                      onChange={(e) => setNrsTraining(toggleNr(nrsTraining, nr, e.target.checked))}
-                      className="w-4 h-4 accent-primary"
+                      type="date"
+                      value={date}
+                      disabled={!selected}
+                      onChange={(e) => setNrsTraining(setNrDate(nrsTraining, nr, e.target.value))}
+                      className="flex-1 px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none disabled:bg-gray-100 disabled:text-text-light"
                     />
-                    <span className="text-sm font-medium">NR-{nr}</span>
-                  </label>
+                  </div>
                 );
               })}
             </div>
-            <p className="text-[10px] text-text-light mt-1">Marque as NRs concluídas pelo colaborador.</p>
+            <p className="text-[10px] text-text-light mt-1">Marque a NR e informe a data em que foi concluída. Validade ~1 ano — aparece no alerta da dashboard ao se aproximar do vencimento.</p>
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <div><label className="block text-sm font-medium mb-1">Meio Ambiente</label><input type="text" value={meioAmbienteTraining} onChange={(e) => setMeioAmbienteTraining(e.target.value)} placeholder="20 de janeiro 2025" className={inputCls} /></div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Meio Ambiente</label>
+              <input type="date" value={meioAmbienteTraining} onChange={(e) => setMeioAmbienteTraining(e.target.value)} className={inputCls} />
+              <p className="text-[10px] text-text-light mt-1">Validade ~1 ano.</p>
+            </div>
             <div>
               <label className="block text-sm font-medium mb-1">Último ASO</label>
               <input type="date" value={lastAsoDate} onChange={(e) => setLastAsoDate(e.target.value)} className={inputCls} />
@@ -1186,7 +1201,7 @@ function renderCell(emp: Employee, key: keyof Employee): React.ReactNode {
     const s = String(v);
     return s.slice(0, 10).split("-").reverse().join("/");
   }
-  if (key === "last_aso_date") {
+  if (key === "last_aso_date" || key === "meio_ambiente_training") {
     const iso = parseLegacyDate(String(v));
     return iso ? iso.split("-").reverse().join("/") : String(v);
   }
@@ -1202,11 +1217,12 @@ function renderCell(emp: Employee, key: keyof Employee): React.ReactNode {
     return <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cls}`}>{label}</span>;
   }
   if (key === "nrs_training") {
-    const nrs = parseNrs(String(v));
-    if (nrs.size === 0) return String(v);
+    const map = parseNrsWithDates(String(v));
+    const entries = Object.entries(map);
+    if (entries.length === 0) return String(v);
     return (
       <span className="inline-flex flex-wrap gap-0.5">
-        {Array.from(nrs).map((nr) => (
+        {entries.map(([nr]) => (
           <span key={nr} className="text-[9px] px-1 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">{nr}</span>
         ))}
       </span>
