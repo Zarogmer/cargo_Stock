@@ -91,38 +91,55 @@ export default function DashboardPage() {
       });
       setShipsByMonth(Object.entries(monthCounts).map(([month, count]) => ({ month, count })));
 
+      // Ghost users: Tecnologia accounts are invisible in the activity log.
+      const ghostsRes = await db.from("users").select("full_name, email").eq("role", "TECNOLOGIA");
+      const ghosts = new Set<string>();
+      ((ghostsRes.data as Array<{ full_name: string | null; email: string | null }> | null) || []).forEach((u) => {
+        if (u.full_name) ghosts.add(u.full_name.trim().toUpperCase());
+        if (u.email) ghosts.add(u.email.trim().toLowerCase());
+      });
+      const isGhost = (actor: string | null | undefined) => {
+        if (!actor) return false;
+        const a = actor.trim();
+        return ghosts.has(a.toUpperCase()) || ghosts.has(a.toLowerCase());
+      };
+
       // Load recent movements from ALL sources
       const [stockMov, epiMov, toolMov, requestsMov, shipsMov, empMov, loginMov] = await Promise.all([
-        db.from("stock_movements").select("id, movement_type, quantity, created_at, created_by, stock_items(name)").order("created_at", { ascending: false }).limit(10),
-        db.from("epi_movements").select("id, movement_type, quantity, created_at, created_by, epis(name)").order("created_at", { ascending: false }).limit(10),
-        db.from("tool_movements").select("id, movement_type, created_at, created_by, tools(name)").order("created_at", { ascending: false }).limit(10),
-        db.from("tool_requests").select("id, tool_name, status, notes, created_at, requested_by").order("created_at", { ascending: false }).limit(10),
+        db.from("stock_movements").select("id, movement_type, quantity, created_at, created_by, stock_items(name)").order("created_at", { ascending: false }).limit(30),
+        db.from("epi_movements").select("id, movement_type, quantity, created_at, created_by, epis(name)").order("created_at", { ascending: false }).limit(30),
+        db.from("tool_movements").select("id, movement_type, created_at, created_by, tools(name)").order("created_at", { ascending: false }).limit(30),
+        db.from("tool_requests").select("id, tool_name, status, notes, created_at, requested_by").order("created_at", { ascending: false }).limit(30),
         db.from("ships").select("id, name, status, created_at, assigned_team").order("created_at", { ascending: false }).limit(10),
         db.from("employees").select("id, name, team, created_at").order("created_at", { ascending: false }).limit(10),
-        db.from("login_logs").select("id, full_name, email, event_type, created_at").order("created_at", { ascending: false }).limit(10),
+        db.from("login_logs").select("id, full_name, email, event_type, created_at").order("created_at", { ascending: false }).limit(30),
       ]);
 
       const combined: RecentMovement[] = [];
 
       (stockMov.data || []).forEach((m: any) => {
+        if (isGhost(m.created_by)) return;
         combined.push({
           id: `stock-${m.id}`, type: "Estoque", item_name: m.stock_items?.name || "—",
           movement_type: m.movement_type, created_at: m.created_at, created_by: m.created_by,
         });
       });
       (epiMov.data || []).forEach((m: any) => {
+        if (isGhost(m.created_by)) return;
         combined.push({
           id: `epi-${m.id}`, type: "EPI", item_name: m.epis?.name || "—",
           movement_type: m.movement_type, created_at: m.created_at, created_by: m.created_by,
         });
       });
       (toolMov.data || []).forEach((m: any) => {
+        if (isGhost(m.created_by)) return;
         combined.push({
           id: `tool-${m.id}`, type: "Equipamento", item_name: m.tools?.name || "—",
           movement_type: m.movement_type, created_at: m.created_at, created_by: m.created_by,
         });
       });
       (requestsMov.data || []).forEach((m: any) => {
+        if (isGhost(m.requested_by)) return;
         const statusLabel = m.status === "APROVADO" ? "Aprovada" : m.status === "REJEITADO" ? "Rejeitada" : "Pendente";
         combined.push({
           id: `req-${m.id}`, type: "Solicitação", item_name: m.tool_name || "—",
@@ -146,6 +163,7 @@ export default function DashboardPage() {
         });
       });
       (loginMov.data || []).forEach((m: any) => {
+        if (isGhost(m.full_name) || isGhost(m.email)) return;
         combined.push({
           id: `login-${m.id}`, type: "Acesso", item_name: m.full_name || "—",
           movement_type: m.event_type, created_at: m.created_at, created_by: m.full_name || "—",
