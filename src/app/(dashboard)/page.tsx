@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
+import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { formatDateTime, parseLegacyDate, parseNrsWithDates, MOVEMENT_TYPE_LABELS, CATEGORY_LABELS } from "@/lib/utils";
 
 interface StockChartItem {
@@ -305,18 +306,17 @@ export default function DashboardPage() {
 
       {/* Training renewal alerts (ASO + NRs + Meio Ambiente) */}
       {trainingAlerts.length > 0 && (
-        <section className="bg-card rounded-2xl border border-amber-200 overflow-hidden">
-          <header className="px-6 pt-5 pb-4 border-b border-border flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold text-text">🎓 Treinamentos próximos do vencimento</h2>
-              <p className="text-xs text-text-light mt-0.5">
-                ASO, NRs e Meio Ambiente — validade anual. Camila, avise estes colaboradores.
-              </p>
-            </div>
+        <CollapsibleSection
+          storageKey="training-alerts"
+          className="bg-card rounded-2xl border border-amber-200 overflow-hidden"
+          title="🎓 Treinamentos próximos do vencimento"
+          subtitle="ASO, NRs e Meio Ambiente — validade anual. Camila, avise estes colaboradores."
+          headerRight={
             <Link href="/colaboradores" className="text-xs font-medium text-primary hover:text-primary-dark whitespace-nowrap">
               Ver RH →
             </Link>
-          </header>
+          }
+        >
           <ul className="divide-y divide-border">
             {trainingAlerts.map((a, idx) => {
               const overdue = a.days_until < 0;
@@ -352,16 +352,16 @@ export default function DashboardPage() {
               );
             })}
           </ul>
-        </section>
+        </CollapsibleSection>
       )}
 
       {/* Embarque readiness — both teams in one card */}
       {stockItems.length > 0 && (
-        <section className="bg-card rounded-2xl border border-border overflow-hidden">
-          <header className="px-6 pt-5 pb-4 border-b border-border">
-            <h2 className="text-base font-semibold text-text">Prontidão para embarque</h2>
-            <p className="text-xs text-text-light mt-0.5">Comparativo de estoque entre equipes</p>
-          </header>
+        <CollapsibleSection
+          storageKey="embarque-readiness"
+          title="Prontidão para embarque"
+          subtitle="Comparativo de estoque entre equipes"
+        >
           <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-border">
             <div className="p-6">
               <div className="flex items-center gap-2 mb-4">
@@ -378,39 +378,37 @@ export default function DashboardPage() {
               <EmbarqueChart items={stockItems.filter((i) => i.team === "EQUIPE_2")} />
             </div>
           </div>
-        </section>
+        </CollapsibleSection>
       )}
 
       {/* Ships per Month Bar Chart */}
       {shipsByMonth.length > 0 && (
-        <section className="bg-card rounded-2xl border border-border p-6">
-          <header className="mb-5">
-            <h2 className="text-base font-semibold text-text">Navios por mês</h2>
-            <p className="text-xs text-text-light mt-0.5">
-              {new Date().getFullYear()} · baseado na data de saída
-            </p>
-          </header>
-          <ShipsBarChart data={shipsByMonth} />
-        </section>
+        <CollapsibleSection
+          storageKey="ships-per-month"
+          title="Navios por mês"
+          subtitle={`${new Date().getFullYear()} · baseado na data de saída`}
+        >
+          <div className="p-6">
+            <ShipsBarChart data={shipsByMonth} />
+          </div>
+        </CollapsibleSection>
       )}
 
       {/* Recent Purchases */}
       {recentPurchases.length > 0 && (
-        <section className="bg-card rounded-2xl border border-border overflow-hidden">
-          <header className="px-6 pt-5 pb-4 border-b border-border flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold text-text">Compras recentes</h2>
-              <p className="text-xs text-text-light mt-0.5">
-                Solicitações marcadas como compradas
-              </p>
-            </div>
+        <CollapsibleSection
+          storageKey="recent-purchases"
+          title="Compras recentes"
+          subtitle="Solicitações marcadas como compradas"
+          headerRight={
             <Link
               href="/solicitacoes"
               className="text-xs font-medium text-primary hover:text-primary-dark whitespace-nowrap"
             >
               Ver todas →
             </Link>
-          </header>
+          }
+        >
           <ul className="divide-y divide-border">
             {recentPurchases.map((p) => (
               <li
@@ -431,19 +429,16 @@ export default function DashboardPage() {
               </li>
             ))}
           </ul>
-        </section>
+        </CollapsibleSection>
       )}
 
       {/* Recent Movements - only for chico, sandra, guilherme */}
       {canSeeMovements && (
-        <section className="bg-card rounded-2xl border border-border overflow-hidden">
-          <header className="px-6 pt-5 pb-4 border-b border-border">
-            <h2 className="text-base font-semibold text-text">Movimentações recentes</h2>
-            <p className="text-xs text-text-light mt-0.5">
-              Últimas 30 movimentações do sistema
-            </p>
-          </header>
-
+        <CollapsibleSection
+          storageKey="recent-movements"
+          title="Movimentações recentes"
+          subtitle="Últimas 30 movimentações do sistema"
+        >
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50/80 border-b border-border">
@@ -491,7 +486,7 @@ export default function DashboardPage() {
               </tbody>
             </table>
           </div>
-        </section>
+        </CollapsibleSection>
       )}
     </div>
   );
