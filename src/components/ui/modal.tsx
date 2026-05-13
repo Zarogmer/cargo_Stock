@@ -19,6 +19,10 @@ export function Modal({
   maxWidth = "max-w-lg",
 }: ModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  // Track whether the current pointer interaction started on the overlay.
+  // Without this, text selections that begin inside the modal and release on
+  // the overlay (e.g. when copying a phone number) would trigger onClose.
+  const pressStartedOnOverlay = useRef(false);
 
   useEffect(() => {
     if (open) {
@@ -37,8 +41,14 @@ export function Modal({
     <div
       ref={overlayRef}
       className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-      onClick={(e) => {
-        if (e.target === overlayRef.current) onClose();
+      onMouseDown={(e) => {
+        pressStartedOnOverlay.current = e.target === overlayRef.current;
+      }}
+      onMouseUp={(e) => {
+        if (pressStartedOnOverlay.current && e.target === overlayRef.current) {
+          onClose();
+        }
+        pressStartedOnOverlay.current = false;
       }}
     >
       <div

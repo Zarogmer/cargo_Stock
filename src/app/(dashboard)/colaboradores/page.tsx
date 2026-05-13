@@ -707,8 +707,6 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
   const [rg, setRg] = useState("");
   const [ispsCode, setIspsCode] = useState("");
   const [eSocial, setESocial] = useState("");
-  const [subestipulante, setSubestipulante] = useState("");
-  const [modulo, setModulo] = useState("");
   // Profissional
   const [status, setStatus] = useState<string>("ATIVO");
   const [sector, setSector] = useState<string>("");
@@ -741,13 +739,11 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
 
   useEffect(() => {
     if (item) {
-      setName(item.name); setTeam(item.team || ""); setPhone(item.phone || "");
+      setName(item.name); setTeam(item.team || ""); setPhone(formatPhoneMask(item.phone || ""));
       setEmail(item.email || ""); setBirthDate(item.birth_date?.slice(0, 10) || "");
-      setFamilyPhone(item.family_phone || ""); setNotes(item.notes || "");
+      setFamilyPhone(formatPhoneMask(item.family_phone || "")); setNotes(item.notes || "");
       setCpf(item.cpf || ""); setRg(item.rg || "");
       setIspsCode(item.isps_code || ""); setESocial(item.e_social || "");
-      setSubestipulante(item.subestipulante?.toString() || "");
-      setModulo(item.modulo?.toString() || "");
       setStatus(item.status || "ATIVO");
       setSector(item.sector || "");
       setRole(item.role || "");
@@ -772,7 +768,6 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
       setName(""); setTeam(""); setPhone(""); setEmail(""); setBirthDate("");
       setFamilyPhone(""); setNotes("");
       setCpf(""); setRg(""); setIspsCode(""); setESocial("");
-      setSubestipulante(""); setModulo("");
       setStatus("ATIVO"); setSector(""); setRole(""); setSalary(""); setAdmissionDate(""); setContractType("");
       setBankName(""); setBankAgency(""); setBankAccount(""); setBankAccountType("");
       setHasVaccinationCard(false); setHasCnh(false);
@@ -785,6 +780,22 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
+  // Auto-derive Status ASO from the last ASO date — vencido if the 1-year
+  // renewal already passed, OK otherwise. Empty if no date set.
+  useEffect(() => {
+    if (!lastAsoDate) {
+      setAsoStatus("");
+      return;
+    }
+    const last = new Date(lastAsoDate + "T00:00:00");
+    if (Number.isNaN(last.getTime())) return;
+    const next = new Date(last);
+    next.setFullYear(next.getFullYear() + 1);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    setAsoStatus(next.getTime() < today.getTime() ? "VENCIDO" : "OK");
+  }, [lastAsoDate]);
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     onSave({
@@ -795,8 +806,6 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
       rg: rg || null,
       isps_code: ispsCode || null,
       e_social: eSocial || null,
-      subestipulante: subestipulante ? Number(subestipulante) : null,
-      modulo: modulo ? Number(modulo) : null,
       status: (status as any) || "ATIVO",
       sector: (sector as any) || null,
       role: role || null,
@@ -854,10 +863,9 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
               <div><label className="block text-sm font-medium mb-1">CPF</label><input type="text" value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="000.000.000-00" className={inputCls} /></div>
               <div><label className="block text-sm font-medium mb-1">RG</label><input type="text" value={rg} onChange={(e) => setRg(e.target.value)} className={inputCls} /></div>
             </div>
-            <div className="grid grid-cols-3 gap-4 mt-4">
+            <div className="grid grid-cols-2 gap-4 mt-4">
               <div><label className="block text-sm font-medium mb-1">ISPS Code</label><input type="text" value={ispsCode} onChange={(e) => setIspsCode(e.target.value)} className={inputCls} /></div>
               <div><label className="block text-sm font-medium mb-1">E-Social</label><input type="text" value={eSocial} onChange={(e) => setESocial(e.target.value)} className={inputCls} /></div>
-              <div><label className="block text-sm font-medium mb-1">Módulo</label><input type="number" value={modulo} onChange={(e) => setModulo(e.target.value)} className={inputCls} /></div>
             </div>
           </div>
         </div>
@@ -905,19 +913,13 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
             </div>
             <div><label className="block text-sm font-medium mb-1">Salário (R$)</label><input type="number" step="0.01" value={salary} onChange={(e) => setSalary(e.target.value)} placeholder="0,00" className={inputCls} /></div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Tipo de Contrato</label>
-              <select value={contractType} onChange={(e) => setContractType(e.target.value)} className={inputCls}>
-                <option value="">—</option>
-                <option value="REGISTRADO">Registrado</option>
-                <option value="INTERMITENTE">Contrato Intermitente</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Subestipulante</label>
-              <input type="number" value={subestipulante} onChange={(e) => setSubestipulante(e.target.value)} className={inputCls} />
-            </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Tipo de Contrato</label>
+            <select value={contractType} onChange={(e) => setContractType(e.target.value)} className={inputCls}>
+              <option value="">—</option>
+              <option value="REGISTRADO">Registrado</option>
+              <option value="INTERMITENTE">Contrato Intermitente</option>
+            </select>
           </div>
         </div>
       ),
@@ -1010,8 +1012,8 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
               <option value="">—</option>
               <option value="OK">OK</option>
               <option value="VENCIDO">Vencido</option>
-              <option value="INATIVO">Inativo</option>
             </select>
+            <p className="text-[10px] text-text-light mt-1">Atualiza automaticamente ao alterar a data do Último ASO (vencido se passou de 1 ano).</p>
           </div>
         </div>
       ),
