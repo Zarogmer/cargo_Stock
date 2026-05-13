@@ -332,8 +332,12 @@ function FuncoesTab({
   const [deleteFn, setDeleteFn] = useState<JobFunction | null>(null);
   const [search, setSearch] = useState("");
 
+  // Count distinct allocations (records), not the sum of worked days. With the
+  // new Escalação flow records are inserted with quantity=0 and the days are
+  // filled in at finalization; counting records is what matters for delete
+  // safety because the FK constraint cares about row presence, not values.
   const allocCount = (fnId: number) =>
-    allocations.filter((a) => a.function_id === fnId).reduce((s, a) => s + a.quantity, 0);
+    allocations.filter((a) => a.function_id === fnId).length;
 
   const filtered = functions.filter((f) =>
     f.name.toLowerCase().includes(search.toLowerCase())
@@ -472,11 +476,32 @@ function FuncoesTab({
         open={!!deleteFn}
         onClose={() => setDeleteFn(null)}
         onConfirm={async () => {
-          await db.from("job_functions").delete().eq("id", deleteFn!.id);
+          if (!deleteFn) return;
+          const count = allocCount(deleteFn.id);
+          if (count > 0) {
+            // Soft delete: keep the row so the historical allocations remain
+            // valid, but flip active=false so it disappears from the dropdowns.
+            const res = await db.from("job_functions").update({ active: false }).eq("id", deleteFn.id);
+            if (res.error) {
+              alert(`Não consegui desativar: ${res.error.message}`);
+              return;
+            }
+          } else {
+            const res = await db.from("job_functions").delete().eq("id", deleteFn.id);
+            if (res.error) {
+              alert(`Não consegui excluir: ${res.error.message}\n\nProvavelmente há alocações antigas referenciando esta função. Tente desativar em vez de excluir.`);
+              return;
+            }
+          }
           setDeleteFn(null); onChange();
         }}
-        title="Excluir Função"
-        message={`Excluir "${deleteFn?.name}"? Alocações vinculadas perdem a referência.`}
+        title={deleteFn && allocCount(deleteFn.id) > 0 ? "Desativar Função" : "Excluir Função"}
+        message={
+          deleteFn && allocCount(deleteFn.id) > 0
+            ? `"${deleteFn.name}" tem ${allocCount(deleteFn.id)} alocação(ões) registrada(s) — não dá pra excluir sem perder histórico. Posso desativar (some dos dropdowns, dados ficam no banco). Continuar?`
+            : `Excluir "${deleteFn?.name}"?`
+        }
+        confirmLabel={deleteFn && allocCount(deleteFn.id) > 0 ? "Desativar" : "Excluir"}
       />
     </div>
   );
