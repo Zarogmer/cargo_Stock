@@ -46,6 +46,28 @@ export function formatPhone(value: string | null | undefined): string {
   return String(value);
 }
 
+// Best-effort parse of legacy ASO/training date text — handles ISO ("2026-01-06"),
+// Portuguese long form ("06 de janeiro de 2026"), and shorthand ("30 OUTUBRO 2025").
+// Returns YYYY-MM-DD or empty string.
+const PT_MONTHS: Record<string, string> = {
+  janeiro: "01", fevereiro: "02", marco: "03", "março": "03", abril: "04",
+  maio: "05", junho: "06", julho: "07", agosto: "08", setembro: "09",
+  outubro: "10", novembro: "11", dezembro: "12",
+};
+export function parseLegacyDate(value: string | null | undefined): string {
+  if (!value) return "";
+  const s = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const norm = s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const m = norm.match(/(\d{1,2})\s*(?:de\s+)?([a-z]+)(?:\s+de)?\s+(\d{4})/);
+  if (m) {
+    const day = m[1].padStart(2, "0");
+    const month = PT_MONTHS[m[2]];
+    if (month) return `${m[3]}-${month}-${day}`;
+  }
+  return "";
+}
+
 export const TOOL_STATUS_LABELS: Record<string, string> = {
   DISPONIVEL: "Disponível",
   EQUIPE_1: "Equipe 1",

@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
-import { formatDateTime, MOVEMENT_TYPE_LABELS, CATEGORY_LABELS } from "@/lib/utils";
+import { formatDateTime, parseLegacyDate, MOVEMENT_TYPE_LABELS, CATEGORY_LABELS } from "@/lib/utils";
 
 interface StockChartItem {
   name: string;
@@ -33,6 +33,14 @@ interface RecentMovement {
   detail?: string;
 }
 
+interface AsoAlert {
+  id: number;
+  name: string;
+  last_aso_date: string;
+  next_aso_date: string;
+  days_until: number;
+}
+
 interface DollarQuote {
   bid: string;
   ask: string;
@@ -52,6 +60,7 @@ export default function DashboardPage() {
   const [stockItems, setStockItems] = useState<StockChartItem[]>([]);
   const [shipsByMonth, setShipsByMonth] = useState<{ month: string; count: number }[]>([]);
   const [recentPurchases, setRecentPurchases] = useState<{ id: string; tool_name: string; quantity: number; requested_by: string; responded_by: string; updated_at: string }[]>([]);
+  const [asoAlerts, setAsoAlerts] = useState<AsoAlert[]>([]);
   const [loading, setLoading] = useState(true);
 
   const loadDashboard = useCallback(async () => {
@@ -182,6 +191,35 @@ export default function DashboardPage() {
         .order("updated_at", { ascending: false })
         .limit(10);
       setRecentPurchases((purchasesRes.data as any[]) || []);
+
+      // Load ASO alerts: employees whose annual ASO renewal is due within 45 days or overdue.
+      const asoEmpRes = await db
+        .from("employees")
+        .select("id, name, last_aso_date, status")
+        .eq("status", "ATIVO");
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const alerts: AsoAlert[] = [];
+      ((asoEmpRes.data as Array<{ id: number; name: string; last_aso_date: string | null }> | null) || []).forEach((e) => {
+        const iso = parseLegacyDate(e.last_aso_date);
+        if (!iso) return;
+        const last = new Date(iso + "T00:00:00");
+        if (Number.isNaN(last.getTime())) return;
+        const next = new Date(last);
+        next.setFullYear(next.getFullYear() + 1);
+        const daysUntil = Math.round((next.getTime() - today.getTime()) / 86400000);
+        if (daysUntil <= 45) {
+          alerts.push({
+            id: e.id,
+            name: e.name,
+            last_aso_date: iso,
+            next_aso_date: next.toISOString().slice(0, 10),
+            days_until: daysUntil,
+          });
+        }
+      });
+      alerts.sort((a, b) => a.days_until - b.days_until);
+      setAsoAlerts(alerts);
     } catch (err) {
       console.error("Dashboard load error:", err);
     } finally {
@@ -254,6 +292,50 @@ export default function DashboardPage() {
         <StatCard label="Equipamentos" value={stats.totalTools} icon="🔧" tone="amber" href="/equipamentos" />
         <StatCard label="EPIs" value={stats.totalEpis} icon="⛑️" tone="violet" href="/colaboradores?tab=epi" />
       </div>
+
+      {/* ASO renewal alerts */}
+      {asoAlerts.length > 0 && (
+        <section className="bg-card rounded-2xl border border-amber-200 overflow-hidden">
+          <header className="px-6 pt-5 pb-4 border-b border-border flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-text">🩺 ASOs próximos do vencimento</h2>
+              <p className="text-xs text-text-light mt-0.5">
+                Validade anual — Camila, avise estes colaboradores.
+              </p>
+            </div>
+            <Link href="/colaboradores" className="text-xs font-medium text-primary hover:text-primary-dark whitespace-nowrap">
+              Ver RH →
+            </Link>
+          </header>
+          <ul className="divide-y divide-border">
+            {asoAlerts.map((a) => {
+              const overdue = a.days_until < 0;
+              const dueSoon = a.days_until >= 0 && a.days_until <= 15;
+              const cls = overdue
+                ? "bg-red-100 text-red-700"
+                : dueSoon
+                  ? "bg-amber-100 text-amber-700"
+                  : "bg-blue-100 text-blue-700";
+              const label = overdue
+                ? `Vencido há ${Math.abs(a.days_until)}d`
+                : a.days_until === 0
+                  ? "Vence hoje"
+                  : `Vence em ${a.days_until}d`;
+              return (
+                <li key={a.id} className="px-6 py-3 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm truncate">{a.name}</p>
+                    <p className="text-[11px] text-text-light">
+                      Último ASO: {a.last_aso_date.split("-").reverse().join("/")} · Próximo: {a.next_aso_date.split("-").reverse().join("/")}
+                    </p>
+                  </div>
+                  <span className={`text-xs px-2 py-1 rounded-full font-semibold whitespace-nowrap ${cls}`}>{label}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       {/* Embarque readiness — both teams in one card */}
       {stockItems.length > 0 && (
@@ -393,7 +475,54 @@ export default function DashboardPage() {
           </div>
         </section>
       )}
+
+      {profile?.role === "TECNOLOGIA" && <Import2026Button />}
     </div>
+  );
+}
+
+function Import2026Button() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  async function run() {
+    if (!confirm("Importar listagem 2026 (55 colaboradores + 4 executivos)? Upsert por CPF/nome — seguro re-rodar.")) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/import-employees-2026", { method: "POST" });
+      const body = await res.json();
+      if (res.ok) {
+        setResult({ ok: true, msg: `✓ ${body.created} criados, ${body.updated} atualizados${body.errors?.length ? `, ${body.errors.length} erros` : ""}` });
+      } else {
+        setResult({ ok: false, msg: body.error || "Erro" });
+      }
+    } catch (err) {
+      setResult({ ok: false, msg: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="bg-card rounded-2xl border border-dashed border-border p-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-sm font-semibold text-text">Admin · Import 2026</p>
+          <p className="text-xs text-text-light">One-shot — importa a listagem de funcionários de 2026.</p>
+          {result && (
+            <p className={`text-xs mt-1 ${result.ok ? "text-emerald-700" : "text-red-700"}`}>{result.msg}</p>
+          )}
+        </div>
+        <button
+          onClick={run}
+          disabled={busy}
+          className="px-3 py-1.5 text-xs font-medium bg-gray-100 text-text rounded-lg hover:bg-gray-200 transition disabled:opacity-50"
+        >
+          {busy ? "Importando..." : "Importar listagem 2026"}
+        </button>
+      </div>
+    </section>
   );
 }
 

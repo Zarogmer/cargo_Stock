@@ -11,7 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDate, formatDateTime, formatPhone, matchSearch, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
+import { formatDate, formatDateTime, formatPhone, matchSearch, parseLegacyDate, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
 import type { Employee, Epi, Uniform, EpiMovement, UniformMovement, EpiMovementType } from "@/types/database";
 
 export default function ColaboradoresPage() {
@@ -609,7 +609,7 @@ export default function ColaboradoresPage() {
                     );
                   })()}
                   {selectedEmp.meio_ambiente_training && <div><span className="text-text-light">Meio Ambiente:</span> <span className="font-medium">{selectedEmp.meio_ambiente_training}</span></div>}
-                  {selectedEmp.last_aso_date && <div><span className="text-text-light">Último ASO:</span> <span className="font-medium">{selectedEmp.last_aso_date}</span></div>}
+                  {selectedEmp.last_aso_date && <div><span className="text-text-light">Último ASO:</span> <span className="font-medium">{(() => { const iso = parseLegacyDate(selectedEmp.last_aso_date); return iso ? iso.split("-").reverse().join("/") : selectedEmp.last_aso_date; })()}</span></div>}
                   {selectedEmp.aso_status && <div><span className="text-text-light">Status ASO:</span> <span className="font-medium">{selectedEmp.aso_status}</span></div>}
                 </div>
                 <div className="flex gap-3 flex-wrap mt-2">
@@ -765,7 +765,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
       setBootSize(item.boot_size || "");
       setShirtSize(item.shirt_size || "");
       setBermudaSize(item.bermuda_size || "");
-      setLastAsoDate(item.last_aso_date || "");
+      setLastAsoDate(parseLegacyDate(item.last_aso_date));
       setAsoStatus(item.aso_status || "");
       setRealizaLimpeza(item.realiza_limpeza || false);
     } else {
@@ -928,7 +928,16 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
       content: (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <div><label className="block text-sm font-medium mb-1">Banco</label><input type="text" value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="Ex: ITAU, SANTANDER..." className={inputCls} /></div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Banco</label>
+              <select value={bankName} onChange={(e) => setBankName(e.target.value)} className={inputCls}>
+                <option value="">Selecionar...</option>
+                <option value="BRADESCO">Bradesco</option>
+                <option value="ITAU">Itaú</option>
+                <option value="SANTANDER">Santander</option>
+                <option value="PENDENCIA">Pendência</option>
+              </select>
+            </div>
             <div>
               <label className="block text-sm font-medium mb-1">Tipo de Conta</label>
               <select value={bankAccountType} onChange={(e) => setBankAccountType(e.target.value)} className={inputCls}>
@@ -974,7 +983,11 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div><label className="block text-sm font-medium mb-1">Meio Ambiente</label><input type="text" value={meioAmbienteTraining} onChange={(e) => setMeioAmbienteTraining(e.target.value)} placeholder="20 de janeiro 2025" className={inputCls} /></div>
-            <div><label className="block text-sm font-medium mb-1">Último ASO</label><input type="text" value={lastAsoDate} onChange={(e) => setLastAsoDate(e.target.value)} placeholder="06 de janeiro de 2026" className={inputCls} /></div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Último ASO</label>
+              <input type="date" value={lastAsoDate} onChange={(e) => setLastAsoDate(e.target.value)} className={inputCls} />
+              <p className="text-[10px] text-text-light mt-1">Próximo ASO em ~1 ano. Aparece no alerta da dashboard quando estiver próximo do vencimento.</p>
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Status ASO</label>
@@ -1172,6 +1185,10 @@ function renderCell(emp: Employee, key: keyof Employee): React.ReactNode {
   if (key === "birth_date" || key === "admission_date") {
     const s = String(v);
     return s.slice(0, 10).split("-").reverse().join("/");
+  }
+  if (key === "last_aso_date") {
+    const iso = parseLegacyDate(String(v));
+    return iso ? iso.split("-").reverse().join("/") : String(v);
   }
   if (key === "status") {
     const cls = v === "ATIVO" ? "bg-emerald-100 text-emerald-700"
