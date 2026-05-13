@@ -320,7 +320,7 @@ export default function ColaboradoresPage() {
     { key: "escalacao", label: "Escalação", hideOnMobile: true, render: (e: Employee) => {
       const k = escalaStatus.get(e.id);
       if (k === "EMBARQUE") return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">⚓ Embarcado</span>;
-      if (k === "COSTADO") return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-cyan-100 text-cyan-700">🧽 Costado</span>;
+      if (k === "COSTADO") return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-cyan-100 text-cyan-700">⛏️ Costado</span>;
       return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>;
     }},
     { key: "phone", label: "Telefone", hideOnMobile: true, render: (e: Employee) => formatPhone(e.phone) },
@@ -571,7 +571,7 @@ export default function ColaboradoresPage() {
               {(() => {
                 const k = escalaStatus.get(selectedEmp.id);
                 if (k === "EMBARQUE") return <span className="text-xs px-2 py-1 rounded-full font-medium bg-amber-100 text-amber-700">⚓ Embarcado</span>;
-                if (k === "COSTADO") return <span className="text-xs px-2 py-1 rounded-full font-medium bg-cyan-100 text-cyan-700">🧽 Escalado no Costado</span>;
+                if (k === "COSTADO") return <span className="text-xs px-2 py-1 rounded-full font-medium bg-cyan-100 text-cyan-700">⛏️ Escalado no Costado</span>;
                 return <span className="text-xs px-2 py-1 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>;
               })()}
             </div>
