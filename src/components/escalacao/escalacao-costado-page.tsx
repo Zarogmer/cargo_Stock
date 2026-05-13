@@ -149,7 +149,7 @@ export function EscalacaoCostadoPage() {
   if (ships.length === 0) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-bold text-text">Escalação de Costado 🪏</h1>
+        <h1 className="text-2xl font-bold text-text">Escalação de Costado ⛏️</h1>
         <div className="bg-card rounded-xl shadow-sm border border-border p-8 text-center text-text-light">
           <span className="text-4xl block mb-3">🚢</span>
           <p className="font-medium text-text mb-1">Nenhum navio agendado ou em operação</p>
@@ -161,7 +161,7 @@ export function EscalacaoCostadoPage() {
 
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-bold text-text">Escalação de Costado 🪏</h1>
+      <h1 className="text-2xl font-bold text-text">Escalação de Costado ⛏️</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
         <div className="md:col-span-2">

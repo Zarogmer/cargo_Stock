@@ -637,8 +637,8 @@ export default function ColaboradoresPage() {
                   {selectedEmp.rubber_boot && <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 font-medium">🥾 Bota Borracha</span>}
                   {selectedEmp.has_vaccination_card && <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">💉 Vacinação</span>}
                   {selectedEmp.has_cnh && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">🚗 CNH</span>}
-                  {selectedEmp.realiza_limpeza && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">🧹 Limpeza</span>}
-                  {selectedEmp.does_costado && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">🪏 Costado</span>}
+                  {selectedEmp.realiza_limpeza && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">⚓ Limpeza</span>}
+                  {selectedEmp.does_costado && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">⛏️ Costado</span>}
                 </div>
               </div>
             )}
@@ -1104,11 +1104,11 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
               <div className="flex gap-6 flex-wrap">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={realizaLimpeza} onChange={(e) => setRealizaLimpeza(e.target.checked)} className="w-4 h-4 accent-primary" />
-                  <span className="text-sm">🧹 Realiza Limpeza</span>
+                  <span className="text-sm">⚓ Limpeza</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={doesCostado} onChange={(e) => setDoesCostado(e.target.checked)} className="w-4 h-4 accent-primary" />
-                  <span className="text-sm">🪏 Costado</span>
+                  <span className="text-sm">⛏️ Costado</span>
                 </label>
               </div>
             </div>
