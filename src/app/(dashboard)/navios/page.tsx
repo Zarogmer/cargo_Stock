@@ -231,8 +231,9 @@ export default function NaviosPage() {
     setEditingShip(ship);
     setForm({
       name: ship.name,
-      arrival_date: ship.arrival_date || "",
-      departure_date: ship.departure_date || "",
+      // <input type="date"> needs YYYY-MM-DD — the DB returns full ISO timestamps.
+      arrival_date: ship.arrival_date ? ship.arrival_date.slice(0, 10) : "",
+      departure_date: ship.departure_date ? ship.departure_date.slice(0, 10) : "",
       port: ship.port || "",
       status: ship.status,
       assigned_team: ship.assigned_team || "",
