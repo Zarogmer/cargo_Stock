@@ -741,9 +741,9 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
 
   useEffect(() => {
     if (item) {
-      setName(item.name); setTeam(item.team || ""); setPhone(formatPhoneMask(item.phone || ""));
+      setName(item.name); setTeam(item.team || ""); setPhone(item.phone ? formatPhoneMask(item.phone) : "");
       setEmail(item.email || ""); setBirthDate(item.birth_date?.slice(0, 10) || "");
-      setFamilyPhone(formatPhoneMask(item.family_phone || "")); setNotes(item.notes || "");
+      setFamilyPhone(item.family_phone ? formatPhoneMask(item.family_phone) : ""); setNotes(item.notes || "");
       setCpf(item.cpf || ""); setRg(item.rg || "");
       setIspsCode(item.isps_code || ""); setESocial(item.e_social || "");
       setStatus(item.status || "ATIVO");
