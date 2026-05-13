@@ -702,12 +702,17 @@ function CrewFormModal({
   onSaved: () => void;
 }) {
   const [search, setSearch] = useState("");
+  // Edit mode: single employee. Add mode: multi-select (set of IDs).
   const [empId, setEmpId] = useState<string>("");
-  const [fnId, setFnId] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [fnId, setFnId] = useState("");                       // edit mode
+  const [perEmpFn, setPerEmpFn] = useState<Map<number, string>>(new Map()); // add mode: empId -> fnId
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+
+  const isEditing = !!item;
 
   useEffect(() => {
     if (open) {
@@ -716,8 +721,12 @@ function CrewFormModal({
         setFnId(item.function_id.toString());
         setNotes(item.notes || "");
         setSearch(item.employees?.name || "");
+        setSelectedIds(new Set());
+        setPerEmpFn(new Map());
       } else {
         setEmpId(""); setFnId(""); setNotes(""); setSearch("");
+        setSelectedIds(new Set());
+        setPerEmpFn(new Map());
       }
       setError(""); setShowQuickAdd(false);
     }
@@ -738,44 +747,98 @@ function CrewFormModal({
 
   const selectedEmp = empId ? employees.find((e) => String(e.id) === empId) : null;
 
+  function findFnIdForRole(role: string | null): string {
+    if (!role) return "";
+    const fn = functions.find((f) => f.name.toUpperCase() === role.toUpperCase());
+    return fn ? String(fn.id) : "";
+  }
+
   function selectEmployee(emp: Employee) {
+    // Edit mode: replace selection
     setEmpId(String(emp.id));
     setSearch(emp.name);
-    const fn = functions.find((f) => f.name.toUpperCase() === (emp.role || "").toUpperCase());
-    if (fn) setFnId(String(fn.id));
+    const guessed = findFnIdForRole(emp.role);
+    if (guessed) setFnId(guessed);
+  }
+
+  function toggleEmployee(emp: Employee) {
+    // Add mode: toggle in/out of selection
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(emp.id)) {
+        next.delete(emp.id);
+        setPerEmpFn((m) => { const nm = new Map(m); nm.delete(emp.id); return nm; });
+      } else {
+        next.add(emp.id);
+        const guessed = findFnIdForRole(emp.role);
+        if (guessed) setPerEmpFn((m) => { const nm = new Map(m); nm.set(emp.id, guessed); return nm; });
+      }
+      return next;
+    });
   }
 
   function clearSelection() {
     setEmpId(""); setSearch(""); setFnId("");
   }
 
+  function removeFromMulti(id: number) {
+    setSelectedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
+    setPerEmpFn((m) => { const nm = new Map(m); nm.delete(id); return nm; });
+  }
+
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    if (!empId) { setError("Selecione ou cadastre um funcionário."); return; }
-    if (!fnId) { setError("Selecione a função."); return; }
+
+    if (isEditing) {
+      if (!empId) { setError("Selecione um funcionário."); return; }
+      if (!fnId) { setError("Selecione a função."); return; }
+      setSaving(true);
+      try {
+        await db.from("job_allocations").update({
+          function_id: parseInt(fnId),
+          employee_id: parseInt(empId),
+          quantity: item?.quantity ?? 0,
+          rate: item?.rate ?? 0,
+          pluxee_value: item?.pluxee_value ?? 0,
+          notes: notes.trim() || null,
+        }).eq("id", item!.id);
+        onSaved();
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    // Add mode (multi)
+    if (selectedIds.size === 0) { setError("Selecione ao menos um funcionário."); return; }
+    const missingFn = Array.from(selectedIds).filter((id) => !perEmpFn.get(id));
+    if (missingFn.length > 0) {
+      const names = missingFn.map((id) => employees.find((e) => e.id === id)?.name).filter(Boolean).join(", ");
+      setError(`Defina a função para: ${names}`);
+      return;
+    }
 
     setSaving(true);
     try {
-      const payload = {
-        function_id: parseInt(fnId),
-        employee_id: parseInt(empId),
-        quantity: item?.quantity ?? 0, // dias = 0 até finalizar
-        rate: item?.rate ?? 0, // valor diário = 0 até finalizar
-        pluxee_value: item?.pluxee_value ?? 0,
+      const jobId = await ensureJob();
+      const now = new Date().toISOString();
+      const rows = Array.from(selectedIds).map((id) => ({
+        job_id: jobId,
+        function_id: parseInt(perEmpFn.get(id)!),
+        employee_id: id,
+        quantity: 0,
+        rate: 0,
+        pluxee_value: 0,
         notes: notes.trim() || null,
-      };
-      if (item) {
-        await db.from("job_allocations").update(payload).eq("id", item.id);
-      } else {
-        const jobId = await ensureJob();
-        await db.from("job_allocations").insert({
-          ...payload,
-          job_id: jobId,
-          status: "ATIVO",
-          added_by: profileName,
-          added_at: new Date().toISOString(),
-        });
+        status: "ATIVO",
+        added_by: profileName,
+        added_at: now,
+      }));
+      for (const row of rows) {
+        await db.from("job_allocations").insert(row);
       }
       onSaved();
     } catch (err) {
@@ -789,37 +852,142 @@ function CrewFormModal({
     setShowQuickAdd(false);
     const { data } = await db.from("employees").select("id, name, role, status").eq("id", newEmpId);
     const fresh = (data as Employee[])?.[0];
-    if (fresh) {
+    if (!fresh) return;
+    if (isEditing) {
       setEmpId(String(fresh.id));
       setSearch(fresh.name);
-      if (newRole) {
-        const fn = functions.find((f) => f.name.toUpperCase() === newRole.toUpperCase());
-        if (fn) setFnId(String(fn.id));
-      }
+      const guessed = findFnIdForRole(newRole);
+      if (guessed) setFnId(guessed);
+    } else {
+      // Add the new employee to the multi-selection automatically.
+      setSelectedIds((prev) => new Set(prev).add(fresh.id));
+      const guessed = findFnIdForRole(newRole);
+      if (guessed) setPerEmpFn((m) => new Map(m).set(fresh.id, guessed));
+      setSearch("");
     }
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
-  return (
-    <Modal open={open} onClose={onClose} title={item ? "Editar Membro" : "Adicionar Membro à Equipe"}>
-      <form onSubmit={handleSave} className="space-y-4">
-        {/* Funcionário (busca) */}
-        <div>
-          <label className="block text-sm font-medium mb-1">Funcionário *</label>
+  const activeFunctions = functions.filter((f) => f.active);
+  const selectedList = Array.from(selectedIds).map((id) => employees.find((e) => e.id === id)).filter(Boolean) as Employee[];
 
-          {selectedEmp ? (
-            <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5">
-              <div>
-                <p className="font-semibold text-emerald-900">{selectedEmp.name}</p>
-                {selectedEmp.role && <p className="text-xs text-emerald-700">{selectedEmp.role}</p>}
-              </div>
-              <button type="button" onClick={clearSelection} className="text-xs text-emerald-700 hover:text-emerald-900 underline">
-                Trocar
-              </button>
+  return (
+    <Modal open={open} onClose={onClose} title={isEditing ? "Editar Membro" : "Adicionar Membros à Equipe"} maxWidth="max-w-2xl">
+      <form onSubmit={handleSave} className="space-y-4">
+        {/* ── EDIT MODE ────────────────────────────────────────────────────── */}
+        {isEditing ? (
+          <>
+            <div>
+              <label className="block text-sm font-medium mb-1">Funcionário *</label>
+              {selectedEmp ? (
+                <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5">
+                  <div>
+                    <p className="font-semibold text-emerald-900">{selectedEmp.name}</p>
+                    {selectedEmp.role && <p className="text-xs text-emerald-700">{selectedEmp.role}</p>}
+                  </div>
+                  <button type="button" onClick={clearSelection} className="text-xs text-emerald-700 hover:text-emerald-900 underline">
+                    Trocar
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="🔍 Digite o nome do funcionário..."
+                    className={inputCls}
+                    autoFocus
+                  />
+                  <div className="mt-2 max-h-56 overflow-y-auto border border-border rounded-lg bg-card">
+                    {matches.length === 0 ? (
+                      <div className="px-3 py-3 text-xs text-text-light italic text-center">
+                        {search.trim() ? "Nenhum funcionário encontrado" : "Comece a digitar para filtrar..."}
+                      </div>
+                    ) : (
+                      matches.slice(0, 30).map((e) => (
+                        <button
+                          key={e.id}
+                          type="button"
+                          onClick={() => selectEmployee(e)}
+                          className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b border-border last:border-0 transition"
+                        >
+                          <p className="text-sm font-medium">{e.name}</p>
+                          {e.role && <p className="text-[10px] text-text-light">{e.role}</p>}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </>
+              )}
             </div>
-          ) : (
-            <>
+
+            {selectedEmp && (
+              <div>
+                <label className="block text-sm font-medium mb-1">Função *</label>
+                <select value={fnId} onChange={(e) => setFnId(e.target.value)} required className={inputCls}>
+                  <option value="">Selecione...</option>
+                  {activeFunctions.map((f) => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {selectedEmp && (
+              <div>
+                <label className="block text-sm font-medium mb-1">Observações</label>
+                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
+              </div>
+            )}
+          </>
+        ) : (
+          /* ── ADD MODE (MULTI) ──────────────────────────────────────────── */
+          <>
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Funcionários * <span className="text-xs text-text-light font-normal">(selecione vários)</span>
+              </label>
+
+              {/* Selected chips */}
+              {selectedList.length > 0 && (
+                <div className="mb-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg">
+                  <p className="text-[10px] font-semibold text-emerald-900 uppercase tracking-wider mb-2">
+                    {selectedList.length} {selectedList.length === 1 ? "selecionado" : "selecionados"}
+                  </p>
+                  <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                    {selectedList.map((emp) => {
+                      const curFn = perEmpFn.get(emp.id) || "";
+                      const fnMissing = !curFn;
+                      return (
+                        <div key={emp.id} className="flex items-center gap-2 bg-white border border-emerald-100 rounded-md px-2 py-1.5">
+                          <span className="flex-1 min-w-0 text-xs font-medium truncate">{emp.name}</span>
+                          <select
+                            value={curFn}
+                            onChange={(ev) => setPerEmpFn((m) => new Map(m).set(emp.id, ev.target.value))}
+                            className={`text-xs px-2 py-1 border rounded ${fnMissing ? "border-red-300 bg-red-50" : "border-border"}`}
+                          >
+                            <option value="">Função...</option>
+                            {activeFunctions.map((f) => (
+                              <option key={f.id} value={f.id}>{f.name}</option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => removeFromMulti(emp.id)}
+                            className="text-xs text-red-600 hover:bg-red-50 rounded p-1"
+                            title="Remover"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <input
                 type="text"
                 value={search}
@@ -834,17 +1002,28 @@ function CrewFormModal({
                     {search.trim() ? "Nenhum funcionário encontrado" : "Comece a digitar para filtrar..."}
                   </div>
                 ) : (
-                  matches.slice(0, 30).map((e) => (
-                    <button
-                      key={e.id}
-                      type="button"
-                      onClick={() => selectEmployee(e)}
-                      className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b border-border last:border-0 transition"
-                    >
-                      <p className="text-sm font-medium">{e.name}</p>
-                      {e.role && <p className="text-[10px] text-text-light">{e.role}</p>}
-                    </button>
-                  ))
+                  matches.slice(0, 50).map((e) => {
+                    const checked = selectedIds.has(e.id);
+                    return (
+                      <label
+                        key={e.id}
+                        className={`flex items-center gap-2 px-3 py-2 border-b border-border last:border-0 cursor-pointer transition ${
+                          checked ? "bg-emerald-50 hover:bg-emerald-100" : "hover:bg-blue-50"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleEmployee(e)}
+                          className="w-4 h-4 accent-primary"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{e.name}</p>
+                          {e.role && <p className="text-[10px] text-text-light">{e.role}</p>}
+                        </div>
+                      </label>
+                    );
+                  })
                 )}
               </div>
               <button
@@ -854,42 +1033,22 @@ function CrewFormModal({
               >
                 ⊕ Cadastrar novo funcionário
               </button>
-            </>
-          )}
-        </div>
+            </div>
 
-        {/* Função (auto-preenchida do cadastro, override possível) */}
-        {selectedEmp && (
-          <div>
-            <label className="block text-sm font-medium mb-1">Função *</label>
-            <select value={fnId} onChange={(e) => setFnId(e.target.value)} required className={inputCls}>
-              <option value="">Selecione...</option>
-              {functions.filter((f) => f.active).map((f) => (
-                <option key={f.id} value={f.id}>{f.name}</option>
-              ))}
-            </select>
-            <p className="text-[10px] text-text-light mt-1">
-              {selectedEmp.role
-                ? <>Sugerido pelo cadastro: <strong>{selectedEmp.role}</strong></>
-                : <em>Funcionário sem função padrão cadastrada.</em>}
-            </p>
-          </div>
-        )}
+            {selectedList.length > 0 && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-900">
+                💡 Os <strong>dias trabalhados</strong> e o <strong>valor diário</strong> são preenchidos
+                ao final do trabalho — em massa por função no botão <strong>🏁 Finalizar</strong>.
+              </div>
+            )}
 
-        {/* Aviso sobre dias e valor */}
-        {selectedEmp && !item && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-900">
-            💡 Os <strong>dias trabalhados</strong> e o <strong>valor diário</strong> são preenchidos
-            ao final do trabalho — em massa por função no botão <strong>🏁 Finalizar</strong>.
-          </div>
-        )}
-
-        {/* Observações */}
-        {selectedEmp && (
-          <div>
-            <label className="block text-sm font-medium mb-1">Observações</label>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
-          </div>
+            {selectedList.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium mb-1">Observações (aplica a todos)</label>
+                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
+              </div>
+            )}
+          </>
         )}
 
         {error && (
@@ -898,7 +1057,18 @@ function CrewFormModal({
 
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={saving || !empId}>{saving ? "Salvando..." : item ? "Salvar" : "Adicionar"}</Button>
+          <Button
+            type="submit"
+            disabled={saving || (isEditing ? !empId : selectedIds.size === 0)}
+          >
+            {saving
+              ? "Salvando..."
+              : isEditing
+                ? "Salvar"
+                : selectedIds.size > 1
+                  ? `Adicionar ${selectedIds.size} membros`
+                  : "Adicionar"}
+          </Button>
         </div>
       </form>
 

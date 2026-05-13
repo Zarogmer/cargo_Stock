@@ -83,6 +83,7 @@ export interface Employee {
   role: string | null;
   salary: string | number | null;
   admission_date: string | null;
+  contract_type: "REGISTRADO" | "INTERMITENTE" | null;
   // Treinamentos
   nrs_training: string | null;
   meio_ambiente_training: string | null;

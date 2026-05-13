@@ -120,7 +120,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Navios", href: "/navios", icon: "navios", module: "NAVIOS" },
   { label: "Embarque", href: "/embarque", icon: "embarque", module: "EMBARQUE" },
   { label: "Estoque", href: "/estoque", icon: "estoque", module: "ESTOQUE" },
-  { label: "RH", href: "/colaboradores", icon: "epi", module: "EPI" },
+  { label: "Rh", href: "/colaboradores", icon: "epi", module: "EPI" },
   { label: "Equipamentos", href: "/equipamentos", icon: "equipamentos", module: "FERRAMENTAS" },
   { label: "Controle", href: "/solicitacoes", icon: "solicitacoes", module: "SOLICITACOES" },
   { label: "Financeiro", href: "/financeiro", icon: "financeiro", module: "FINANCEIRO_MOD" },

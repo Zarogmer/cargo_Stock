@@ -996,6 +996,8 @@ export default function NaviosPage() {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function formatDate(dateStr: string) {
-  const [year, month, day] = dateStr.split("-");
+  // Use only the YYYY-MM-DD part to avoid TZ shifts; works for both
+  // plain "2026-04-14" and ISO "2026-04-14T00:00:00.000Z".
+  const [year, month, day] = dateStr.slice(0, 10).split("-");
   return `${day}/${month}/${year}`;
 }

@@ -183,6 +183,7 @@ export default function ColaboradoresPage() {
         ASO: e.aso_status ?? "",
         "REALIZA LIMPEZA": e.realiza_limpeza === true ? "SIM" : e.realiza_limpeza === false ? "NÃO" : "",
         FUNÇÃO: e.role ?? "",
+        CONTRATO: e.contract_type ?? "",
         SETOR: e.sector ?? "",
       }));
       const ws = XLSX.utils.json_to_sheet(data);
@@ -283,6 +284,12 @@ export default function ColaboradoresPage() {
       return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}>{e.status || "—"}</span>;
     }},
     { key: "role", label: "Função", render: (e: Employee) => e.role ? <span className="text-xs font-medium">{e.role}</span> : <span className="text-text-light text-xs">—</span> },
+    { key: "contract_type", label: "Contrato", hideOnMobile: true, render: (e: Employee) => {
+      if (!e.contract_type) return <span className="text-text-light text-xs">—</span>;
+      const cls = e.contract_type === "REGISTRADO" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700";
+      const label = e.contract_type === "REGISTRADO" ? "Registrado" : "Intermitente";
+      return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}>{label}</span>;
+    }},
     { key: "sector", label: "Setor", hideOnMobile: true, render: (e: Employee) => e.sector || "—" },
     { key: "team", label: "Equipe", hideOnMobile: true, render: (e: Employee) => e.team ? <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${teamColors[e.team] || ""}`}>{teamLabels[e.team]}</span> : <span className="text-text-light text-xs">—</span> },
     { key: "phone", label: "Telefone", hideOnMobile: true, render: (e: Employee) => e.phone || "—" },
@@ -461,7 +468,7 @@ export default function ColaboradoresPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-text">Colaboradores</h1>
+      <h1 className="text-2xl font-bold text-text">RH</h1>
 
       {dbError && (
         <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700 font-mono break-all">
@@ -503,6 +510,13 @@ export default function ColaboradoresPage() {
                 }`}>{selectedEmp.status}</span>
               )}
               {selectedEmp.role && <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700 font-medium">{selectedEmp.role}</span>}
+              {selectedEmp.contract_type && (
+                <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                  selectedEmp.contract_type === "REGISTRADO" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700"
+                }`}>
+                  {selectedEmp.contract_type === "REGISTRADO" ? "Registrado" : "Intermitente"}
+                </span>
+              )}
               {selectedEmp.sector && <span className="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-700 font-medium">{selectedEmp.sector}</span>}
               {selectedEmp.team && <span className={`text-xs px-2 py-1 rounded-full font-medium ${teamColors[selectedEmp.team] || ""}`}>{teamLabels[selectedEmp.team]}</span>}
             </div>
@@ -540,7 +554,22 @@ export default function ColaboradoresPage() {
               <div className="border-t border-border pt-4">
                 <h3 className="text-xs font-semibold text-text-light uppercase tracking-wider mb-2">🎓 Treinamentos / ASO</h3>
                 <div className="grid grid-cols-2 gap-2 text-sm">
-                  {selectedEmp.nrs_training && <div><span className="text-text-light">NRs:</span> <span className="font-medium">{selectedEmp.nrs_training}</span></div>}
+                  {selectedEmp.nrs_training && (() => {
+                    const nrs = parseNrs(selectedEmp.nrs_training);
+                    if (nrs.size === 0) {
+                      return <div className="col-span-2"><span className="text-text-light">NRs:</span> <span className="font-medium">{selectedEmp.nrs_training}</span></div>;
+                    }
+                    return (
+                      <div className="col-span-2">
+                        <span className="text-text-light">NRs:</span>{" "}
+                        <span className="inline-flex flex-wrap gap-1 align-middle">
+                          {Array.from(nrs).map((nr) => (
+                            <span key={nr} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">NR-{nr}</span>
+                          ))}
+                        </span>
+                      </div>
+                    );
+                  })()}
                   {selectedEmp.meio_ambiente_training && <div><span className="text-text-light">Meio Ambiente:</span> <span className="font-medium">{selectedEmp.meio_ambiente_training}</span></div>}
                   {selectedEmp.last_aso_date && <div><span className="text-text-light">Último ASO:</span> <span className="font-medium">{selectedEmp.last_aso_date}</span></div>}
                   {selectedEmp.aso_status && <div><span className="text-text-light">Status ASO:</span> <span className="font-medium">{selectedEmp.aso_status}</span></div>}
@@ -596,6 +625,29 @@ export default function ColaboradoresPage() {
 }
 
 // --- FORM MODALS ---
+
+// Parse a CSV/legacy NRs string into a Set of NR numbers ("1", "6", "7", ...).
+// Accepts: "1,6,7,17,29,35" (CSV) or legacy text like "14 e 15 janeiro 2025"
+// (returns empty Set in that case — user will re-check the boxes).
+function parseNrs(value: string): Set<string> {
+  if (!value) return new Set();
+  const result = new Set<string>();
+  // Match only standalone NR numbers from the canonical list
+  const valid = ["1", "6", "7", "17", "29", "35"];
+  for (const nr of valid) {
+    // Word boundary to avoid matching "1" inside "14"
+    const re = new RegExp(`(^|[^\\d])${nr}([^\\d]|$)`);
+    if (re.test(value)) result.add(nr);
+  }
+  return result;
+}
+
+function toggleNr(current: string, nr: string, checked: boolean): string {
+  const set = parseNrs(current);
+  if (checked) set.add(nr); else set.delete(nr);
+  return Array.from(set).sort((a, b) => Number(a) - Number(b)).join(",");
+}
+
 function formatPhoneMask(value: string): string {
   const digits = value.replace(/\D/g, "").slice(0, 11);
   if (digits.length <= 2) return `(${digits}`;
@@ -625,6 +677,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
   const [role, setRole] = useState("");
   const [salary, setSalary] = useState("");
   const [admissionDate, setAdmissionDate] = useState("");
+  const [contractType, setContractType] = useState<string>("");
   // Bancários
   const [bankName, setBankName] = useState("");
   const [bankAgency, setBankAgency] = useState("");
@@ -662,6 +715,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
       setRole(item.role || "");
       setSalary(item.salary?.toString() || "");
       setAdmissionDate(item.admission_date?.slice(0, 10) || "");
+      setContractType(item.contract_type || "");
       setBankName(item.bank_name || ""); setBankAgency(item.bank_agency || "");
       setBankAccount(item.bank_account || ""); setBankAccountType(item.bank_account_type || "");
       setHasVaccinationCard(item.has_vaccination_card || false);
@@ -681,7 +735,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
       setFamilyPhone(""); setNotes("");
       setCpf(""); setRg(""); setIspsCode(""); setESocial("");
       setSubestipulante(""); setModulo("");
-      setStatus("ATIVO"); setSector(""); setRole(""); setSalary(""); setAdmissionDate("");
+      setStatus("ATIVO"); setSector(""); setRole(""); setSalary(""); setAdmissionDate(""); setContractType("");
       setBankName(""); setBankAgency(""); setBankAccount(""); setBankAccountType("");
       setHasVaccinationCard(false); setHasCnh(false);
       setNrsTraining(""); setMeioAmbienteTraining("");
@@ -710,6 +764,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
       role: role || null,
       salary: salary || null,
       admission_date: admissionDate || null,
+      contract_type: (contractType as any) || null,
       bank_name: bankName || null, bank_agency: bankAgency || null,
       bank_account: bankAccount || null,
       bank_account_type: (bankAccountType as any) || null,
@@ -812,9 +867,19 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
             </div>
             <div><label className="block text-sm font-medium mb-1">Salário (R$)</label><input type="number" step="0.01" value={salary} onChange={(e) => setSalary(e.target.value)} placeholder="0,00" className={inputCls} /></div>
           </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Subestipulante</label>
-            <input type="number" value={subestipulante} onChange={(e) => setSubestipulante(e.target.value)} className={inputCls} />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Tipo de Contrato</label>
+              <select value={contractType} onChange={(e) => setContractType(e.target.value)} className={inputCls}>
+                <option value="">—</option>
+                <option value="REGISTRADO">Registrado</option>
+                <option value="INTERMITENTE">Contrato Intermitente</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Subestipulante</label>
+              <input type="number" value={subestipulante} onChange={(e) => setSubestipulante(e.target.value)} className={inputCls} />
+            </div>
           </div>
         </div>
       ),
@@ -849,31 +914,38 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
       label: "🎓 Treinamentos",
       content: (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div><label className="block text-sm font-medium mb-1">NRs (1, 6, 7, 17, 29, 35)</label><input type="text" value={nrsTraining} onChange={(e) => setNrsTraining(e.target.value)} placeholder="14 e 15 janeiro 2025" className={inputCls} /></div>
-            <div><label className="block text-sm font-medium mb-1">Meio Ambiente</label><input type="text" value={meioAmbienteTraining} onChange={(e) => setMeioAmbienteTraining(e.target.value)} placeholder="20 de janeiro 2025" className={inputCls} /></div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div><label className="block text-sm font-medium mb-1">Último ASO</label><input type="text" value={lastAsoDate} onChange={(e) => setLastAsoDate(e.target.value)} placeholder="06 de janeiro de 2026" className={inputCls} /></div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Status ASO</label>
-              <select value={asoStatus} onChange={(e) => setAsoStatus(e.target.value)} className={inputCls}>
-                <option value="">—</option>
-                <option value="OK">OK</option>
-                <option value="VENCIDO">Vencido</option>
-                <option value="INATIVO">Inativo</option>
-              </select>
+          <div>
+            <label className="block text-sm font-medium mb-2">NRs realizadas</label>
+            <div className="flex gap-3 flex-wrap p-3 bg-gray-50 border border-border rounded-lg">
+              {["1", "6", "7", "17", "29", "35"].map((nr) => {
+                const selected = parseNrs(nrsTraining).has(nr);
+                return (
+                  <label key={nr} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={(e) => setNrsTraining(toggleNr(nrsTraining, nr, e.target.checked))}
+                      className="w-4 h-4 accent-primary"
+                    />
+                    <span className="text-sm font-medium">NR-{nr}</span>
+                  </label>
+                );
+              })}
             </div>
+            <p className="text-[10px] text-text-light mt-1">Marque as NRs concluídas pelo colaborador.</p>
           </div>
-          <div className="flex gap-6 flex-wrap pt-2">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={lifeguardTraining} onChange={(e) => setLifeguardTraining(e.target.checked)} className="w-4 h-4 accent-primary" />
-              <span className="text-sm">🛟 Salva-Vidas</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={rubberBoot} onChange={(e) => setRubberBoot(e.target.checked)} className="w-4 h-4 accent-primary" />
-              <span className="text-sm">🥾 Bota de Borracha</span>
-            </label>
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className="block text-sm font-medium mb-1">Meio Ambiente</label><input type="text" value={meioAmbienteTraining} onChange={(e) => setMeioAmbienteTraining(e.target.value)} placeholder="20 de janeiro 2025" className={inputCls} /></div>
+            <div><label className="block text-sm font-medium mb-1">Último ASO</label><input type="text" value={lastAsoDate} onChange={(e) => setLastAsoDate(e.target.value)} placeholder="06 de janeiro de 2026" className={inputCls} /></div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Status ASO</label>
+            <select value={asoStatus} onChange={(e) => setAsoStatus(e.target.value)} className={inputCls}>
+              <option value="">—</option>
+              <option value="OK">OK</option>
+              <option value="VENCIDO">Vencido</option>
+              <option value="INATIVO">Inativo</option>
+            </select>
           </div>
         </div>
       ),
@@ -889,6 +961,19 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
               <div><label className="block text-sm font-medium mb-1">Bota</label><input type="text" value={bootSize} onChange={(e) => setBootSize(e.target.value)} placeholder="42" className={inputCls} /></div>
               <div><label className="block text-sm font-medium mb-1">Blusa</label><input type="text" value={shirtSize} onChange={(e) => setShirtSize(e.target.value)} placeholder="G" className={inputCls} /></div>
               <div><label className="block text-sm font-medium mb-1">Bermuda</label><input type="text" value={bermudaSize} onChange={(e) => setBermudaSize(e.target.value)} placeholder="46" className={inputCls} /></div>
+            </div>
+          </div>
+          <div className="border-t border-border pt-3">
+            <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-3">EPIs Específicos</p>
+            <div className="flex gap-6 flex-wrap">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={lifeguardTraining} onChange={(e) => setLifeguardTraining(e.target.checked)} className="w-4 h-4 accent-primary" />
+                <span className="text-sm">🛟 Salva-Vidas</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={rubberBoot} onChange={(e) => setRubberBoot(e.target.checked)} className="w-4 h-4 accent-primary" />
+                <span className="text-sm">🥾 Bota de Borracha</span>
+              </label>
             </div>
           </div>
           <div className="border-t border-border pt-3">
@@ -1035,6 +1120,7 @@ const SHEET_COLUMNS: { key: keyof Employee | "actions"; label: string; w?: strin
   { key: "aso_status", label: "ASO", w: "w-16" },
   { key: "realiza_limpeza", label: "Limpeza", w: "w-20" },
   { key: "role", label: "Função", w: "w-28" },
+  { key: "contract_type", label: "Contrato", w: "w-28" },
   { key: "sector", label: "Setor", w: "w-32" },
 ];
 
@@ -1051,6 +1137,22 @@ function renderCell(emp: Employee, key: keyof Employee): React.ReactNode {
               : v === "INATIVO" ? "bg-red-100 text-red-700"
               : "bg-amber-100 text-amber-700";
     return <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cls}`}>{String(v)}</span>;
+  }
+  if (key === "contract_type") {
+    const cls = v === "REGISTRADO" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700";
+    const label = v === "REGISTRADO" ? "Registrado" : "Intermitente";
+    return <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cls}`}>{label}</span>;
+  }
+  if (key === "nrs_training") {
+    const nrs = parseNrs(String(v));
+    if (nrs.size === 0) return String(v);
+    return (
+      <span className="inline-flex flex-wrap gap-0.5">
+        {Array.from(nrs).map((nr) => (
+          <span key={nr} className="text-[9px] px-1 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">{nr}</span>
+        ))}
+      </span>
+    );
   }
   return String(v);
 }

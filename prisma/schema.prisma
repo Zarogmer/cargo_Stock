@@ -146,6 +146,7 @@ model Employee {
   role                 String?                                // WAP, AJUDANTE, ESFREGAO, ANALISTA_RH, OPERACIONAL...
   salary               Decimal?  @db.Decimal(10, 2)           // futuro: cálculo de folha
   admission_date       DateTime? @db.Date
+  contract_type        String?                                // REGISTRADO, INTERMITENTE
 
   // ── Treinamentos (datas em texto livre vindas da planilha) ─────────────────
   nrs_training         String?                                // NR 1,6,7,17,29,35
