@@ -275,6 +275,8 @@ export interface Job {
 
 export type AllocationStatus = "ATIVO" | "REMOVIDO" | "SUBSTITUIDO";
 export type AllocationKind = "EMBARQUE" | "COSTADO";
+export type ShiftPeriod = "07-13" | "13-19" | "19-01" | "01-07";
+export const SHIFT_PERIODS: ShiftPeriod[] = ["07-13", "13-19", "19-01", "01-07"];
 
 export interface JobAllocation {
   id: number;
@@ -287,6 +289,8 @@ export interface JobAllocation {
   notes: string | null;
   status: AllocationStatus;
   kind: AllocationKind;
+  shift_date: string | null;
+  shift_period: ShiftPeriod | null;
   replaces_id: number | null;
   added_by: string;
   added_at: string;

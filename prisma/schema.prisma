@@ -383,6 +383,10 @@ model JobAllocation {
   notes         String?
   kind          String      @default("EMBARQUE") // EMBARQUE ou COSTADO — qual escalação
 
+  // ── Costado: turno (somente quando kind=COSTADO) ────────────────────────
+  shift_date    DateTime? @db.Date           // dia da escala
+  shift_period  String?                       // "07-13", "13-19", "19-01", "01-07"
+
   // ── Status & Histórico ─────────────────────────────────────────────────
   status         String    @default("ATIVO") // ATIVO, REMOVIDO, SUBSTITUIDO
   replaces_id    Int? // se for substituto, aponta para a alocação substituída
@@ -397,6 +401,7 @@ model JobAllocation {
   @@index([job_id])
   @@index([status])
   @@index([kind])
+  @@index([shift_date, shift_period])
   @@map("job_allocations")
 }
 

@@ -1,11 +1,7 @@
 "use client";
 
-import { EscalacaoCrewPage } from "@/components/escalacao/escalacao-crew-page";
+import { EscalacaoCostadoPage } from "@/components/escalacao/escalacao-costado-page";
 
-export default function EscalacaoCostadoPage() {
-  return (
-    <EscalacaoCrewPage
-      config={{ kind: "COSTADO", title: "Escalação de Costado", emoji: "🧽" }}
-    />
-  );
+export default function CostadoRoute() {
+  return <EscalacaoCostadoPage />;
 }
