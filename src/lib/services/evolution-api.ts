@@ -42,13 +42,13 @@ export function normalizeBRNumber(raw: string): string {
   return `55${digits}`;
 }
 
-async function evolutionFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function evolutionFetch<T>(path: string, init: RequestInit = {}, apikey?: string): Promise<T> {
   const cfg = readConfig();
   const res = await fetch(`${cfg.url}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      apikey: cfg.key,
+      apikey: apikey ?? cfg.key,
       ...(init.headers || {}),
     },
   });
@@ -60,14 +60,37 @@ async function evolutionFetch<T>(path: string, init: RequestInit = {}): Promise<
   return body as T;
 }
 
+// Evolution v2 (latest) requires the per-instance token for instance-scoped
+// endpoints (/connect, /logout, /message/*). The token is returned by
+// fetchInstances. Cached per process to avoid an extra hop on every call.
+let cachedInstanceToken: string | null = null;
+async function getInstanceToken(): Promise<string> {
+  if (cachedInstanceToken) return cachedInstanceToken;
+  const cfg = readConfig();
+  const list = (await evolutionFetch<Array<{ name?: string; token?: string }>>(`/instance/fetchInstances`)) || [];
+  const found = list.find((i) => i.name === cfg.instance);
+  if (!found?.token) {
+    throw new Error(`Instância "${cfg.instance}" não encontrada — crie-a primeiro.`);
+  }
+  cachedInstanceToken = found.token;
+  return found.token;
+}
+
+// Useful when the instance is recreated and the cached token goes stale.
+export function clearInstanceTokenCache() {
+  cachedInstanceToken = null;
+}
+
 export async function sendWhatsappText(to: string, text: string): Promise<unknown> {
   const cfg = readConfig();
   const number = normalizeBRNumber(to);
   if (!number) throw new Error("Número inválido.");
-  return evolutionFetch(`/message/sendText/${encodeURIComponent(cfg.instance)}`, {
-    method: "POST",
-    body: JSON.stringify({ number, text }),
-  });
+  const token = await getInstanceToken();
+  return evolutionFetch(
+    `/message/sendText/${encodeURIComponent(cfg.instance)}`,
+    { method: "POST", body: JSON.stringify({ number, text }) },
+    token,
+  );
 }
 
 export async function getInstanceStatus(): Promise<{ state?: string } & Record<string, unknown>> {
@@ -101,12 +124,18 @@ export async function createInstanceIfMissing(): Promise<unknown> {
 // When the instance is already connected this returns the current state instead.
 export async function connectInstance(): Promise<{ base64?: string; code?: string; pairingCode?: string } & Record<string, unknown>> {
   const cfg = readConfig();
-  return evolutionFetch(`/instance/connect/${encodeURIComponent(cfg.instance)}`);
+  const token = await getInstanceToken();
+  return evolutionFetch(`/instance/connect/${encodeURIComponent(cfg.instance)}`, {}, token);
 }
 
 export async function logoutInstance(): Promise<unknown> {
   const cfg = readConfig();
-  return evolutionFetch(`/instance/logout/${encodeURIComponent(cfg.instance)}`, {
-    method: "DELETE",
-  });
+  const token = await getInstanceToken();
+  const result = await evolutionFetch(
+    `/instance/logout/${encodeURIComponent(cfg.instance)}`,
+    { method: "DELETE" },
+    token,
+  );
+  clearInstanceTokenCache();
+  return result;
 }
