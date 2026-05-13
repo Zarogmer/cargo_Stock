@@ -11,7 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDate, formatDateTime, formatPhone, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, type NrCode, type NrDates, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
+import { formatDate, formatDateTime, formatPhone, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, type NrCode, type NrDates, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
 import type { Employee, Epi, Uniform, EpiMovement, UniformMovement, EpiMovementType } from "@/types/database";
 
 export default function ColaboradoresPage() {
@@ -294,10 +294,19 @@ export default function ColaboradoresPage() {
   const empColumns = [
     { key: "name", label: "Nome", render: (e: Employee) => <span className="font-medium">{e.name}</span> },
     { key: "status", label: "Status", render: (e: Employee) => {
-      const cls = e.status === "ATIVO" ? "bg-emerald-100 text-emerald-700"
-                : e.status === "INATIVO" ? "bg-red-100 text-red-700"
+      const eff = effectiveEmployeeStatus(e);
+      const cls = eff === "ATIVO" ? "bg-emerald-100 text-emerald-700"
+                : eff === "INATIVO" ? "bg-red-100 text-red-700"
                 : "bg-amber-100 text-amber-700";
-      return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}>{e.status || "—"}</span>;
+      const autoFlagged = eff === "PENDENCIA" && e.status === "ATIVO";
+      return (
+        <span
+          className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}
+          title={autoFlagged ? "Pendência automática: treinamento (ASO/NR/Meio Ambiente) vencido" : undefined}
+        >
+          {eff}{autoFlagged ? " ⚠️" : ""}
+        </span>
+      );
     }},
     { key: "role", label: "Função", render: (e: Employee) => e.role ? <span className="text-xs font-medium">{e.role}</span> : <span className="text-text-light text-xs">—</span> },
     { key: "contract_type", label: "Contrato", hideOnMobile: true, render: (e: Employee) => {
@@ -363,7 +372,7 @@ export default function ColaboradoresPage() {
       content: (() => {
         const filteredEmployees = employees.filter((e) => {
           const nameMatch = matchSearch(e.name, empSearch);
-          const statusMatch = empStatusFilter === "Todos" ? true : e.status === empStatusFilter;
+          const statusMatch = empStatusFilter === "Todos" ? true : effectiveEmployeeStatus(e) === empStatusFilter;
           const teamMatch = empTeamFilter === "Todos" ? true :
             empTeamFilter === "Equipe 1" ? e.team === "EQUIPE_1" :
             empTeamFilter === "Equipe 2" ? e.team === "EQUIPE_2" :
@@ -534,13 +543,21 @@ export default function ColaboradoresPage() {
           <div className="space-y-4">
             {/* Status / função */}
             <div className="flex flex-wrap gap-2">
-              {selectedEmp.status && (
-                <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                  selectedEmp.status === "ATIVO" ? "bg-emerald-100 text-emerald-700" :
-                  selectedEmp.status === "INATIVO" ? "bg-red-100 text-red-700" :
-                  "bg-amber-100 text-amber-700"
-                }`}>{selectedEmp.status}</span>
-              )}
+              {selectedEmp.status && (() => {
+                const eff = effectiveEmployeeStatus(selectedEmp);
+                const autoFlagged = eff === "PENDENCIA" && selectedEmp.status === "ATIVO";
+                const cls = eff === "ATIVO" ? "bg-emerald-100 text-emerald-700"
+                          : eff === "INATIVO" ? "bg-red-100 text-red-700"
+                          : "bg-amber-100 text-amber-700";
+                return (
+                  <span
+                    className={`text-xs px-2 py-1 rounded-full font-medium ${cls}`}
+                    title={autoFlagged ? "Pendência automática: treinamento vencido" : undefined}
+                  >
+                    {eff}{autoFlagged ? " ⚠️" : ""}
+                  </span>
+                );
+              })()}
               {selectedEmp.role && <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700 font-medium">{selectedEmp.role}</span>}
               {selectedEmp.contract_type && (
                 <span className={`text-xs px-2 py-1 rounded-full font-medium ${
@@ -799,6 +816,20 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
     today.setHours(0, 0, 0, 0);
     setAsoStatus(next.getTime() < today.getTime() ? "VENCIDO" : "OK");
   }, [lastAsoDate]);
+
+  // Auto-upgrade Status to PENDENCIA whenever any training (ASO / NR /
+  // Meio Ambiente) is expired. Never downgrades — user has to clear it
+  // manually once retrained — and never overrides INATIVO.
+  useEffect(() => {
+    if (status === "INATIVO" || status === "PENDENCIA") return;
+    if (hasExpiredTraining({
+      last_aso_date: lastAsoDate || null,
+      nrs_training: nrsTraining || null,
+      meio_ambiente_training: meioAmbienteTraining || null,
+    })) {
+      setStatus("PENDENCIA");
+    }
+  }, [lastAsoDate, nrsTraining, meioAmbienteTraining, status]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -1228,10 +1259,19 @@ function renderCell(emp: Employee, key: keyof Employee): React.ReactNode {
     return iso ? iso.split("-").reverse().join("/") : String(v);
   }
   if (key === "status") {
-    const cls = v === "ATIVO" ? "bg-emerald-100 text-emerald-700"
-              : v === "INATIVO" ? "bg-red-100 text-red-700"
+    const eff = effectiveEmployeeStatus(emp);
+    const autoFlagged = eff === "PENDENCIA" && emp.status === "ATIVO";
+    const cls = eff === "ATIVO" ? "bg-emerald-100 text-emerald-700"
+              : eff === "INATIVO" ? "bg-red-100 text-red-700"
               : "bg-amber-100 text-amber-700";
-    return <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cls}`}>{String(v)}</span>;
+    return (
+      <span
+        className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cls}`}
+        title={autoFlagged ? "Pendência automática: treinamento vencido" : undefined}
+      >
+        {eff}{autoFlagged ? " ⚠️" : ""}
+      </span>
+    );
   }
   if (key === "contract_type") {
     const cls = v === "REGISTRADO" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700";

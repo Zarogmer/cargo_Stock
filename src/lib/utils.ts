@@ -105,6 +105,47 @@ export function formatNrsWithDates(map: NrDates): string {
   return JSON.stringify(map);
 }
 
+// Training tracked here renews annually. Returns true if the employee has
+// any ASO/Meio Ambiente/NR whose 1-year renewal date is already in the past.
+export interface TrainingFields {
+  last_aso_date: string | null;
+  nrs_training: string | null;
+  meio_ambiente_training: string | null;
+}
+
+function isExpired(isoDate: string): boolean {
+  const last = new Date(isoDate + "T00:00:00");
+  if (Number.isNaN(last.getTime())) return false;
+  const next = new Date(last);
+  next.setFullYear(next.getFullYear() + 1);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return next.getTime() < today.getTime();
+}
+
+export function hasExpiredTraining(emp: TrainingFields): boolean {
+  const aso = parseLegacyDate(emp.last_aso_date);
+  if (aso && isExpired(aso)) return true;
+  const ma = parseLegacyDate(emp.meio_ambiente_training);
+  if (ma && isExpired(ma)) return true;
+  const nrs = parseNrsWithDates(emp.nrs_training);
+  for (const date of Object.values(nrs)) {
+    if (date && isExpired(date)) return true;
+  }
+  return false;
+}
+
+// PENDENCIA is forced when training expired — INATIVO is never overridden.
+export function effectiveEmployeeStatus(
+  emp: TrainingFields & { status: string | null }
+): "ATIVO" | "INATIVO" | "PENDENCIA" {
+  const stored = (emp.status || "ATIVO") as "ATIVO" | "INATIVO" | "PENDENCIA";
+  if (stored === "INATIVO") return "INATIVO";
+  if (stored === "PENDENCIA") return "PENDENCIA";
+  if (hasExpiredTraining(emp)) return "PENDENCIA";
+  return "ATIVO";
+}
+
 export const TOOL_STATUS_LABELS: Record<string, string> = {
   DISPONIVEL: "Disponível",
   EQUIPE_1: "Equipe 1",
