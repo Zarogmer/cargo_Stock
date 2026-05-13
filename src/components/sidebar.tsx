@@ -1,26 +1,48 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getNavItemsForRole, type NavItem } from "@/lib/rbac";
+import { getNavItemsForRole, type NavItem, type NavSubItem } from "@/lib/rbac";
 import { NavIcon, LogoutIcon, CloseIcon, ChevronDownIcon } from "@/components/icons";
+
+// Split "/path?tab=key" into { path: "/path", tab: "key" }
+function splitHref(href: string): { path: string; tab: string | null } {
+  const [path, query] = href.split("?");
+  if (!query) return { path, tab: null };
+  const tab = new URLSearchParams(query).get("tab");
+  return { path, tab };
+}
+
+function isChildActive(child: NavSubItem, pathname: string, currentTab: string | null) {
+  const { path, tab } = splitHref(child.href);
+  if (pathname !== path && !pathname.startsWith(path + "/")) return false;
+  if (tab === null) return true;
+  return currentTab === tab;
+}
 
 function NavEntry({
   item,
   isActive,
   pathname,
+  currentTab,
   onClose,
 }: {
   item: NavItem;
   isActive: (href: string) => boolean;
   pathname: string;
+  currentTab: string | null;
   onClose: () => void;
 }) {
   const hasChildren = !!item.children && item.children.length > 0;
   const parentActive = isActive(item.href);
   const [expanded, setExpanded] = useState(parentActive);
+
+  // Auto-expand when navigating into this parent's area.
+  useEffect(() => {
+    if (parentActive) setExpanded(true);
+  }, [parentActive]);
 
   if (!hasChildren) {
     return (
@@ -57,7 +79,7 @@ function NavEntry({
       {expanded && (
         <div className="mt-0.5 ml-7 space-y-0.5 border-l border-white/5 pl-2">
           {item.children!.map((child) => {
-            const active = pathname === child.href || pathname.startsWith(child.href + "/");
+            const active = isChildActive(child, pathname, currentTab);
             return (
               <Link
                 key={child.href}
@@ -87,6 +109,8 @@ interface SidebarProps {
 export function Sidebar({ open, onClose }: SidebarProps) {
   const { profile, signOut } = useAuth();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const currentTab = searchParams.get("tab");
 
   if (!profile) return null;
 
@@ -164,6 +188,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 item={item}
                 isActive={isActive}
                 pathname={pathname}
+                currentTab={currentTab}
                 onClose={onClose}
               />
             ))}

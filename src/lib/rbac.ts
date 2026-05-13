@@ -136,10 +136,52 @@ export const NAV_ITEMS: NavItem[] = [
     ],
   },
   { label: "Estoque", href: "/estoque", icon: "estoque", module: "ESTOQUE" },
-  { label: "Rh", href: "/colaboradores", icon: "epi", module: "EPI" },
-  { label: "Equipamentos", href: "/equipamentos", icon: "equipamentos", module: "FERRAMENTAS" },
-  { label: "Controle", href: "/solicitacoes", icon: "solicitacoes", module: "SOLICITACOES" },
-  { label: "Financeiro", href: "/financeiro", icon: "financeiro", module: "FINANCEIRO_MOD" },
+  {
+    label: "Rh",
+    href: "/colaboradores",
+    icon: "epi",
+    module: "EPI",
+    children: [
+      { label: "Colaboradores", href: "/colaboradores?tab=colaboradores" },
+      { label: "EPI", href: "/colaboradores?tab=epi" },
+      { label: "Uniforme", href: "/colaboradores?tab=uniforme" },
+      { label: "Histórico", href: "/colaboradores?tab=historico" },
+    ],
+  },
+  {
+    label: "Equipamentos",
+    href: "/equipamentos",
+    icon: "equipamentos",
+    module: "FERRAMENTAS",
+    children: [
+      { label: "Ferramentas", href: "/equipamentos?tab=ferramentas" },
+      { label: "Maquinário", href: "/equipamentos?tab=maquinario" },
+      { label: "Histórico", href: "/equipamentos?tab=historico" },
+    ],
+  },
+  {
+    label: "Controle",
+    href: "/solicitacoes",
+    icon: "solicitacoes",
+    module: "SOLICITACOES",
+    children: [
+      { label: "Solicitações", href: "/solicitacoes?tab=solicitacoes" },
+      { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos" },
+      { label: "Fornecedores", href: "/solicitacoes?tab=fornecedores" },
+    ],
+  },
+  {
+    label: "Financeiro",
+    href: "/financeiro",
+    icon: "financeiro",
+    module: "FINANCEIRO_MOD",
+    children: [
+      { label: "Funções e Valores", href: "/financeiro?tab=funcoes" },
+      { label: "Trabalhos", href: "/financeiro?tab=trabalhos" },
+      { label: "Faturar", href: "/financeiro?tab=faturar" },
+      { label: "Resumo", href: "/financeiro?tab=resumo" },
+    ],
+  },
 ];
 
 export function getNavItemsForRole(role: Role): NavItem[] {

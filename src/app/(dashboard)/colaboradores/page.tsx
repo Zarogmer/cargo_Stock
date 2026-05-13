@@ -488,9 +488,19 @@ export default function ColaboradoresPage() {
     },
   ];
 
+  const activeTabLabel = tabs.find((t) => t.key === initialTab)?.label;
+
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-text">RH</h1>
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <h1 className="text-2xl font-bold text-text">RH</h1>
+        {activeTabLabel && (
+          <>
+            <span className="text-text-light">›</span>
+            <span className="text-lg font-semibold text-text-light">{activeTabLabel}</span>
+          </>
+        )}
+      </div>
 
       {dbError && (
         <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700 font-mono break-all">
@@ -498,7 +508,7 @@ export default function ColaboradoresPage() {
         </div>
       )}
 
-      <Tabs tabs={tabs} defaultTab={initialTab} />
+      <Tabs tabs={tabs} defaultTab={initialTab} hideHeader />
 
       {/* Employee Form */}
       <EmployeeFormModal open={empForm} onClose={() => { setEmpForm(false); setEditEmp(null); }} onSave={saveEmployee} item={editEmp} saving={saving} />

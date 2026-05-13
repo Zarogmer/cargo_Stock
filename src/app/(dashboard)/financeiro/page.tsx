@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { hasPermission } from "@/lib/rbac";
 import { db } from "@/lib/db";
@@ -83,6 +84,8 @@ function calcJobCost(job: Job, allocations: JobAllocation[], adjustments: JobAdj
 
 export default function FinanceiroPage() {
   const { profile } = useAuth();
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab") || "funcoes";
   const role = profile?.role || "FINANCEIRO";
   const canEdit = hasPermission(role, "FINANCEIRO_MOD", "edit") || hasPermission(role, "FINANCEIRO_MOD", "create");
 
@@ -135,10 +138,78 @@ export default function FinanceiroPage() {
     };
   }, [functions, jobs, allocations, adjustments]);
 
+  const financeiroTabs = [
+    {
+      key: "funcoes",
+      label: "💰 Funções e Valores",
+      content: (
+        <FuncoesTab
+          functions={functions}
+          rates={rates}
+          allocations={allocations}
+          canEdit={canEdit}
+          onChange={loadAll}
+          loading={loading}
+        />
+      ),
+    },
+    {
+      key: "trabalhos",
+      label: "🚢 Trabalhos",
+      content: (
+        <TrabalhosTab
+          jobs={jobs}
+          allocations={allocations}
+          adjustments={adjustments}
+          functions={functions}
+          ships={ships}
+          employees={employees}
+          canEdit={canEdit}
+          profileName={profile?.full_name || "Sistema"}
+          onChange={loadAll}
+          loading={loading}
+        />
+      ),
+    },
+    {
+      key: "faturar",
+      label: "🧾 Faturar",
+      content: (
+        <FaturarTab
+          jobs={jobs}
+          allocations={allocations}
+          loading={loading}
+        />
+      ),
+    },
+    {
+      key: "resumo",
+      label: "📊 Resumo",
+      content: (
+        <ResumoTab
+          jobs={jobs}
+          allocations={allocations}
+          adjustments={adjustments}
+          functions={functions}
+        />
+      ),
+    },
+  ];
+
+  const activeTabLabel = financeiroTabs.find((t) => t.key === initialTab)?.label;
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       <div>
-        <h1 className="text-2xl font-bold text-text">Financeiro 💰</h1>
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <h1 className="text-2xl font-bold text-text">Financeiro 💰</h1>
+          {activeTabLabel && (
+            <>
+              <span className="text-text-light">›</span>
+              <span className="text-lg font-semibold text-text-light">{activeTabLabel}</span>
+            </>
+          )}
+        </div>
         <p className="text-text-light text-sm mt-0.5">
           Catálogo de funções, alocações de equipe e cálculo por trabalho
         </p>
@@ -157,65 +228,7 @@ export default function FinanceiroPage() {
         />
       </div>
 
-      <Tabs
-        tabs={[
-          {
-            key: "funcoes",
-            label: "💰 Funções e Valores",
-            content: (
-              <FuncoesTab
-                functions={functions}
-                rates={rates}
-                allocations={allocations}
-                canEdit={canEdit}
-                onChange={loadAll}
-                loading={loading}
-              />
-            ),
-          },
-          {
-            key: "trabalhos",
-            label: "🚢 Trabalhos",
-            content: (
-              <TrabalhosTab
-                jobs={jobs}
-                allocations={allocations}
-                adjustments={adjustments}
-                functions={functions}
-                ships={ships}
-                employees={employees}
-                canEdit={canEdit}
-                profileName={profile?.full_name || "Sistema"}
-                onChange={loadAll}
-                loading={loading}
-              />
-            ),
-          },
-          {
-            key: "faturar",
-            label: "🧾 Faturar",
-            content: (
-              <FaturarTab
-                jobs={jobs}
-                allocations={allocations}
-                loading={loading}
-              />
-            ),
-          },
-          {
-            key: "resumo",
-            label: "📊 Resumo",
-            content: (
-              <ResumoTab
-                jobs={jobs}
-                allocations={allocations}
-                adjustments={adjustments}
-                functions={functions}
-              />
-            ),
-          },
-        ]}
-      />
+      <Tabs tabs={financeiroTabs} defaultTab={initialTab} hideHeader />
     </div>
   );
 }

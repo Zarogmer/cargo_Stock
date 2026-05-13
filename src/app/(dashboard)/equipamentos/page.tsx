@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
@@ -17,6 +17,8 @@ import type { Tool, ToolStatus, AssetType, ToolMovementType } from "@/types/data
 export default function EquipamentosPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab") || "ferramentas";
   const role = profile?.role || "RH";
 
   const [tools, setTools] = useState<Tool[]>([]);
@@ -199,9 +201,19 @@ export default function EquipamentosPage() {
     },
   ];
 
+  const activeTabLabel = tabs.find((t) => t.key === initialTab)?.label;
+
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-text">Equipamentos</h1>
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <h1 className="text-2xl font-bold text-text">Equipamentos</h1>
+        {activeTabLabel && (
+          <>
+            <span className="text-text-light">›</span>
+            <span className="text-lg font-semibold text-text-light">{activeTabLabel}</span>
+          </>
+        )}
+      </div>
 
       {dbError && (
         <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700 font-mono break-all">
@@ -209,7 +221,7 @@ export default function EquipamentosPage() {
         </div>
       )}
 
-      <Tabs tabs={tabs} />
+      <Tabs tabs={tabs} defaultTab={initialTab} hideHeader />
 
       {/* Form Modal */}
       <ToolFormModal open={showForm} onClose={() => { setShowForm(false); setEditTool(null); }} onSave={saveTool} item={editTool} assetType={formAssetType} saving={saving} />

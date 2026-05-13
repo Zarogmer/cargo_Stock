@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
@@ -64,6 +64,8 @@ const PRODUCT_CATEGORIES = [
 export default function SolicitacoesPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab") || "solicitacoes";
   const role = profile?.role || "RH";
 
   const [requests, setRequests] = useState<ToolRequest[]>([]);
@@ -562,9 +564,19 @@ export default function SolicitacoesPage() {
     },
   ];
 
+  const activeTabLabel = tabs.find((t) => t.key === initialTab)?.label;
+
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-text">Controle</h1>
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <h1 className="text-2xl font-bold text-text">Controle</h1>
+        {activeTabLabel && (
+          <>
+            <span className="text-text-light">›</span>
+            <span className="text-lg font-semibold text-text-light">{activeTabLabel}</span>
+          </>
+        )}
+      </div>
 
       {dbError && (
         <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700 font-mono break-all">
@@ -579,7 +591,7 @@ export default function SolicitacoesPage() {
         </div>
       )}
 
-      <Tabs tabs={tabs} />
+      <Tabs tabs={tabs} defaultTab={initialTab} hideHeader />
 
       {/* Request Form Modal */}
       <RequestFormModal open={showRequestForm} onClose={() => setShowRequestForm(false)} onSave={handleCreateRequest} saving={saving} />
