@@ -358,6 +358,9 @@ function HistoricoView({
   }, [periodMarks]);
   const isMarked = (date: string, period: ShiftPeriod) => markedKeys.has(`${date}|${period}`);
 
+  const todayISOStr = todayISO();
+  const isPastDate = (date: string) => date < todayISOStr;
+
   const summary = useMemo(() => {
     const byEmp = new Map<number, EmployeeSummary>();
     for (const a of allocations) {
@@ -468,9 +471,13 @@ function HistoricoView({
         <ul className="divide-y divide-border">
           {byDate.map(([date, byPeriod]) => {
             const isOpen = expandedDates.has(date);
-            // Period counter: how many of the 4 períodos têm gente OU estão marcados como NR.
+            const past = isPastDate(date);
+            // Period is "accounted for" if it has crew, is manually marked NR,
+            // OR the day already passed (auto-NR — see request below the form).
+            const isAccounted = (p: ShiftPeriod) =>
+              byPeriod[p].length > 0 || isMarked(date, p) || past;
             const periodsAccounted = SHIFT_PERIODS.reduce(
-              (acc, p) => acc + (byPeriod[p].length > 0 || isMarked(date, p) ? 1 : 0),
+              (acc, p) => acc + (isAccounted(p) ? 1 : 0),
               0,
             );
             return (
@@ -494,16 +501,19 @@ function HistoricoView({
                       const crew = byPeriod[period];
                       const marked = isMarked(date, period);
                       const hasCrew = crew.length > 0;
+                      // Past + empty + no manual mark → treat as não requisitado (auto)
+                      const autoNR = past && !hasCrew && !marked;
+                      const showAsNR = marked || autoNR;
                       return (
                         <div
                           key={period}
-                          className={`rounded-lg border p-3 ${marked ? "border-gray-300 bg-gray-50/80" : PERIOD_TONES[period]}`}
+                          className={`rounded-lg border p-3 ${showAsNR ? "border-gray-300 bg-gray-50/80" : PERIOD_TONES[period]}`}
                         >
                           <div className="flex items-center justify-between mb-2">
                             <p className="text-xs font-bold text-text">{PERIOD_LABELS[period]}</p>
-                            {marked ? (
+                            {showAsNR ? (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-700 font-semibold">
-                                NÃO REQ.
+                                NÃO REQ.{autoNR ? " (auto)" : ""}
                               </span>
                             ) : (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white border border-border font-semibold">
@@ -520,12 +530,14 @@ function HistoricoView({
                                 </li>
                               ))}
                             </ul>
+                          ) : autoNR ? (
+                            <p className="text-[11px] text-gray-600 italic">Período não requisitado · dia passou sem escala</p>
                           ) : marked ? (
                             <p className="text-[11px] text-gray-600 italic">Período não requisitado</p>
                           ) : (
                             <p className="text-[11px] text-text-light italic">Ninguém</p>
                           )}
-                          {canEdit && !hasCrew && (
+                          {canEdit && !hasCrew && !past && (
                             <button
                               type="button"
                               onClick={() => onTogglePeriodMark(date, period)}
