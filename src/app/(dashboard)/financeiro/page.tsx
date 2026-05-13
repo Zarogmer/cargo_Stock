@@ -442,9 +442,15 @@ function FuncoesTab({
                           <button onClick={() => { setEditFn(f); setShowFnForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded" title="Editar tudo">
                             <EditIcon />
                           </button>
-                          <button onClick={() => setDeleteFn(f)} className="p-1.5 text-danger hover:bg-red-50 rounded" title="Excluir">
-                            <TrashIcon />
-                          </button>
+                          {f.active ? (
+                            <button onClick={() => setDeleteFn(f)} className="p-1.5 text-danger hover:bg-red-50 rounded" title="Excluir ou desativar">
+                              <TrashIcon />
+                            </button>
+                          ) : (
+                            <button onClick={() => setDeleteFn(f)} className="px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 rounded font-medium" title="Reativar">
+                              ↻ Reativar
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
@@ -477,15 +483,16 @@ function FuncoesTab({
         onClose={() => setDeleteFn(null)}
         onConfirm={async () => {
           if (!deleteFn) return;
-          const count = allocCount(deleteFn.id);
-          if (count > 0) {
-            // Soft delete: keep the row so the historical allocations remain
-            // valid, but flip active=false so it disappears from the dropdowns.
+          // Three modes derived from current state:
+          //   - inactive            → reactivate (set active=true)
+          //   - active + has allocs → soft delete (set active=false)
+          //   - active + no allocs  → hard delete
+          if (!deleteFn.active) {
+            const res = await db.from("job_functions").update({ active: true }).eq("id", deleteFn.id);
+            if (res.error) { alert(`Não consegui reativar: ${res.error.message}`); return; }
+          } else if (allocCount(deleteFn.id) > 0) {
             const res = await db.from("job_functions").update({ active: false }).eq("id", deleteFn.id);
-            if (res.error) {
-              alert(`Não consegui desativar: ${res.error.message}`);
-              return;
-            }
+            if (res.error) { alert(`Não consegui desativar: ${res.error.message}`); return; }
           } else {
             const res = await db.from("job_functions").delete().eq("id", deleteFn.id);
             if (res.error) {
@@ -495,13 +502,27 @@ function FuncoesTab({
           }
           setDeleteFn(null); onChange();
         }}
-        title={deleteFn && allocCount(deleteFn.id) > 0 ? "Desativar Função" : "Excluir Função"}
-        message={
-          deleteFn && allocCount(deleteFn.id) > 0
-            ? `"${deleteFn.name}" tem ${allocCount(deleteFn.id)} alocação(ões) registrada(s) — não dá pra excluir sem perder histórico. Posso desativar (some dos dropdowns, dados ficam no banco). Continuar?`
-            : `Excluir "${deleteFn?.name}"?`
+        title={
+          !deleteFn ? ""
+          : !deleteFn.active ? "Reativar Função"
+          : allocCount(deleteFn.id) > 0 ? "Desativar Função"
+          : "Excluir Função"
         }
-        confirmLabel={deleteFn && allocCount(deleteFn.id) > 0 ? "Desativar" : "Excluir"}
+        message={
+          !deleteFn ? ""
+          : !deleteFn.active
+            ? `Reativar "${deleteFn.name}"? Ela vai voltar a aparecer nos dropdowns.`
+            : allocCount(deleteFn.id) > 0
+              ? `"${deleteFn.name}" tem ${allocCount(deleteFn.id)} alocação(ões) registrada(s) — não dá pra excluir sem perder histórico. Posso desativar (some dos dropdowns, dados ficam no banco). Continuar?`
+              : `Excluir "${deleteFn.name}"?`
+        }
+        confirmLabel={
+          !deleteFn ? "Confirmar"
+          : !deleteFn.active ? "Reativar"
+          : allocCount(deleteFn.id) > 0 ? "Desativar"
+          : "Excluir"
+        }
+        variant={deleteFn && !deleteFn.active ? "primary" : "danger"}
       />
     </div>
   );
