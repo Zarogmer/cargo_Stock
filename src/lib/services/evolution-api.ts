@@ -74,3 +74,39 @@ export async function getInstanceStatus(): Promise<{ state?: string } & Record<s
   const cfg = readConfig();
   return evolutionFetch(`/instance/connectionState/${encodeURIComponent(cfg.instance)}`);
 }
+
+// Creates the instance if missing. Idempotent-ish: Evolution returns an error
+// when the instance already exists, which we swallow.
+export async function createInstanceIfMissing(): Promise<unknown> {
+  const cfg = readConfig();
+  try {
+    return await evolutionFetch(`/instance/create`, {
+      method: "POST",
+      body: JSON.stringify({
+        instanceName: cfg.instance,
+        qrcode: true,
+        integration: "WHATSAPP-BAILEYS",
+      }),
+    });
+  } catch (err) {
+    const msg = (err as Error).message || "";
+    if (msg.toLowerCase().includes("already") || msg.includes("409")) {
+      return { existed: true };
+    }
+    throw err;
+  }
+}
+
+// Returns the QR code to scan with WhatsApp (as a data URL base64 PNG).
+// When the instance is already connected this returns the current state instead.
+export async function connectInstance(): Promise<{ base64?: string; code?: string; pairingCode?: string } & Record<string, unknown>> {
+  const cfg = readConfig();
+  return evolutionFetch(`/instance/connect/${encodeURIComponent(cfg.instance)}`);
+}
+
+export async function logoutInstance(): Promise<unknown> {
+  const cfg = readConfig();
+  return evolutionFetch(`/instance/logout/${encodeURIComponent(cfg.instance)}`, {
+    method: "DELETE",
+  });
+}

@@ -10,7 +10,8 @@ export type Module =
   | "MAQUINARIO"
   | "NAVIOS"
   | "FINANCEIRO_MOD"
-  | "SOLICITACOES";
+  | "SOLICITACOES"
+  | "WHATSAPP";
 
 // Permission actions
 export type Permission =
@@ -36,6 +37,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
+    WHATSAPP: ["view", "edit"],
   },
   EXECUTIVO: {
     DASHBOARD: ["view"],
@@ -46,6 +48,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     NAVIOS: ["view", "create", "edit", "delete"],
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
+    WHATSAPP: ["view", "edit"],
   },
   MANUTENCAO: {
     DASHBOARD: ["view"],
@@ -82,6 +85,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     NAVIOS: ["view", "create", "edit", "delete"],
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
+    WHATSAPP: ["view", "edit"],
   },
 };
 
@@ -182,6 +186,7 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Resumo", href: "/financeiro?tab=resumo" },
     ],
   },
+  { label: "WhatsApp", href: "/whatsapp", icon: "whatsapp", module: "WHATSAPP" },
 ];
 
 export function getNavItemsForRole(role: Role): NavItem[] {
