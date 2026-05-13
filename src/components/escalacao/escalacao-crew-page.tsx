@@ -315,9 +315,8 @@ function EscalacaoTab({
 }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editAlloc, setEditAlloc] = useState<JobAllocation | null>(null);
-  const [substituteAlloc, setSubstituteAlloc] = useState<JobAllocation | null>(null);
   const [removeAlloc, setRemoveAlloc] = useState<JobAllocation | null>(null);
-  const [showHistory, setShowHistory] = useState(false);
+  const [view, setView] = useState<"escalacao" | "historico">("escalacao");
 
   const activeAllocs = allocations.filter((a) => a.status === "ATIVO");
 
@@ -374,86 +373,97 @@ function EscalacaoTab({
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2 items-center justify-between">
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowHistory(!showHistory)}
-            className="px-3 py-1.5 text-xs font-medium bg-gray-100 text-text rounded-lg hover:bg-gray-200 transition"
-          >
-            📋 Histórico ({allocations.length})
-          </button>
-        </div>
-        {canEdit && (
-          <Button size="sm" onClick={() => { setEditAlloc(null); setShowAdd(true); }}>
-            + Adicionar Membro
-          </Button>
-        )}
+      {/* In-page sub-tabs */}
+      <div className="flex gap-1 border-b border-border">
+        <button
+          type="button"
+          onClick={() => setView("escalacao")}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition ${
+            view === "escalacao"
+              ? "border-primary text-primary"
+              : "border-transparent text-text-light hover:text-text"
+          }`}
+        >
+          👥 Escalação atual
+        </button>
+        <button
+          type="button"
+          onClick={() => setView("historico")}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition ${
+            view === "historico"
+              ? "border-primary text-primary"
+              : "border-transparent text-text-light hover:text-text"
+          }`}
+        >
+          📋 Histórico ({allocations.length})
+        </button>
       </div>
 
-      {activeAllocs.length === 0 ? (
-        <div className="bg-card rounded-xl border border-border p-12 text-center text-text-light">
-          <p className="text-3xl mb-2">👥</p>
-          <p className="text-sm">Nenhum membro escalado ainda.</p>
-          {canEdit && <p className="text-xs mt-2">Clique em &quot;Adicionar Membro&quot; para começar.</p>}
-        </div>
-      ) : (
-        <div className="bg-card rounded-xl border border-border overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-border">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">#</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Funcionário</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Função</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Adicionado por</th>
-                {canEdit && <th className="px-3 py-2 text-right text-xs font-semibold text-text-light w-24">Ações</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {activeAllocs.map((a, idx) => {
-                const isReplacement = a.replaces_id != null;
-                return (
-                  <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
-                    <td className="px-3 py-2 text-text-light">{idx + 1}</td>
-                    <td className="px-3 py-2">
-                      <div>
-                        <p className="font-medium">{a.employees?.name || "—"}</p>
-                        {isReplacement && <span className="text-[10px] text-amber-700">↻ substituto</span>}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
-                        {a.job_functions?.name || "—"}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-xs text-text-light">
-                      {a.added_by || "—"}
-                      {a.added_at && <span className="block text-[10px]">{formatDateTime(a.added_at)}</span>}
-                    </td>
-                    {canEdit && (
-                      <td className="px-3 py-2">
-                        <div className="flex gap-1 justify-end">
-                          <button onClick={() => { setEditAlloc(a); setShowAdd(true); }} className="p-1 text-primary hover:bg-blue-50 rounded" title="Editar">
-                            <EditIcon className="w-3.5 h-3.5" />
-                          </button>
-                          <button onClick={() => setSubstituteAlloc(a)} className="p-1 text-amber-700 hover:bg-amber-50 rounded" title="Substituir">
-                            🔄
-                          </button>
-                          <button onClick={() => setRemoveAlloc(a)} className="p-1 text-danger hover:bg-red-50 rounded" title="Remover">
-                            <TrashIcon className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {view === "escalacao" ? (
+        <>
+          <div className="flex justify-end">
+            {canEdit && (
+              <Button size="sm" onClick={() => { setEditAlloc(null); setShowAdd(true); }}>
+                + Adicionar Membro
+              </Button>
+            )}
+          </div>
 
-      {showHistory && (
-        <HistoryTimeline allocations={allocations} />
+          {activeAllocs.length === 0 ? (
+            <div className="bg-card rounded-xl border border-border p-12 text-center text-text-light">
+              <p className="text-3xl mb-2">👥</p>
+              <p className="text-sm">Nenhum membro escalado ainda.</p>
+              {canEdit && <p className="text-xs mt-2">Clique em &quot;Adicionar Membro&quot; para começar.</p>}
+            </div>
+          ) : (
+            <div className="bg-card rounded-xl border border-border overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-border">
+                  <tr>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">#</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Funcionário</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Função</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Adicionado por</th>
+                    {canEdit && <th className="px-3 py-2 text-right text-xs font-semibold text-text-light w-20">Ações</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeAllocs.map((a, idx) => (
+                    <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
+                      <td className="px-3 py-2 text-text-light">{idx + 1}</td>
+                      <td className="px-3 py-2">
+                        <p className="font-medium">{a.employees?.name || "—"}</p>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
+                          {a.job_functions?.name || "—"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-text-light">
+                        {a.added_by || "—"}
+                        {a.added_at && <span className="block text-[10px]">{formatDateTime(a.added_at)}</span>}
+                      </td>
+                      {canEdit && (
+                        <td className="px-3 py-2">
+                          <div className="flex gap-1 justify-end">
+                            <button onClick={() => { setEditAlloc(a); setShowAdd(true); }} className="p-1 text-primary hover:bg-blue-50 rounded" title="Editar">
+                              <EditIcon className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => setRemoveAlloc(a)} className="p-1 text-danger hover:bg-red-50 rounded" title="Remover">
+                              <TrashIcon className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      ) : (
+        <EmbarqueHistoricoView allocations={allocations} shipName={ship.name} />
       )}
 
       <CrewFormModal
@@ -467,17 +477,6 @@ function EscalacaoTab({
         kind={kind}
         onClose={() => { setShowAdd(false); setEditAlloc(null); }}
         onSaved={() => { setShowAdd(false); setEditAlloc(null); onChange(); }}
-      />
-
-      <SubstituteModal
-        open={!!substituteAlloc}
-        target={substituteAlloc}
-        employees={employees}
-        existingAllocs={activeAllocs}
-        profileName={profileName}
-        kind={kind}
-        onClose={() => setSubstituteAlloc(null)}
-        onSaved={() => { setSubstituteAlloc(null); onChange(); }}
       />
 
       <RemoveModal
@@ -954,133 +953,6 @@ function QuickAddEmployeeModal({
   );
 }
 
-// ─── Substitute Modal ───────────────────────────────────────────────────────
-
-function SubstituteModal({
-  open, target, employees, existingAllocs, profileName, kind, onClose, onSaved,
-}: {
-  open: boolean;
-  target: JobAllocation | null;
-  employees: Employee[];
-  existingAllocs: JobAllocation[];
-  profileName: string;
-  kind: AllocationKind;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [newEmpId, setNewEmpId] = useState("");
-  const [reason, setReason] = useState("");
-  const [actualDays, setActualDays] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (open && target) {
-      setNewEmpId("");
-      setReason("");
-      setActualDays(target.quantity.toString());
-      setError("");
-    }
-  }, [open, target]);
-
-  async function handleSubstitute(e: React.FormEvent) {
-    e.preventDefault();
-    if (!target || !newEmpId || !reason.trim()) {
-      setError("Selecione o substituto e informe o motivo.");
-      return;
-    }
-    if (existingAllocs.some((a) => a.id !== target.id && String(a.employee_id) === newEmpId)) {
-      setError("Esse funcionário já está escalado.");
-      return;
-    }
-    setSaving(true);
-    try {
-      const now = new Date().toISOString();
-      await db.from("job_allocations").update({
-        status: "SUBSTITUIDO",
-        quantity: parseInt(actualDays) || 0,
-        removed_by: profileName,
-        removed_at: now,
-        removal_reason: reason.trim(),
-      }).eq("id", target.id);
-
-      await db.from("job_allocations").insert({
-        job_id: target.job_id,
-        function_id: target.function_id,
-        employee_id: parseInt(newEmpId),
-        quantity: 1,
-        rate: target.rate,
-        pluxee_value: 0,
-        status: "ATIVO",
-        kind,
-        replaces_id: target.id,
-        added_by: profileName,
-        added_at: now,
-      });
-      onSaved();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
-  if (!target) return null;
-
-  return (
-    <Modal open={open} onClose={onClose} title={`Substituir ${target.employees?.name || "membro"}`}>
-      <form onSubmit={handleSubstitute} className="space-y-4">
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs">
-          <p className="font-semibold text-amber-900 mb-1">⚠️ Você vai substituir:</p>
-          <p>{target.employees?.name || "—"} · {target.job_functions?.name} · {brl(target.rate)}/dia</p>
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Substituto *</label>
-          <select value={newEmpId} onChange={(e) => setNewEmpId(e.target.value)} required className={inputCls}>
-            <option value="">Selecione...</option>
-            {employees
-              .filter((e) => e.status === "ATIVO" && e.id !== target.employee_id)
-              .map((e) => (
-                <option key={e.id} value={e.id}>{e.name} {e.role ? `· ${e.role}` : ""}</option>
-              ))}
-          </select>
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Dias trabalhados pelo original</label>
-          <input type="number" min={0} value={actualDays} onChange={(e) => setActualDays(e.target.value)} className={inputCls} />
-          <p className="text-[10px] text-text-light mt-1">Coloque 0 se não trabalhou nenhum dia. Os dias do substituto você ajusta depois.</p>
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Motivo *</label>
-          <input
-            type="text"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            required
-            className={inputCls}
-            placeholder="Desistência, doença, atraso..."
-            list="reason-options"
-          />
-          <datalist id="reason-options">
-            <option value="Desistência" />
-            <option value="Doença" />
-            <option value="Atraso" />
-            <option value="Falta" />
-            <option value="Demissão" />
-            <option value="Acidente" />
-          </datalist>
-        </div>
-        {error && <p className="text-xs text-danger bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
-        <div className="flex gap-3 justify-end pt-2">
-          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Confirmar Substituição"}</Button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
 // ─── Remove Modal ───────────────────────────────────────────────────────────
 
 function RemoveModal({
@@ -1162,72 +1034,88 @@ function RemoveModal({
   );
 }
 
-// ─── History Timeline ───────────────────────────────────────────────────────
+// ─── Histórico de Embarque ──────────────────────────────────────────────────
 
-interface TimelineEvent {
-  at: string;
-  type: "added" | "removed" | "substituted_out" | "substituted_in";
-  by: string;
-  description: string;
-  reason?: string;
-}
+function EmbarqueHistoricoView({ allocations, shipName }: { allocations: JobAllocation[]; shipName: string }) {
+  const sorted = useMemo(
+    () => [...allocations].sort((a, b) => a.added_at.localeCompare(b.added_at)),
+    [allocations],
+  );
 
-function HistoryTimeline({ allocations }: { allocations: JobAllocation[] }) {
-  const events: TimelineEvent[] = [];
-  for (const a of allocations) {
-    events.push({
-      at: a.added_at,
-      type: a.replaces_id ? "substituted_in" : "added",
-      by: a.added_by || "—",
-      description: `${a.employees?.name || "—"} (${a.job_functions?.name || "—"}) entrou na equipe`,
-    });
-    if (a.removed_at) {
-      events.push({
-        at: a.removed_at,
-        type: a.status === "SUBSTITUIDO" ? "substituted_out" : "removed",
-        by: a.removed_by || "—",
-        description: `${a.employees?.name || "—"} (${a.job_functions?.name || "—"}) ${a.status === "SUBSTITUIDO" ? "foi substituído" : "foi removido"}`,
-        reason: a.removal_reason || undefined,
-      });
-    }
+  if (sorted.length === 0) {
+    return (
+      <div className="bg-card rounded-xl border border-border p-12 text-center text-text-light">
+        <p className="text-3xl mb-2">📋</p>
+        <p className="text-sm">Nenhuma alocação registrada para este navio ainda.</p>
+      </div>
+    );
   }
-  events.sort((a, b) => b.at.localeCompare(a.at));
-
-  if (events.length === 0) {
-    return <div className="text-center py-8 text-text-light text-xs">Sem histórico ainda.</div>;
-  }
-
-  const ICONS: Record<TimelineEvent["type"], string> = {
-    added: "✅",
-    removed: "❌",
-    substituted_out: "🔄",
-    substituted_in: "↻",
-  };
-  const COLORS: Record<TimelineEvent["type"], string> = {
-    added: "border-emerald-200 bg-emerald-50",
-    removed: "border-red-200 bg-red-50",
-    substituted_out: "border-amber-200 bg-amber-50",
-    substituted_in: "border-blue-200 bg-blue-50",
-  };
 
   return (
-    <div className="bg-card rounded-xl border border-border p-4">
-      <h3 className="text-sm font-semibold mb-3">📋 Histórico Completo da Equipe</h3>
-      <div className="space-y-2">
-        {events.map((e, idx) => (
-          <div key={idx} className={`rounded-lg border p-2 text-xs ${COLORS[e.type]}`}>
-            <div className="flex justify-between gap-2">
-              <div>
-                <span className="mr-2">{ICONS[e.type]}</span>
-                <span>{e.description}</span>
-                {e.reason && <span className="text-text-light italic"> — &quot;{e.reason}&quot;</span>}
-              </div>
-              <div className="text-text-light text-[10px] whitespace-nowrap">
-                {formatDateTime(e.at)} por <strong>{e.by}</strong>
-              </div>
-            </div>
-          </div>
-        ))}
+    <div className="space-y-4">
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
+        <header className="px-6 pt-4 pb-3 border-b border-border">
+          <h2 className="text-base font-semibold text-text">Histórico de Escalação · {shipName}</h2>
+          <p className="text-xs text-text-light mt-0.5">
+            Toda alocação feita neste navio, com a <strong>função que o colaborador exerceu aqui</strong> (pode diferir do cargo padrão do cadastro).
+          </p>
+        </header>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-border">
+              <tr>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">#</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Funcionário</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Função no navio</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Status</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Adicionado</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Removido</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((a, idx) => {
+                const statusCls = a.status === "ATIVO"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : a.status === "REMOVIDO"
+                    ? "bg-red-100 text-red-700"
+                    : "bg-amber-100 text-amber-700";
+                return (
+                  <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
+                    <td className="px-3 py-2 text-text-light tabular-nums">{idx + 1}</td>
+                    <td className="px-3 py-2 font-medium">{a.employees?.name || "—"}</td>
+                    <td className="px-3 py-2">
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
+                        {a.job_functions?.name || "—"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${statusCls}`}>
+                        {a.status}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-text-light">
+                      <span className="block">{a.added_by || "—"}</span>
+                      <span className="text-[10px]">{formatDateTime(a.added_at)}</span>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-text-light">
+                      {a.removed_at ? (
+                        <>
+                          <span className="block">{a.removed_by || "—"}</span>
+                          <span className="text-[10px]">{formatDateTime(a.removed_at)}</span>
+                          {a.removal_reason && (
+                            <span className="block text-[10px] italic">&quot;{a.removal_reason}&quot;</span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-text-light/60">—</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
