@@ -381,6 +381,7 @@ model JobAllocation {
   rate          Decimal     @db.Decimal(10, 2) // valor diário aplicado
   pluxee_value  Decimal?    @default(0) @db.Decimal(10, 2) // parte paga via Pluxee
   notes         String?
+  kind          String      @default("EMBARQUE") // EMBARQUE ou COSTADO — qual escalação
 
   // ── Status & Histórico ─────────────────────────────────────────────────
   status         String    @default("ATIVO") // ATIVO, REMOVIDO, SUBSTITUIDO
@@ -395,6 +396,7 @@ model JobAllocation {
 
   @@index([job_id])
   @@index([status])
+  @@index([kind])
   @@map("job_allocations")
 }
 

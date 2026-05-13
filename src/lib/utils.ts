@@ -36,6 +36,16 @@ export function matchSearch(text: string, query: string): boolean {
   return normalize(text).includes(normalize(query));
 }
 
+export function formatPhone(value: string | null | undefined): string {
+  if (!value) return "—";
+  const digits = String(value).replace(/\D/g, "");
+  if (digits.length === 11) return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+  if (digits.length === 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+  if (digits.length === 9) return `${digits.slice(0, 5)}-${digits.slice(5)}`;
+  if (digits.length === 8) return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+  return String(value);
+}
+
 export const TOOL_STATUS_LABELS: Record<string, string> = {
   DISPONIVEL: "Disponível",
   EQUIPE_1: "Equipe 1",

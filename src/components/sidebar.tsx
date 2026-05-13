@@ -1,10 +1,83 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getNavItemsForRole } from "@/lib/rbac";
-import { NavIcon, LogoutIcon, CloseIcon } from "@/components/icons";
+import { getNavItemsForRole, type NavItem } from "@/lib/rbac";
+import { NavIcon, LogoutIcon, CloseIcon, ChevronDownIcon } from "@/components/icons";
+
+function NavEntry({
+  item,
+  isActive,
+  pathname,
+  onClose,
+}: {
+  item: NavItem;
+  isActive: (href: string) => boolean;
+  pathname: string;
+  onClose: () => void;
+}) {
+  const hasChildren = !!item.children && item.children.length > 0;
+  const parentActive = isActive(item.href);
+  const [expanded, setExpanded] = useState(parentActive);
+
+  if (!hasChildren) {
+    return (
+      <Link
+        href={item.href}
+        onClick={onClose}
+        className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200
+          ${parentActive
+            ? "bg-primary text-white font-medium shadow-lg shadow-primary/20"
+            : "text-gray-400 hover:bg-white/5 hover:text-white"
+          }`}
+      >
+        <NavIcon name={item.icon} className="w-5 h-5 shrink-0" />
+        <span>{item.label}</span>
+      </Link>
+    );
+  }
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm transition-all duration-200
+          ${parentActive
+            ? "bg-primary/15 text-white font-medium"
+            : "text-gray-400 hover:bg-white/5 hover:text-white"
+          }`}
+      >
+        <NavIcon name={item.icon} className="w-5 h-5 shrink-0" />
+        <span className="flex-1 text-left">{item.label}</span>
+        <ChevronDownIcon className={`w-4 h-4 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
+      </button>
+      {expanded && (
+        <div className="mt-0.5 ml-7 space-y-0.5 border-l border-white/5 pl-2">
+          {item.children!.map((child) => {
+            const active = pathname === child.href || pathname.startsWith(child.href + "/");
+            return (
+              <Link
+                key={child.href}
+                href={child.href}
+                onClick={onClose}
+                className={`block px-3 py-2 rounded-lg text-xs transition-all duration-200
+                  ${active
+                    ? "bg-primary text-white font-medium"
+                    : "text-gray-400 hover:bg-white/5 hover:text-white"
+                  }`}
+              >
+                {child.label}
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface SidebarProps {
   open: boolean;
@@ -86,19 +159,13 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <nav className="flex-1 py-3 px-3 overflow-y-auto space-y-0.5">
             <p className="px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase tracking-widest">Menu</p>
             {navItems.map((item) => (
-              <Link
+              <NavEntry
                 key={item.href}
-                href={item.href}
-                onClick={onClose}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200
-                  ${isActive(item.href)
-                    ? "bg-primary text-white font-medium shadow-lg shadow-primary/20"
-                    : "text-gray-400 hover:bg-white/5 hover:text-white"
-                  }`}
-              >
-                <NavIcon name={item.icon} className="w-5 h-5 shrink-0" />
-                <span>{item.label}</span>
-              </Link>
+                item={item}
+                isActive={isActive}
+                pathname={pathname}
+                onClose={onClose}
+              />
             ))}
           </nav>
 

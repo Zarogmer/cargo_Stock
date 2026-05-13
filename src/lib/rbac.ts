@@ -113,12 +113,28 @@ export interface NavItem {
   href: string;
   icon: string;
   module: Module;
+  children?: NavSubItem[];
+}
+
+export interface NavSubItem {
+  label: string;
+  href: string;
 }
 
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/", icon: "dashboard", module: "DASHBOARD" },
   { label: "Navios", href: "/navios", icon: "navios", module: "NAVIOS" },
-  { label: "Embarque", href: "/embarque", icon: "embarque", module: "EMBARQUE" },
+  {
+    label: "Escalação",
+    href: "/escalacao",
+    icon: "embarque",
+    module: "EMBARQUE",
+    children: [
+      { label: "Escalação de Costado", href: "/escalacao/costado" },
+      { label: "Escalação de Embarque", href: "/escalacao/embarque" },
+      { label: "Estoque para embarque", href: "/escalacao/estoque" },
+    ],
+  },
   { label: "Estoque", href: "/estoque", icon: "estoque", module: "ESTOQUE" },
   { label: "Rh", href: "/colaboradores", icon: "epi", module: "EPI" },
   { label: "Equipamentos", href: "/equipamentos", icon: "equipamentos", module: "FERRAMENTAS" },

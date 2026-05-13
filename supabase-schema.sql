@@ -311,3 +311,10 @@ CREATE INDEX idx_login_logs_created_at ON public.login_logs(created_at DESC);
 CREATE INDEX idx_tool_requests_status ON public.tool_requests(status);
 CREATE INDEX idx_tool_requests_created_at ON public.tool_requests(created_at DESC);
 CREATE INDEX idx_product_links_category ON public.product_links(category);
+
+-- ============================================================
+-- MIGRATION: add `kind` column to job_allocations (EMBARQUE / COSTADO)
+-- ============================================================
+ALTER TABLE public.job_allocations
+  ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'EMBARQUE';
+CREATE INDEX IF NOT EXISTS idx_job_allocations_kind ON public.job_allocations(kind);

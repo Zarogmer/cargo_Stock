@@ -274,6 +274,7 @@ export interface Job {
 }
 
 export type AllocationStatus = "ATIVO" | "REMOVIDO" | "SUBSTITUIDO";
+export type AllocationKind = "EMBARQUE" | "COSTADO";
 
 export interface JobAllocation {
   id: number;
@@ -285,6 +286,7 @@ export interface JobAllocation {
   pluxee_value: string | number | null;
   notes: string | null;
   status: AllocationStatus;
+  kind: AllocationKind;
   replaces_id: number | null;
   added_by: string;
   added_at: string;

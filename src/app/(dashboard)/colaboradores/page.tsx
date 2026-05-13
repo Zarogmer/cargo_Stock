@@ -11,7 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDate, formatDateTime, matchSearch, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
+import { formatDate, formatDateTime, formatPhone, matchSearch, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
 import type { Employee, Epi, Uniform, EpiMovement, UniformMovement, EpiMovementType } from "@/types/database";
 
 export default function ColaboradoresPage() {
@@ -62,6 +62,9 @@ export default function ColaboradoresPage() {
   const [empItems, setEmpItems] = useState<{ name: string; qty: number; source: string }[]>([]);
   const [loadingEmpItems, setLoadingEmpItems] = useState(false);
 
+  // --- ESCALAÇÃO STATUS (active allocation kind per employee) ---
+  const [escalaStatus, setEscalaStatus] = useState<Map<number, "EMBARQUE" | "COSTADO">>(new Map());
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
@@ -70,12 +73,13 @@ export default function ColaboradoresPage() {
     setLoading(true);
     setDbError(null);
     try {
-      const [empRes, epiRes, uniRes, epiMovRes, uniMovRes] = await Promise.all([
+      const [empRes, epiRes, uniRes, epiMovRes, uniMovRes, allocRes] = await Promise.all([
         db.from("employees").select("*").order("name"),
         db.from("epis").select("*").order("name"),
         db.from("uniforms").select("*").order("name"),
         db.from("epi_movements").select("*, epis(name)").order("created_at", { ascending: false }).limit(50),
         db.from("uniform_movements").select("*, uniforms(name)").order("created_at", { ascending: false }).limit(50),
+        db.from("job_allocations").select("employee_id, kind, status").eq("status", "ATIVO"),
       ]);
 
       // Log all errors
@@ -93,6 +97,18 @@ export default function ColaboradoresPage() {
       setEmployees(empRes.data || []);
       setEpis(epiRes.data || []);
       setUniforms(uniRes.data || []);
+
+      // Build escalação status map. EMBARQUE wins over COSTADO if both exist.
+      const statusMap = new Map<number, "EMBARQUE" | "COSTADO">();
+      ((allocRes.data as Array<{ employee_id: number | null; kind: string | null }> | null) || []).forEach((a) => {
+        if (a.employee_id == null) return;
+        const k = (a.kind || "EMBARQUE") as "EMBARQUE" | "COSTADO";
+        const existing = statusMap.get(a.employee_id);
+        if (!existing || (existing === "COSTADO" && k === "EMBARQUE")) {
+          statusMap.set(a.employee_id, k);
+        }
+      });
+      setEscalaStatus(statusMap);
 
       const combined: Array<Record<string, unknown>> = [];
       (epiMovRes.data || []).forEach((m: Record<string, unknown>) => {
@@ -292,7 +308,13 @@ export default function ColaboradoresPage() {
     }},
     { key: "sector", label: "Setor", hideOnMobile: true, render: (e: Employee) => e.sector || "—" },
     { key: "team", label: "Equipe", hideOnMobile: true, render: (e: Employee) => e.team ? <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${teamColors[e.team] || ""}`}>{teamLabels[e.team]}</span> : <span className="text-text-light text-xs">—</span> },
-    { key: "phone", label: "Telefone", hideOnMobile: true, render: (e: Employee) => e.phone || "—" },
+    { key: "escalacao", label: "Escalação", hideOnMobile: true, render: (e: Employee) => {
+      const k = escalaStatus.get(e.id);
+      if (k === "EMBARQUE") return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">⚓ Embarcado</span>;
+      if (k === "COSTADO") return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-cyan-100 text-cyan-700">🧽 Costado</span>;
+      return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>;
+    }},
+    { key: "phone", label: "Telefone", hideOnMobile: true, render: (e: Employee) => formatPhone(e.phone) },
     { key: "actions", label: "", className: "w-20", render: (e: Employee) => (
       <div className="flex gap-1">
         {canEdit && <button onClick={(ev) => { ev.stopPropagation(); setEditEmp(e); setEmpForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded"><EditIcon /></button>}
@@ -519,6 +541,12 @@ export default function ColaboradoresPage() {
               )}
               {selectedEmp.sector && <span className="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-700 font-medium">{selectedEmp.sector}</span>}
               {selectedEmp.team && <span className={`text-xs px-2 py-1 rounded-full font-medium ${teamColors[selectedEmp.team] || ""}`}>{teamLabels[selectedEmp.team]}</span>}
+              {(() => {
+                const k = escalaStatus.get(selectedEmp.id);
+                if (k === "EMBARQUE") return <span className="text-xs px-2 py-1 rounded-full font-medium bg-amber-100 text-amber-700">⚓ Embarcado</span>;
+                if (k === "COSTADO") return <span className="text-xs px-2 py-1 rounded-full font-medium bg-cyan-100 text-cyan-700">🧽 Escalado no Costado</span>;
+                return <span className="text-xs px-2 py-1 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>;
+              })()}
             </div>
 
             {/* Pessoais */}
@@ -527,8 +555,8 @@ export default function ColaboradoresPage() {
               {selectedEmp.rg && <div><span className="text-text-light">RG:</span> <span className="font-medium font-mono">{selectedEmp.rg}</span></div>}
               {selectedEmp.isps_code && <div><span className="text-text-light">ISPS:</span> <span className="font-medium font-mono">{selectedEmp.isps_code}</span></div>}
               {selectedEmp.e_social && <div><span className="text-text-light">E-Social:</span> <span className="font-medium">{selectedEmp.e_social}</span></div>}
-              <div><span className="text-text-light">Telefone:</span> <span className="font-medium">{selectedEmp.phone || "—"}</span></div>
-              {selectedEmp.family_phone && <div><span className="text-text-light">Tel. Familiar:</span> <span className="font-medium">{selectedEmp.family_phone}</span></div>}
+              <div><span className="text-text-light">Telefone:</span> <span className="font-medium">{formatPhone(selectedEmp.phone)}</span></div>
+              {selectedEmp.family_phone && <div><span className="text-text-light">Tel. Familiar:</span> <span className="font-medium">{formatPhone(selectedEmp.family_phone)}</span></div>}
               {selectedEmp.birth_date && <div><span className="text-text-light">Nascimento:</span> <span className="font-medium">{selectedEmp.birth_date.slice(0, 10)}</span></div>}
               {selectedEmp.admission_date && <div><span className="text-text-light">Admissão:</span> <span className="font-medium">{selectedEmp.admission_date.slice(0, 10)}</span></div>}
               {selectedEmp.email && <div className="col-span-2"><span className="text-text-light">Email:</span> <span className="font-medium">{selectedEmp.email}</span></div>}
@@ -1128,6 +1156,9 @@ function renderCell(emp: Employee, key: keyof Employee): React.ReactNode {
   const v = emp[key] as unknown;
   if (v === null || v === undefined || v === "") return <span className="text-gray-300">—</span>;
   if (typeof v === "boolean") return v ? "OK" : "—";
+  if (key === "phone" || key === "family_phone") {
+    return formatPhone(String(v));
+  }
   if (key === "birth_date" || key === "admission_date") {
     const s = String(v);
     return s.slice(0, 10).split("-").reverse().join("/");
