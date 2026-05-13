@@ -98,6 +98,7 @@ export interface Employee {
   aso_status: string | null;
   // Operacional
   realiza_limpeza: boolean | null;
+  does_costado: boolean | null;
   updated_at: string;
   updated_by: string;
 }

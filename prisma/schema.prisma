@@ -165,6 +165,7 @@ model Employee {
 
   // ── Operacional ────────────────────────────────────────────────────────────
   realiza_limpeza      Boolean?  @default(false)
+  does_costado         Boolean?  @default(false)
 
   updated_at           DateTime  @default(now()) @db.Timestamptz()
   updated_by           String

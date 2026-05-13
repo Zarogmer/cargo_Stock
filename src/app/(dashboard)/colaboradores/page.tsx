@@ -620,7 +620,8 @@ export default function ColaboradoresPage() {
                   {selectedEmp.rubber_boot && <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 font-medium">🥾 Bota Borracha</span>}
                   {selectedEmp.has_vaccination_card && <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">💉 Vacinação</span>}
                   {selectedEmp.has_cnh && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">🚗 CNH</span>}
-                  {selectedEmp.realiza_limpeza && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">🧽 Limpeza</span>}
+                  {selectedEmp.realiza_limpeza && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">🧹 Limpeza</span>}
+                  {selectedEmp.does_costado && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">🪏 Costado</span>}
                 </div>
               </div>
             )}
@@ -736,6 +737,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
   const [asoStatus, setAsoStatus] = useState("");
   // Operacional
   const [realizaLimpeza, setRealizaLimpeza] = useState(false);
+  const [doesCostado, setDoesCostado] = useState(false);
 
   useEffect(() => {
     if (item) {
@@ -764,6 +766,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
       setLastAsoDate(parseLegacyDate(item.last_aso_date));
       setAsoStatus(item.aso_status || "");
       setRealizaLimpeza(item.realiza_limpeza || false);
+      setDoesCostado(item.does_costado || false);
     } else {
       setName(""); setTeam(""); setPhone(""); setEmail(""); setBirthDate("");
       setFamilyPhone(""); setNotes("");
@@ -775,6 +778,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
       setLifeguardTraining(false); setRubberBoot(false);
       setBootSize(""); setShirtSize(""); setBermudaSize("");
       setLastAsoDate(""); setAsoStatus(""); setRealizaLimpeza(false);
+      setDoesCostado(false);
     }
   }, [item, open]);
 
@@ -827,6 +831,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
       last_aso_date: lastAsoDate || null,
       aso_status: asoStatus || null,
       realiza_limpeza: realizaLimpeza,
+      does_costado: doesCostado,
     });
   }
 
@@ -898,18 +903,23 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Função</label>
-              <input type="text" value={role} onChange={(e) => setRole(e.target.value.toUpperCase())} placeholder="WAP, AJUDANTE, ESFREGÃO..." className={inputCls} list="role-options" />
-              <datalist id="role-options">
-                <option value="WAP" />
-                <option value="AJUDANTE" />
-                <option value="ESFREGAO" />
-                <option value="MAQUINISTA" />
-                <option value="COZINHEIRO" />
-                <option value="MECANICO" />
-                <option value="ANALISTA RH" />
-                <option value="ASSISTENTE" />
-                <option value="OPERACIONAL" />
-              </datalist>
+              <select value={role} onChange={(e) => setRole(e.target.value)} className={inputCls}>
+                <option value="">Selecionar...</option>
+                <option value="WAP">WAP</option>
+                <option value="AJUDANTE">Ajudante</option>
+                <option value="ESFREGAO">Esfregão</option>
+                <option value="SUPERVISOR">Supervisor</option>
+                <option value="MAQUINISTA">Maquinista</option>
+                <option value="COZINHEIRO">Cozinheiro</option>
+                <option value="MECANICO">Mecânico</option>
+                <option value="ANALISTA RH">Analista RH</option>
+                <option value="ASSISTENTE">Assistente</option>
+                <option value="OPERACIONAL">Operacional</option>
+                <option value="EXECUTIVO">Executivo</option>
+                {role && !["WAP","AJUDANTE","ESFREGAO","SUPERVISOR","MAQUINISTA","COZINHEIRO","MECANICO","ANALISTA RH","ASSISTENTE","OPERACIONAL","EXECUTIVO"].includes(role) && (
+                  <option value={role}>{role}</option>
+                )}
+              </select>
             </div>
             <div><label className="block text-sm font-medium mb-1">Salário (R$)</label><input type="number" step="0.01" value={salary} onChange={(e) => setSalary(e.target.value)} placeholder="0,00" className={inputCls} /></div>
           </div>
@@ -1044,21 +1054,32 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
               </label>
             </div>
           </div>
-          <div className="border-t border-border pt-3">
-            <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-3">Documentos / Operacional</p>
-            <div className="flex gap-6 flex-wrap">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={hasVaccinationCard} onChange={(e) => setHasVaccinationCard(e.target.checked)} className="w-4 h-4 accent-primary" />
-                <span className="text-sm">💉 Cartão de Vacinação</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={hasCnh} onChange={(e) => setHasCnh(e.target.checked)} className="w-4 h-4 accent-primary" />
-                <span className="text-sm">🚗 CNH</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={realizaLimpeza} onChange={(e) => setRealizaLimpeza(e.target.checked)} className="w-4 h-4 accent-primary" />
-                <span className="text-sm">🧽 Realiza Limpeza</span>
-              </label>
+          <div className="border-t border-border pt-3 space-y-3">
+            <div>
+              <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-2">Documentos</p>
+              <div className="flex gap-6 flex-wrap">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={hasVaccinationCard} onChange={(e) => setHasVaccinationCard(e.target.checked)} className="w-4 h-4 accent-primary" />
+                  <span className="text-sm">💉 Cartão de Vacinação</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={hasCnh} onChange={(e) => setHasCnh(e.target.checked)} className="w-4 h-4 accent-primary" />
+                  <span className="text-sm">🚗 CNH</span>
+                </label>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-2">Operacional</p>
+              <div className="flex gap-6 flex-wrap">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={realizaLimpeza} onChange={(e) => setRealizaLimpeza(e.target.checked)} className="w-4 h-4 accent-primary" />
+                  <span className="text-sm">🧹 Realiza Limpeza</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={doesCostado} onChange={(e) => setDoesCostado(e.target.checked)} className="w-4 h-4 accent-primary" />
+                  <span className="text-sm">🪏 Costado</span>
+                </label>
+              </div>
             </div>
           </div>
           <div className="border-t border-border pt-3">
