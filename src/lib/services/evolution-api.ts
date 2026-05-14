@@ -139,3 +139,41 @@ export async function logoutInstance(): Promise<unknown> {
   clearInstanceTokenCache();
   return result;
 }
+
+// Hard-delete the instance entirely (different from logout — wipes the Evolution
+// record so the next create starts fresh). 404 means it's already gone, which
+// is fine for a reset flow.
+export async function deleteInstance(): Promise<unknown> {
+  const cfg = readConfig();
+  try {
+    const result = await evolutionFetch(
+      `/instance/delete/${encodeURIComponent(cfg.instance)}`,
+      { method: "DELETE" },
+    );
+    clearInstanceTokenCache();
+    return result;
+  } catch (err) {
+    const msg = (err as Error).message || "";
+    if (msg.includes("404") || msg.toLowerCase().includes("not found") || msg.toLowerCase().includes("does not exist")) {
+      clearInstanceTokenCache();
+      return { existed: false };
+    }
+    throw err;
+  }
+}
+
+// Delete + create. The QR is reliably returned by /instance/create when qrcode:
+// true — the connect endpoint sometimes doesn't regenerate it for an instance
+// stuck in "close", so this is the reset hatch.
+export async function resetInstance(): Promise<unknown> {
+  await deleteInstance();
+  const cfg = readConfig();
+  return evolutionFetch(`/instance/create`, {
+    method: "POST",
+    body: JSON.stringify({
+      instanceName: cfg.instance,
+      qrcode: true,
+      integration: "WHATSAPP-BAILEYS",
+    }),
+  });
+}

@@ -2,6 +2,9 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth-context";
+
+const ADMIN_ROLES = new Set(["TECNOLOGIA", "GESTOR", "EXECUTIVO"]);
 
 interface StatusResponse {
   configured?: boolean;
@@ -16,6 +19,8 @@ interface ConnectResponse {
 }
 
 export default function WhatsappPage() {
+  const { profile } = useAuth();
+  const isAdmin = !!profile && ADMIN_ROLES.has(profile.role);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [qr, setQr] = useState<{ base64?: string; code?: string; pairingCode?: string } | null>(null);
@@ -99,8 +104,37 @@ export default function WhatsappPage() {
         if (qr) {
           setQr(qr);
         } else {
-          setMessage({ kind: "err", text: "Sem QR na resposta — tente recriar a instância (logout + criar)." });
+          const raw = JSON.stringify(body.result ?? body).slice(0, 300);
+          setMessage({ kind: "err", text: `Sem QR na resposta — use "Recriar (reset)". Evolution respondeu: ${raw}` });
         }
+      } else {
+        setMessage({ kind: "err", text: body.error || "Erro" });
+      }
+    } catch (err) {
+      setMessage({ kind: "err", text: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleReset() {
+    if (!confirm("Deletar e recriar a instância? Isso vai gerar um QR Code novo.")) return;
+    setBusy(true);
+    setMessage(null);
+    setQr(null);
+    try {
+      const res = await fetch("/api/whatsapp/instance/reset", { method: "POST" });
+      const body = await res.json();
+      if (res.ok) {
+        const qrFromReset = extractQr(body.result);
+        if (qrFromReset?.base64 || qrFromReset?.code) {
+          setQr(qrFromReset);
+          setMessage({ kind: "ok", text: "Instância recriada. Escaneie o QR Code." });
+        } else {
+          const raw = JSON.stringify(body.result).slice(0, 300);
+          setMessage({ kind: "err", text: `Recriou mas sem QR. Evolution respondeu: ${raw}` });
+        }
+        loadStatus();
       } else {
         setMessage({ kind: "err", text: body.error || "Erro" });
       }
@@ -190,7 +224,7 @@ export default function WhatsappPage() {
             <Button size="sm" variant="secondary" onClick={loadStatus} disabled={loadingStatus}>
               ↻ Atualizar
             </Button>
-            {stateRaw === "open" && (
+            {isAdmin && stateRaw === "open" && (
               <Button size="sm" variant="danger" onClick={handleLogout} disabled={busy}>
                 Desconectar
               </Button>
@@ -198,7 +232,7 @@ export default function WhatsappPage() {
           </div>
         </div>
 
-        {(status?.configured !== false && stateRaw !== "open") && (
+        {isAdmin && (status?.configured !== false && stateRaw !== "open") && (
           <div className="border-t border-border pt-3 flex gap-2 flex-wrap">
             <Button size="sm" onClick={handleCreate} disabled={busy}>
               1. Criar instância (se ainda não existe)
@@ -206,6 +240,17 @@ export default function WhatsappPage() {
             <Button size="sm" variant="success" onClick={handleConnect} disabled={busy}>
               2. Gerar QR Code
             </Button>
+            <Button size="sm" variant="danger" onClick={handleReset} disabled={busy}>
+              3. Recriar (reset)
+            </Button>
+          </div>
+        )}
+
+        {!isAdmin && stateRaw !== "open" && (
+          <div className="border-t border-border pt-3">
+            <p className="text-xs text-text-light">
+              WhatsApp desconectado — peça para a equipe de tecnologia reconectar.
+            </p>
           </div>
         )}
       </section>

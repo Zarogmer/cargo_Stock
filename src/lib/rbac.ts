@@ -74,6 +74,8 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     DASHBOARD: ["view"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
     NAVIOS: ["view"],
+    SOLICITACOES: ["view"],
+    WHATSAPP: ["view"],
   },
   TECNOLOGIA: {
     DASHBOARD: ["view"],
