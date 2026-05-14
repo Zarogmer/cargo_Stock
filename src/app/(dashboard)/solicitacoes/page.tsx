@@ -562,9 +562,12 @@ export default function SolicitacoesPage() {
         </div>
       ),
     },
-  ];
+  ].filter((t) => t.key !== "produtos" || role === "TECNOLOGIA");
 
-  const activeTabLabel = tabs.find((t) => t.key === initialTab)?.label;
+  // If the URL points to a tab the current role can't see (e.g. someone with a
+  // stale bookmark to ?tab=produtos), fall back to the first available tab.
+  const effectiveTab = tabs.some((t) => t.key === initialTab) ? initialTab : tabs[0]?.key;
+  const activeTabLabel = tabs.find((t) => t.key === effectiveTab)?.label;
 
   return (
     <div className="space-y-4">
@@ -591,7 +594,7 @@ export default function SolicitacoesPage() {
         </div>
       )}
 
-      <Tabs tabs={tabs} defaultTab={initialTab} hideHeader />
+      <Tabs tabs={tabs} defaultTab={effectiveTab} hideHeader />
 
       {/* Request Form Modal */}
       <RequestFormModal open={showRequestForm} onClose={() => setShowRequestForm(false)} onSave={handleCreateRequest} saving={saving} />

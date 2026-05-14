@@ -11,7 +11,8 @@ export type Module =
   | "NAVIOS"
   | "FINANCEIRO_MOD"
   | "SOLICITACOES"
-  | "WHATSAPP";
+  | "WHATSAPP"
+  | "MENSAGENS";
 
 // Permission actions
 export type Permission =
@@ -38,6 +39,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     NAVIOS: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
     WHATSAPP: ["view", "edit"],
+    MENSAGENS: ["view", "create"],
   },
   EXECUTIVO: {
     DASHBOARD: ["view"],
@@ -49,6 +51,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
     WHATSAPP: ["view", "edit"],
+    MENSAGENS: ["view", "create"],
   },
   MANUTENCAO: {
     DASHBOARD: ["view"],
@@ -76,6 +79,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     NAVIOS: ["view"],
     SOLICITACOES: ["view"],
     WHATSAPP: ["view"],
+    MENSAGENS: ["view", "create"],
   },
   TECNOLOGIA: {
     DASHBOARD: ["view"],
@@ -88,6 +92,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
     WHATSAPP: ["view", "edit"],
+    MENSAGENS: ["view", "create"],
   },
 };
 
@@ -125,6 +130,9 @@ export interface NavItem {
 export interface NavSubItem {
   label: string;
   href: string;
+  // When set, only these roles see this sub-item. Omit to inherit the parent's
+  // module visibility (default behaviour).
+  roles?: Role[];
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -172,7 +180,7 @@ export const NAV_ITEMS: NavItem[] = [
     module: "SOLICITACOES",
     children: [
       { label: "Solicitações", href: "/solicitacoes?tab=solicitacoes" },
-      { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos" },
+      { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos", roles: ["TECNOLOGIA"] },
       { label: "Fornecedores", href: "/solicitacoes?tab=fornecedores" },
     ],
   },
@@ -188,9 +196,15 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Resumo", href: "/financeiro?tab=resumo" },
     ],
   },
+  { label: "Mensagens", href: "/mensagens", icon: "mensagens", module: "MENSAGENS" },
   { label: "WhatsApp", href: "/whatsapp", icon: "whatsapp", module: "WHATSAPP" },
 ];
 
 export function getNavItemsForRole(role: Role): NavItem[] {
-  return NAV_ITEMS.filter((item) => hasModuleAccess(role, item.module));
+  return NAV_ITEMS
+    .filter((item) => hasModuleAccess(role, item.module))
+    .map((item) => ({
+      ...item,
+      children: item.children?.filter((c) => !c.roles || c.roles.includes(role)),
+    }));
 }
