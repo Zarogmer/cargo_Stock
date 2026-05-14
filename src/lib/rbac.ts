@@ -125,6 +125,9 @@ export interface NavItem {
 export interface NavSubItem {
   label: string;
   href: string;
+  // When set, only these roles see this sub-item. Omit to inherit the parent's
+  // module visibility (default behaviour).
+  roles?: Role[];
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -172,7 +175,7 @@ export const NAV_ITEMS: NavItem[] = [
     module: "SOLICITACOES",
     children: [
       { label: "Solicitações", href: "/solicitacoes?tab=solicitacoes" },
-      { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos" },
+      { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos", roles: ["TECNOLOGIA"] },
       { label: "Fornecedores", href: "/solicitacoes?tab=fornecedores" },
     ],
   },
@@ -192,5 +195,10 @@ export const NAV_ITEMS: NavItem[] = [
 ];
 
 export function getNavItemsForRole(role: Role): NavItem[] {
-  return NAV_ITEMS.filter((item) => hasModuleAccess(role, item.module));
+  return NAV_ITEMS
+    .filter((item) => hasModuleAccess(role, item.module))
+    .map((item) => ({
+      ...item,
+      children: item.children?.filter((c) => !c.roles || c.roles.includes(role)),
+    }));
 }
