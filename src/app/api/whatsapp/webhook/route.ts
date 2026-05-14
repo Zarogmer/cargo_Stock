@@ -74,6 +74,7 @@ export async function POST(req: NextRequest) {
   if (expected) {
     const provided = req.nextUrl.searchParams.get("secret");
     if (provided !== expected) {
+      console.warn("[whatsapp-webhook] reject: bad secret (got=", provided?.slice(0, 6), ")");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }
@@ -82,11 +83,18 @@ export async function POST(req: NextRequest) {
   try {
     payload = await req.json();
   } catch {
+    console.warn("[whatsapp-webhook] reject: invalid JSON");
     return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
   }
 
-  // We only persist messages — other events are acknowledged silently
-  if (payload.event !== "messages.upsert") {
+  // Trace everything Evolution sends so we can see in Railway logs what
+  // shape is actually coming through. Truncate the data body so logs stay readable.
+  console.log("[whatsapp-webhook] event:", payload.event, "instance:", payload.instance, "hasData:", !!payload.data, "remoteJid:", payload.data?.key?.remoteJid, "fromMe:", payload.data?.key?.fromMe, "messageType:", payload.data?.messageType);
+
+  // Event names vary across Evolution versions: "messages.upsert", "MESSAGES_UPSERT",
+  // or even "messagesUpsert". Normalize before comparing.
+  const evt = String(payload.event || "").toLowerCase().replace(/_/g, ".");
+  if (evt !== "messages.upsert") {
     return NextResponse.json({ status: "ignored", event: payload.event });
   }
 
@@ -135,9 +143,10 @@ export async function POST(req: NextRequest) {
         raw_event: payload as unknown as object,
       },
     });
+    console.log("[whatsapp-webhook] persisted:", remoteJid, "fromMe:", fromMe, "type:", messageType);
     return NextResponse.json({ status: "ok" });
   } catch (err) {
-    console.error("Webhook persist error:", err);
+    console.error("[whatsapp-webhook] persist error:", (err as Error).message);
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }
 }
