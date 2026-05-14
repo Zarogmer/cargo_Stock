@@ -52,10 +52,32 @@ async function evolutionFetch<T>(path: string, init: RequestInit = {}, apikey?: 
       ...(init.headers || {}),
     },
   });
-  const body = (await res.json().catch(() => null)) as T | { message?: string; response?: unknown };
+  // Read the response as text first so we can surface it on errors even when
+  // it's not JSON (HTML 500 page, plain string, NestJS exception filter, etc).
+  const raw = await res.text();
+  let body: unknown = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = raw;
+  }
   if (!res.ok) {
-    const err = body as { message?: string };
-    throw new Error(`Evolution API ${res.status}: ${err?.message || res.statusText}`);
+    // Evolution wraps errors in different shapes depending on the layer:
+    //   NestJS validation: { statusCode, message: string[], error }
+    //   Service errors:    { status, error, response: { message } }
+    //   Baileys crashes:   plain text / HTML
+    const b = body as { message?: unknown; error?: unknown; response?: { message?: unknown } } | string | null;
+    const detail = typeof b === "string"
+      ? b.slice(0, 500)
+      : (() => {
+          const msgs = [
+            b?.response && typeof b.response === "object" && "message" in b.response ? JSON.stringify(b.response.message) : null,
+            b?.message ? JSON.stringify(b.message) : null,
+            b?.error ? JSON.stringify(b.error) : null,
+          ].filter(Boolean);
+          return msgs.length ? msgs.join(" | ") : JSON.stringify(b).slice(0, 500);
+        })();
+    throw new Error(`Evolution API ${res.status} ${path}: ${detail || res.statusText}`);
   }
   return body as T;
 }
@@ -166,14 +188,22 @@ export async function deleteInstance(): Promise<unknown> {
 // true — the connect endpoint sometimes doesn't regenerate it for an instance
 // stuck in "close", so this is the reset hatch.
 export async function resetInstance(): Promise<unknown> {
-  await deleteInstance();
+  try {
+    await deleteInstance();
+  } catch (err) {
+    throw new Error(`[delete falhou] ${(err as Error).message}`);
+  }
   const cfg = readConfig();
-  return evolutionFetch(`/instance/create`, {
-    method: "POST",
-    body: JSON.stringify({
-      instanceName: cfg.instance,
-      qrcode: true,
-      integration: "WHATSAPP-BAILEYS",
-    }),
-  });
+  try {
+    return await evolutionFetch(`/instance/create`, {
+      method: "POST",
+      body: JSON.stringify({
+        instanceName: cfg.instance,
+        qrcode: true,
+        integration: "WHATSAPP-BAILEYS",
+      }),
+    });
+  } catch (err) {
+    throw new Error(`[create falhou] ${(err as Error).message}`);
+  }
 }
