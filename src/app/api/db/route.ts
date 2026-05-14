@@ -29,6 +29,8 @@ const TABLE_MAP: Record<string, string> = {
   costado_period_status: "costadoPeriodStatus",
   // Also support "profiles" alias -> reads from users table
   profiles: "user",
+  // WhatsApp
+  whatsapp_messages: "whatsappMessage",
 };
 
 interface QuerySpec {
