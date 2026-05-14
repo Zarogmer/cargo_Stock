@@ -11,7 +11,8 @@ export type Module =
   | "NAVIOS"
   | "FINANCEIRO_MOD"
   | "SOLICITACOES"
-  | "WHATSAPP";
+  | "WHATSAPP"
+  | "MENSAGENS";
 
 // Permission actions
 export type Permission =
@@ -38,6 +39,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     NAVIOS: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
     WHATSAPP: ["view", "edit"],
+    MENSAGENS: ["view", "create"],
   },
   EXECUTIVO: {
     DASHBOARD: ["view"],
@@ -49,6 +51,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
     WHATSAPP: ["view", "edit"],
+    MENSAGENS: ["view", "create"],
   },
   MANUTENCAO: {
     DASHBOARD: ["view"],
@@ -76,6 +79,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     NAVIOS: ["view"],
     SOLICITACOES: ["view"],
     WHATSAPP: ["view"],
+    MENSAGENS: ["view", "create"],
   },
   TECNOLOGIA: {
     DASHBOARD: ["view"],
@@ -88,6 +92,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
     WHATSAPP: ["view", "edit"],
+    MENSAGENS: ["view", "create"],
   },
 };
 
@@ -191,6 +196,7 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Resumo", href: "/financeiro?tab=resumo" },
     ],
   },
+  { label: "Mensagens", href: "/mensagens", icon: "mensagens", module: "MENSAGENS" },
   { label: "WhatsApp", href: "/whatsapp", icon: "whatsapp", module: "WHATSAPP" },
 ];
 

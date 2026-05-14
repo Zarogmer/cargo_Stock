@@ -19,6 +19,7 @@ import {
   Search,
   ChevronDown,
   MessageCircle,
+  Send,
 } from "lucide-react";
 
 interface IconProps {
@@ -59,6 +60,10 @@ export function FinanceiroIcon({ className = "w-5 h-5" }: IconProps) {
 
 export function WhatsappIcon({ className = "w-5 h-5" }: IconProps) {
   return <MessageCircle className={className} />;
+}
+
+export function MensagensIcon({ className = "w-5 h-5" }: IconProps) {
+  return <Send className={className} />;
 }
 
 export function LogoutIcon({ className = "w-5 h-5" }: IconProps) {
@@ -103,6 +108,7 @@ const ICON_MAP: Record<string, React.FC<IconProps>> = {
   navios: NaviosIcon,
   financeiro: FinanceiroIcon,
   whatsapp: WhatsappIcon,
+  mensagens: MensagensIcon,
 };
 
 export function NavIcon({ name, className }: { name: string; className?: string }) {
