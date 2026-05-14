@@ -38,7 +38,6 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
-    WHATSAPP: ["view", "edit"],
     MENSAGENS: ["view", "create"],
   },
   EXECUTIVO: {
@@ -50,7 +49,6 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     NAVIOS: ["view", "create", "edit", "delete"],
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
-    WHATSAPP: ["view", "edit"],
     MENSAGENS: ["view", "create"],
   },
   MANUTENCAO: {
@@ -78,7 +76,6 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
     NAVIOS: ["view"],
     SOLICITACOES: ["view"],
-    WHATSAPP: ["view"],
     MENSAGENS: ["view", "create"],
   },
   TECNOLOGIA: {
@@ -197,7 +194,7 @@ export const NAV_ITEMS: NavItem[] = [
     ],
   },
   { label: "Mensagens", href: "/mensagens", icon: "mensagens", module: "MENSAGENS" },
-  { label: "WhatsApp", href: "/whatsapp", icon: "whatsapp", module: "WHATSAPP" },
+  { label: "WhatsApp API", href: "/whatsapp", icon: "whatsapp", module: "WHATSAPP" },
 ];
 
 export function getNavItemsForRole(role: Role): NavItem[] {
