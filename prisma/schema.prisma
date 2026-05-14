@@ -522,3 +522,30 @@ model ProductLink {
   @@index([category])
   @@map("product_links")
 }
+
+// ── WhatsApp Messages ───────────────────────────────────────────────────────
+// Persisted history of every message we receive via Evolution webhook plus
+// every message we send from the app. `remote_jid` groups messages into
+// conversations — individual chats end with @s.whatsapp.net, groups with @g.us.
+
+model WhatsappMessage {
+  id              String   @id @default(uuid()) @db.Uuid
+  message_id      String?                                  // Evolution's key.id (may collide across instances, hence not unique alone)
+  instance_name   String
+  remote_jid      String                                   // conversation partner (number@s.whatsapp.net or groupId@g.us)
+  from_me         Boolean  @default(false)
+  push_name       String?                                  // display name from WhatsApp (sender's)
+  message_type    String                                   // conversation, imageMessage, audioMessage, videoMessage, documentMessage, ...
+  text            String?                                  // text content or caption
+  media_mimetype  String?                                  // image/jpeg, audio/ogg, etc
+  media_filename  String?                                  // for documentMessage
+  timestamp_ms    BigInt                                   // WhatsApp's messageTimestamp (seconds) * 1000
+  sent_by_user_id String?                                  // if from_me and originated in our app, the user id
+  raw_event       Json?                                    // full Evolution webhook payload for debugging
+  created_at      DateTime @default(now()) @db.Timestamptz()
+
+  @@index([remote_jid, timestamp_ms(sort: Desc)])
+  @@index([timestamp_ms(sort: Desc)])
+  @@unique([instance_name, message_id, remote_jid], name: "unique_message")
+  @@map("whatsapp_messages")
+}

@@ -321,3 +321,20 @@ export interface JobAdjustment {
   created_at: string;
 }
 
+export interface WhatsappMessage {
+  id: string;
+  message_id: string | null;
+  instance_name: string;
+  remote_jid: string;
+  from_me: boolean;
+  push_name: string | null;
+  message_type: string;
+  text: string | null;
+  media_mimetype: string | null;
+  media_filename: string | null;
+  timestamp_ms: string | number;
+  sent_by_user_id: string | null;
+  raw_event: unknown;
+  created_at: string;
+}
+

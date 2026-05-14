@@ -121,11 +121,12 @@ export async function getInstanceStatus(): Promise<{ state?: string } & Record<s
 }
 
 // Creates the instance if missing. Idempotent-ish: Evolution returns an error
-// when the instance already exists, which we swallow.
+// when the instance already exists, which we swallow. After a successful create
+// we also register the webhook so incoming messages start flowing to our DB.
 export async function createInstanceIfMissing(): Promise<unknown> {
   const cfg = readConfig();
   try {
-    return await evolutionFetch(`/instance/create`, {
+    const created = await evolutionFetch(`/instance/create`, {
       method: "POST",
       body: JSON.stringify({
         instanceName: cfg.instance,
@@ -133,9 +134,17 @@ export async function createInstanceIfMissing(): Promise<unknown> {
         integration: "WHATSAPP-BAILEYS",
       }),
     });
+    clearInstanceTokenCache();
+    // Best-effort: webhook registration shouldn't block instance creation.
+    try { await registerWebhook(); } catch (err) {
+      console.warn("[evolution] webhook register failed (non-fatal):", (err as Error).message);
+    }
+    return created;
   } catch (err) {
     const msg = (err as Error).message || "";
     if (msg.toLowerCase().includes("already") || msg.includes("409")) {
+      // Instance exists — still try to (re)register the webhook in case it was lost.
+      try { await registerWebhook(); } catch { /* ignore */ }
       return { existed: true };
     }
     throw err;
@@ -184,6 +193,33 @@ export async function deleteInstance(): Promise<unknown> {
   }
 }
 
+// Tell Evolution to POST messages.upsert events to our /api/whatsapp/webhook.
+// Idempotent — calling again just overwrites the previous config.
+export async function registerWebhook(): Promise<unknown> {
+  const cfg = readConfig();
+  const baseUrl = (process.env.AUTH_URL || process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/$/, "");
+  if (!baseUrl) {
+    throw new Error("AUTH_URL não definido — não dá pra registrar o webhook.");
+  }
+  const secret = process.env.EVOLUTION_WEBHOOK_SECRET || "";
+  const url = `${baseUrl}/api/whatsapp/webhook${secret ? `?secret=${encodeURIComponent(secret)}` : ""}`;
+  const token = await getInstanceToken();
+  return evolutionFetch(
+    `/webhook/set/${encodeURIComponent(cfg.instance)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        url,
+        enabled: true,
+        events: ["MESSAGES_UPSERT"],
+        webhook_by_events: false,
+        webhook_base64: false,
+      }),
+    },
+    token,
+  );
+}
+
 // Delete + create. The QR is reliably returned by /instance/create when qrcode:
 // true — the connect endpoint sometimes doesn't regenerate it for an instance
 // stuck in "close", so this is the reset hatch.
@@ -194,8 +230,9 @@ export async function resetInstance(): Promise<unknown> {
     throw new Error(`[delete falhou] ${(err as Error).message}`);
   }
   const cfg = readConfig();
+  let result: unknown;
   try {
-    return await evolutionFetch(`/instance/create`, {
+    result = await evolutionFetch(`/instance/create`, {
       method: "POST",
       body: JSON.stringify({
         instanceName: cfg.instance,
@@ -206,4 +243,9 @@ export async function resetInstance(): Promise<unknown> {
   } catch (err) {
     throw new Error(`[create falhou] ${(err as Error).message}`);
   }
+  clearInstanceTokenCache();
+  try { await registerWebhook(); } catch (err) {
+    console.warn("[evolution] webhook register after reset failed (non-fatal):", (err as Error).message);
+  }
+  return result;
 }
