@@ -27,8 +27,10 @@ export default function WhatsappPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
-  const [testTo, setTestTo] = useState("");
-  const [testText, setTestText] = useState("Teste do Cargo Stock");
+  // Webhook section
+  const [webhookConfig, setWebhookConfig] = useState<Record<string, unknown> | null>(null);
+  const [loadingWebhook, setLoadingWebhook] = useState(false);
+  const [webhookErr, setWebhookErr] = useState<string | null>(null);
 
   const loadStatus = useCallback(async () => {
     setLoadingStatus(true);
@@ -166,19 +168,30 @@ export default function WhatsappPage() {
     }
   }
 
-  async function handleTestSend(e: React.FormEvent) {
-    e.preventDefault();
+  const loadWebhookStatus = useCallback(async () => {
+    setLoadingWebhook(true);
+    setWebhookErr(null);
+    try {
+      const res = await fetch("/api/whatsapp/webhook/status");
+      const body = await res.json();
+      if (res.ok) setWebhookConfig(body.config as Record<string, unknown>);
+      else setWebhookErr(body.error || `HTTP ${res.status}`);
+    } catch (err) {
+      setWebhookErr((err as Error).message);
+    } finally {
+      setLoadingWebhook(false);
+    }
+  }, []);
+
+  async function handleRegisterWebhook() {
     setBusy(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/whatsapp/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to: testTo, text: testText }),
-      });
+      const res = await fetch("/api/whatsapp/webhook/register", { method: "POST" });
       const body = await res.json();
       if (res.ok) {
-        setMessage({ kind: "ok", text: "Mensagem enviada." });
+        setMessage({ kind: "ok", text: "Webhook registrado no Evolution." });
+        loadWebhookStatus();
       } else {
         setMessage({ kind: "err", text: body.error || "Erro" });
       }
@@ -188,6 +201,10 @@ export default function WhatsappPage() {
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (isAdmin) loadWebhookStatus();
+  }, [isAdmin, loadWebhookStatus]);
 
   const stateRaw = status?.status?.instance?.state;
   const stateLabel = stateRaw === "open" ? "Conectado" : stateRaw === "connecting" ? "Conectando..." : stateRaw === "close" ? "Desconectado" : stateRaw || "—";
@@ -199,7 +216,10 @@ export default function WhatsappPage() {
 
   return (
     <div className="space-y-4 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold text-text">WhatsApp 💬</h1>
+      <h1 className="text-2xl font-bold text-text">WhatsApp API 💬</h1>
+      <p className="text-sm text-text-light">
+        Conexão e webhook do WhatsApp. Pra mandar mensagens use a aba <strong>Mensagens</strong>; pra ver conversas, <strong>Conversas</strong>.
+      </p>
 
       {/* Status card */}
       <section className="bg-card rounded-2xl border border-border p-6 space-y-3">
@@ -288,36 +308,53 @@ export default function WhatsappPage() {
         </section>
       )}
 
-      {/* Test send */}
-      {stateRaw === "open" && (
-        <section className="bg-card rounded-2xl border border-border p-6">
-          <h2 className="text-base font-semibold mb-3">Enviar mensagem de teste</h2>
-          <form onSubmit={handleTestSend} className="space-y-3">
+      {/* Webhook (admin) */}
+      {isAdmin && (
+        <section className="bg-card rounded-2xl border border-border p-6 space-y-3">
+          <div className="flex items-baseline justify-between flex-wrap gap-2">
             <div>
-              <label className="block text-sm font-medium mb-1">Número (com DDD, sem +55)</label>
-              <input
-                type="text"
-                value={testTo}
-                onChange={(e) => setTestTo(e.target.value)}
-                placeholder="13988309100"
-                required
-                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
-              />
+              <h2 className="text-base font-semibold">Webhook do Evolution</h2>
+              <p className="text-xs text-text-light mt-0.5">
+                O Evolution chama essa URL toda vez que chega/sai mensagem — é o que alimenta a aba <strong>Conversas</strong>.
+              </p>
             </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Mensagem</label>
-              <textarea
-                value={testText}
-                onChange={(e) => setTestText(e.target.value)}
-                rows={3}
-                required
-                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none"
-              />
+            <div className="flex gap-2">
+              <Button size="sm" variant="secondary" onClick={loadWebhookStatus} disabled={loadingWebhook}>
+                ↻ Verificar
+              </Button>
+              <Button size="sm" onClick={handleRegisterWebhook} disabled={busy}>
+                Registrar webhook
+              </Button>
             </div>
-            <Button type="submit" disabled={busy}>
-              {busy ? "Enviando..." : "Enviar"}
-            </Button>
-          </form>
+          </div>
+          {loadingWebhook ? (
+            <p className="text-xs text-text-light">Verificando...</p>
+          ) : webhookErr ? (
+            <p className="text-xs text-red-700">⚠️ {webhookErr}</p>
+          ) : webhookConfig ? (
+            (() => {
+              const url = (webhookConfig.url as string) || "";
+              const events = (webhookConfig.events as string[]) || [];
+              const enabled = !!webhookConfig.enabled;
+              const isOurs = url.includes("/api/whatsapp/webhook");
+              return (
+                <div className="text-xs space-y-1 font-mono bg-gray-50 border border-border rounded-lg p-3">
+                  <p>
+                    Status:{" "}
+                    {enabled && isOurs ? (
+                      <span className="text-emerald-700 font-semibold">✓ ativo</span>
+                    ) : (
+                      <span className="text-red-700 font-semibold">⚠️ {!enabled ? "desativado" : "URL externa"}</span>
+                    )}
+                  </p>
+                  <p className="break-all">URL: {url || "<vazio>"}</p>
+                  <p>Eventos: {events.length ? events.join(", ") : "<nenhum>"}</p>
+                </div>
+              );
+            })()
+          ) : (
+            <p className="text-xs text-text-light">Clique em &quot;Verificar&quot; pra ver o status.</p>
+          )}
         </section>
       )}
     </div>

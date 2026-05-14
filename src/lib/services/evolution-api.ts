@@ -193,6 +193,14 @@ export async function deleteInstance(): Promise<unknown> {
   }
 }
 
+// Read whatever webhook is currently configured for the instance — handy when
+// the UI wants to show admins "where is Evolution sending events?".
+export async function getWebhookConfig(): Promise<unknown> {
+  const cfg = readConfig();
+  const token = await getInstanceToken();
+  return evolutionFetch(`/webhook/find/${encodeURIComponent(cfg.instance)}`, {}, token);
+}
+
 // Tell Evolution to POST messages.upsert events to our /api/whatsapp/webhook.
 // Idempotent — calling again just overwrites the previous config.
 export async function registerWebhook(): Promise<unknown> {
