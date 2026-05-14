@@ -203,6 +203,11 @@ export async function getWebhookConfig(): Promise<unknown> {
 
 // Tell Evolution to POST messages.upsert events to our /api/whatsapp/webhook.
 // Idempotent — calling again just overwrites the previous config.
+//
+// Evolution v2 latest expects the payload wrapped in a `webhook` key with
+// camelCase field names (webhookByEvents, webhookBase64). Older versions
+// accepted flat snake_case — sending the v2 shape; if you hit a 4xx in older
+// Evolution images, this is the place to flip.
 export async function registerWebhook(): Promise<unknown> {
   const cfg = readConfig();
   const baseUrl = (process.env.AUTH_URL || process.env.NEXT_PUBLIC_APP_URL || "").replace(/\/$/, "");
@@ -217,11 +222,13 @@ export async function registerWebhook(): Promise<unknown> {
     {
       method: "POST",
       body: JSON.stringify({
-        url,
-        enabled: true,
-        events: ["MESSAGES_UPSERT"],
-        webhook_by_events: false,
-        webhook_base64: false,
+        webhook: {
+          enabled: true,
+          url,
+          events: ["MESSAGES_UPSERT"],
+          webhookByEvents: false,
+          webhookBase64: false,
+        },
       }),
     },
     token,
