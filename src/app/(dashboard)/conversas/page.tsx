@@ -245,8 +245,12 @@ export default function ConversasPage() {
       <h1 className="text-2xl font-bold text-text mb-3">Conversas 💬</h1>
 
       <div className="flex-1 flex gap-3 min-h-0 bg-card rounded-2xl border border-border overflow-hidden">
-        {/* Sidebar */}
-        <aside className="w-80 shrink-0 border-r border-border flex flex-col">
+        {/* Sidebar — full width on mobile when no conversation selected, hidden on mobile when one is */}
+        <aside
+          className={`w-full md:w-80 shrink-0 border-r border-border flex-col ${
+            selectedJid ? "hidden md:flex" : "flex"
+          }`}
+        >
           <div className="p-3 border-b border-border">
             <input
               type="text"
@@ -295,22 +299,34 @@ export default function ConversasPage() {
           </div>
         </aside>
 
-        {/* Thread */}
-        <section className="flex-1 flex flex-col min-w-0">
+        {/* Thread — hidden on mobile when no conversation selected (sidebar takes full width instead) */}
+        <section
+          className={`flex-1 flex-col min-w-0 ${
+            selectedJid ? "flex" : "hidden md:flex"
+          }`}
+        >
           {!selectedJid ? (
-            <div className="flex-1 flex items-center justify-center text-text-light text-sm">
+            <div className="flex-1 flex items-center justify-center text-text-light text-sm px-4 text-center">
               ← Selecione uma conversa pra ver as mensagens
             </div>
           ) : (
             <>
-              <header className="border-b border-border px-4 py-3 flex items-baseline justify-between">
-                <div>
-                  <h2 className="font-semibold text-sm">{selectedConv ? displayName(selectedConv) : "..."}</h2>
-                  <p className="text-xs text-text-light font-mono">
+              <header className="border-b border-border px-3 sm:px-4 py-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedJid(null)}
+                  className="md:hidden p-1 -ml-1 rounded hover:bg-gray-100 text-text-light shrink-0"
+                  aria-label="Voltar"
+                >
+                  ←
+                </button>
+                <div className="flex-1 min-w-0">
+                  <h2 className="font-semibold text-sm truncate">{selectedConv ? displayName(selectedConv) : "..."}</h2>
+                  <p className="text-xs text-text-light font-mono truncate">
                     {selectedConv?.is_group ? "Grupo" : formatPhone(jidToNumber(selectedJid))}
                   </p>
                 </div>
-                <span className="text-xs text-text-light">
+                <span className="text-xs text-text-light shrink-0">
                   {messages.length} {messages.length === 1 ? "mensagem" : "mensagens"}
                 </span>
               </header>
