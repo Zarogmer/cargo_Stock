@@ -74,10 +74,10 @@ export function ShipSelector({
               <div className="flex flex-wrap gap-3 mt-1 text-xs text-text-light">
                 {current.port && <span className="flex items-center gap-1">📍 {current.port}</span>}
                 {current.arrival_date && (
-                  <span className="flex items-center gap-1">🛬 <span className="text-text font-medium">{formatDate(current.arrival_date)}</span></span>
+                  <span className="flex items-center gap-1"><span className="text-text font-medium">{formatDate(current.arrival_date)}</span></span>
                 )}
                 {current.departure_date && (
-                  <span className="flex items-center gap-1">🛫 <span className="text-text font-medium">{formatDate(current.departure_date)}</span></span>
+                  <span className="flex items-center gap-1"><span className="text-text font-medium">{formatDate(current.departure_date)}</span></span>
                 )}
               </div>
             </div>
@@ -126,8 +126,8 @@ export function ShipSelector({
                       </div>
                       <div className="flex flex-wrap gap-2 mt-0.5 text-[11px] text-text-light">
                         {s.port && <span>📍 {s.port}</span>}
-                        {s.arrival_date && <span>🛬 {formatDate(s.arrival_date)}</span>}
-                        {s.departure_date && <span>🛫 {formatDate(s.departure_date)}</span>}
+                        {s.arrival_date && <span>{formatDate(s.arrival_date)}</span>}
+                        {s.departure_date && <span>{formatDate(s.departure_date)}</span>}
                       </div>
                     </div>
                   </button>
