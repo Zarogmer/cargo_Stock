@@ -292,7 +292,25 @@ export default function ColaboradoresPage() {
   const teamLabels: Record<string, string> = { EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3", COSTADO: "Costado" };
   const teamColors: Record<string, string> = { EQUIPE_1: "bg-blue-100 text-blue-700", EQUIPE_2: "bg-purple-100 text-purple-700", EQUIPE_3: "bg-teal-100 text-teal-700", COSTADO: "bg-amber-100 text-amber-700" };
   const empColumns = [
-    { key: "name", label: "Nome", render: (e: Employee) => <span className="font-medium">{e.name}</span> },
+    { key: "name", label: "Nome", render: (e: Employee) => {
+      const k = escalaStatus.get(e.id);
+      const phone = formatPhone(e.phone);
+      return (
+        <div className="flex flex-col gap-1 min-w-0">
+          <span className="font-medium break-words">{e.name}</span>
+          {/* Mobile-only inline info — desktop has dedicated columns */}
+          <div className="md:hidden flex flex-wrap gap-1 text-[10px]">
+            {e.role && <span className="px-1.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700">{e.role}</span>}
+            {e.team && <span className={`px-1.5 py-0.5 rounded-full font-medium ${teamColors[e.team] || ""}`}>{teamLabels[e.team]}</span>}
+            {k === "EMBARQUE" && <span className="px-1.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">⚓ Embarcado</span>}
+            {k === "COSTADO" && <span className="px-1.5 py-0.5 rounded-full font-medium bg-cyan-100 text-cyan-700">⛏️ Costado</span>}
+            {!k && <span className="px-1.5 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>}
+            {e.sector && <span className="px-1.5 py-0.5 rounded-full font-medium bg-purple-100 text-purple-700">{e.sector}</span>}
+          </div>
+          {phone && <span className="md:hidden text-[11px] text-text-light font-mono">{phone}</span>}
+        </div>
+      );
+    }},
     { key: "status", label: "Status", render: (e: Employee) => {
       const eff = effectiveEmployeeStatus(e);
       const cls = eff === "ATIVO" ? "bg-emerald-100 text-emerald-700"
@@ -308,7 +326,7 @@ export default function ColaboradoresPage() {
         </span>
       );
     }},
-    { key: "role", label: "Função", render: (e: Employee) => e.role ? <span className="text-xs font-medium">{e.role}</span> : <span className="text-text-light text-xs">—</span> },
+    { key: "role", label: "Função", hideOnMobile: true, render: (e: Employee) => e.role ? <span className="text-xs font-medium">{e.role}</span> : <span className="text-text-light text-xs">—</span> },
     { key: "contract_type", label: "Contrato", hideOnMobile: true, render: (e: Employee) => {
       if (!e.contract_type) return <span className="text-text-light text-xs">—</span>;
       const cls = e.contract_type === "REGISTRADO" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700";
