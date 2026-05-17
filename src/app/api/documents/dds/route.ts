@@ -168,14 +168,25 @@ export async function POST(request: NextRequest) {
       delimiters: { start: "{", end: "}" },
       nullGetter: () => "",
     });
-    doc.render({
-      "NOME_NAVIO": shipName,
-      "NOME_NAVIO ": shipName, // trailing-space variant in the header
+
+    // The template places some placeholders with whitespace inside the braces
+    // (e.g. "{NOME_NAVIO }" in the header collapses to " NOME_NAVIO " as a tag).
+    // Normalize the key on lookup so leading/trailing spaces do not matter.
+    const dataMap: Record<string, string> = {
+      NOME_NAVIO: shipName,
       "PORÃO": holdsValue,
       "DATA ATUAL": documentDate,
       "15/05/2026": periodStart,
       "19/05/2026": periodEnd,
+    };
+    const dataProxy = new Proxy({} as Record<string, string>, {
+      get: (_target, key) => {
+        if (typeof key !== "string") return undefined;
+        return dataMap[key.trim()] ?? "";
+      },
+      has: () => true,
     });
+    doc.render(dataProxy);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
