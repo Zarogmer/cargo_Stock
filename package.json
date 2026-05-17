@@ -25,6 +25,7 @@
     "@eslint/eslintrc": "^3.3.5",
     "@prisma/client": "^6.9.0",
     "bcryptjs": "^2.4.3",
+    "docx": "^9.5.1",
     "lucide-react": "^1.14.0",
     "next": "~15.3.9",
     "next-auth": "^5.0.0-beta.25",

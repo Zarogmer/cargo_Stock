@@ -13,6 +13,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatDate, formatDateTime, formatPhone, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, type NrCode, type NrDates, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
 import type { Employee, Epi, Uniform, EpiMovement, UniformMovement, EpiMovementType } from "@/types/database";
+import { DocumentosTab } from "./documentos-tab";
 
 export default function ColaboradoresPage() {
   const { profile } = useAuth();
@@ -512,6 +513,10 @@ export default function ColaboradoresPage() {
           />
         </div>
       ),
+    },
+    {
+      key: "documentos", label: "Documentos",
+      content: <DocumentosTab employees={employees} />,
     },
   ];
 
