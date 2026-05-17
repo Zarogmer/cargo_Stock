@@ -44,6 +44,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   },
   EXECUTIVO: {
     DASHBOARD: ["view"],
+    EMBARQUE: ["view"],
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],

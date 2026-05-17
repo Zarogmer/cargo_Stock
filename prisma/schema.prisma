@@ -294,6 +294,8 @@ model Ship {
   status         ShipStatus    @default(AGENDADO)
   assigned_team  String?
   notes          String?
+  cargo_type     String?       // serviço/produto: CARVÃO, CIMENTO, UREIA, etc.
+  holds_count    Int?          // quantidade de porões
   created_by     String
   created_at     DateTime      @default(now()) @db.Timestamptz()
   externalShipId String?

@@ -20,6 +20,8 @@ interface Ship {
   status: ShipStatus;
   assigned_team: string | null;
   notes: string | null;
+  cargo_type: string | null;
+  holds_count: number | null;
   created_at: string;
   created_by: string;
 }
@@ -74,8 +76,12 @@ const EMPTY_FORM = {
   port: "",
   status: "AGENDADO" as ShipStatus,
   assigned_team: "" as string,
+  cargo_type: "",
+  holds_count: "" as string, // stored as text in the form so the input can be empty
   notes: "",
 };
+
+const CARGO_OPTIONS = ["CARVÃO", "CIMENTO", "UREIA", "SOJA", "MILHO", "AÇÚCAR"];
 
 // AIS status -> badge color (used in MarineTraffic modal)
 const EXTERNAL_STATUS_STYLES: Record<string, string> = {
@@ -237,6 +243,8 @@ export default function NaviosPage() {
       port: ship.port || "",
       status: ship.status,
       assigned_team: ship.assigned_team || "",
+      cargo_type: ship.cargo_type || "",
+      holds_count: ship.holds_count != null ? String(ship.holds_count) : "",
       notes: ship.notes || "",
     });
     setFormError("");
@@ -251,6 +259,13 @@ export default function NaviosPage() {
     setSaving(true);
     setFormError("");
 
+    const holdsParsed = form.holds_count.trim() ? Number.parseInt(form.holds_count, 10) : null;
+    if (holdsParsed != null && (Number.isNaN(holdsParsed) || holdsParsed < 0)) {
+      setFormError("Quantidade de porões inválida.");
+      setSaving(false);
+      return;
+    }
+
     const payload = {
       name: form.name.trim(),
       arrival_date: form.arrival_date || null,
@@ -258,6 +273,8 @@ export default function NaviosPage() {
       port: form.port.trim() || null,
       status: form.status,
       assigned_team: form.assigned_team || null,
+      cargo_type: form.cargo_type.trim() || null,
+      holds_count: holdsParsed,
       notes: form.notes.trim() || null,
       created_by: profile?.full_name || "sistema",
     };
@@ -535,6 +552,12 @@ export default function NaviosPage() {
                         {ship.departure_date && (
                           <span>🏁 Saída: <span className="font-medium text-text">{formatDate(ship.departure_date)}</span></span>
                         )}
+                        {ship.cargo_type && (
+                          <span>📦 <span className="font-medium text-text">{ship.cargo_type}</span></span>
+                        )}
+                        {ship.holds_count != null && (
+                          <span>🛢️ <span className="font-medium text-text">{ship.holds_count} porão{ship.holds_count === 1 ? "" : "es"}</span></span>
+                        )}
                       </div>
                       {ship.notes && (
                         <p className="text-xs text-text-light mt-1.5 line-clamp-1 italic">&ldquo;{ship.notes}&rdquo;</p>
@@ -594,6 +617,12 @@ export default function NaviosPage() {
               )}
               {selectedShip.departure_date && (
                 <p><span className="text-text-light">Saída:</span> <span className="font-medium">{formatDate(selectedShip.departure_date)}</span></p>
+              )}
+              {selectedShip.cargo_type && (
+                <p><span className="text-text-light">Produto:</span> <span className="font-medium">{selectedShip.cargo_type}</span></p>
+              )}
+              {selectedShip.holds_count != null && (
+                <p><span className="text-text-light">Porões:</span> <span className="font-medium">{selectedShip.holds_count}</span></p>
               )}
               {selectedShip.notes && (
                 <p className="text-text-light italic text-xs pt-1">&ldquo;{selectedShip.notes}&rdquo;</p>
@@ -760,6 +789,37 @@ export default function NaviosPage() {
                   <option value="EQUIPE_1">Equipe 1</option>
                   <option value="EQUIPE_2">Equipe 2</option>
                 </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-text mb-1">Serviço / Produto</label>
+                  <input
+                    type="text"
+                    value={form.cargo_type}
+                    onChange={(e) => setForm({ ...form, cargo_type: e.target.value.toUpperCase() })}
+                    placeholder="Ex: CARVÃO"
+                    list="cargo-options"
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                  />
+                  <datalist id="cargo-options">
+                    {CARGO_OPTIONS.map((c) => (
+                      <option key={c} value={c} />
+                    ))}
+                  </datalist>
+                  <p className="text-[10px] text-text-light mt-1">Selecione ou digite o produto transportado</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-text mb-1">Qtd. de Porões</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.holds_count}
+                    onChange={(e) => setForm({ ...form, holds_count: e.target.value })}
+                    placeholder="Ex: 5"
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                  />
+                </div>
               </div>
 
               <div>
