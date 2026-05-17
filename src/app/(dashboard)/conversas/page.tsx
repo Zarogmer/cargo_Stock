@@ -245,10 +245,12 @@ export default function ConversasPage() {
       <h1 className="text-2xl font-bold text-text mb-3">Conversas 💬</h1>
 
       <div className="flex-1 flex gap-3 min-h-0 bg-card rounded-2xl border border-border overflow-hidden">
-        {/* Sidebar — full width on mobile when no conversation selected, hidden on mobile when one is */}
+        {/* Sidebar — full width on mobile/tablet when no conversation selected,
+            hidden on mobile/tablet when one is. Side-by-side only on lg+ to
+            avoid cramming both panels on portrait tablets. */}
         <aside
-          className={`w-full md:w-80 shrink-0 border-r border-border flex-col ${
-            selectedJid ? "hidden md:flex" : "flex"
+          className={`w-full lg:w-80 shrink-0 lg:border-r border-border flex-col ${
+            selectedJid ? "hidden lg:flex" : "flex"
           }`}
         >
           <div className="p-3 border-b border-border">
@@ -299,10 +301,10 @@ export default function ConversasPage() {
           </div>
         </aside>
 
-        {/* Thread — hidden on mobile when no conversation selected (sidebar takes full width instead) */}
+        {/* Thread — hidden on mobile/tablet when no conversation selected (sidebar takes full width instead) */}
         <section
           className={`flex-1 flex-col min-w-0 ${
-            selectedJid ? "flex" : "hidden md:flex"
+            selectedJid ? "flex" : "hidden lg:flex"
           }`}
         >
           {!selectedJid ? (
@@ -315,7 +317,7 @@ export default function ConversasPage() {
                 <button
                   type="button"
                   onClick={() => setSelectedJid(null)}
-                  className="md:hidden p-1 -ml-1 rounded hover:bg-gray-100 text-text-light shrink-0"
+                  className="lg:hidden p-1 -ml-1 rounded hover:bg-gray-100 text-text-light shrink-0"
                   aria-label="Voltar"
                 >
                   ←

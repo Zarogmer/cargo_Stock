@@ -146,6 +146,20 @@ export function effectiveEmployeeStatus(
   return "ATIVO";
 }
 
+// Visual label only — the internal DB value stays "INATIVO" so existing
+// filters, RBAC and queries keep working. We just present it as "Demitido"
+// to end users.
+export const EMPLOYEE_STATUS_LABELS: Record<"ATIVO" | "INATIVO" | "PENDENCIA", string> = {
+  ATIVO: "Ativo",
+  INATIVO: "Demitido",
+  PENDENCIA: "Pendência",
+};
+
+export function employeeStatusLabel(s: "ATIVO" | "INATIVO" | "PENDENCIA" | string | null | undefined): string {
+  if (!s) return "—";
+  return EMPLOYEE_STATUS_LABELS[s as "ATIVO" | "INATIVO" | "PENDENCIA"] ?? s;
+}
+
 export const TOOL_STATUS_LABELS: Record<string, string> = {
   DISPONIVEL: "Disponível",
   EQUIPE_1: "Equipe 1",

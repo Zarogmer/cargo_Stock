@@ -11,7 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDate, formatDateTime, formatPhone, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, type NrCode, type NrDates, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
+import { formatDate, formatDateTime, formatPhone, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, type NrCode, type NrDates, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
 import type { Employee, Epi, Uniform, EpiMovement, UniformMovement, EpiMovementType } from "@/types/database";
 import { DocumentosTab } from "./documentos-tab";
 
@@ -323,7 +323,7 @@ export default function ColaboradoresPage() {
           className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}
           title={autoFlagged ? "Pendência automática: treinamento (ASO/NR/Meio Ambiente) vencido" : undefined}
         >
-          {eff}{autoFlagged ? " ⚠️" : ""}
+          {employeeStatusLabel(eff)}{autoFlagged ? " ⚠️" : ""}
         </span>
       );
     }},
@@ -428,7 +428,7 @@ export default function ColaboradoresPage() {
               {(["Todos", "ATIVO", "INATIVO", "PENDENCIA"] as const).map((t) => (
                 <button key={t} onClick={() => setEmpStatusFilter(t)}
                   className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${empStatusFilter === t ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}>
-                  {t === "Todos" ? "Todos" : t === "ATIVO" ? "Ativo" : t === "INATIVO" ? "Inativo" : "Pendência"}
+                  {t === "Todos" ? "Todos" : employeeStatusLabel(t)}
                 </button>
               ))}
             </div>
@@ -577,7 +577,7 @@ export default function ColaboradoresPage() {
                     className={`text-xs px-2 py-1 rounded-full font-medium ${cls}`}
                     title={autoFlagged ? "Pendência automática: treinamento vencido" : undefined}
                   >
-                    {eff}{autoFlagged ? " ⚠️" : ""}
+                    {employeeStatusLabel(eff)}{autoFlagged ? " ⚠️" : ""}
                   </span>
                 );
               })()}
@@ -940,7 +940,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
               <label className="block text-sm font-medium mb-1">Status</label>
               <select value={status} onChange={(e) => setStatus(e.target.value)} className={inputCls}>
                 <option value="ATIVO">Ativo</option>
-                <option value="INATIVO">Inativo</option>
+                <option value="INATIVO">Demitido</option>
                 <option value="PENDENCIA">Pendência</option>
               </select>
             </div>
@@ -1292,7 +1292,7 @@ function renderCell(emp: Employee, key: keyof Employee): React.ReactNode {
         className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cls}`}
         title={autoFlagged ? "Pendência automática: treinamento vencido" : undefined}
       >
-        {eff}{autoFlagged ? " ⚠️" : ""}
+        {employeeStatusLabel(eff)}{autoFlagged ? " ⚠️" : ""}
       </span>
     );
   }
