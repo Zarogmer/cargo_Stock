@@ -14,10 +14,12 @@ interface Ship {
   port: string | null;
   status: string;
   assigned_team: string | null;
+  cargo_type: string | null;
+  holds_count: number | null;
 }
 
 interface SelectedEmployee {
-  id: number | null; // null if added by free text
+  id: number | null;
   name: string;
   cpf: string;
 }
@@ -49,14 +51,14 @@ export function DocumentosTab({ employees }: { employees: Employee[] }) {
 
   const [shipId, setShipId] = useState<string>("");
   const [shipName, setShipName] = useState<string>("");
-  const [docNumber, setDocNumber] = useState<string>("");
+  const [produto, setProduto] = useState<string>("");
+  const [poroes, setPoroes] = useState<string>("");
   const [documentDate, setDocumentDate] = useState<string>(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   });
   const [periodStart, setPeriodStart] = useState<string>("");
   const [periodEnd, setPeriodEnd] = useState<string>("");
-  const [motivo, setMotivo] = useState<string>("Utilização do Material de EPI's");
 
   const [picked, setPicked] = useState<SelectedEmployee[]>([]);
   const [search, setSearch] = useState("");
@@ -70,7 +72,7 @@ export function DocumentosTab({ employees }: { employees: Employee[] }) {
       try {
         const { data } = await db
           .from("ships")
-          .select("id, name, arrival_date, departure_date, port, status, assigned_team")
+          .select("id, name, arrival_date, departure_date, port, status, assigned_team, cargo_type, holds_count")
           .order("arrival_date", { ascending: false });
         if (!cancelled) setShips((data as Ship[]) || []);
       } finally {
@@ -82,14 +84,17 @@ export function DocumentosTab({ employees }: { employees: Employee[] }) {
     };
   }, []);
 
-  // When the user picks a ship, prefill name/period and seed the worker list
-  // from the assigned team.
+  // When the user picks a ship, prefill everything from the ship record:
+  // name, period, cargo (produto), porões count, and the worker list from
+  // the assigned team.
   const handlePickShip = useCallback(
     (id: string) => {
       setShipId(id);
       const s = ships.find((x) => x.id === id);
       if (!s) return;
       setShipName(s.name);
+      setProduto(s.cargo_type || "");
+      setPoroes(s.holds_count != null ? String(s.holds_count) : "");
       if (s.arrival_date) setPeriodStart(toInputDate(s.arrival_date));
       if (s.departure_date) setPeriodEnd(toInputDate(s.departure_date));
       if (s.assigned_team) {
@@ -102,7 +107,6 @@ export function DocumentosTab({ employees }: { employees: Employee[] }) {
     [ships, employees]
   );
 
-  // Employees available to add (not already picked, matching search)
   const availableEmployees = useMemo(() => {
     const pickedIds = new Set(picked.map((p) => p.id).filter((i): i is number => i !== null));
     const q = search.trim().toLowerCase();
@@ -148,11 +152,11 @@ export function DocumentosTab({ employees }: { employees: Employee[] }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shipName: shipName.trim(),
-          shipNumber: docNumber.trim(),
+          produto: produto.trim(),
+          holdsCount: poroes.trim(),
           documentDate: fromInputDate(documentDate),
           periodStart: fromInputDate(periodStart),
           periodEnd: fromInputDate(periodEnd),
-          motivo: motivo.trim(),
           employees: picked.map((p) => ({ name: p.name, cpf: p.cpf })),
         }),
       });
@@ -181,14 +185,13 @@ export function DocumentosTab({ employees }: { employees: Employee[] }) {
     <div className="space-y-5">
       <div className="bg-card border border-border rounded-xl p-4 space-y-4">
         <div>
-          <h3 className="font-semibold text-text">📄 Gerar DDS — Declaração de Entrega de EPI's</h3>
+          <h3 className="font-semibold text-text">Gerar DDS — Declaração de Entrega de EPI&apos;s</h3>
           <p className="text-xs text-text-light mt-0.5">
-            Selecione o navio e a equipe; o sistema preenche nome, período e CPFs automaticamente.
+            Selecione o navio; o sistema preenche nome, produto, porão, período e CPFs automaticamente.
             Você pode editar antes de gerar o Word.
           </p>
         </div>
 
-        {/* Ship picker + identifiers */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Navio</label>
@@ -219,15 +222,29 @@ export function DocumentosTab({ employees }: { employees: Employee[] }) {
           </div>
 
           <div>
-            <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Nº do documento</label>
+            <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Produto</label>
             <input
               type="text"
-              value={docNumber}
-              onChange={(e) => setDocNumber(e.target.value)}
-              placeholder="ex.: 7"
+              value={produto}
+              onChange={(e) => setProduto(e.target.value.toUpperCase())}
+              placeholder="ex.: CARVÃO"
               className="mt-1 w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
+            <p className="text-[10px] text-text-light mt-1">Puxado do navio. Edite se necessário.</p>
           </div>
+          <div>
+            <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Porão (qtd)</label>
+            <input
+              type="number"
+              min={0}
+              value={poroes}
+              onChange={(e) => setPoroes(e.target.value)}
+              placeholder="ex.: 5"
+              className="mt-1 w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+            <p className="text-[10px] text-text-light mt-1">Puxado do navio. Edite se necessário.</p>
+          </div>
+
           <div>
             <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Data do documento</label>
             <input
@@ -237,39 +254,29 @@ export function DocumentosTab({ employees }: { employees: Employee[] }) {
               className="mt-1 w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           </div>
-
-          <div>
-            <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Período — início</label>
-            <input
-              type="date"
-              value={periodStart}
-              onChange={(e) => setPeriodStart(e.target.value)}
-              className="mt-1 w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Período — fim</label>
-            <input
-              type="date"
-              value={periodEnd}
-              onChange={(e) => setPeriodEnd(e.target.value)}
-              className="mt-1 w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
-          </div>
-
-          <div className="md:col-span-2">
-            <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Motivo</label>
-            <input
-              type="text"
-              value={motivo}
-              onChange={(e) => setMotivo(e.target.value)}
-              className="mt-1 w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Período início</label>
+              <input
+                type="date"
+                value={periodStart}
+                onChange={(e) => setPeriodStart(e.target.value)}
+                className="mt-1 w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Período fim</label>
+              <input
+                type="date"
+                value={periodEnd}
+                onChange={(e) => setPeriodEnd(e.target.value)}
+                className="mt-1 w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Picked employees */}
       <div className="bg-card border border-border rounded-xl p-4 space-y-3">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div>
@@ -330,7 +337,6 @@ export function DocumentosTab({ employees }: { employees: Employee[] }) {
         )}
       </div>
 
-      {/* Add employees */}
       <div className="bg-card border border-border rounded-xl p-4 space-y-3">
         <h3 className="font-semibold text-text">Adicionar funcionários</h3>
         <div className="relative">
@@ -373,7 +379,7 @@ export function DocumentosTab({ employees }: { employees: Employee[] }) {
 
       <div className="flex justify-end">
         <Button onClick={handleGenerate} disabled={generating || picked.length === 0}>
-          {generating ? "Gerando..." : "📄 Gerar DDS (.docx)"}
+          {generating ? "Gerando..." : "Gerar DDS (.docx)"}
         </Button>
       </div>
     </div>

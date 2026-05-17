@@ -1,22 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { promises as fs } from "fs";
+import path from "path";
+import PizZip from "pizzip";
+import Docxtemplater from "docxtemplater";
 import { auth } from "@/lib/auth";
-import {
-  AlignmentType,
-  BorderStyle,
-  Document,
-  HeightRule,
-  Packer,
-  PageOrientation,
-  Paragraph,
-  ShadingType,
-  Table,
-  TableCell,
-  TableRow,
-  TextRun,
-  VerticalAlign,
-  WidthType,
-  Footer,
-} from "docx";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,88 +15,100 @@ interface DdsEmployee {
 
 interface DdsRequestBody {
   shipName?: string;
-  shipNumber?: string;
   documentDate?: string; // dd/mm/yyyy
   periodStart?: string; // dd/mm/yyyy
   periodEnd?: string; // dd/mm/yyyy
-  motivo?: string;
+  holdsCount?: number | string | null;
   employees?: DdsEmployee[];
 }
 
-const COMPANY_INFO = {
-  name: "Cargo Ships Cleaning Ltda",
-  address: "rua Praça Iguatemi Martins nº 08, Santos/SP",
-  cnpj: "41.560.212/0001-00",
-  footerAddress: "Praça Iguatemi Martins, 08",
-  footerCity: "Vila Nova, Santos/SP",
-  footerCep: "CEP: 11013-310",
-  footerEmail: "CARGOSHIPS@CARGOSHIPS.COM.BR",
-};
-
-const HEADER_FILL = "8EAADB";
-const SUBHEADER_FILL = "D8D8D8";
-
-function arial(text: string, opts: { bold?: boolean; size?: number; color?: string } = {}) {
-  return new TextRun({
-    text,
-    font: "Arial",
-    bold: opts.bold,
-    size: opts.size ?? 22, // half-points (default 11pt)
-    color: opts.color,
-  });
+function safe(s?: string | null): string {
+  return (s || "").toString().trim();
 }
-
-function timesBold(text: string, size = 44) {
-  return new TextRun({
-    text,
-    font: "Times New Roman",
-    bold: true,
-    size,
-  });
-}
-
-function p(children: TextRun[], opts: { alignment?: typeof AlignmentType[keyof typeof AlignmentType]; spacingAfter?: number } = {}) {
-  return new Paragraph({
-    children,
-    alignment: opts.alignment,
-    spacing: { after: opts.spacingAfter ?? 120 },
-  });
-}
-
-function cell(opts: {
-  children: Paragraph[];
-  fill?: string;
-  width: number;
-  bold?: boolean;
-  align?: typeof AlignmentType[keyof typeof AlignmentType];
-  columnSpan?: number;
-}): TableCell {
-  return new TableCell({
-    width: { size: opts.width, type: WidthType.DXA },
-    columnSpan: opts.columnSpan,
-    shading: opts.fill
-      ? { fill: opts.fill, type: ShadingType.CLEAR, color: "auto" }
-      : undefined,
-    verticalAlign: VerticalAlign.CENTER,
-    margins: { top: 80, bottom: 80, left: 120, right: 120 },
-    children: opts.children,
-  });
-}
-
-const FULL_BORDER = {
-  top: { style: BorderStyle.SINGLE, size: 8, color: "000000" },
-  bottom: { style: BorderStyle.SINGLE, size: 8, color: "000000" },
-  left: { style: BorderStyle.SINGLE, size: 8, color: "000000" },
-  right: { style: BorderStyle.SINGLE, size: 8, color: "000000" },
-};
 
 function todayPtBr(): string {
-  const d = new Date();
-  return d.toLocaleDateString("pt-BR");
+  return new Date().toLocaleDateString("pt-BR");
 }
 
-function safe(s?: string | null): string {
-  return (s || "").trim();
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+// Build a <w:r> with Arial 10pt text suitable for the employees table cells.
+function makeCellRun(text: string): string {
+  const t = escapeXml(text);
+  return (
+    `<w:r>` +
+    `<w:rPr>` +
+    `<w:rFonts w:ascii="Arial" w:eastAsia="Times New Roman" w:hAnsi="Arial" w:cs="Arial"/>` +
+    `<w:sz w:val="20"/>` +
+    `<w:szCs w:val="20"/>` +
+    `<w:lang w:val="pt-BR" w:eastAsia="pt-BR"/>` +
+    `</w:rPr>` +
+    `<w:t xml:space="preserve">${t}</w:t>` +
+    `</w:r>`
+  );
+}
+
+// Take one empty row from the employees table and inject name + cpf into the
+// first two cells. The third cell (assinatura) stays empty.
+function buildEmployeeRow(rowTemplate: string, name: string, cpf: string): string {
+  let cellIndex = 0;
+  return rowTemplate.replace(/<w:tc>([\s\S]*?)<\/w:tc>/g, (_match, inner) => {
+    const text = cellIndex === 0 ? name : cellIndex === 1 ? cpf : "";
+    cellIndex++;
+    if (!text) {
+      return `<w:tc>${inner}</w:tc>`;
+    }
+    // Inject the run just before the paragraph's closing tag.
+    const injected = inner.replace(/<\/w:p>(?![\s\S]*<\/w:p>)/, `${makeCellRun(text)}</w:p>`);
+    return `<w:tc>${injected}</w:tc>`;
+  });
+}
+
+// Rewrite the second <w:tbl> (employees table) so it has one row per employee
+// plus the original header row. Keeps the rest of the document intact.
+function rewriteEmployeesTable(xml: string, employees: DdsEmployee[]): string {
+  const tblRegex = /<w:tbl>[\s\S]*?<\/w:tbl>/g;
+  const tables: { start: number; end: number; text: string }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = tblRegex.exec(xml)) !== null) {
+    tables.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
+  }
+  if (tables.length < 2) return xml; // safety — template not as expected
+
+  const empTbl = tables[tables.length - 1];
+  const empText = empTbl.text;
+
+  const rowRegex = /<w:tr[\s>][\s\S]*?<\/w:tr>/g;
+  const rows: string[] = [];
+  let rm: RegExpExecArray | null;
+  while ((rm = rowRegex.exec(empText)) !== null) {
+    rows.push(rm[0]);
+  }
+  if (rows.length < 2) return xml;
+
+  const headerRow = rows[0];
+  const rowTemplate = rows[1];
+
+  // Beginning of table up to the first <w:tr>, and the closing tags after the
+  // last </w:tr>.
+  const firstRowIdx = empText.indexOf(rows[0]);
+  const lastRowEnd = empText.lastIndexOf(rows[rows.length - 1]) + rows[rows.length - 1].length;
+  const tblOpen = empText.substring(0, firstRowIdx);
+  const tblClose = empText.substring(lastRowEnd);
+
+  const employeeRowsXml = employees
+    .map((e) => buildEmployeeRow(rowTemplate, safe(e.name), safe(e.cpf)))
+    .join("");
+
+  const newEmpTbl = `${tblOpen}${headerRow}${employeeRowsXml}${tblClose}`;
+  return xml.substring(0, empTbl.start) + newEmpTbl + xml.substring(empTbl.end);
 }
 
 export async function POST(request: NextRequest) {
@@ -126,13 +125,16 @@ export async function POST(request: NextRequest) {
   }
 
   const shipName = safe(body.shipName) || "—";
-  const shipNumber = safe(body.shipNumber);
   const documentDate = safe(body.documentDate) || todayPtBr();
   const periodStart = safe(body.periodStart) || todayPtBr();
   const periodEnd = safe(body.periodEnd) || todayPtBr();
-  const motivo = safe(body.motivo) || "Utilização do Material de EPI's";
-  const employees = (body.employees || []).filter((e) => safe(e.name));
+  const holdsRaw = body.holdsCount;
+  const holdsValue =
+    holdsRaw == null || holdsRaw === ""
+      ? ""
+      : String(holdsRaw).trim();
 
+  const employees = (body.employees || []).filter((e) => safe(e.name));
   if (employees.length === 0) {
     return NextResponse.json(
       { error: "Inclua pelo menos um funcionário." },
@@ -140,220 +142,66 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // ── Page setup (portrait A4-ish, 1" margins) ─────────────────────────────
-  const PAGE_WIDTH = 12240; // 8.5" in DXA
-  const MARGIN = 1080; // 0.75" margins to allow wider table
-  const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
-
-  // ── Top blue banner: "DDS  {ship}_{n}#{date}" ────────────────────────────
-  const headerNumberPart = shipNumber
-    ? `_${shipNumber}#${documentDate}`
-    : `#${documentDate}`;
-
-  const bannerTable = new Table({
-    width: { size: CONTENT_WIDTH, type: WidthType.DXA },
-    columnWidths: [CONTENT_WIDTH],
-    borders: FULL_BORDER,
-    rows: [
-      new TableRow({
-        height: { value: 900, rule: HeightRule.ATLEAST },
-        children: [
-          cell({
-            width: CONTENT_WIDTH,
-            fill: HEADER_FILL,
-            children: [
-              new Paragraph({
-                alignment: AlignmentType.CENTER,
-                children: [
-                  timesBold("DDS", 44),
-                  timesBold("    ", 44),
-                  timesBold(shipName.toUpperCase(), 44),
-                  timesBold(headerNumberPart, 32),
-                ],
-              }),
-            ],
-          }),
-        ],
-      }),
-    ],
-  });
-
-  // ── Intro paragraph (company info) ───────────────────────────────────────
-  const introPara = new Paragraph({
-    alignment: AlignmentType.JUSTIFIED,
-    spacing: { before: 240, after: 240 },
-    children: [
-      arial("A ", {}),
-      arial(COMPANY_INFO.name, { bold: true }),
-      arial(", situada na "),
-      arial(COMPANY_INFO.address, { bold: true }),
-      arial(", no CNPJ "),
-      arial(COMPANY_INFO.cnpj, { bold: true }),
-      arial("."),
-    ],
-  });
-
-  // ── Motivo / Navio / Período block (table with grey label cells) ─────────
-  const labelCol = 2400;
-  const valueCol = CONTENT_WIDTH - labelCol;
-
-  function infoRow(label: string, value: string): TableRow {
-    return new TableRow({
-      children: [
-        cell({
-          width: labelCol,
-          fill: SUBHEADER_FILL,
-          children: [p([arial(label, { bold: true })])],
-        }),
-        cell({
-          width: valueCol,
-          children: [p([arial(value)])],
-        }),
-      ],
-    });
+  // ── Load template ────────────────────────────────────────────────────────
+  let templateBuffer: Buffer;
+  try {
+    const templatePath = path.join(process.cwd(), "src/lib/templates/dds-template.docx");
+    templateBuffer = await fs.readFile(templatePath);
+  } catch (err) {
+    return NextResponse.json(
+      { error: "Template DDS não encontrado no servidor.", detail: String(err) },
+      { status: 500 }
+    );
   }
 
-  const infoTable = new Table({
-    width: { size: CONTENT_WIDTH, type: WidthType.DXA },
-    columnWidths: [labelCol, valueCol],
-    borders: FULL_BORDER,
-    rows: [
-      infoRow("Motivo:", motivo),
-      infoRow("Navio:", shipName),
-      infoRow("Período:", `${periodStart} A ${periodEnd}`),
-    ],
-  });
+  const zip = new PizZip(templateBuffer);
 
-  // ── Long declaration paragraph ───────────────────────────────────────────
-  const declaration = new Paragraph({
-    alignment: AlignmentType.JUSTIFIED,
-    spacing: { before: 320, after: 320, line: 300 },
-    children: [
-      arial(
-        "Declaro que recebi gratuitamente o(s) Equipamento(s) de Proteção Individual - EPI(s) conforme Portaria 3214/78 - NR06 para utilização em função dos agentes existentes em meu local de trabalho e principalmente para neutralização dos agentes agressivos. Declaro ainda que fui treinado e tenho ciência da obrigatoriedade do uso, que em caso de extravio ou inutilização ficarei obrigado a reembolsar a empresa o correspondente custo, em época hábil acrescido dos custos legais. Possuo ainda conhecimento que o não cumprimento dos padrões estabelecidos é passível de medida disciplinar interna."
-      ),
-    ],
-  });
+  // ── Fill placeholders with docxtemplater ────────────────────────────────
+  // The template uses {NOME_NAVIO}, {PORÃO}, {DATA ATUAL}, {15/05/2026},
+  // {19/05/2026}. The header has "{NOME_NAVIO }" with a trailing space inside
+  // braces, so we map both keys to the same value.
+  let doc: Docxtemplater;
+  try {
+    doc = new Docxtemplater(zip, {
+      paragraphLoop: true,
+      linebreaks: true,
+      delimiters: { start: "{", end: "}" },
+      nullGetter: () => "",
+    });
+    doc.render({
+      "NOME_NAVIO": shipName,
+      "NOME_NAVIO ": shipName, // trailing-space variant in the header
+      "PORÃO": holdsValue,
+      "DATA ATUAL": documentDate,
+      "15/05/2026": periodStart,
+      "19/05/2026": periodEnd,
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      { error: "Falha ao renderizar o template DDS.", detail },
+      { status: 500 }
+    );
+  }
 
-  // ── Employees table: FUNCIONARIOS | CPF | ASSINATURA ─────────────────────
-  const cFuncionario = Math.floor(CONTENT_WIDTH * 0.45);
-  const cCpf = Math.floor(CONTENT_WIDTH * 0.2);
-  const cAss = CONTENT_WIDTH - cFuncionario - cCpf;
+  // ── Inject employee rows directly in document.xml ────────────────────────
+  const rendered = doc.getZip();
+  const docFile = rendered.file("word/document.xml");
+  if (docFile) {
+    const xml = docFile.asText();
+    const newXml = rewriteEmployeesTable(xml, employees);
+    rendered.file("word/document.xml", newXml);
+  }
 
-  const headerRow = new TableRow({
-    tableHeader: true,
-    height: { value: 500, rule: HeightRule.ATLEAST },
-    children: [
-      cell({
-        width: cFuncionario,
-        fill: HEADER_FILL,
-        children: [p([arial("FUNCIONÁRIOS", { bold: true })], { alignment: AlignmentType.CENTER, spacingAfter: 0 })],
-      }),
-      cell({
-        width: cCpf,
-        fill: HEADER_FILL,
-        children: [p([arial("CPF", { bold: true })], { alignment: AlignmentType.CENTER, spacingAfter: 0 })],
-      }),
-      cell({
-        width: cAss,
-        fill: HEADER_FILL,
-        children: [p([arial("ASSINATURA", { bold: true })], { alignment: AlignmentType.CENTER, spacingAfter: 0 })],
-      }),
-    ],
-  });
+  const buffer = rendered.generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
 
-  const employeeRows = employees.map((e) =>
-    new TableRow({
-      height: { value: 600, rule: HeightRule.ATLEAST },
-      children: [
-        cell({
-          width: cFuncionario,
-          children: [p([arial(e.name.toUpperCase())], { spacingAfter: 0 })],
-        }),
-        cell({
-          width: cCpf,
-          children: [p([arial(safe(e.cpf))], { spacingAfter: 0 })],
-        }),
-        cell({
-          width: cAss,
-          children: [p([arial("")], { spacingAfter: 0 })],
-        }),
-      ],
-    })
-  );
-
-  const employeesTable = new Table({
-    width: { size: CONTENT_WIDTH, type: WidthType.DXA },
-    columnWidths: [cFuncionario, cCpf, cAss],
-    borders: FULL_BORDER,
-    rows: [headerRow, ...employeeRows],
-  });
-
-  // ── Footer (company contact) ─────────────────────────────────────────────
-  const footer = new Footer({
-    children: [
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        children: [
-          arial(COMPANY_INFO.name.toUpperCase() + ".", { bold: true, size: 18 }),
-        ],
-      }),
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        children: [
-          arial(`${COMPANY_INFO.footerAddress}, ${COMPANY_INFO.footerCity}, ${COMPANY_INFO.footerCep}`, { size: 18 }),
-        ],
-      }),
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        children: [arial(COMPANY_INFO.footerEmail, { size: 18, bold: true })],
-      }),
-    ],
-  });
-
-  const doc = new Document({
-    creator: COMPANY_INFO.name,
-    title: `DDS ${shipName}`,
-    styles: {
-      default: {
-        document: { run: { font: "Arial", size: 22 } },
-      },
-    },
-    sections: [
-      {
-        properties: {
-          page: {
-            size: {
-              width: PAGE_WIDTH,
-              height: 15840,
-              orientation: PageOrientation.PORTRAIT,
-            },
-            margin: { top: MARGIN, right: MARGIN, bottom: 1440, left: MARGIN },
-          },
-        },
-        footers: { default: footer },
-        children: [
-          bannerTable,
-          new Paragraph({ children: [] }),
-          introPara,
-          infoTable,
-          declaration,
-          employeesTable,
-        ],
-      },
-    ],
-  });
-
-  const buffer = await Packer.toBuffer(doc);
-
-  // Filename: DDS MV BARROW ISLAND.docx style
+  // Filename: DDS MV BARROW ISLAND.docx
   const safeName = shipName
     .toUpperCase()
     .replace(/[\\/:*?"<>|]+/g, "")
     .trim()
     .replace(/\s+/g, " ");
   const filename = `DDS ${safeName}.docx`;
-  // RFC 5987: provide ASCII-safe filename + UTF-8 percent-encoded filename*.
   const asciiFallback = filename.replace(/[^\x20-\x7E]+/g, "_");
 
   return new NextResponse(buffer as unknown as BodyInit, {

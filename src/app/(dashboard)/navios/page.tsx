@@ -261,7 +261,7 @@ export default function NaviosPage() {
 
     const holdsParsed = form.holds_count.trim() ? Number.parseInt(form.holds_count, 10) : null;
     if (holdsParsed != null && (Number.isNaN(holdsParsed) || holdsParsed < 0)) {
-      setFormError("Quantidade de porões inválida.");
+      setFormError("Quantidade de porão inválida.");
       setSaving(false);
       return;
     }
@@ -553,10 +553,10 @@ export default function NaviosPage() {
                           <span>🏁 Saída: <span className="font-medium text-text">{formatDate(ship.departure_date)}</span></span>
                         )}
                         {ship.cargo_type && (
-                          <span>📦 <span className="font-medium text-text">{ship.cargo_type}</span></span>
+                          <span>Produto: <span className="font-medium text-text">{ship.cargo_type}</span></span>
                         )}
                         {ship.holds_count != null && (
-                          <span>🛢️ <span className="font-medium text-text">{ship.holds_count} porão{ship.holds_count === 1 ? "" : "es"}</span></span>
+                          <span>Porão: <span className="font-medium text-text">{ship.holds_count}</span></span>
                         )}
                       </div>
                       {ship.notes && (
@@ -622,7 +622,7 @@ export default function NaviosPage() {
                 <p><span className="text-text-light">Produto:</span> <span className="font-medium">{selectedShip.cargo_type}</span></p>
               )}
               {selectedShip.holds_count != null && (
-                <p><span className="text-text-light">Porões:</span> <span className="font-medium">{selectedShip.holds_count}</span></p>
+                <p><span className="text-text-light">Porão:</span> <span className="font-medium">{selectedShip.holds_count}</span></p>
               )}
               {selectedShip.notes && (
                 <p className="text-text-light italic text-xs pt-1">&ldquo;{selectedShip.notes}&rdquo;</p>
@@ -810,7 +810,7 @@ export default function NaviosPage() {
                   <p className="text-[10px] text-text-light mt-1">Selecione ou digite o produto transportado</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-text mb-1">Qtd. de Porões</label>
+                  <label className="block text-sm font-medium text-text mb-1">Porão (qtd)</label>
                   <input
                     type="number"
                     min={0}
