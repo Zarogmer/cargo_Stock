@@ -71,7 +71,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     EPI: ["view"],
     FERRAMENTAS: ["view"],
     MAQUINARIO: ["view"],
-    NAVIOS: ["view"],
+    NAVIOS: ["view", "create", "edit", "delete"],
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
     MENSAGENS: ["view", "create"],
@@ -80,7 +80,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   RH: {
     DASHBOARD: ["view"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
-    NAVIOS: ["view"],
+    NAVIOS: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view"],
     MENSAGENS: ["view", "create"],
     CONVERSAS: ["view", "create"],
