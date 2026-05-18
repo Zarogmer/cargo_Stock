@@ -124,7 +124,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
   }
 
-  const shipName = safe(body.shipName) || "—";
+  // The header banner uses small caps and the body's "Navio MV ..." line is
+  // bold uppercase, so force-upper the ship name to match what the company
+  // expects on the printed DDS.
+  const shipName = (safe(body.shipName) || "—").toUpperCase();
   const documentDate = safe(body.documentDate) || todayPtBr();
   const periodStart = safe(body.periodStart) || todayPtBr();
   const periodEnd = safe(body.periodEnd) || todayPtBr();
@@ -196,6 +199,9 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Inject employee rows directly in document.xml ────────────────────────
+  // Underline stripping and the duplicate-space cleanup are done once in the
+  // template itself (see .claude/preprocess_dds.js), so the runtime only has
+  // to swap in the employees table.
   const rendered = doc.getZip();
   const docFile = rendered.file("word/document.xml");
   if (docFile) {
