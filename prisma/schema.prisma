@@ -294,8 +294,10 @@ model Ship {
   status         ShipStatus    @default(AGENDADO)
   assigned_team  String?
   notes          String?
-  cargo_type     String?       // serviço/produto: CARVÃO, CIMENTO, UREIA, etc.
+  cargo_type     String?       // produto/carga: CARVÃO, CIMENTO, UREIA, etc.
   holds_count    Int?          // quantidade de porões
+  client_name    String?       // cliente que contratou o serviço (texto livre)
+  services       String[]      @default([]) // serviços executados: LAVAGEM_PORAO, PINTURA, RASPAGEM, COSTADO
   created_by     String
   created_at     DateTime      @default(now()) @db.Timestamptz()
   externalShipId String?

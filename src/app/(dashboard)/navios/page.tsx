@@ -22,9 +22,22 @@ interface Ship {
   notes: string | null;
   cargo_type: string | null;
   holds_count: number | null;
+  client_name: string | null;
+  services: string[];
   created_at: string;
   created_by: string;
 }
+
+const SERVICE_OPTIONS: { value: string; label: string }[] = [
+  { value: "LAVAGEM_PORAO", label: "Lavagem de Porão" },
+  { value: "PINTURA", label: "Pintura" },
+  { value: "RASPAGEM", label: "Raspagem" },
+  { value: "COSTADO", label: "Costado" },
+];
+
+const SERVICE_LABELS: Record<string, string> = Object.fromEntries(
+  SERVICE_OPTIONS.map((s) => [s.value, s.label])
+);
 
 interface Employee {
   id: number;
@@ -78,6 +91,8 @@ const EMPTY_FORM = {
   assigned_team: "" as string,
   cargo_type: "",
   holds_count: "" as string, // stored as text in the form so the input can be empty
+  client_name: "",
+  services: [] as string[],
   notes: "",
 };
 
@@ -245,6 +260,8 @@ export default function NaviosPage() {
       assigned_team: ship.assigned_team || "",
       cargo_type: ship.cargo_type || "",
       holds_count: ship.holds_count != null ? String(ship.holds_count) : "",
+      client_name: ship.client_name || "",
+      services: ship.services || [],
       notes: ship.notes || "",
     });
     setFormError("");
@@ -275,6 +292,8 @@ export default function NaviosPage() {
       assigned_team: form.assigned_team || null,
       cargo_type: form.cargo_type.trim() || null,
       holds_count: holdsParsed,
+      client_name: form.client_name.trim() || null,
+      services: form.services,
       notes: form.notes.trim() || null,
       created_by: profile?.full_name || "sistema",
     };
@@ -552,11 +571,17 @@ export default function NaviosPage() {
                         {ship.departure_date && (
                           <span>🏁 Saída: <span className="font-medium text-text">{formatDate(ship.departure_date)}</span></span>
                         )}
+                        {ship.client_name && (
+                          <span>Cliente: <span className="font-medium text-text">{ship.client_name}</span></span>
+                        )}
                         {ship.cargo_type && (
                           <span>Produto: <span className="font-medium text-text">{ship.cargo_type}</span></span>
                         )}
                         {ship.holds_count != null && (
                           <span>Porão: <span className="font-medium text-text">{ship.holds_count}</span></span>
+                        )}
+                        {ship.services && ship.services.length > 0 && (
+                          <span>Serviços: <span className="font-medium text-text">{ship.services.map((s) => SERVICE_LABELS[s] || s).join(", ")}</span></span>
                         )}
                       </div>
                       {ship.notes && (
@@ -618,11 +643,20 @@ export default function NaviosPage() {
               {selectedShip.departure_date && (
                 <p><span className="text-text-light">Saída:</span> <span className="font-medium">{formatDate(selectedShip.departure_date)}</span></p>
               )}
+              {selectedShip.client_name && (
+                <p><span className="text-text-light">Cliente:</span> <span className="font-medium">{selectedShip.client_name}</span></p>
+              )}
               {selectedShip.cargo_type && (
                 <p><span className="text-text-light">Produto:</span> <span className="font-medium">{selectedShip.cargo_type}</span></p>
               )}
               {selectedShip.holds_count != null && (
                 <p><span className="text-text-light">Porão:</span> <span className="font-medium">{selectedShip.holds_count}</span></p>
+              )}
+              {selectedShip.services && selectedShip.services.length > 0 && (
+                <p>
+                  <span className="text-text-light">Serviços:</span>{" "}
+                  <span className="font-medium">{selectedShip.services.map((s) => SERVICE_LABELS[s] || s).join(", ")}</span>
+                </p>
               )}
               {selectedShip.notes && (
                 <p className="text-text-light italic text-xs pt-1">&ldquo;{selectedShip.notes}&rdquo;</p>
@@ -791,9 +825,55 @@ export default function NaviosPage() {
                 </select>
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-text mb-1">Cliente</label>
+                <input
+                  type="text"
+                  value={form.client_name}
+                  onChange={(e) => setForm({ ...form, client_name: e.target.value })}
+                  placeholder="Ex: DEEP, VALE, BUNGE..."
+                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-text mb-1">Serviços</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {SERVICE_OPTIONS.map((s) => {
+                    const checked = form.services.includes(s.value);
+                    return (
+                      <label
+                        key={s.value}
+                        className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border cursor-pointer transition ${
+                          checked
+                            ? "border-primary bg-primary/5 text-primary"
+                            : "border-border hover:bg-gray-50 text-text"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            setForm({
+                              ...form,
+                              services: e.target.checked
+                                ? [...form.services, s.value]
+                                : form.services.filter((x) => x !== s.value),
+                            });
+                          }}
+                          className="h-4 w-4 accent-primary"
+                        />
+                        <span>{s.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-text-light mt-1">Marque um ou mais serviços que serão executados.</p>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-text mb-1">Serviço / Produto</label>
+                  <label className="block text-sm font-medium text-text mb-1">Produto / Carga</label>
                   <input
                     type="text"
                     value={form.cargo_type}
