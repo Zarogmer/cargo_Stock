@@ -724,7 +724,7 @@ export default function NaviosPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-text mb-1">Data de Chegada</label>
                   <input
@@ -791,7 +791,7 @@ export default function NaviosPage() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-text mb-1">Serviço / Produto</label>
                   <input
