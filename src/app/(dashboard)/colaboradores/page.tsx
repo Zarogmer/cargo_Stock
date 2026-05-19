@@ -515,7 +515,7 @@ export default function ColaboradoresPage() {
       ),
     },
     {
-      key: "documentos", label: "DDS",
+      key: "documentos", label: "Documentos",
       content: <DocumentosTab employees={employees} />,
     },
   ];
