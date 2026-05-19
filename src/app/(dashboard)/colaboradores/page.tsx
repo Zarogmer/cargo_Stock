@@ -521,6 +521,13 @@ export default function ColaboradoresPage() {
   ];
 
   const activeTabLabel = tabs.find((t) => t.key === initialTab)?.label;
+  const docSub = searchParams.get("doc");
+  const docSubLabel: Record<string, string> = {
+    "dds": "DDS",
+    "ficha-epi": "Ficha de EPI",
+    "aviso-medico": "Aviso Médico",
+  };
+  const docCrumb = initialTab === "documentos" ? docSubLabel[docSub || "dds"] : null;
 
   return (
     <div className="space-y-4">
@@ -530,6 +537,12 @@ export default function ColaboradoresPage() {
           <>
             <span className="text-text-light">›</span>
             <span className="text-lg font-semibold text-text-light">{activeTabLabel}</span>
+          </>
+        )}
+        {docCrumb && (
+          <>
+            <span className="text-text-light">›</span>
+            <span className="text-lg font-semibold text-text-light">{docCrumb}</span>
           </>
         )}
       </div>

@@ -138,6 +138,9 @@ export interface NavSubItem {
   // When set, only these roles see this sub-item. Omit to inherit the parent's
   // module visibility (default behaviour).
   roles?: Role[];
+  // Optional nested entries. When present, the sub-item itself does not
+  // navigate — clicking the label toggles the nested list open/closed.
+  children?: NavSubItem[];
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -165,7 +168,15 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "EPI", href: "/colaboradores?tab=epi" },
       { label: "Uniforme", href: "/colaboradores?tab=uniforme" },
       { label: "Histórico", href: "/colaboradores?tab=historico" },
-      { label: "Documentos", href: "/colaboradores?tab=documentos" },
+      {
+        label: "Documentos",
+        href: "/colaboradores?tab=documentos",
+        children: [
+          { label: "DDS", href: "/colaboradores?tab=documentos&doc=dds" },
+          { label: "Ficha de EPI", href: "/colaboradores?tab=documentos&doc=ficha-epi" },
+          { label: "Aviso Médico", href: "/colaboradores?tab=documentos&doc=aviso-medico" },
+        ],
+      },
     ],
   },
   {
@@ -207,11 +218,21 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "WhatsApp API", href: "/whatsapp", icon: "whatsapp", module: "WHATSAPP" },
 ];
 
+function filterSubItems(items: NavSubItem[] | undefined, role: Role): NavSubItem[] | undefined {
+  if (!items) return undefined;
+  return items
+    .filter((c) => !c.roles || c.roles.includes(role))
+    .map((c) => ({
+      ...c,
+      children: filterSubItems(c.children, role),
+    }));
+}
+
 export function getNavItemsForRole(role: Role): NavItem[] {
   return NAV_ITEMS
     .filter((item) => hasModuleAccess(role, item.module))
     .map((item) => ({
       ...item,
-      children: item.children?.filter((c) => !c.roles || c.roles.includes(role)),
+      children: filterSubItems(item.children, role),
     }));
 }
