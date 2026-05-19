@@ -31,7 +31,6 @@ export async function GET() {
       WITH latest AS (
         SELECT DISTINCT ON (remote_jid)
           remote_jid,
-          push_name,
           text,
           message_type,
           from_me,
@@ -39,13 +38,27 @@ export async function GET() {
         FROM whatsapp_messages
         ORDER BY remote_jid, timestamp_ms DESC
       ),
+      contact_name AS (
+        -- Only consider push_name from messages received from the contact
+        -- (from_me=false), so we never label a conversation with our own
+        -- profile name ("Cargo Ships") just because we sent the last message.
+        SELECT DISTINCT ON (remote_jid)
+          remote_jid,
+          push_name
+        FROM whatsapp_messages
+        WHERE from_me = false
+          AND push_name IS NOT NULL
+          AND push_name <> ''
+        ORDER BY remote_jid, timestamp_ms DESC
+      ),
       counts AS (
         SELECT remote_jid, COUNT(*)::bigint AS message_count
         FROM whatsapp_messages
         GROUP BY remote_jid
       )
-      SELECT l.*, c.message_count
+      SELECT l.*, n.push_name, c.message_count
       FROM latest l
+      LEFT JOIN contact_name n USING (remote_jid)
       JOIN counts c USING (remote_jid)
       ORDER BY l.timestamp_ms DESC
       LIMIT 200
