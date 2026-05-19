@@ -165,7 +165,7 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "EPI", href: "/colaboradores?tab=epi" },
       { label: "Uniforme", href: "/colaboradores?tab=uniforme" },
       { label: "Histórico", href: "/colaboradores?tab=historico" },
-      { label: "Documentos", href: "/colaboradores?tab=documentos" },
+      { label: "DDS", href: "/colaboradores?tab=documentos" },
     ],
   },
   {
