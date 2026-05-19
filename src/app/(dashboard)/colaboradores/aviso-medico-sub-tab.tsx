@@ -37,7 +37,10 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
   const [nome, setNome] = useState("");
   const [cpf, setCpf] = useState("");
   const [matricula, setMatricula] = useState("");
-  const [funcao, setFuncao] = useState("");
+  // Aviso Médico always carries "Auxiliar Operacional" — the clinic's standard
+  // form for the operational team, regardless of the colaborador's internal
+  // role. Field stays editable for one-off overrides.
+  const [funcao, setFuncao] = useState("Auxiliar Operacional");
   const [data, setData] = useState<string>(todayInput);
   const [tipoExame, setTipoExame] = useState<ExamType>("ADMISSIONAL");
 
@@ -56,7 +59,6 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
       setNome("");
       setCpf("");
       setMatricula("");
-      setFuncao("");
       return;
     }
     const e = employees.find((x) => String(x.id) === idStr);
@@ -64,7 +66,7 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
     setNome(e.name.toUpperCase());
     setCpf(e.cpf || "");
     setMatricula(e.e_social || "");
-    setFuncao((e.role || "").toUpperCase());
+    // Função stays as "Auxiliar Operacional" — don't overwrite from e.role.
   }
 
   async function handleGenerate() {
