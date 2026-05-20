@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { TrashIcon } from "@/components/icons";
 import { formatPhone } from "@/lib/utils";
 
 interface Conversation {
@@ -76,12 +78,40 @@ function previewLine(c: Conversation): string {
   return `${prefix}${typeLabels[c.last_message_type] || c.last_message_type}`;
 }
 
-function MediaBubble({ msg }: { msg: Message }) {
+// Figure out what kind of media this is. Mimetype is the source of truth when
+// present, but Evolution sometimes stores it as "unknown" or null — in that
+// case fall back to message_type ("imageMessage", "audioMessage", ...).
+function detectMediaKind(msg: Message): "image" | "audio" | "video" | "document" | "sticker" {
+  const mime = msg.media_mimetype || "";
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  switch (msg.message_type) {
+    case "imageMessage": return "image";
+    case "audioMessage": return "audio";
+    case "videoMessage": return "video";
+    case "stickerMessage": return "sticker";
+    default: return "document";
+  }
+}
+
+function friendlyMediaError(raw: string): string {
+  // Evolution returns 400/404 when the media has aged out of its cache —
+  // there's nothing we can do about it, so explain it plainly.
+  if (/\b(400|404)\b/.test(raw)) return "Mídia indisponível (expirou no WhatsApp)";
+  if (/503/.test(raw)) return "WhatsApp API offline — tenta de novo em alguns instantes";
+  return raw;
+}
+
+function MediaBubble({ msg, autoLoad }: { msg: Message; autoLoad: boolean }) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<{ base64: string; mimetype: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const triedAuto = useRef(false);
 
-  async function load() {
+  const kind = detectMediaKind(msg);
+
+  const load = useCallback(async () => {
     if (!msg.message_id) { setErr("Mensagem sem id — não dá pra carregar mídia."); return; }
     setLoading(true); setErr(null);
     try {
@@ -90,52 +120,70 @@ function MediaBubble({ msg }: { msg: Message }) {
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
       setData(body);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(friendlyMediaError((e as Error).message));
     } finally {
       setLoading(false);
     }
-  }
+  }, [msg.message_id]);
 
-  const mime = msg.media_mimetype || "";
-  const isImage = mime.startsWith("image/");
-  const isAudio = mime.startsWith("audio/");
-  const isVideo = mime.startsWith("video/");
+  // Auto-fetch images, audio, video, and stickers — these are meant to be
+  // viewed/played inline (like WhatsApp). Documents stay click-to-download to
+  // avoid pulling potentially huge files automatically.
+  useEffect(() => {
+    if (!autoLoad || triedAuto.current) return;
+    if (kind === "document") return;
+    if (!msg.message_id) return;
+    triedAuto.current = true;
+    load();
+  }, [autoLoad, kind, msg.message_id, load]);
 
-  if (!data) {
-    return (
-      <div>
-        {msg.text && <p className="text-sm mb-2 whitespace-pre-wrap">{msg.text}</p>}
+  const src = data
+    ? (data.base64.startsWith("data:") ? data.base64 : `data:${data.mimetype};base64,${data.base64}`)
+    : null;
+
+  return (
+    <div>
+      {msg.text && <p className="text-sm mb-2 whitespace-pre-wrap">{msg.text}</p>}
+
+      {src && kind === "image" && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt="imagem" className="max-w-xs rounded-lg" />
+      )}
+      {src && kind === "sticker" && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt="figurinha" className="max-w-[120px]" />
+      )}
+      {src && kind === "audio" && (
+        <audio controls src={src} className="max-w-xs" />
+      )}
+      {src && kind === "video" && (
+        <video controls src={src} className="max-w-xs rounded-lg" />
+      )}
+      {src && kind === "document" && (
+        <a href={src} download={msg.media_filename || "arquivo"} className="text-xs underline text-primary">
+          ⬇️ Baixar {msg.media_filename || "arquivo"}
+        </a>
+      )}
+
+      {!src && (
         <button
           type="button"
           onClick={load}
           disabled={loading}
-          className="text-xs px-2 py-1 bg-white/10 hover:bg-white/20 rounded transition disabled:opacity-50"
+          className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded transition disabled:opacity-50"
         >
-          {loading ? "Carregando..." : `⬇️ ${
-            isImage ? "Ver imagem" : isAudio ? "Ouvir áudio" : isVideo ? "Ver vídeo" : "Baixar arquivo"
+          {loading ? "Carregando..." : `${
+            kind === "image" ? "🖼️ Ver imagem"
+              : kind === "sticker" ? "🖼️ Ver figurinha"
+              : kind === "audio" ? "🎵 Ouvir áudio"
+              : kind === "video" ? "🎥 Ver vídeo"
+              : "📄 Baixar arquivo"
           }${msg.media_filename ? ` (${msg.media_filename})` : ""}`}
         </button>
-        {err && <p className="text-xs text-red-200 mt-1">{err}</p>}
-      </div>
-    );
-  }
+      )}
 
-  const src = data.base64.startsWith("data:") ? data.base64 : `data:${data.mimetype};base64,${data.base64}`;
-
-  if (isImage) {
-    // eslint-disable-next-line @next/next/no-img-element
-    return <img src={src} alt="imagem" className="max-w-xs rounded-lg" />;
-  }
-  if (isAudio) {
-    return <audio controls src={src} className="max-w-xs" />;
-  }
-  if (isVideo) {
-    return <video controls src={src} className="max-w-xs rounded-lg" />;
-  }
-  return (
-    <a href={src} download={msg.media_filename || "arquivo"} className="text-xs underline">
-      Baixar {msg.media_filename || "arquivo"}
-    </a>
+      {err && <p className="text-xs text-red-600 mt-1">{err}</p>}
+    </div>
   );
 }
 
@@ -150,6 +198,10 @@ export default function ConversasPage() {
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
   const [sendErr, setSendErr] = useState<string | null>(null);
+
+  const [confirmDelete, setConfirmDelete] = useState<Conversation | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
   const threadRef = useRef<HTMLDivElement>(null);
   const lastMessageCount = useRef(0);
@@ -211,6 +263,31 @@ export default function ConversasPage() {
   }, [conversations, search]);
 
   const selectedConv = conversations.find((c) => c.remote_jid === selectedJid) || null;
+
+  async function handleDelete() {
+    if (!confirmDelete) return;
+    setDeleting(true); setDeleteErr(null);
+    try {
+      const res = await fetch(
+        `/api/whatsapp/conversations/${encodeURIComponent(confirmDelete.remote_jid)}`,
+        { method: "DELETE" },
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      // Drop from local state right away so the UI doesn't flash the old row
+      // before the next poll.
+      setConversations((prev) => prev.filter((c) => c.remote_jid !== confirmDelete.remote_jid));
+      if (selectedJid === confirmDelete.remote_jid) {
+        setSelectedJid(null);
+        setMessages([]);
+      }
+      setConfirmDelete(null);
+    } catch (err) {
+      setDeleteErr((err as Error).message);
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   async function handleReply(e: React.FormEvent) {
     e.preventDefault();
@@ -274,11 +351,11 @@ export default function ConversasPage() {
                 {filteredConvs.map((c) => {
                   const active = c.remote_jid === selectedJid;
                   return (
-                    <li key={c.remote_jid}>
+                    <li key={c.remote_jid} className="group relative">
                       <button
                         type="button"
                         onClick={() => setSelectedJid(c.remote_jid)}
-                        className={`w-full text-left px-3 py-2.5 hover:bg-gray-50 transition ${active ? "bg-primary/5 border-l-2 border-primary" : ""}`}
+                        className={`w-full text-left px-3 py-2.5 pr-9 hover:bg-gray-50 transition ${active ? "bg-primary/5 border-l-2 border-primary" : ""}`}
                       >
                         <div className="flex items-baseline justify-between gap-2">
                           <span className="font-medium text-sm truncate flex items-center gap-1">
@@ -292,6 +369,15 @@ export default function ConversasPage() {
                         <p className="text-xs text-text-light truncate mt-0.5">
                           {previewLine(c)}
                         </p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setConfirmDelete(c); }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded text-text-light hover:text-red-600 hover:bg-red-50 opacity-0 group-hover:opacity-100 focus:opacity-100 transition"
+                        title="Apagar conversa (apenas do sistema)"
+                        aria-label="Apagar conversa"
+                      >
+                        <TrashIcon className="w-3.5 h-3.5" />
                       </button>
                     </li>
                   );
@@ -328,9 +414,20 @@ export default function ConversasPage() {
                     {selectedConv?.is_group ? "Grupo" : formatPhone(jidToNumber(selectedJid))}
                   </p>
                 </div>
-                <span className="text-xs text-text-light shrink-0">
+                <span className="text-xs text-text-light shrink-0 hidden sm:inline">
                   {messages.length} {messages.length === 1 ? "mensagem" : "mensagens"}
                 </span>
+                {selectedConv && (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(selectedConv)}
+                    className="shrink-0 p-1.5 rounded text-text-light hover:text-red-600 hover:bg-red-50 transition"
+                    title="Apagar conversa (apenas do sistema)"
+                    aria-label="Apagar conversa"
+                  >
+                    <TrashIcon className="w-4 h-4" />
+                  </button>
+                )}
               </header>
 
               <div ref={threadRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-2 bg-[#f0f2f5]">
@@ -340,7 +437,8 @@ export default function ConversasPage() {
                   <p className="text-sm text-text-light text-center">Sem mensagens nessa conversa ainda.</p>
                 ) : (
                   messages.map((m) => {
-                    const hasMedia = m.media_mimetype && m.message_type !== "conversation" && m.message_type !== "extendedTextMessage";
+                    const MEDIA_TYPES = ["imageMessage", "audioMessage", "videoMessage", "documentMessage", "stickerMessage"];
+                    const hasMedia = !!m.media_mimetype || MEDIA_TYPES.includes(m.message_type);
                     return (
                       <div key={m.id} className={`flex ${m.from_me ? "justify-end" : "justify-start"}`}>
                         <div className={`max-w-[70%] rounded-lg px-3 py-2 shadow-sm ${
@@ -350,7 +448,7 @@ export default function ConversasPage() {
                             <p className="text-[10px] font-semibold text-primary mb-0.5">{m.push_name}</p>
                           )}
                           {hasMedia ? (
-                            <MediaBubble msg={m} />
+                            <MediaBubble msg={m} autoLoad />
                           ) : (
                             <p className="text-sm whitespace-pre-wrap break-words">{m.text || "(vazio)"}</p>
                           )}
@@ -384,6 +482,26 @@ export default function ConversasPage() {
           )}
         </section>
       </div>
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        onClose={() => { setConfirmDelete(null); setDeleteErr(null); }}
+        onConfirm={handleDelete}
+        title="Apagar conversa?"
+        message={
+          confirmDelete
+            ? `Isso vai apagar todo o histórico de ${displayName(confirmDelete)} (${confirmDelete.message_count} ${confirmDelete.message_count === 1 ? "mensagem" : "mensagens"}) apenas do sistema. O contato continua tendo as mensagens no WhatsApp dele.`
+            : ""
+        }
+        confirmLabel="Apagar"
+        variant="danger"
+        loading={deleting}
+      />
+      {deleteErr && (
+        <p className="fixed bottom-4 right-4 bg-red-600 text-white text-sm px-3 py-2 rounded shadow-lg">
+          {deleteErr}
+        </p>
+      )}
     </div>
   );
 }
