@@ -155,7 +155,7 @@ export default function FinanceiroPage() {
     },
     {
       key: "trabalhos",
-      label: "🚢 Trabalhos",
+      label: "🚢 Fechamento",
       content: (
         <TrabalhosTab
           jobs={jobs}
@@ -211,14 +211,14 @@ export default function FinanceiroPage() {
           )}
         </div>
         <p className="text-text-light text-sm mt-0.5">
-          Catálogo de funções, alocações de equipe e cálculo por trabalho
+          Catálogo de funções, fechamento de navios e faturamento
         </p>
       </div>
 
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <KpiCard label="Funções Ativas" value={kpis.activeFunctions.toString()} accent="blue" />
-        <KpiCard label="Trabalhos em Aberto" value={kpis.openJobs.toString()} accent="amber" />
+        <KpiCard label="Fechamentos Abertos" value={kpis.openJobs.toString()} accent="amber" />
         <KpiCard label="Custo do Mês" value={brl(kpis.monthCost)} accent="red" />
         <KpiCard label="Receita do Mês" value={brl(kpis.monthRevenue)} accent="emerald" />
         <KpiCard
@@ -387,7 +387,7 @@ function FuncoesTab({
 
       <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-900">
         💡 Esses são os <strong>valores médios padrão</strong> por função. De navio para navio podem ser ajustados,
-        e a confirmação final dos valores é feita no <strong>Trabalho</strong> (em "Ajustar Valor por Função") antes do fechamento.
+        e a confirmação final dos valores é feita no <strong>Fechamento</strong> (em "Ajustar Valor por Função") antes de fechar.
       </div>
 
       {loading ? (
@@ -778,7 +778,7 @@ function TrabalhosTab({
         </div>
         {canEdit && (
           <Button size="sm" onClick={() => { setEditJob(null); setShowJobForm(true); }}>
-            <PlusIcon className="w-4 h-4" />Novo Trabalho
+            <PlusIcon className="w-4 h-4" />Novo Fechamento
           </Button>
         )}
       </div>
@@ -788,7 +788,7 @@ function TrabalhosTab({
       ) : filtered.length === 0 ? (
         <div className="text-center py-12 bg-card rounded-xl border border-border">
           <p className="text-3xl mb-2">🚢</p>
-          <p className="text-sm text-text-light">Nenhum trabalho encontrado</p>
+          <p className="text-sm text-text-light">Nenhum fechamento encontrado</p>
         </div>
       ) : (
         <div className="grid gap-2">
@@ -873,7 +873,7 @@ function TrabalhosTab({
           await db.from("jobs").delete().eq("id", deleteJob!.id);
           setDeleteJob(null); onChange();
         }}
-        title="Excluir Trabalho"
+        title="Excluir Fechamento"
         message={`Excluir "${deleteJob?.name}"? As alocações e ajustes vinculados também serão removidos.`}
       />
     </div>
@@ -960,7 +960,7 @@ function JobFormModal({
   const sectionTitle = "text-xs font-semibold text-text-light uppercase tracking-wider mb-2";
 
   return (
-    <Modal open={open} onClose={onClose} title={item ? "Editar Trabalho" : "Novo Trabalho"} maxWidth="max-w-2xl">
+    <Modal open={open} onClose={onClose} title={item ? "Editar Fechamento" : "Novo Fechamento"} maxWidth="max-w-2xl">
       <form onSubmit={handleSave} className="space-y-4">
         <div>
           <p className={sectionTitle}>Identificação</p>
@@ -1178,7 +1178,7 @@ function JobDetailModal({
   }
 
   async function handleReopen() {
-    if (!confirm("Reabrir trabalho? Isso limpa a verificação e o fechamento.")) return;
+    if (!confirm("Reabrir fechamento? Isso limpa a verificação e o status fechado.")) return;
     await db.from("jobs").update({
       status: "EM_ANDAMENTO",
       verified_at: null,
@@ -1301,7 +1301,7 @@ function JobDetailModal({
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
-  // Trabalho fica somente-leitura apenas após o último OK do gerente.
+  // Fechamento fica somente-leitura apenas após o último OK do gerente.
   // O verificador pode ajustar valores enquanto está em conferência (VERIFICADO).
   const isReadOnly = job.status === "FECHADO";
 
@@ -1570,7 +1570,7 @@ function JobDetailModal({
             )}
             <div className="flex gap-2 justify-end">
               <Button variant="secondary" size="sm" type="button" onClick={() => setShowCloseForm(false)}>Cancelar</Button>
-              <Button size="sm" type="submit">🔒 Fechar Trabalho</Button>
+              <Button size="sm" type="submit">🔒 Fechar Definitivo</Button>
             </div>
           </form>
         )}
@@ -1838,7 +1838,7 @@ function ResumoTab({
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard label="Trabalhos Fechados" value={closedJobs.length.toString()} accent="blue" />
+        <KpiCard label="Fechamentos Concluídos" value={closedJobs.length.toString()} accent="blue" />
         <KpiCard label="Receita Total" value={brl(totalRevenue)} accent="emerald" />
         <KpiCard label="Custo Total" value={brl(totalCost)} accent="red" />
         <KpiCard
@@ -1888,7 +1888,7 @@ function FaturarTab({
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [search, setSearch] = useState("");
 
-  // Apenas trabalhos com alocações fazem sentido para faturar
+  // Apenas fechamentos com alocações fazem sentido para faturar
   const billable = useMemo(
     () => jobs.filter((j) => allocations.some((a) => a.job_id === j.id && a.status === "ATIVO")),
     [jobs, allocations]
@@ -1908,13 +1908,13 @@ function FaturarTab({
   return (
     <div className="space-y-3">
       <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-900">
-        🧾 Selecione um trabalho para gerar a planilha de pagamento. Você poderá importar o PDF da
+        🧾 Selecione um fechamento para gerar a planilha de pagamento. Você poderá importar o PDF da
         <strong> Relação de Líquidos</strong> da contabilidade para preencher a coluna <strong>PAGTO NA FOLHA</strong> automaticamente.
       </div>
 
       <input
         type="text"
-        placeholder="Buscar trabalho, navio, cliente..."
+        placeholder="Buscar fechamento, navio, cliente..."
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         className="px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none w-full max-w-md"
@@ -1927,8 +1927,8 @@ function FaturarTab({
           <p className="text-3xl mb-2">🧾</p>
           <p className="text-sm text-text-light">
             {billable.length === 0
-              ? "Nenhum trabalho com equipe alocada. Aloque equipe na aba Trabalhos."
-              : "Nenhum trabalho encontrado."}
+              ? "Nenhum fechamento com equipe alocada. Aloque equipe na aba Fechamento."
+              : "Nenhum fechamento encontrado."}
           </p>
         </div>
       ) : (

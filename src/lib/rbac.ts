@@ -208,7 +208,7 @@ export const NAV_ITEMS: NavItem[] = [
     module: "FINANCEIRO_MOD",
     children: [
       { label: "Funções e Valores", href: "/financeiro?tab=funcoes" },
-      { label: "Trabalhos", href: "/financeiro?tab=trabalhos" },
+      { label: "Fechamento", href: "/financeiro?tab=trabalhos" },
       { label: "Faturar", href: "/financeiro?tab=faturar" },
       { label: "Resumo", href: "/financeiro?tab=resumo" },
     ],
