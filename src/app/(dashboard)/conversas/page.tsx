@@ -95,7 +95,7 @@ function previewLine(c: Conversation): string {
 
 // Click-to-load: keeps the chat light by only downloading media when the user
 // explicitly asks for it (Evolution can return base64 blobs in the hundreds of KB).
-function MediaBubble({ msg }: { msg: Message }) {
+function MediaBubble({ msg, onImageClick }: { msg: Message; onImageClick: (src: string) => void }) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<{ base64: string; mimetype: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -142,8 +142,15 @@ function MediaBubble({ msg }: { msg: Message }) {
   const src = data.base64.startsWith("data:") ? data.base64 : `data:${data.mimetype};base64,${data.base64}`;
 
   if (isImage) {
-    // eslint-disable-next-line @next/next/no-img-element
-    return <img src={src} alt="imagem" className="max-w-xs rounded-lg" />;
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={src}
+        alt="imagem"
+        className="max-w-xs rounded-lg cursor-zoom-in hover:opacity-90 transition"
+        onClick={() => onImageClick(src)}
+      />
+    );
   }
   if (isAudio) {
     return <audio controls src={src} className="max-w-xs" />;
@@ -155,6 +162,48 @@ function MediaBubble({ msg }: { msg: Message }) {
     <a href={src} download={msg.media_filename || "arquivo"} className="text-xs underline">
       Baixar {msg.media_filename || "arquivo"}
     </a>
+  );
+}
+
+// Fullscreen image viewer. Click backdrop or press ESC to close.
+function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    // Lock scroll under the overlay so the page doesn't jiggle when we open it.
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-[100] bg-black/85 flex items-center justify-center p-4 cursor-zoom-out"
+      role="dialog"
+      aria-label="Imagem ampliada"
+    >
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute top-4 right-4 text-white text-2xl w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 transition flex items-center justify-center"
+        aria-label="Fechar"
+      >
+        ×
+      </button>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt="imagem ampliada"
+        onClick={(e) => e.stopPropagation()}
+        className="max-w-full max-h-full object-contain rounded-lg cursor-default shadow-2xl"
+      />
+    </div>
   );
 }
 
@@ -175,6 +224,9 @@ export default function ConversasPage() {
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
   const [showNewGroup, setShowNewGroup] = useState(false);
+
+  // Fullscreen image viewer state — populated when the user clicks an image bubble.
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   const threadRef = useRef<HTMLDivElement>(null);
   const lastMessageCount = useRef(0);
@@ -418,7 +470,7 @@ export default function ConversasPage() {
                             <p className="text-[10px] font-semibold text-primary mb-0.5">{m.push_name}</p>
                           )}
                           {hasMedia ? (
-                            <MediaBubble msg={m} />
+                            <MediaBubble msg={m} onImageClick={setLightboxSrc} />
                           ) : (
                             <p className="text-sm whitespace-pre-wrap break-words">{m.text || "(vazio)"}</p>
                           )}
@@ -481,6 +533,10 @@ export default function ConversasPage() {
           loadConversations();
         }}
       />
+
+      {lightboxSrc && (
+        <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+      )}
     </div>
   );
 }
