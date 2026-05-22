@@ -19,6 +19,10 @@ export async function GET() {
     // Distinct-on-remote_jid: take the latest message per conversation, sorted
     // by timestamp desc overall. Done as raw SQL because Prisma's groupBy can't
     // return arbitrary columns from the picked row.
+    //
+    // "systemNotice" stubs (inserted on group create/sync) carry the group
+    // subject in push_name. They're treated as fallback content only — once
+    // a real message arrives, the latest CTE prefers it over the stub.
     const rows = await prisma.$queryRaw<Array<{
       remote_jid: string;
       push_name: string | null;
@@ -29,6 +33,9 @@ export async function GET() {
       message_count: bigint;
     }>>`
       WITH latest AS (
+        -- Prefer real messages over stubs for the "last message" preview.
+        -- ORDER BY clause: (1) group by remote_jid, (2) put non-stubs first,
+        -- (3) most recent first. DISTINCT ON keeps the first row per partition.
         SELECT DISTINCT ON (remote_jid)
           remote_jid,
           text,
@@ -36,7 +43,10 @@ export async function GET() {
           from_me,
           timestamp_ms
         FROM whatsapp_messages
-        ORDER BY remote_jid, timestamp_ms DESC
+        ORDER BY
+          remote_jid,
+          (from_me = true AND message_type = 'systemNotice') ASC,
+          timestamp_ms DESC
       ),
       contact_name AS (
         -- Only consider push_name from messages received from the contact
@@ -51,14 +61,40 @@ export async function GET() {
           AND push_name <> ''
         ORDER BY remote_jid, timestamp_ms DESC
       ),
+      group_label AS (
+        -- Our create/sync stubs carry the group's subject in push_name. This
+        -- is what we want to show as the group's display name — group names
+        -- don't change with whoever sent the latest message.
+        SELECT DISTINCT ON (remote_jid)
+          remote_jid,
+          push_name
+        FROM whatsapp_messages
+        WHERE remote_jid LIKE '%@g.us'
+          AND from_me = true
+          AND message_type = 'systemNotice'
+          AND push_name IS NOT NULL
+          AND push_name <> ''
+        ORDER BY remote_jid, timestamp_ms DESC
+      ),
       counts AS (
-        SELECT remote_jid, COUNT(*)::bigint AS message_count
+        -- Exclude stubs so freshly-synced groups show "0 mensagens" until
+        -- there's real activity.
+        SELECT
+          remote_jid,
+          COUNT(*) FILTER (WHERE NOT (from_me = true AND message_type = 'systemNotice'))::bigint AS message_count
         FROM whatsapp_messages
         GROUP BY remote_jid
       )
-      SELECT l.*, n.push_name, c.message_count
+      SELECT
+        l.*,
+        CASE
+          WHEN l.remote_jid LIKE '%@g.us' THEN COALESCE(g.push_name, n.push_name)
+          ELSE n.push_name
+        END AS push_name,
+        c.message_count
       FROM latest l
       LEFT JOIN contact_name n USING (remote_jid)
+      LEFT JOIN group_label g USING (remote_jid)
       JOIN counts c USING (remote_jid)
       ORDER BY l.timestamp_ms DESC
       LIMIT 200

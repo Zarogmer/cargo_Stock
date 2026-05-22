@@ -42,6 +42,33 @@ export async function POST(request: NextRequest) {
     // Evolution returns the JID in different shapes depending on version; cover both.
     const jid = (created.id || created.groupJid || "") as string;
 
+    // Insert a "systemNotice" stub so the group shows up in the Conversas list
+    // immediately — without it the conversation only materializes once someone
+    // actually sends a message in the group. push_name carries the subject so
+    // the list can label the group properly (see conversations route SQL).
+    if (jid) {
+      try {
+        await prisma.whatsappMessage.create({
+          data: {
+            message_id: `system-create-${jid}-${Date.now()}`,
+            instance_name: process.env.EVOLUTION_INSTANCE || "default",
+            remote_jid: jid,
+            from_me: true,
+            push_name: subject,
+            message_type: "systemNotice",
+            text: "✨ Grupo criado",
+            timestamp_ms: BigInt(Date.now()),
+            sent_by_user_id: session.user.id || null,
+            raw_event: { source: "groups-create", subject, participants_count: participants.length },
+          },
+        });
+      } catch (stubErr) {
+        // Non-fatal: the group exists on WhatsApp regardless. The user can use
+        // "Sincronizar grupos" to backfill later.
+        console.warn("[groups] stub insert failed:", (stubErr as Error).message);
+      }
+    }
+
     if (shipId && jid) {
       try {
         await prisma.ship.update({

@@ -199,6 +199,32 @@ export async function getInstanceStatus(): Promise<{ state?: string } & Record<s
   return evolutionFetch(`/instance/connectionState/${encodeURIComponent(cfg.instance)}`);
 }
 
+interface EvolutionGroupInfo {
+  id?: string;
+  subject?: string;
+  size?: number;
+  desc?: string;
+  participants?: Array<{ id?: string; admin?: string }>;
+  [key: string]: unknown;
+}
+
+// Lists every WhatsApp group the connected number is a member of. Used by the
+// sync endpoint to backfill the conversation list with groups created outside
+// the app or before this feature existed.
+export async function fetchAllGroups(includeParticipants = false): Promise<EvolutionGroupInfo[]> {
+  const cfg = readConfig();
+  const token = await getInstanceToken();
+  const qs = includeParticipants ? "?getParticipants=true" : "";
+  const result = await evolutionFetch<EvolutionGroupInfo[] | { groups?: EvolutionGroupInfo[] }>(
+    `/group/fetchAllGroups/${encodeURIComponent(cfg.instance)}${qs}`,
+    {},
+    token,
+  );
+  if (Array.isArray(result)) return result;
+  if (result && typeof result === "object" && Array.isArray(result.groups)) return result.groups;
+  return [];
+}
+
 // Creates the instance if missing. Idempotent-ish: Evolution returns an error
 // when the instance already exists, which we swallow. After a successful create
 // we also register the webhook so incoming messages start flowing to our DB.

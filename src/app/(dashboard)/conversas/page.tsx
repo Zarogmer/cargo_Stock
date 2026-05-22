@@ -225,6 +225,12 @@ export default function ConversasPage() {
 
   const [showNewGroup, setShowNewGroup] = useState(false);
 
+  // Group sync — pulls every group the connected number is part of and
+  // makes them appear in this list (handy for groups created outside the app
+  // or before the sync feature existed).
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
   // Fullscreen image viewer state — populated when the user clicks an image bubble.
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
@@ -312,6 +318,26 @@ export default function ConversasPage() {
     }
   }
 
+  async function handleSync() {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await fetch("/api/whatsapp/groups/sync", { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      const parts: string[] = [];
+      if (body.added) parts.push(`${body.added} novo(s)`);
+      if (body.updated) parts.push(`${body.updated} atualizado(s)`);
+      const detail = parts.length ? ` — ${parts.join(", ")}.` : " — nada novo.";
+      setSyncMsg({ kind: "ok", text: `${body.total} grupo(s) encontrado(s)${detail}` });
+      loadConversations();
+    } catch (err) {
+      setSyncMsg({ kind: "err", text: (err as Error).message });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   async function handleReply(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedJid || !reply.trim()) return;
@@ -341,12 +367,32 @@ export default function ConversasPage() {
 
   return (
     <div className="h-[calc(100vh-120px)] flex flex-col">
-      <div className="flex items-center justify-between mb-3 gap-2">
+      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
         <h1 className="text-2xl font-bold text-text">Conversas 💬</h1>
-        <Button size="sm" onClick={() => setShowNewGroup(true)} className="inline-flex items-center gap-1.5">
-          <PlusIcon className="w-4 h-4" /> Novo grupo
-        </Button>
+        <div className="flex gap-2 flex-wrap">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={handleSync}
+            disabled={syncing}
+            title="Busca todos os grupos no WhatsApp e adiciona à lista"
+          >
+            {syncing ? "Sincronizando..." : "↻ Sincronizar grupos"}
+          </Button>
+          <Button size="sm" onClick={() => setShowNewGroup(true)} className="inline-flex items-center gap-1.5">
+            <PlusIcon className="w-4 h-4" /> Novo grupo
+          </Button>
+        </div>
       </div>
+      {syncMsg && (
+        <div className={`mb-2 rounded-lg px-3 py-2 text-xs border ${
+          syncMsg.kind === "ok"
+            ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+            : "bg-red-50 border-red-200 text-red-900"
+        }`}>
+          {syncMsg.text}
+        </div>
+      )}
 
       <div className="flex-1 flex gap-3 min-h-0 bg-card rounded-2xl border border-border overflow-hidden">
         <aside
