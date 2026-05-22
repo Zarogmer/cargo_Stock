@@ -42,6 +42,42 @@ export function normalizeBRNumber(raw: string): string {
   return `55${digits}`;
 }
 
+// Recursively walks the parsed body looking for human-readable strings. Skips
+// values that stringify to "[object Object]" (an Evolution v2 bug where they
+// String()-ed a class instance) and only returns concrete error text.
+function collectMessages(value: unknown, out: string[], depth = 0): void {
+  if (out.length >= 3 || depth > 4) return;
+  if (value === null || value === undefined) return;
+  if (typeof value === "string") {
+    const s = value.trim();
+    if (s && s !== "[object Object]") out.push(s.slice(0, 300));
+    return;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return;
+  if (Array.isArray(value)) {
+    for (const v of value) collectMessages(v, out, depth + 1);
+    return;
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    // Common error-bearing keys first.
+    for (const key of ["message", "error", "details", "reason", "response"]) {
+      if (key in obj) collectMessages(obj[key], out, depth + 1);
+    }
+  }
+}
+
+function formatEvolutionError(body: unknown, raw: string): string {
+  if (typeof body === "string") return body.slice(0, 500);
+  const collected: string[] = [];
+  collectMessages(body, collected);
+  if (collected.length > 0) return collected.join(" | ");
+  // Fall back to the raw HTTP body so we at least show *something* useful.
+  const trimmed = raw.trim();
+  if (trimmed) return trimmed.slice(0, 500);
+  return "";
+}
+
 async function evolutionFetch<T>(path: string, init: RequestInit = {}, apikey?: string): Promise<T> {
   const cfg = readConfig();
   const res = await fetch(`${cfg.url}${path}`, {
@@ -66,17 +102,10 @@ async function evolutionFetch<T>(path: string, init: RequestInit = {}, apikey?: 
     //   NestJS validation: { statusCode, message: string[], error }
     //   Service errors:    { status, error, response: { message } }
     //   Baileys crashes:   plain text / HTML
-    const b = body as { message?: unknown; error?: unknown; response?: { message?: unknown } } | string | null;
-    const detail = typeof b === "string"
-      ? b.slice(0, 500)
-      : (() => {
-          const msgs = [
-            b?.response && typeof b.response === "object" && "message" in b.response ? JSON.stringify(b.response.message) : null,
-            b?.message ? JSON.stringify(b.message) : null,
-            b?.error ? JSON.stringify(b.error) : null,
-          ].filter(Boolean);
-          return msgs.length ? msgs.join(" | ") : JSON.stringify(b).slice(0, 500);
-        })();
+    //   Evolution v2 bugs: { message: ["[object Object]"] } — useless, fall
+    //                     back to the raw text body so we at least show what
+    //                     Evolution actually returned.
+    const detail = formatEvolutionError(body, raw);
     throw new Error(`Evolution API ${res.status} ${path}: ${detail || res.statusText}`);
   }
   return body as T;
@@ -285,16 +314,37 @@ export async function registerWebhook(): Promise<unknown> {
   );
 }
 
-// Delete + create. The QR is reliably returned by /instance/create when qrcode:
-// true — the connect endpoint sometimes doesn't regenerate it for an instance
-// stuck in "close", so this is the reset hatch.
+// Best-effort recovery from a stuck instance. Tries, in order:
+//   1. logout — closes the Baileys session cleanly (often returns 500 with
+//      "Connection Closed" when the session is already dead, which is fine)
+//   2. delete — wipes the instance record
+//   3. create — recreates it with qrcode:true
+// Steps 1 and 2 are swallowed (the goal is "make create succeed", not "ensure
+// every step worked"). Only failure of step 3 surfaces — that's the one the
+// admin actually needs to know about.
 export async function resetInstance(): Promise<unknown> {
+  const cfg = readConfig();
+
+  // Step 1: logout. Almost always fails with "Connection Closed" when called
+  // on a stuck instance — that's the whole reason we're resetting. Swallow.
+  try {
+    await logoutInstance();
+  } catch (err) {
+    console.warn("[evolution] reset: logout step failed (continuing):", (err as Error).message);
+  }
+  clearInstanceTokenCache();
+
+  // Step 2: delete. May 400 if Evolution doesn't accept delete in the current
+  // state (e.g. session in "connecting"). Swallow and let create try anyway.
   try {
     await deleteInstance();
   } catch (err) {
-    throw new Error(`[delete falhou] ${(err as Error).message}`);
+    console.warn("[evolution] reset: delete step failed (continuing):", (err as Error).message);
   }
-  const cfg = readConfig();
+  clearInstanceTokenCache();
+
+  // Step 3: create. This is the one we care about. Evolution returns the QR
+  // base64 right here when qrcode:true.
   let result: unknown;
   try {
     result = await evolutionFetch(`/instance/create`, {
@@ -306,9 +356,28 @@ export async function resetInstance(): Promise<unknown> {
       }),
     });
   } catch (err) {
-    throw new Error(`[create falhou] ${(err as Error).message}`);
+    const msg = (err as Error).message || "";
+    // Instance still exists despite the delete attempt above (delete was
+    // rejected and create can't overwrite). Try restart as a last resort —
+    // some Evolution builds expose /instance/restart which kicks Baileys.
+    if (msg.toLowerCase().includes("already") || msg.includes("409")) {
+      try {
+        await evolutionFetch(`/instance/restart/${encodeURIComponent(cfg.instance)}`, {
+          method: "POST",
+        });
+        result = await evolutionFetch(`/instance/connect/${encodeURIComponent(cfg.instance)}`);
+      } catch (restartErr) {
+        throw new Error(
+          `Não consegui recriar a instância. A instância existe mas o WhatsApp não respondeu. ` +
+          `Detalhes: create→ ${msg}; restart→ ${(restartErr as Error).message}`,
+        );
+      }
+    } else {
+      throw new Error(`[create falhou] ${msg}`);
+    }
   }
   clearInstanceTokenCache();
+
   try { await registerWebhook(); } catch (err) {
     console.warn("[evolution] webhook register after reset failed (non-fatal):", (err as Error).message);
   }

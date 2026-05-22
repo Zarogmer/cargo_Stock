@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { isEvolutionConfigured, resetInstance } from "@/lib/services/evolution-api";
+import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 
 export async function POST() {
   const session = await auth();
@@ -15,6 +16,6 @@ export async function POST() {
     const result = await resetInstance();
     return NextResponse.json({ success: true, result });
   } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 502 });
+    return NextResponse.json({ error: friendlyEvolutionError((err as Error).message) }, { status: 502 });
   }
 }
