@@ -43,6 +43,16 @@ interface TrainingAlert {
   days_until: number;
 }
 
+interface Birthday {
+  employee_id: number;
+  employee_name: string;
+  day: number;
+  month: number;
+  // Negative when already passed this month, 0 when today, positive ahead.
+  days_until: number;
+  turning_age: number | null;
+}
+
 interface DollarQuote {
   bid: string;
   ask: string;
@@ -63,6 +73,7 @@ export default function DashboardPage() {
   const [shipsByMonth, setShipsByMonth] = useState<{ month: string; count: number }[]>([]);
   const [recentPurchases, setRecentPurchases] = useState<{ id: string; tool_name: string; quantity: number; requested_by: string; responded_by: string; updated_at: string }[]>([]);
   const [trainingAlerts, setTrainingAlerts] = useState<TrainingAlert[]>([]);
+  const [birthdays, setBirthdays] = useState<Birthday[]>([]);
   const [loading, setLoading] = useState(true);
 
   const loadDashboard = useCallback(async () => {
@@ -231,6 +242,38 @@ export default function DashboardPage() {
       });
       alerts.sort((a, b) => a.days_until - b.days_until);
       setTrainingAlerts(alerts);
+
+      // Aniversariantes do mês — todos os colaboradores ATIVOS que fazem
+      // aniversário no mês corrente, ordenados por dia (já passados primeiro,
+      // depois os de hoje, depois os próximos).
+      const birthdayRes = await db
+        .from("employees")
+        .select("id, name, birth_date, status")
+        .eq("status", "ATIVO");
+      const currentMonth = today.getMonth() + 1;
+      const currentDay = today.getDate();
+      const currentYear = today.getFullYear();
+      const monthBirthdays: Birthday[] = [];
+      ((birthdayRes.data as Array<{ id: number; name: string; birth_date: string | null }> | null) || []).forEach((e) => {
+        if (!e.birth_date) return;
+        const d = new Date(e.birth_date);
+        if (Number.isNaN(d.getTime())) return;
+        const month = d.getUTCMonth() + 1;
+        if (month !== currentMonth) return;
+        const day = d.getUTCDate();
+        const birthYear = d.getUTCFullYear();
+        const turningAge = birthYear > 1900 ? currentYear - birthYear : null;
+        monthBirthdays.push({
+          employee_id: e.id,
+          employee_name: e.name,
+          day,
+          month,
+          days_until: day - currentDay,
+          turning_age: turningAge,
+        });
+      });
+      monthBirthdays.sort((a, b) => a.day - b.day);
+      setBirthdays(monthBirthdays);
     } catch (err) {
       console.error("Dashboard load error:", err);
     } finally {
@@ -488,6 +531,68 @@ export default function DashboardPage() {
           </div>
         </CollapsibleSection>
       )}
+
+      {/* Aniversariantes do mês — todos os usuários veem */}
+      <CollapsibleSection
+        storageKey="birthdays-of-month"
+        className="bg-card rounded-2xl border border-pink-200 overflow-hidden"
+        title={`🎂 Aniversariantes de ${new Date().toLocaleDateString("pt-BR", { month: "long" })}`}
+        subtitle={
+          birthdays.length === 0
+            ? "Ninguém faz aniversário este mês."
+            : `${birthdays.length} ${birthdays.length === 1 ? "colaborador" : "colaboradores"} para lembrar.`
+        }
+      >
+        {birthdays.length === 0 ? (
+          <div className="px-6 py-8 text-center text-text-light">
+            <span className="text-3xl block mb-2">🗓️</span>
+            <p className="text-sm">Nenhum aniversariante neste mês.</p>
+          </div>
+        ) : (
+          <ul className="divide-y divide-border">
+            {birthdays.map((b) => {
+              const today = b.days_until === 0;
+              const passed = b.days_until < 0;
+              const cls = today
+                ? "bg-pink-100 text-pink-700"
+                : passed
+                  ? "bg-gray-100 text-gray-600"
+                  : b.days_until <= 7
+                    ? "bg-amber-100 text-amber-700"
+                    : "bg-blue-100 text-blue-700";
+              const label = today
+                ? "🎉 Hoje!"
+                : passed
+                  ? `Foi há ${Math.abs(b.days_until)}d`
+                  : `Em ${b.days_until}d`;
+              return (
+                <li
+                  key={b.employee_id}
+                  className={`px-6 py-3 flex items-center justify-between gap-3 ${today ? "bg-pink-50/60" : ""}`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-full bg-pink-100 text-pink-600 flex items-center justify-center text-lg shrink-0">
+                      🎂
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate">{b.employee_name}</p>
+                      <p className="text-[11px] text-text-light">
+                        Dia {String(b.day).padStart(2, "0")}/{String(b.month).padStart(2, "0")}
+                        {b.turning_age !== null && b.turning_age > 0 && (
+                          <> · completa <strong className="text-text">{b.turning_age} anos</strong></>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  <span className={`text-xs px-2 py-1 rounded-full font-semibold whitespace-nowrap ${cls}`}>
+                    {label}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </CollapsibleSection>
     </div>
   );
 }
