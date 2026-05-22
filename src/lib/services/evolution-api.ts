@@ -327,80 +327,118 @@ function hasQrCode(body: unknown): boolean {
   return false;
 }
 
-// Best-effort recovery from a stuck instance. Tries, in order:
-//   1. logout — closes the Baileys session cleanly (often returns 500 with
-//      "Connection Closed" when the session is already dead, which is fine)
-//   2. delete — wipes the instance record
-//   3. create — recreates it with qrcode:true
-// Steps 1 and 2 are swallowed (the goal is "make create succeed", not "ensure
-// every step worked"). Only failure of step 3 surfaces — that's the one the
-// admin actually needs to know about.
+async function tryCreate(cfg: EvolutionConfig): Promise<unknown> {
+  return evolutionFetch(`/instance/create`, {
+    method: "POST",
+    body: JSON.stringify({
+      instanceName: cfg.instance,
+      qrcode: true,
+      integration: "WHATSAPP-BAILEYS",
+    }),
+  });
+}
+
+// Best-effort recovery from a stuck instance. Stuck = Evolution reports
+// state:"open" but Baileys is dead, so sends fail with "Connection Closed".
+//
+// We try escalating layers of force, in order:
+//   1. logout    — close the Baileys session cleanly
+//   2. delete    — wipe the instance record (incl. saved credentials)
+//   3. create    — recreate with qrcode:true
+//   4. restart   — kick Baileys if create returned zombie {state:"open", no QR}
+//   5. connect   — fetch fresh QR after the restart
+//   6. delete+create again — if connect ALSO returns zombie (Evolution's
+//      session lock didn't release), nuke it once more
+//   7. give up with a clear error pointing to a Railway service restart
+//
+// We track failures along the way so the final error message can explain
+// WHICH step couldn't recover — usually it's delete being rejected because
+// Baileys still holds the row, and the only real fix is restarting Evolution.
 export async function resetInstance(): Promise<unknown> {
   const cfg = readConfig();
+  const stepErrors: string[] = [];
 
-  // Step 1: logout. Almost always fails with "Connection Closed" when called
-  // on a stuck instance — that's the whole reason we're resetting. Swallow.
+  // Step 1: logout. Almost always fails with "Connection Closed" when the
+  // session is already dead — that's the whole reason we're resetting.
   try {
     await logoutInstance();
   } catch (err) {
-    console.warn("[evolution] reset: logout step failed (continuing):", (err as Error).message);
+    console.warn("[evolution] reset: logout failed (continuing):", (err as Error).message);
   }
   clearInstanceTokenCache();
 
-  // Step 2: delete. May 400 if Evolution doesn't accept delete in the current
-  // state (e.g. session in "connecting"). Swallow and let create try anyway.
+  // Step 2: delete. If it fails we still try create — but track the error so
+  // we can surface it if recovery ultimately fails.
+  let deleteErrMsg: string | null = null;
   try {
     await deleteInstance();
   } catch (err) {
-    console.warn("[evolution] reset: delete step failed (continuing):", (err as Error).message);
+    deleteErrMsg = (err as Error).message;
+    stepErrors.push(`delete: ${deleteErrMsg}`);
+    console.warn("[evolution] reset: delete failed (continuing):", deleteErrMsg);
   }
   clearInstanceTokenCache();
 
-  // Step 3: create. This is the one we care about. Evolution returns the QR
-  // base64 right here when qrcode:true.
-  //
-  // Edge case (the whole reason we're rewriting this): when delete fails
-  // silently and the instance is still in Evolution's books, create returns
-  // 200 OK with {"instance":{"state":"open"}} and NO QR. That's a zombie —
-  // Evolution thinks it's connected, Baileys disagrees. We have to force a
-  // restart to wake it up.
+  // Step 3: create. Evolution returns the QR base64 inline when qrcode:true.
+  // If the instance still exists (delete failed) and is in the zombie state,
+  // create returns 200 OK with {instance:{state:"open"}} and NO QR.
   let result: unknown;
   let createResponse: unknown = null;
   try {
-    createResponse = await evolutionFetch(`/instance/create`, {
-      method: "POST",
-      body: JSON.stringify({
-        instanceName: cfg.instance,
-        qrcode: true,
-        integration: "WHATSAPP-BAILEYS",
-      }),
-    });
+    createResponse = await tryCreate(cfg);
     result = createResponse;
   } catch (err) {
     const msg = (err as Error).message || "";
-    // Some Evolution builds return 409/"already exists" instead of the 200
-    // zombie response above. Same recovery path — kick Baileys.
     if (!(msg.toLowerCase().includes("already") || msg.includes("409"))) {
       throw new Error(`[create falhou] ${msg}`);
     }
+    stepErrors.push(`create: ${msg}`);
   }
 
-  // Detect the "zombie create" response and force a restart. The shape is
-  // { instance: { instanceName, state } } with no qrcode/qrcode.base64 anywhere.
+  // Steps 4-6: zombie recovery. Only enter this branch if create didn't give
+  // us a QR — meaning the instance is alive in Evolution but unusable.
   if (!hasQrCode(createResponse)) {
     try {
+      // Step 4: kick Baileys.
       await evolutionFetch(`/instance/restart/${encodeURIComponent(cfg.instance)}`, {
         method: "POST",
       });
-      // Brief pause so Baileys has time to drop the dead session.
-      await new Promise((r) => setTimeout(r, 1500));
-      // /instance/connect returns the new QR once Baileys re-opens the socket.
-      result = await evolutionFetch(`/instance/connect/${encodeURIComponent(cfg.instance)}`);
+      // Give Baileys time to drop the dead websocket and release its session lock.
+      await new Promise((r) => setTimeout(r, 2000));
+
+      // Step 5: ask for a fresh QR.
+      const connectResponse = await evolutionFetch(
+        `/instance/connect/${encodeURIComponent(cfg.instance)}`,
+      );
+      result = connectResponse;
+
+      // Step 6: connect ALSO returned zombie → delete + create one more time.
+      // By now Baileys should be in a state where delete actually works.
+      if (!hasQrCode(connectResponse)) {
+        clearInstanceTokenCache();
+        try {
+          await deleteInstance();
+        } catch (delErr) {
+          stepErrors.push(`delete pós-restart: ${(delErr as Error).message}`);
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+        try {
+          result = await tryCreate(cfg);
+        } catch (createErr) {
+          stepErrors.push(`create pós-restart: ${(createErr as Error).message}`);
+        }
+      }
     } catch (restartErr) {
+      stepErrors.push(`restart/connect: ${(restartErr as Error).message}`);
+    }
+
+    // Still no QR after all that? Evolution is genuinely stuck — only a
+    // service-level restart on Railway will fix it.
+    if (!hasQrCode(result)) {
+      const detail = stepErrors.length > 0 ? ` Detalhes: ${stepErrors.join(" | ")}.` : "";
       throw new Error(
-        `Instância existe mas está travada (Evolution diz "open" sem QR). ` +
-        `Restart falhou: ${(restartErr as Error).message}. ` +
-        `Tente reiniciar o serviço Evolution na Railway.`,
+        `Evolution está travado — devolve "open" sem QR mesmo após logout, delete, create, restart e connect. ` +
+        `Reinicie o serviço Evolution na Railway (painel Railway → serviço Evolution → Restart) e tente de novo.${detail}`,
       );
     }
   }
