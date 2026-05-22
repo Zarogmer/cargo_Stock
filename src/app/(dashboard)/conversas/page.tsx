@@ -2,6 +2,10 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Modal } from "@/components/ui/modal";
+import { TrashIcon, PlusIcon } from "@/components/icons";
+import { db } from "@/lib/db";
 import { formatPhone } from "@/lib/utils";
 
 interface Conversation {
@@ -27,6 +31,19 @@ interface Message {
   media_filename: string | null;
   timestamp_ms: string;
   created_at: string;
+}
+
+interface ShipOpt {
+  id: string;
+  name: string;
+  whatsapp_group_jid: string | null;
+}
+
+interface EmpOpt {
+  id: number;
+  name: string;
+  phone: string | null;
+  status: string | null;
 }
 
 // "5513999999999@s.whatsapp.net" → "5513999999999"
@@ -76,6 +93,8 @@ function previewLine(c: Conversation): string {
   return `${prefix}${typeLabels[c.last_message_type] || c.last_message_type}`;
 }
 
+// Click-to-load: keeps the chat light by only downloading media when the user
+// explicitly asks for it (Evolution can return base64 blobs in the hundreds of KB).
 function MediaBubble({ msg }: { msg: Message }) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<{ base64: string; mimetype: string } | null>(null);
@@ -151,6 +170,12 @@ export default function ConversasPage() {
   const [sending, setSending] = useState(false);
   const [sendErr, setSendErr] = useState<string | null>(null);
 
+  const [confirmDelete, setConfirmDelete] = useState<Conversation | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
+
+  const [showNewGroup, setShowNewGroup] = useState(false);
+
   const threadRef = useRef<HTMLDivElement>(null);
   const lastMessageCount = useRef(0);
 
@@ -212,6 +237,29 @@ export default function ConversasPage() {
 
   const selectedConv = conversations.find((c) => c.remote_jid === selectedJid) || null;
 
+  async function handleDelete() {
+    if (!confirmDelete) return;
+    setDeleting(true); setDeleteErr(null);
+    try {
+      const res = await fetch(
+        `/api/whatsapp/conversations/${encodeURIComponent(confirmDelete.remote_jid)}`,
+        { method: "DELETE" },
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setConversations((prev) => prev.filter((c) => c.remote_jid !== confirmDelete.remote_jid));
+      if (selectedJid === confirmDelete.remote_jid) {
+        setSelectedJid(null);
+        setMessages([]);
+      }
+      setConfirmDelete(null);
+    } catch (err) {
+      setDeleteErr((err as Error).message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function handleReply(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedJid || !reply.trim()) return;
@@ -230,7 +278,6 @@ export default function ConversasPage() {
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
       setReply("");
-      // Webhook will deliver the from_me event shortly; trigger a refresh now too
       loadMessages(selectedJid);
       loadConversations();
     } catch (err) {
@@ -242,12 +289,14 @@ export default function ConversasPage() {
 
   return (
     <div className="h-[calc(100vh-120px)] flex flex-col">
-      <h1 className="text-2xl font-bold text-text mb-3">Conversas 💬</h1>
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <h1 className="text-2xl font-bold text-text">Conversas 💬</h1>
+        <Button size="sm" onClick={() => setShowNewGroup(true)} className="inline-flex items-center gap-1.5">
+          <PlusIcon className="w-4 h-4" /> Novo grupo
+        </Button>
+      </div>
 
       <div className="flex-1 flex gap-3 min-h-0 bg-card rounded-2xl border border-border overflow-hidden">
-        {/* Sidebar — full width on mobile/tablet when no conversation selected,
-            hidden on mobile/tablet when one is. Side-by-side only on lg+ to
-            avoid cramming both panels on portrait tablets. */}
         <aside
           className={`w-full lg:w-80 shrink-0 lg:border-r border-border flex-col ${
             selectedJid ? "hidden lg:flex" : "flex"
@@ -274,11 +323,11 @@ export default function ConversasPage() {
                 {filteredConvs.map((c) => {
                   const active = c.remote_jid === selectedJid;
                   return (
-                    <li key={c.remote_jid}>
+                    <li key={c.remote_jid} className="group relative">
                       <button
                         type="button"
                         onClick={() => setSelectedJid(c.remote_jid)}
-                        className={`w-full text-left px-3 py-2.5 hover:bg-gray-50 transition ${active ? "bg-primary/5 border-l-2 border-primary" : ""}`}
+                        className={`w-full text-left px-3 py-2.5 pr-9 hover:bg-gray-50 transition ${active ? "bg-primary/5 border-l-2 border-primary" : ""}`}
                       >
                         <div className="flex items-baseline justify-between gap-2">
                           <span className="font-medium text-sm truncate flex items-center gap-1">
@@ -293,6 +342,15 @@ export default function ConversasPage() {
                           {previewLine(c)}
                         </p>
                       </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setConfirmDelete(c); }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded text-text-light hover:text-red-600 hover:bg-red-50 opacity-0 group-hover:opacity-100 focus:opacity-100 transition"
+                        title="Apagar conversa (apenas do sistema)"
+                        aria-label="Apagar conversa"
+                      >
+                        <TrashIcon className="w-3.5 h-3.5" />
+                      </button>
                     </li>
                   );
                 })}
@@ -301,7 +359,6 @@ export default function ConversasPage() {
           </div>
         </aside>
 
-        {/* Thread — hidden on mobile/tablet when no conversation selected (sidebar takes full width instead) */}
         <section
           className={`flex-1 flex-col min-w-0 ${
             selectedJid ? "flex" : "hidden lg:flex"
@@ -328,9 +385,20 @@ export default function ConversasPage() {
                     {selectedConv?.is_group ? "Grupo" : formatPhone(jidToNumber(selectedJid))}
                   </p>
                 </div>
-                <span className="text-xs text-text-light shrink-0">
+                <span className="text-xs text-text-light shrink-0 hidden sm:inline">
                   {messages.length} {messages.length === 1 ? "mensagem" : "mensagens"}
                 </span>
+                {selectedConv && (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(selectedConv)}
+                    className="shrink-0 p-1.5 rounded text-text-light hover:text-red-600 hover:bg-red-50 transition"
+                    title="Apagar conversa (apenas do sistema)"
+                    aria-label="Apagar conversa"
+                  >
+                    <TrashIcon className="w-4 h-4" />
+                  </button>
+                )}
               </header>
 
               <div ref={threadRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-2 bg-[#f0f2f5]">
@@ -384,6 +452,266 @@ export default function ConversasPage() {
           )}
         </section>
       </div>
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        onClose={() => { setConfirmDelete(null); setDeleteErr(null); }}
+        onConfirm={handleDelete}
+        title="Apagar conversa?"
+        message={
+          confirmDelete
+            ? `Isso vai apagar todo o histórico de ${displayName(confirmDelete)} (${confirmDelete.message_count} ${confirmDelete.message_count === 1 ? "mensagem" : "mensagens"}) apenas do sistema. O contato continua tendo as mensagens no WhatsApp dele.`
+            : ""
+        }
+        confirmLabel="Apagar"
+        variant="danger"
+        loading={deleting}
+      />
+      {deleteErr && (
+        <p className="fixed bottom-4 right-4 bg-red-600 text-white text-sm px-3 py-2 rounded shadow-lg">
+          {deleteErr}
+        </p>
+      )}
+
+      <NewGroupModal
+        open={showNewGroup}
+        onClose={() => setShowNewGroup(false)}
+        onCreated={() => {
+          setShowNewGroup(false);
+          loadConversations();
+        }}
+      />
     </div>
+  );
+}
+
+// ─── Novo Grupo Modal ───────────────────────────────────────────────────────
+
+function NewGroupModal({
+  open, onClose, onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [subject, setSubject] = useState("");
+  const [shipId, setShipId] = useState<string>("");
+  const [ships, setShips] = useState<ShipOpt[]>([]);
+  const [employees, setEmployees] = useState<EmpOpt[]>([]);
+  const [selectedEmpIds, setSelectedEmpIds] = useState<Set<number>>(new Set());
+  const [empSearch, setEmpSearch] = useState("");
+  const [extraNumbers, setExtraNumbers] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setSubject(""); setShipId(""); setSelectedEmpIds(new Set());
+    setEmpSearch(""); setExtraNumbers(""); setError(null); setWarning(null);
+    (async () => {
+      try {
+        const [shipsRes, empRes] = await Promise.all([
+          db.from("ships").select("id, name, whatsapp_group_jid").in("status", ["AGENDADO", "EM_OPERACAO"]).order("name"),
+          db.from("employees").select("id, name, phone, status").eq("status", "ATIVO").order("name"),
+        ]);
+        setShips((shipsRes.data as ShipOpt[]) || []);
+        setEmployees((empRes.data as EmpOpt[]) || []);
+      } catch (err) {
+        setError(`Não foi possível carregar listas: ${(err as Error).message}`);
+      }
+    })();
+  }, [open]);
+
+  const filteredEmps = useMemo(() => {
+    const list = employees.filter((e) => e.phone && e.phone.trim().length > 0);
+    if (!empSearch.trim()) return list;
+    const q = empSearch.toLowerCase();
+    return list.filter((e) => e.name.toLowerCase().includes(q));
+  }, [employees, empSearch]);
+
+  function toggleEmp(id: number) {
+    setSelectedEmpIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  // Free-text numbers, one per line or comma-separated. Stripped to digits.
+  function parseExtraNumbers(raw: string): string[] {
+    return raw
+      .split(/[\s,;]+/)
+      .map((s) => s.replace(/\D/g, ""))
+      .filter((s) => s.length >= 10);
+  }
+
+  const totalParticipants = useMemo(() => {
+    const empPhones = Array.from(selectedEmpIds)
+      .map((id) => employees.find((e) => e.id === id)?.phone || "")
+      .filter(Boolean);
+    return new Set([...empPhones, ...parseExtraNumbers(extraNumbers)]).size;
+  }, [selectedEmpIds, employees, extraNumbers]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null); setWarning(null);
+    if (!subject.trim()) { setError("Informe o nome do grupo."); return; }
+    if (totalParticipants === 0) { setError("Adicione ao menos um participante."); return; }
+
+    setSaving(true);
+    try {
+      const empPhones = Array.from(selectedEmpIds)
+        .map((id) => employees.find((e) => e.id === id)?.phone || "")
+        .filter(Boolean);
+      const participants = Array.from(new Set([...empPhones, ...parseExtraNumbers(extraNumbers)]));
+
+      const res = await fetch("/api/whatsapp/groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject: subject.trim(),
+          participants,
+          shipId: shipId || undefined,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      if (body.status === "partial" && body.warning) {
+        setWarning(body.warning);
+        // Don't auto-close — let the user read the warning.
+        return;
+      }
+      onCreated();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputCls = "w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+
+  return (
+    <Modal open={open} onClose={onClose} title="Novo grupo do WhatsApp" maxWidth="max-w-xl">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">Nome do grupo *</label>
+          <input
+            type="text"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="ex.: MV REVENGER - 12"
+            className={inputCls}
+            autoFocus
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Vincular a um navio <span className="text-xs text-text-light font-normal">(opcional)</span>
+          </label>
+          <select value={shipId} onChange={(e) => setShipId(e.target.value)} className={inputCls}>
+            <option value="">— Sem vínculo —</option>
+            {ships.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}{s.whatsapp_group_jid ? " (já tem grupo)" : ""}
+              </option>
+            ))}
+          </select>
+          <p className="text-[10px] text-text-light mt-1">
+            Vinculando, o sistema posta automaticamente a escala diária neste grupo.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Colaboradores <span className="text-xs text-text-light font-normal">
+              ({selectedEmpIds.size} selecionados)
+            </span>
+          </label>
+          <input
+            type="text"
+            value={empSearch}
+            onChange={(e) => setEmpSearch(e.target.value)}
+            placeholder="🔍 Buscar colaborador..."
+            className={inputCls}
+          />
+          <div className="mt-2 max-h-56 overflow-y-auto border border-border rounded-lg">
+            {filteredEmps.length === 0 ? (
+              <p className="px-3 py-3 text-xs text-text-light italic text-center">
+                {empSearch.trim()
+                  ? "Nenhum colaborador com telefone encontrado."
+                  : "Apenas colaboradores ATIVOS com telefone aparecem aqui."}
+              </p>
+            ) : (
+              filteredEmps.map((emp) => {
+                const checked = selectedEmpIds.has(emp.id);
+                return (
+                  <label
+                    key={emp.id}
+                    className={`flex items-center gap-2 px-3 py-2 border-b border-border last:border-0 cursor-pointer transition ${
+                      checked ? "bg-emerald-50 hover:bg-emerald-100" : "hover:bg-blue-50"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleEmp(emp.id)}
+                      className="w-4 h-4 accent-primary"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{emp.name}</p>
+                      <p className="text-[10px] text-text-light">{formatPhone(emp.phone || "")}</p>
+                    </div>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Outros números <span className="text-xs text-text-light font-normal">(opcional, um por linha)</span>
+          </label>
+          <textarea
+            value={extraNumbers}
+            onChange={(e) => setExtraNumbers(e.target.value)}
+            rows={2}
+            placeholder="5513999999999&#10;5513988888888"
+            className={inputCls + " font-mono"}
+          />
+          <p className="text-[10px] text-text-light mt-1">
+            Use só dígitos. Sem o 55 inicial o sistema completa automaticamente.
+          </p>
+        </div>
+
+        {error && (
+          <p className="text-xs text-danger bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            {error}
+          </p>
+        )}
+        {warning && (
+          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            {warning}
+          </p>
+        )}
+
+        <div className="flex items-center justify-between pt-2">
+          <p className="text-xs text-text-light">
+            Total: <strong className="text-text">{totalParticipants}</strong> participante(s)
+          </p>
+          <div className="flex gap-2">
+            <Button type="button" variant="secondary" onClick={onClose} disabled={saving}>
+              Cancelar
+            </Button>
+            <Button type="submit" disabled={saving || totalParticipants === 0 || !subject.trim()}>
+              {saving ? "Criando..." : "Criar grupo"}
+            </Button>
+          </div>
+        </div>
+      </form>
+    </Modal>
   );
 }

@@ -747,6 +747,20 @@ function AddCostadoCrewModal({
           added_at: now,
         });
       }
+      // Fire-and-forget WhatsApp notification (DMs + group post). Errors don't
+      // block the save — they're logged for the admin to check on the Conversas
+      // side if a recipient claims they didn't get the message.
+      fetch("/api/escalacao/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shipId: ship.id,
+          kind: "COSTADO",
+          shiftDate: date,
+          shiftPeriod: period,
+          employeeIds: Array.from(selectedIds),
+        }),
+      }).catch((err) => console.warn("[escalacao] notify failed:", err));
       onSaved();
     } catch (err) {
       setError((err as Error).message);

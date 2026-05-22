@@ -470,6 +470,7 @@ function EscalacaoTab({
         open={showAdd}
         item={editAlloc}
         ensureJob={ensureJob}
+        shipId={ship.id}
         employees={employees}
         functions={functions}
         existingAllocs={activeAllocs.filter((a) => a.id !== editAlloc?.id)}
@@ -493,11 +494,12 @@ function EscalacaoTab({
 // ─── Crew Form Modal (add/edit member) ──────────────────────────────────────
 
 function CrewFormModal({
-  open, item, ensureJob, employees, functions, existingAllocs, profileName, kind, onClose, onSaved,
+  open, item, ensureJob, shipId, employees, functions, existingAllocs, profileName, kind, onClose, onSaved,
 }: {
   open: boolean;
   item: JobAllocation | null;
   ensureJob: () => Promise<string>;
+  shipId: string;
   employees: Employee[];
   functions: JobFunction[];
   existingAllocs: JobAllocation[];
@@ -637,6 +639,20 @@ function CrewFormModal({
       }));
       for (const row of rows) {
         await db.from("job_allocations").insert(row);
+      }
+      // Fire-and-forget WhatsApp notification — only kicks in for EMBARQUE kind
+      // here (COSTADO has its own modal in escalacao-costado-page that already
+      // posts with shift info).
+      if (kind === "EMBARQUE" && shipId) {
+        fetch("/api/escalacao/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shipId,
+            kind: "EMBARQUE",
+            employeeIds: Array.from(selectedIds),
+          }),
+        }).catch((err) => console.warn("[escalacao] notify failed:", err));
       }
       onSaved();
     } catch (err) {

@@ -115,6 +115,56 @@ export async function sendWhatsappText(to: string, text: string): Promise<unknow
   );
 }
 
+// Sends a text message to a group identified by its full JID (e.g. "12036...@g.us").
+// Same endpoint as sendWhatsappText but the "number" field carries the group JID.
+export async function sendWhatsappTextToGroup(groupJid: string, text: string): Promise<unknown> {
+  const cfg = readConfig();
+  if (!groupJid.endsWith("@g.us")) throw new Error("JID de grupo inválido.");
+  const token = await getInstanceToken();
+  return evolutionFetch(
+    `/message/sendText/${encodeURIComponent(cfg.instance)}`,
+    { method: "POST", body: JSON.stringify({ number: groupJid, text }) },
+    token,
+  );
+}
+
+interface CreateGroupResult {
+  // Evolution returns { id: "12036...@g.us", subject, ... }
+  id?: string;
+  groupJid?: string;
+  subject?: string;
+  [key: string]: unknown;
+}
+
+// Creates a WhatsApp group with the given subject and participant numbers.
+// `participants` should be raw numbers (e.g. ["5513999999999"]); they're normalized
+// to BR format and deduplicated.
+export async function createWhatsappGroup(
+  subject: string,
+  participants: string[],
+): Promise<CreateGroupResult> {
+  const cfg = readConfig();
+  const trimmed = subject.trim();
+  if (!trimmed) throw new Error("Nome do grupo é obrigatório.");
+  const normalized = Array.from(new Set(
+    participants
+      .map((p) => normalizeBRNumber(p))
+      .filter((p) => p.length >= 12), // 55 + DDD(2) + number(8-9)
+  ));
+  if (normalized.length === 0) {
+    throw new Error("Selecione ao menos um participante com número válido.");
+  }
+  const token = await getInstanceToken();
+  return evolutionFetch<CreateGroupResult>(
+    `/group/create/${encodeURIComponent(cfg.instance)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ subject: trimmed, participants: normalized }),
+    },
+    token,
+  );
+}
+
 export async function getInstanceStatus(): Promise<{ state?: string } & Record<string, unknown>> {
   const cfg = readConfig();
   return evolutionFetch(`/instance/connectionState/${encodeURIComponent(cfg.instance)}`);

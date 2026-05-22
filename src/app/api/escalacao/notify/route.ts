@@ -1,0 +1,126 @@
+import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import {
+  isEvolutionConfigured,
+  sendWhatsappText,
+  sendWhatsappTextToGroup,
+} from "@/lib/services/evolution-api";
+
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+
+interface NotifyBody {
+  shipId: string;
+  kind: "EMBARQUE" | "COSTADO";
+  // Only set for COSTADO
+  shiftDate?: string;        // "2026-05-22"
+  shiftPeriod?: string;      // "07-13" | "13-19" | "19-01" | "01-07"
+  employeeIds: number[];
+}
+
+// Friendlier label for each costado shift — used on the group post so the
+// message reads natural ("Escala da tarde: …") instead of just "13-19".
+const SHIFT_LABEL: Record<string, string> = {
+  "07-13": "manhã (07h–13h)",
+  "13-19": "tarde (13h–19h)",
+  "19-01": "noite (19h–01h)",
+  "01-07": "madrugada (01h–07h)",
+};
+
+function formatBRDate(iso: string): string {
+  // "2026-05-22" → "22/05/2026"
+  const [y, m, d] = iso.split("-");
+  if (!y || !m || !d) return iso;
+  return `${d}/${m}/${y}`;
+}
+
+// POST /api/escalacao/notify
+// Best-effort: returns 200 with a per-target breakdown so the caller can log
+// (or surface) partial failures without blocking the underlying escalação save.
+export async function POST(request: NextRequest) {
+  const session = await auth();
+  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!ALLOWED_ROLES.includes(session.user.role)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  if (!isEvolutionConfigured()) {
+    return NextResponse.json({ skipped: "Evolution API não configurada" }, { status: 200 });
+  }
+
+  let body: NotifyBody;
+  try {
+    body = (await request.json()) as NotifyBody;
+  } catch {
+    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+  }
+
+  if (!body.shipId || !body.kind || !Array.isArray(body.employeeIds) || body.employeeIds.length === 0) {
+    return NextResponse.json({ error: "Campos obrigatórios faltando" }, { status: 400 });
+  }
+
+  const ship = await prisma.ship.findUnique({
+    where: { id: body.shipId },
+    select: { id: true, name: true, whatsapp_group_jid: true },
+  });
+  if (!ship) return NextResponse.json({ error: "Navio não encontrado" }, { status: 404 });
+
+  const employees = await prisma.employee.findMany({
+    where: { id: { in: body.employeeIds } },
+    select: { id: true, name: true, phone: true },
+  });
+
+  // ── Build the messages ──────────────────────────────────────────────────
+  const isCostado = body.kind === "COSTADO";
+  const dateLabel = body.shiftDate ? formatBRDate(body.shiftDate) : "";
+  const shiftLabel = body.shiftPeriod ? (SHIFT_LABEL[body.shiftPeriod] || body.shiftPeriod) : "";
+  const shipName = ship.name;
+
+  const names = employees.map((e) => e.name);
+  const namesList = names.map((n) => `• ${n}`).join("\n");
+
+  const groupMessage = isCostado
+    ? `🚢 *${shipName}*\n📅 Escala da ${shiftLabel} — ${dateLabel}\n\n${namesList}`
+    : `🚢 *${shipName}*\n⚓ Equipe escalada para o embarque:\n\n${namesList}`;
+
+  function dmFor(name: string): string {
+    if (isCostado) {
+      return `Olá, ${name}!\n\nVocê foi escalado(a) para o navio *${shipName}* — turno da ${shiftLabel} do dia ${dateLabel}.\n\nCargo Stock`;
+    }
+    return `Olá, ${name}!\n\nVocê foi escalado(a) para o embarque do navio *${shipName}*.\n\nCargo Stock`;
+  }
+
+  const results: { target: string; ok: boolean; error?: string }[] = [];
+
+  // ── Group post (only if the ship has a linked group) ────────────────────
+  if (ship.whatsapp_group_jid) {
+    try {
+      await sendWhatsappTextToGroup(ship.whatsapp_group_jid, groupMessage);
+      results.push({ target: `grupo:${ship.whatsapp_group_jid}`, ok: true });
+    } catch (err) {
+      results.push({
+        target: `grupo:${ship.whatsapp_group_jid}`,
+        ok: false,
+        error: (err as Error).message,
+      });
+    }
+  } else {
+    results.push({ target: "grupo", ok: false, error: "Navio não tem grupo do WhatsApp vinculado" });
+  }
+
+  // ── Individual DMs ──────────────────────────────────────────────────────
+  for (const emp of employees) {
+    if (!emp.phone || emp.phone.trim().length < 10) {
+      results.push({ target: `dm:${emp.name}`, ok: false, error: "sem telefone válido" });
+      continue;
+    }
+    try {
+      await sendWhatsappText(emp.phone, dmFor(emp.name));
+      results.push({ target: `dm:${emp.name}`, ok: true });
+    } catch (err) {
+      results.push({ target: `dm:${emp.name}`, ok: false, error: (err as Error).message });
+    }
+  }
+
+  const sent = results.filter((r) => r.ok).length;
+  return NextResponse.json({ status: "ok", sent, total: results.length, results });
+}
