@@ -211,10 +211,14 @@ interface EvolutionGroupInfo {
 // Lists every WhatsApp group the connected number is a member of. Used by the
 // sync endpoint to backfill the conversation list with groups created outside
 // the app or before this feature existed.
+//
+// Evolution requires `getParticipants` to ALWAYS be present in the query
+// string (it errors with "The getParticipants needs to be informed in the
+// query" otherwise) — we default to false to keep the response light.
 export async function fetchAllGroups(includeParticipants = false): Promise<EvolutionGroupInfo[]> {
   const cfg = readConfig();
   const token = await getInstanceToken();
-  const qs = includeParticipants ? "?getParticipants=true" : "";
+  const qs = `?getParticipants=${includeParticipants ? "true" : "false"}`;
   const result = await evolutionFetch<EvolutionGroupInfo[] | { groups?: EvolutionGroupInfo[] }>(
     `/group/fetchAllGroups/${encodeURIComponent(cfg.instance)}${qs}`,
     {},
