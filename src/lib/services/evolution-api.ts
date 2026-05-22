@@ -314,6 +314,19 @@ export async function registerWebhook(): Promise<unknown> {
   );
 }
 
+// True when the response body has a QR base64 / pairing code somewhere in
+// it — used to decide whether /instance/create actually gave us something
+// usable or returned a "state-only" zombie response.
+function hasQrCode(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  const obj = body as Record<string, unknown>;
+  if (typeof obj.base64 === "string" && obj.base64.length > 0) return true;
+  if (typeof obj.code === "string" && obj.code.length > 0) return true;
+  if (typeof obj.pairingCode === "string" && obj.pairingCode.length > 0) return true;
+  if (obj.qrcode && typeof obj.qrcode === "object") return hasQrCode(obj.qrcode);
+  return false;
+}
+
 // Best-effort recovery from a stuck instance. Tries, in order:
 //   1. logout — closes the Baileys session cleanly (often returns 500 with
 //      "Connection Closed" when the session is already dead, which is fine)
@@ -345,9 +358,16 @@ export async function resetInstance(): Promise<unknown> {
 
   // Step 3: create. This is the one we care about. Evolution returns the QR
   // base64 right here when qrcode:true.
+  //
+  // Edge case (the whole reason we're rewriting this): when delete fails
+  // silently and the instance is still in Evolution's books, create returns
+  // 200 OK with {"instance":{"state":"open"}} and NO QR. That's a zombie —
+  // Evolution thinks it's connected, Baileys disagrees. We have to force a
+  // restart to wake it up.
   let result: unknown;
+  let createResponse: unknown = null;
   try {
-    result = await evolutionFetch(`/instance/create`, {
+    createResponse = await evolutionFetch(`/instance/create`, {
       method: "POST",
       body: JSON.stringify({
         instanceName: cfg.instance,
@@ -355,25 +375,33 @@ export async function resetInstance(): Promise<unknown> {
         integration: "WHATSAPP-BAILEYS",
       }),
     });
+    result = createResponse;
   } catch (err) {
     const msg = (err as Error).message || "";
-    // Instance still exists despite the delete attempt above (delete was
-    // rejected and create can't overwrite). Try restart as a last resort —
-    // some Evolution builds expose /instance/restart which kicks Baileys.
-    if (msg.toLowerCase().includes("already") || msg.includes("409")) {
-      try {
-        await evolutionFetch(`/instance/restart/${encodeURIComponent(cfg.instance)}`, {
-          method: "POST",
-        });
-        result = await evolutionFetch(`/instance/connect/${encodeURIComponent(cfg.instance)}`);
-      } catch (restartErr) {
-        throw new Error(
-          `Não consegui recriar a instância. A instância existe mas o WhatsApp não respondeu. ` +
-          `Detalhes: create→ ${msg}; restart→ ${(restartErr as Error).message}`,
-        );
-      }
-    } else {
+    // Some Evolution builds return 409/"already exists" instead of the 200
+    // zombie response above. Same recovery path — kick Baileys.
+    if (!(msg.toLowerCase().includes("already") || msg.includes("409"))) {
       throw new Error(`[create falhou] ${msg}`);
+    }
+  }
+
+  // Detect the "zombie create" response and force a restart. The shape is
+  // { instance: { instanceName, state } } with no qrcode/qrcode.base64 anywhere.
+  if (!hasQrCode(createResponse)) {
+    try {
+      await evolutionFetch(`/instance/restart/${encodeURIComponent(cfg.instance)}`, {
+        method: "POST",
+      });
+      // Brief pause so Baileys has time to drop the dead session.
+      await new Promise((r) => setTimeout(r, 1500));
+      // /instance/connect returns the new QR once Baileys re-opens the socket.
+      result = await evolutionFetch(`/instance/connect/${encodeURIComponent(cfg.instance)}`);
+    } catch (restartErr) {
+      throw new Error(
+        `Instância existe mas está travada (Evolution diz "open" sem QR). ` +
+        `Restart falhou: ${(restartErr as Error).message}. ` +
+        `Tente reiniciar o serviço Evolution na Railway.`,
+      );
     }
   }
   clearInstanceTokenCache();
