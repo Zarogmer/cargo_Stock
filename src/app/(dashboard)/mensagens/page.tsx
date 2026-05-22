@@ -415,14 +415,16 @@ export default function MensagensPage() {
           <h3 className="text-sm font-semibold mb-3">Resultado do envio</h3>
           <ul className="divide-y divide-border text-sm">
             {results.map((r, idx) => (
-              <li key={idx} className="flex items-center gap-2 py-2">
-                <span className={`w-2 h-2 rounded-full shrink-0 ${r.ok ? "bg-emerald-500" : "bg-red-500"}`} />
-                <span className="flex-1">{r.name}</span>
-                <span className="text-xs text-text-light font-mono">{formatPhone(r.phone)}</span>
-                {!r.ok && (
-                  <span className="text-xs text-red-700 max-w-xs truncate" title={r.error}>
+              <li key={idx} className="py-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${r.ok ? "bg-emerald-500" : "bg-red-500"}`} />
+                  <span className="flex-1 min-w-0">{r.name}</span>
+                  <span className="text-xs text-text-light font-mono">{formatPhone(r.phone)}</span>
+                </div>
+                {!r.ok && r.error && (
+                  <p className="ml-4 mt-1 text-xs text-red-700 whitespace-pre-wrap break-words">
                     {r.error}
-                  </span>
+                  </p>
                 )}
               </li>
             ))}

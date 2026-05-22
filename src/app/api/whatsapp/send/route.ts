@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { isEvolutionConfigured, sendWhatsappText } from "@/lib/services/evolution-api";
+import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 
 // POST { to: string, text: string } — sends a WhatsApp text via Evolution API.
 // Requires authentication. Returns 503 when Evolution is not configured so the
@@ -31,6 +32,6 @@ export async function POST(request: NextRequest) {
     const result = await sendWhatsappText(to, text);
     return NextResponse.json({ success: true, result });
   } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 502 });
+    return NextResponse.json({ error: friendlyEvolutionError((err as Error).message) }, { status: 502 });
   }
 }

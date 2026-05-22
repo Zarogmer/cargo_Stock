@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { createWhatsappGroup, isEvolutionConfigured } from "@/lib/services/evolution-api";
+import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
@@ -59,21 +60,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ status: "ok", jid, raw: created });
   } catch (err) {
-    return NextResponse.json({ error: friendlyError((err as Error).message) }, { status: 502 });
+    return NextResponse.json({ error: friendlyEvolutionError((err as Error).message) }, { status: 502 });
   }
-}
-
-// Translate Evolution/Baileys errors into something a non-engineer can act on.
-function friendlyError(raw: string): string {
-  const lower = raw.toLowerCase();
-  if (lower.includes("connection closed") || lower.includes("connection lost")) {
-    return "WhatsApp desconectado no servidor. Abra a aba WhatsApp API, confira o status e escaneie o QR Code novamente.";
-  }
-  if (lower.includes("not exists") || lower.includes("does not exist")) {
-    return "Um dos números informados não tem WhatsApp ou está inválido. Confirme os contatos selecionados.";
-  }
-  if (lower.includes("timeout")) {
-    return "Tempo esgotado falando com o WhatsApp. Tenta de novo em alguns segundos.";
-  }
-  return raw;
 }
