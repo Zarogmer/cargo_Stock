@@ -9,6 +9,11 @@ import {
 
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
+// Where to send: "GROUP" only posts to the ship's WhatsApp group (and skips
+// DMs entirely), "DM" only sends individual messages to each escalated person,
+// "BOTH" does both. Defaults to "BOTH" so older callers keep working.
+type NotifyTargets = "GROUP" | "DM" | "BOTH";
+
 interface NotifyBody {
   shipId: string;
   kind: "EMBARQUE" | "COSTADO";
@@ -16,6 +21,7 @@ interface NotifyBody {
   shiftDate?: string;        // "2026-05-22"
   shiftPeriod?: string;      // "07-13" | "13-19" | "19-01" | "01-07"
   employeeIds: number[];
+  targets?: NotifyTargets;
 }
 
 // Friendlier label for each costado shift — used on the group post so the
@@ -89,35 +95,43 @@ export async function POST(request: NextRequest) {
     return `Olá, ${name}!\n\nVocê foi escalado(a) para o embarque do navio *${shipName}*.\n\nCargo Stock`;
   }
 
+  const targets: NotifyTargets = body.targets || "BOTH";
+  const sendToGroup = targets === "GROUP" || targets === "BOTH";
+  const sendToDM = targets === "DM" || targets === "BOTH";
+
   const results: { target: string; ok: boolean; error?: string }[] = [];
 
-  // ── Group post (only if the ship has a linked group) ────────────────────
-  if (ship.whatsapp_group_jid) {
-    try {
-      await sendWhatsappTextToGroup(ship.whatsapp_group_jid, groupMessage);
-      results.push({ target: `grupo:${ship.whatsapp_group_jid}`, ok: true });
-    } catch (err) {
-      results.push({
-        target: `grupo:${ship.whatsapp_group_jid}`,
-        ok: false,
-        error: (err as Error).message,
-      });
+  // ── Group post (only if the ship has a linked group AND the caller asked) ─
+  if (sendToGroup) {
+    if (ship.whatsapp_group_jid) {
+      try {
+        await sendWhatsappTextToGroup(ship.whatsapp_group_jid, groupMessage);
+        results.push({ target: `grupo:${ship.whatsapp_group_jid}`, ok: true });
+      } catch (err) {
+        results.push({
+          target: `grupo:${ship.whatsapp_group_jid}`,
+          ok: false,
+          error: (err as Error).message,
+        });
+      }
+    } else {
+      results.push({ target: "grupo", ok: false, error: "Navio não tem grupo do WhatsApp vinculado" });
     }
-  } else {
-    results.push({ target: "grupo", ok: false, error: "Navio não tem grupo do WhatsApp vinculado" });
   }
 
   // ── Individual DMs ──────────────────────────────────────────────────────
-  for (const emp of employees) {
-    if (!emp.phone || emp.phone.trim().length < 10) {
-      results.push({ target: `dm:${emp.name}`, ok: false, error: "sem telefone válido" });
-      continue;
-    }
-    try {
-      await sendWhatsappText(emp.phone, dmFor(emp.name));
-      results.push({ target: `dm:${emp.name}`, ok: true });
-    } catch (err) {
-      results.push({ target: `dm:${emp.name}`, ok: false, error: (err as Error).message });
+  if (sendToDM) {
+    for (const emp of employees) {
+      if (!emp.phone || emp.phone.trim().length < 10) {
+        results.push({ target: `dm:${emp.name}`, ok: false, error: "sem telefone válido" });
+        continue;
+      }
+      try {
+        await sendWhatsappText(emp.phone, dmFor(emp.name));
+        results.push({ target: `dm:${emp.name}`, ok: true });
+      } catch (err) {
+        results.push({ target: `dm:${emp.name}`, ok: false, error: (err as Error).message });
+      }
     }
   }
 
