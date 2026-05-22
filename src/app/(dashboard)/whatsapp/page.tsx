@@ -240,18 +240,26 @@ export default function WhatsappPage() {
               </p>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button size="sm" variant="secondary" onClick={loadStatus} disabled={loadingStatus}>
               ↻ Atualizar
             </Button>
             {isAdmin && stateRaw === "open" && (
-              <Button size="sm" variant="danger" onClick={handleLogout} disabled={busy}>
-                Desconectar
-              </Button>
+              <>
+                <Button size="sm" variant="danger" onClick={handleLogout} disabled={busy}>
+                  Desconectar
+                </Button>
+                <Button size="sm" variant="danger" onClick={handleReset} disabled={busy} title="Use quando o status diz 'Conectado' mas envios falham com Connection Closed">
+                  Recriar (reset)
+                </Button>
+              </>
             )}
           </div>
         </div>
 
+        {/* Recovery path — shown only when the instance is NOT open. When open
+            but stuck (status=open + operations failing), the admin also has
+            "Recriar (reset)" in the top-right action bar above. */}
         {isAdmin && (status?.configured !== false && stateRaw !== "open") && (
           <div className="border-t border-border pt-3 flex gap-2 flex-wrap">
             <Button size="sm" onClick={handleCreate} disabled={busy}>
