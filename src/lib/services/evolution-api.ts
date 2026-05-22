@@ -202,10 +202,27 @@ export async function getInstanceStatus(): Promise<{ state?: string } & Record<s
 interface EvolutionGroupInfo {
   id?: string;
   subject?: string;
+  subjectOwner?: string;
+  subjectTime?: number;
   size?: number;
   desc?: string;
-  participants?: Array<{ id?: string; admin?: string }>;
+  creation?: number;             // seconds-since-epoch
+  owner?: string;
+  participants?: Array<{ id?: string; admin?: string | null }>;
   [key: string]: unknown;
+}
+
+// Detailed info for a single group — used by the conversation info panel.
+// Evolution returns participants with their JIDs and admin flags so we can
+// cross-reference with our Employees table for friendly names.
+export async function findGroupInfo(groupJid: string): Promise<EvolutionGroupInfo> {
+  const cfg = readConfig();
+  const token = await getInstanceToken();
+  return evolutionFetch<EvolutionGroupInfo>(
+    `/group/findGroupInfos/${encodeURIComponent(cfg.instance)}?groupJid=${encodeURIComponent(groupJid)}`,
+    {},
+    token,
+  );
 }
 
 // Lists every WhatsApp group the connected number is a member of. Used by the

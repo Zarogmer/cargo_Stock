@@ -39,6 +39,30 @@ interface ShipOpt {
   whatsapp_group_jid: string | null;
 }
 
+// Full response of GET /api/whatsapp/groups/[jid] — used by the info panel.
+interface GroupInfo {
+  jid: string;
+  subject: string | null;
+  description: string | null;
+  created_at_ms: number | null;
+  owner: string | null;
+  size: number;
+  participants: Array<{
+    jid: string;
+    phone: string;
+    admin: string | null;
+    employee: { id: number; name: string; team: string | null; status: string | null } | null;
+  }>;
+  ship: {
+    id: string;
+    name: string;
+    status: string;
+    port: string | null;
+    arrival_date: string | null;
+    departure_date: string | null;
+  } | null;
+}
+
 interface EmpOpt {
   id: number;
   name: string;
@@ -234,6 +258,9 @@ export default function ConversasPage() {
   // Fullscreen image viewer state — populated when the user clicks an image bubble.
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
+  // Group info panel — opened from the chat header on group conversations.
+  const [showGroupInfoJid, setShowGroupInfoJid] = useState<string | null>(null);
+
   const threadRef = useRef<HTMLDivElement>(null);
   const lastMessageCount = useRef(0);
 
@@ -366,7 +393,7 @@ export default function ConversasPage() {
   }
 
   return (
-    <div className="h-[calc(100vh-120px)] flex flex-col">
+    <div className="h-full flex flex-col min-h-0">
       <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
         <h1 className="text-2xl font-bold text-text">Conversas 💬</h1>
         <div className="flex gap-2 flex-wrap">
@@ -486,6 +513,17 @@ export default function ConversasPage() {
                 <span className="text-xs text-text-light shrink-0 hidden sm:inline">
                   {messages.length} {messages.length === 1 ? "mensagem" : "mensagens"}
                 </span>
+                {selectedConv?.is_group && (
+                  <button
+                    type="button"
+                    onClick={() => setShowGroupInfoJid(selectedJid)}
+                    className="shrink-0 p-1.5 rounded text-text-light hover:text-primary hover:bg-primary/10 transition"
+                    title="Informações do grupo"
+                    aria-label="Informações do grupo"
+                  >
+                    <span className="text-base leading-none">ℹ️</span>
+                  </button>
+                )}
                 {selectedConv && (
                   <button
                     type="button"
@@ -583,7 +621,163 @@ export default function ConversasPage() {
       {lightboxSrc && (
         <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}
+
+      <GroupInfoModal
+        jid={showGroupInfoJid}
+        onClose={() => setShowGroupInfoJid(null)}
+      />
     </div>
+  );
+}
+
+// ─── Group Info Modal ───────────────────────────────────────────────────────
+// Fetched on open from /api/whatsapp/groups/[jid] — shows subject, description,
+// creation date, linked ship, and the full participant list with employee
+// cross-reference so admins can see who's in each group.
+function GroupInfoModal({ jid, onClose }: { jid: string | null; onClose: () => void }) {
+  const [info, setInfo] = useState<GroupInfo | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!jid) return;
+    setLoading(true); setErr(null); setInfo(null);
+    (async () => {
+      try {
+        const res = await fetch(`/api/whatsapp/groups/${encodeURIComponent(jid)}`);
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+        setInfo(body as GroupInfo);
+      } catch (e) {
+        setErr((e as Error).message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [jid]);
+
+  const formatCreation = (ms: number | null) =>
+    ms ? new Date(ms).toLocaleString("pt-BR", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+
+  return (
+    <Modal open={!!jid} onClose={onClose} title="Informações do grupo" maxWidth="max-w-2xl">
+      {loading && <p className="text-sm text-text-light">Carregando informações...</p>}
+      {err && (
+        <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          {err}
+        </p>
+      )}
+      {info && (
+        <div className="space-y-4">
+          {/* Header card */}
+          <div className="bg-gray-50 border border-border rounded-xl p-4">
+            <p className="text-xs uppercase tracking-wider text-text-light font-semibold">Nome do grupo</p>
+            <p className="font-semibold text-text mt-0.5">{info.subject || "(sem nome)"}</p>
+            {info.description && (
+              <>
+                <p className="text-xs uppercase tracking-wider text-text-light font-semibold mt-3">Descrição</p>
+                <p className="text-sm text-text whitespace-pre-wrap mt-0.5">{info.description}</p>
+              </>
+            )}
+            <div className="grid grid-cols-2 gap-3 mt-3 text-xs">
+              <div>
+                <p className="uppercase tracking-wider text-text-light font-semibold">Criado em</p>
+                <p className="text-text mt-0.5">{formatCreation(info.created_at_ms)}</p>
+              </div>
+              <div>
+                <p className="uppercase tracking-wider text-text-light font-semibold">Participantes</p>
+                <p className="text-text mt-0.5">{info.size}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Linked ship */}
+          <div className={`rounded-xl border p-4 ${
+            info.ship
+              ? "bg-emerald-50 border-emerald-200"
+              : "bg-amber-50 border-amber-200"
+          }`}>
+            <p className="text-xs uppercase tracking-wider font-semibold text-text-light">Navio vinculado</p>
+            {info.ship ? (
+              <>
+                <a
+                  href="/navios"
+                  className="block mt-0.5 font-semibold text-emerald-900 hover:underline"
+                >
+                  🚢 {info.ship.name}
+                </a>
+                <p className="text-xs text-emerald-800 mt-1">
+                  Status: <strong>{info.ship.status}</strong>
+                  {info.ship.port && <> · Porto: <strong>{info.ship.port}</strong></>}
+                </p>
+                <p className="text-[10px] text-emerald-700 mt-1">
+                  A escala diária é postada automaticamente neste grupo.
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-amber-900 mt-0.5">
+                Nenhum navio vinculado.{" "}
+                <span className="text-xs text-amber-800">
+                  Vincule este grupo a um navio na aba <strong>Navios</strong> pra ativar o envio automático de escala.
+                </span>
+              </p>
+            )}
+          </div>
+
+          {/* Participants */}
+          <div>
+            <p className="text-xs uppercase tracking-wider text-text-light font-semibold mb-2">
+              Participantes ({info.participants.length})
+            </p>
+            <div className="border border-border rounded-xl divide-y divide-border max-h-72 overflow-y-auto">
+              {info.participants.length === 0 ? (
+                <p className="px-3 py-4 text-xs text-text-light italic text-center">
+                  Nenhum participante retornado pelo WhatsApp.
+                </p>
+              ) : (
+                info.participants.map((p) => (
+                  <div key={p.jid} className="px-3 py-2 flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                      <span className="text-xs font-semibold text-primary">
+                        {(p.employee?.name || p.phone || "?").slice(0, 2).toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">
+                        {p.employee?.name || (
+                          <span className="text-text-light italic">Não cadastrado</span>
+                        )}
+                      </p>
+                      <p className="text-[10px] text-text-light font-mono">
+                        {formatPhone(p.phone) || p.phone}
+                        {p.employee?.team && ` · ${p.employee.team}`}
+                      </p>
+                    </div>
+                    {p.admin && (
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${
+                        p.admin === "superadmin"
+                          ? "bg-amber-100 text-amber-800"
+                          : "bg-blue-100 text-blue-800"
+                      }`}>
+                        {p.admin === "superadmin" ? "Dono" : "Admin"}
+                      </span>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+            <p className="text-[10px] text-text-light mt-2">
+              Os nomes são casados pelo telefone com a aba <strong>Colaboradores</strong>. Quem aparece como
+              &quot;Não cadastrado&quot; ainda não tem registro no sistema (ou o telefone está em outro formato).
+            </p>
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <Button variant="secondary" onClick={onClose}>Fechar</Button>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
 
