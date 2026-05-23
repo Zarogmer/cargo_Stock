@@ -65,14 +65,35 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Categorias estruturadas de despesa, usadas no fechamento. A ordem aqui é
+// também a ordem em que aparecem na exportação Excel.
+const EXPENSE_CATEGORIES = [
+  { value: "COMPRAS",            label: "Compras" },
+  { value: "QUIMICA",            label: "Química" },
+  { value: "MATERIAL_DANIFICADO", label: "Material danificado" },
+  { value: "AJUDA_DE_CUSTO",     label: "Ajuda de custo" },
+  { value: "ALIMENTACAO",        label: "Alimentação" },
+  { value: "RESTAURANTE",        label: "Jantar/Restaurante" },
+  { value: "OUTROS",             label: "Outros" },
+] as const;
+type ExpenseCategory = typeof EXPENSE_CATEGORIES[number]["value"];
+
+function categoryLabel(cat: string | null | undefined): string {
+  if (!cat) return "Outros";
+  return EXPENSE_CATEGORIES.find((c) => c.value === cat)?.label || cat;
+}
+
 function calcJobCost(job: Job, allocations: JobAllocation[], adjustments: JobAdjustment[]): {
-  base: number;
-  adj: number;
+  base: number;     // soma dos pagamentos base (rate × dias) + rateios
+  adj: number;      // ajustes (adicionais menos reduções)
   total: number;
 } {
   const jobAllocs = allocations.filter((a) => a.job_id === job.id);
   const jobAdjs = adjustments.filter((a) => a.job_id === job.id);
-  const base = jobAllocs.reduce((sum, a) => sum + Number(a.rate) * a.quantity, 0);
+  const base = jobAllocs.reduce(
+    (sum, a) => sum + Number(a.rate) * a.quantity + Number(a.extra_value || 0),
+    0,
+  );
   const adj = jobAdjs.reduce(
     (sum, a) => sum + (a.type === "ADICIONAL" ? Number(a.amount) : -Number(a.amount)),
     0
@@ -1050,8 +1071,15 @@ function JobDetailModal({
 
   const [showAddAdj, setShowAddAdj] = useState(false);
   const [adjType, setAdjType] = useState<AdjustmentType>("ADICIONAL");
+  const [adjCategory, setAdjCategory] = useState<ExpenseCategory>("COMPRAS");
   const [adjDesc, setAdjDesc] = useState("");
   const [adjAmt, setAdjAmt] = useState("");
+
+  // Rateio: distribute the no-show person's pay among the rest of the same role.
+  const [showRateio, setShowRateio] = useState(false);
+  const [rateioFnId, setRateioFnId] = useState<string>("");
+  const [rateioMissing, setRateioMissing] = useState<string>("1");
+  const [rateioSaving, setRateioSaving] = useState(false);
 
   const [showCloseForm, setShowCloseForm] = useState(false);
   const [showFunctionForm, setShowFunctionForm] = useState(false);
@@ -1062,10 +1090,11 @@ function JobDetailModal({
   useEffect(() => {
     if (open) {
       setShowAddAlloc(false); setShowAddAdj(false); setShowCloseForm(false);
-      setShowFunctionForm(false);
+      setShowFunctionForm(false); setShowRateio(false);
       setAllocEmp(""); setAllocFn(""); setAllocDays("1"); setAllocRate(""); setAllocPluxee("0");
       setEditAllocId(null);
-      setAdjType("ADICIONAL"); setAdjDesc(""); setAdjAmt("");
+      setAdjType("ADICIONAL"); setAdjCategory("COMPRAS"); setAdjDesc(""); setAdjAmt("");
+      setRateioFnId(""); setRateioMissing("1");
       setPayrollValue(job?.payroll_value?.toString() || "");
     }
   }, [open, job]);
@@ -1116,12 +1145,87 @@ function JobDetailModal({
     await db.from("job_adjustments").insert({
       job_id: job!.id,
       type: adjType,
+      category: adjCategory,
       description: adjDesc.trim(),
       amount: parseFloat(adjAmt),
     });
     setShowAddAdj(false);
     setAdjDesc(""); setAdjAmt("");
     onChange();
+  }
+
+  // Rateio: divides (rate × dias) × missingCount equally among the allocations
+  // of the chosen function, persisting on extra_value with an explanatory reason.
+  async function handleApplyRateio() {
+    const fnId = parseInt(rateioFnId, 10);
+    const missing = parseInt(rateioMissing, 10);
+    if (!fnId || !missing || missing < 1) return;
+    const fnAllocs = allocations.filter((a) => a.function_id === fnId && a.status === "ATIVO");
+    if (fnAllocs.length === 0) return;
+
+    // Reference rate/days: take the most common (or the first) row.
+    const refRate = Number(fnAllocs[0].rate);
+    const refDays = fnAllocs[0].quantity;
+    const missingPay = refRate * refDays * missing;
+    const perPerson = +(missingPay / fnAllocs.length).toFixed(2);
+    const fnName = functions.find((f) => f.id === fnId)?.name || `Função ${fnId}`;
+    const reason = `Rateio: ${missing} ${fnName} faltou(aram), valor (${brl(refRate * refDays)} × ${missing}) dividido entre ${fnAllocs.length}`;
+
+    setRateioSaving(true);
+    try {
+      for (const a of fnAllocs) {
+        const current = Number(a.extra_value || 0);
+        await db.from("job_allocations").update({
+          extra_value: current + perPerson,
+          extra_reason: reason,
+        }).eq("id", a.id);
+      }
+      setShowRateio(false);
+      setRateioFnId(""); setRateioMissing("1");
+      onChange();
+    } finally {
+      setRateioSaving(false);
+    }
+  }
+
+  // Strip the extra_value from each allocation of a given function (undo rateio).
+  async function handleClearRateio(fnId: number) {
+    if (!confirm("Remover o rateio aplicado a essa função?")) return;
+    const fnAllocs = allocations.filter((a) => a.function_id === fnId && a.status === "ATIVO" && Number(a.extra_value || 0) > 0);
+    for (const a of fnAllocs) {
+      await db.from("job_allocations").update({
+        extra_value: 0,
+        extra_reason: null,
+      }).eq("id", a.id);
+    }
+    onChange();
+  }
+
+  // Export the closing as an Excel file matching the user's template layout.
+  async function handleExportFechamentoXlsx() {
+    setExporting("fechamento");
+    try {
+      const params = new URLSearchParams({ jobId: job!.id });
+      const res = await fetch(`/api/financeiro/jobs/export-fechamento?${params}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const safeName = (job!.name || "fechamento").replace(/[^a-z0-9-_ ]/gi, "_").slice(0, 80);
+      a.download = `Fechamento_${safeName}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(`Falha ao exportar: ${(err as Error).message}`);
+    } finally {
+      setExporting("none");
+    }
   }
 
   async function handleDeleteAlloc(id: number) {
@@ -1324,6 +1428,21 @@ function JobDetailModal({
           </div>
         )}
 
+        {/* Quick actions row — export Excel sits here so the user can grab the
+            closing as a spreadsheet at any point regardless of status. */}
+        <div className="flex flex-wrap gap-2 justify-end">
+          <Button
+            size="sm"
+            variant="secondary"
+            type="button"
+            onClick={handleExportFechamentoXlsx}
+            disabled={exporting !== "none"}
+            title="Baixar o fechamento como planilha Excel"
+          >
+            {exporting === "fechamento" ? "Gerando..." : "📥 Exportar Excel"}
+          </Button>
+        </div>
+
         {/* Resumo financeiro */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="rounded-lg border border-red-200 bg-red-50 p-3">
@@ -1362,14 +1481,88 @@ function JobDetailModal({
 
         {/* Alocações */}
         <div>
-          <div className="flex justify-between items-center mb-2">
+          <div className="flex justify-between items-center mb-2 gap-2 flex-wrap">
             <h3 className="text-sm font-semibold">👥 Equipe Alocada ({allocations.length})</h3>
-            {canEdit && !isReadOnly && !showAddAlloc && (
-              <button onClick={() => setShowAddAlloc(true)} className="text-xs px-2 py-1 bg-primary text-white rounded hover:bg-primary-dark">
-                + Adicionar Funcionário
-              </button>
-            )}
+            <div className="flex gap-2">
+              {canEdit && !isReadOnly && !showRateio && allocations.length > 0 && (
+                <button onClick={() => setShowRateio(true)} className="text-xs px-2 py-1 bg-amber-600 text-white rounded hover:bg-amber-700" title="Distribuir o pagamento de quem faltou entre os que foram">
+                  ⚖️ Aplicar Rateio
+                </button>
+              )}
+              {canEdit && !isReadOnly && !showAddAlloc && (
+                <button onClick={() => setShowAddAlloc(true)} className="text-xs px-2 py-1 bg-primary text-white rounded hover:bg-primary-dark">
+                  + Adicionar Funcionário
+                </button>
+              )}
+            </div>
           </div>
+
+          {showRateio && (() => {
+            // Per-function summary inside the rateio form — shows the user
+            // how many people are in each role so they can pick which one
+            // needs the rateio.
+            const fnGroups = new Map<number, JobAllocation[]>();
+            for (const a of allocations) {
+              if (a.status !== "ATIVO") continue;
+              if (!fnGroups.has(a.function_id)) fnGroups.set(a.function_id, []);
+              fnGroups.get(a.function_id)!.push(a);
+            }
+            const fnId = parseInt(rateioFnId, 10);
+            const groupAllocs = fnId ? (fnGroups.get(fnId) || []) : [];
+            const refRate = groupAllocs[0] ? Number(groupAllocs[0].rate) : 0;
+            const refDays = groupAllocs[0]?.quantity || 0;
+            const missing = parseInt(rateioMissing, 10) || 0;
+            const present = groupAllocs.length;
+            const missingPay = refRate * refDays * missing;
+            const perPerson = present > 0 ? missingPay / present : 0;
+            return (
+              <form onSubmit={(e) => { e.preventDefault(); handleApplyRateio(); }} className="bg-amber-50 rounded-lg p-3 mb-2 border border-amber-200 space-y-2">
+                <p className="text-xs text-amber-900 font-medium">
+                  ⚖️ Rateio — divide o pagamento de quem faltou entre os que foram da mesma função.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Função *</label>
+                    <select value={rateioFnId} onChange={(e) => setRateioFnId(e.target.value)} required className={inputCls}>
+                      <option value="">Selecione...</option>
+                      {Array.from(fnGroups.entries()).map(([id, grp]) => {
+                        const fn = functions.find((f) => f.id === id);
+                        return (
+                          <option key={id} value={id}>
+                            {fn?.name || `Função ${id}`} ({grp.length} {grp.length === 1 ? "pessoa" : "pessoas"})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Quantos faltaram *</label>
+                    <input type="number" min={1} value={rateioMissing} onChange={(e) => setRateioMissing(e.target.value)} required className={inputCls} />
+                  </div>
+                </div>
+                {fnId > 0 && present > 0 && missing > 0 && (
+                  <div className="bg-white border border-amber-300 rounded-lg p-2 text-xs space-y-0.5">
+                    <p>Pagamento de referência: <strong>{brl(refRate)} × {refDays} dia{refDays === 1 ? "" : "s"} = {brl(refRate * refDays)}</strong></p>
+                    <p>Valor de quem faltou: <strong>{brl(refRate * refDays)} × {missing} = {brl(missingPay)}</strong></p>
+                    <p>Dividido entre {present} {present === 1 ? "pessoa presente" : "pessoas presentes"}: <strong className="text-emerald-700">+ {brl(perPerson)} por pessoa</strong></p>
+                  </div>
+                )}
+                <div className="flex gap-2 justify-between flex-wrap">
+                  {fnId > 0 && allocations.some((a) => a.function_id === fnId && Number(a.extra_value || 0) > 0) && (
+                    <Button variant="secondary" size="sm" type="button" onClick={() => handleClearRateio(fnId)}>
+                      Limpar rateio anterior dessa função
+                    </Button>
+                  )}
+                  <div className="flex gap-2 ml-auto">
+                    <Button variant="secondary" size="sm" type="button" onClick={() => setShowRateio(false)} disabled={rateioSaving}>Cancelar</Button>
+                    <Button size="sm" type="submit" disabled={rateioSaving || !fnId || !missing}>
+                      {rateioSaving ? "Aplicando..." : "Aplicar Rateio"}
+                    </Button>
+                  </div>
+                </div>
+              </form>
+            );
+          })()}
 
           {showAddAlloc && (
             <form onSubmit={handleAddAlloc} className="bg-blue-50 rounded-lg p-3 mb-2 border border-blue-200 space-y-2">
@@ -1431,6 +1624,8 @@ function JobDetailModal({
                     <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Funcionário / Função</th>
                     <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">Dias</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Valor Diário</th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Base</th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light" title="Rateio aplicado">Extra</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Total</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Pluxee</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Folha</th>
@@ -1440,18 +1635,26 @@ function JobDetailModal({
                 <tbody>
                   {allocations.map((a, idx) => {
                     const subtotal = Number(a.rate) * a.quantity;
+                    const extra = Number(a.extra_value || 0);
                     const pluxee = Number(a.pluxee_value || 0);
-                    const folha = subtotal - pluxee;
+                    const folha = subtotal + extra - pluxee;
                     return (
                       <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
                         <td className="px-3 py-2 text-text-light">{idx + 1}</td>
                         <td className="px-3 py-2">
                           <p className="font-medium">{a.employees?.name || a.job_functions?.name || `#${a.function_id}`}</p>
                           {a.employees?.name && <p className="text-[10px] text-text-light">{a.job_functions?.name}</p>}
+                          {extra > 0 && a.extra_reason && (
+                            <p className="text-[10px] text-amber-700 italic mt-0.5" title={a.extra_reason}>
+                              ⚖️ {a.extra_reason}
+                            </p>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-center">{a.quantity}</td>
                         <td className="px-3 py-2 text-right">{brl(a.rate)}</td>
-                        <td className="px-3 py-2 text-right font-semibold">{brl(subtotal)}</td>
+                        <td className="px-3 py-2 text-right">{brl(subtotal)}</td>
+                        <td className="px-3 py-2 text-right text-amber-700">{extra > 0 ? `+ ${brl(extra)}` : "—"}</td>
+                        <td className="px-3 py-2 text-right font-semibold text-emerald-700">{brl(subtotal + extra)}</td>
                         <td className="px-3 py-2 text-right text-amber-700">{brl(pluxee)}</td>
                         <td className="px-3 py-2 text-right text-purple-700">{brl(folha)}</td>
                         {canEdit && !isReadOnly && (
@@ -1474,8 +1677,10 @@ function JobDetailModal({
                   <tr>
                     <td colSpan={4} className="px-3 py-2 text-text-light text-right">TOTAL</td>
                     <td className="px-3 py-2 text-right">{brl(allocations.reduce((s, a) => s + Number(a.rate) * a.quantity, 0))}</td>
+                    <td className="px-3 py-2 text-right text-amber-700">{brl(allocations.reduce((s, a) => s + Number(a.extra_value || 0), 0))}</td>
+                    <td className="px-3 py-2 text-right text-emerald-700">{brl(allocations.reduce((s, a) => s + Number(a.rate) * a.quantity + Number(a.extra_value || 0), 0))}</td>
                     <td className="px-3 py-2 text-right text-amber-700">{brl(allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0))}</td>
-                    <td className="px-3 py-2 text-right text-purple-700">{brl(allocations.reduce((s, a) => s + Number(a.rate) * a.quantity - Number(a.pluxee_value || 0), 0))}</td>
+                    <td className="px-3 py-2 text-right text-purple-700">{brl(allocations.reduce((s, a) => s + Number(a.rate) * a.quantity + Number(a.extra_value || 0) - Number(a.pluxee_value || 0), 0))}</td>
                     {canEdit && !isReadOnly && <td></td>}
                   </tr>
                 </tfoot>
@@ -1497,7 +1702,15 @@ function JobDetailModal({
 
           {showAddAdj && (
             <form onSubmit={handleAddAdj} className="bg-amber-50 rounded-lg p-3 mb-2 border border-amber-200 space-y-2">
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-medium mb-1">Categoria *</label>
+                  <select value={adjCategory} onChange={(e) => setAdjCategory(e.target.value as ExpenseCategory)} className={inputCls}>
+                    {EXPENSE_CATEGORIES.map((c) => (
+                      <option key={c.value} value={c.value}>{c.label}</option>
+                    ))}
+                  </select>
+                </div>
                 <div>
                   <label className="block text-xs font-medium mb-1">Tipo</label>
                   <select value={adjType} onChange={(e) => setAdjType(e.target.value as AdjustmentType)} className={inputCls}>
@@ -1505,10 +1718,10 @@ function JobDetailModal({
                     <option value="REDUCAO">Redução (−)</option>
                   </select>
                 </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-medium mb-1">Descrição *</label>
-                  <input type="text" value={adjDesc} onChange={(e) => setAdjDesc(e.target.value)} required className={inputCls} placeholder="Bônus por urgência" />
-                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Descrição *</label>
+                <input type="text" value={adjDesc} onChange={(e) => setAdjDesc(e.target.value)} required className={inputCls} placeholder="Detergente, sabão, etc." />
               </div>
               <div>
                 <label className="block text-xs font-medium mb-1">Valor (R$) *</label>
@@ -1529,13 +1742,18 @@ function JobDetailModal({
                 <div key={a.id} className={`flex justify-between items-center px-3 py-2 rounded-lg border ${
                   a.type === "ADICIONAL" ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"
                 }`}>
-                  <div>
-                    <span className={`text-xs font-bold mr-2 ${a.type === "ADICIONAL" ? "text-emerald-700" : "text-red-700"}`}>
-                      {a.type === "ADICIONAL" ? "+" : "−"}
-                    </span>
-                    <span className="text-sm">{a.description}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`text-xs font-bold ${a.type === "ADICIONAL" ? "text-emerald-700" : "text-red-700"}`}>
+                        {a.type === "ADICIONAL" ? "+" : "−"}
+                      </span>
+                      <span className="text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full bg-white border border-current/20 text-text-light">
+                        {categoryLabel(a.category)}
+                      </span>
+                      <span className="text-sm">{a.description}</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     <span className={`font-semibold text-sm ${a.type === "ADICIONAL" ? "text-emerald-700" : "text-red-700"}`}>
                       {brl(a.amount)}
                     </span>

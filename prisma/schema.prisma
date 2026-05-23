@@ -386,6 +386,10 @@ model JobAllocation {
   quantity      Int         @default(1) // dias trabalhados
   rate          Decimal     @db.Decimal(10, 2) // valor diário aplicado
   pluxee_value  Decimal?    @default(0) @db.Decimal(10, 2) // parte paga via Pluxee
+  // Valor extra recebido por rateio (quando o time foi menor que o ideal e o
+  // valor de quem faltou foi dividido entre os que foram). null/0 = sem rateio.
+  extra_value   Decimal?    @default(0) @db.Decimal(10, 2)
+  extra_reason  String? // ex: "Rateio: 1 WAP faltou, valor dividido entre 3"
   notes         String?
   kind          String      @default("EMBARQUE") // EMBARQUE ou COSTADO — qual escalação
 
@@ -434,6 +438,11 @@ model JobAdjustment {
   job_id      String
   jobs        Job      @relation(fields: [job_id], references: [id], onDelete: Cascade)
   type        String // ADICIONAL, REDUCAO
+  // Categoria estruturada da despesa — usada pela planilha de fechamento
+  // pra agrupar os gastos. Valores: COMPRAS, QUIMICA, MATERIAL_DANIFICADO,
+  // AJUDA_DE_CUSTO, ALIMENTACAO, RESTAURANTE, OUTROS. Null = legado/sem
+  // categoria (renderiza como "Outros").
+  category    String?
   description String
   amount      Decimal  @db.Decimal(10, 2) // sempre positivo; type define se soma ou subtrai
   created_at  DateTime @default(now()) @db.Timestamptz()

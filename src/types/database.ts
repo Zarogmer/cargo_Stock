@@ -287,6 +287,9 @@ export interface JobAllocation {
   quantity: number;
   rate: string | number;
   pluxee_value: string | number | null;
+  // Valor extra de rateio (quando faltou alguém da função e o valor foi dividido).
+  extra_value: string | number | null;
+  extra_reason: string | null;
   notes: string | null;
   status: AllocationStatus;
   kind: AllocationKind;
@@ -316,6 +319,9 @@ export interface JobAdjustment {
   id: number;
   job_id: string;
   type: AdjustmentType;
+  // COMPRAS | QUIMICA | MATERIAL_DANIFICADO | AJUDA_DE_CUSTO | ALIMENTACAO | RESTAURANTE | OUTROS
+  // Null = legado/sem categoria.
+  category: string | null;
   description: string;
   amount: string | number;
   created_at: string;
