@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { hasPermission } from "@/lib/rbac";
@@ -108,6 +108,13 @@ const EMPTY_FORM = {
 };
 
 const CARGO_OPTIONS = ["CARVÃO", "CIMENTO", "UREIA", "SOJA", "MILHO", "AÇÚCAR"];
+
+// Sementes iniciais. A lista mostrada no ComboBox combina estes valores com
+// portos/clientes já usados em navios cadastrados (derivados em useMemo),
+// então qualquer porto/cliente novo digitado vira parte da lista assim que
+// o navio é salvo.
+const DEFAULT_PORTS = ["Santos", "Paranaguá", "São Francisco do Sul"];
+const DEFAULT_CLIENTS = ["Deep", "Transatlântica", "Continental", "Wilson"];
 
 // AIS status -> badge color (used in MarineTraffic modal)
 const EXTERNAL_STATUS_STYLES: Record<string, string> = {
@@ -261,6 +268,29 @@ export default function NaviosPage() {
     if (!ship.assigned_team) return [];
     return employees.filter((e) => e.team === ship.assigned_team);
   }, [employees]);
+
+  // Combobox lists: seeds + valores únicos já usados em navios cadastrados.
+  // Dedup é case-insensitive mas preserva a primeira capitalização vista —
+  // assim "Santos" e "santos" não duplicam, mas mostramos como foi digitado.
+  const knownPorts = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of DEFAULT_PORTS) map.set(p.toLowerCase(), p);
+    for (const s of ships) {
+      const v = (s.port || "").trim();
+      if (v && !map.has(v.toLowerCase())) map.set(v.toLowerCase(), v);
+    }
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [ships]);
+
+  const knownClients = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of DEFAULT_CLIENTS) map.set(c.toLowerCase(), c);
+    for (const s of ships) {
+      const v = (s.client_name || "").trim();
+      if (v && !map.has(v.toLowerCase())) map.set(v.toLowerCase(), v);
+    }
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [ships]);
 
   useEffect(() => {
     loadShips();
@@ -1050,22 +1080,16 @@ export default function NaviosPage() {
 
               <div>
                 <label className="block text-sm font-medium text-text mb-1">Porto / Local</label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={form.port}
-                    onChange={(e) => setForm({ ...form, port: e.target.value })}
-                    placeholder="Selecione ou digite um porto..."
-                    list="port-options"
-                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                  />
-                  <datalist id="port-options">
-                    <option value="Santos" />
-                    <option value="Paranaguá" />
-                    <option value="São Francisco do Sul" />
-                  </datalist>
-                </div>
-                <p className="text-[10px] text-text-light mt-1">Selecione um porto ou digite um novo</p>
+                <ComboBox
+                  value={form.port}
+                  onChange={(v) => setForm({ ...form, port: v })}
+                  options={knownPorts}
+                  placeholder="Selecione ou digite um porto..."
+                  addLabel="Adicionar porto"
+                />
+                <p className="text-[10px] text-text-light mt-1">
+                  Selecione um porto da lista ou digite um novo — ele será adicionado ao salvar.
+                </p>
               </div>
 
               <div>
@@ -1096,23 +1120,16 @@ export default function NaviosPage() {
 
               <div>
                 <label className="block text-sm font-medium text-text mb-1">Cliente</label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={form.client_name}
-                    onChange={(e) => setForm({ ...form, client_name: e.target.value })}
-                    placeholder="Selecione ou digite um cliente..."
-                    list="client-options"
-                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                  />
-                  <datalist id="client-options">
-                    <option value="Deep" />
-                    <option value="Transatlântica" />
-                    <option value="Continental" />
-                    <option value="Wilson" />
-                  </datalist>
-                </div>
-                <p className="text-[10px] text-text-light mt-1">Selecione um cliente ou digite um novo</p>
+                <ComboBox
+                  value={form.client_name}
+                  onChange={(v) => setForm({ ...form, client_name: v })}
+                  options={knownClients}
+                  placeholder="Selecione ou digite um cliente..."
+                  addLabel="Adicionar cliente"
+                />
+                <p className="text-[10px] text-text-light mt-1">
+                  Selecione um cliente da lista ou digite um novo — ele será adicionado ao salvar.
+                </p>
               </div>
 
               <div>
@@ -1652,4 +1669,90 @@ function formatDate(dateStr: string) {
   // plain "2026-04-14" and ISO "2026-04-14T00:00:00.000Z".
   const [year, month, day] = dateStr.slice(0, 10).split("-");
   return `${day}/${month}/${year}`;
+}
+
+// ─── ComboBox ─────────────────────────────────────────────────────────────────
+// Input + dropdown que mostra sugestões filtradas e oferece "+ Adicionar X"
+// quando o usuário digita um valor que ainda não existe na lista. O valor
+// novo só é "fixado" quando o navio é salvo (sem mexer no banco enquanto o
+// usuário ainda está digitando) — na próxima abertura do modal aparece como
+// sugestão porque a lista é derivada de ships.
+
+function ComboBox({
+  value,
+  onChange,
+  options,
+  placeholder,
+  addLabel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  placeholder?: string;
+  addLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Fecha o dropdown ao clicar fora.
+  useEffect(() => {
+    if (!open) return;
+    function onClickOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [open]);
+
+  const q = value.trim().toLowerCase();
+  const filtered = q
+    ? options.filter((o) => o.toLowerCase().includes(q))
+    : options;
+  const hasExactMatch = options.some((o) => o.toLowerCase() === q);
+  const showAdd = q.length > 0 && !hasExactMatch;
+
+  function pick(v: string) {
+    onChange(v);
+    setOpen(false);
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        placeholder={placeholder}
+        className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+      />
+      {open && (filtered.length > 0 || showAdd) && (
+        <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-56 overflow-y-auto bg-white border border-border rounded-lg shadow-lg">
+          {filtered.map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()} /* mantém foco no input */
+              onClick={() => pick(opt)}
+              className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition"
+            >
+              {opt}
+            </button>
+          ))}
+          {showAdd && (
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pick(value.trim())}
+              className="w-full text-left px-3 py-2 text-sm bg-emerald-50 text-emerald-800 hover:bg-emerald-100 transition font-medium border-t border-emerald-200"
+            >
+              + {addLabel}: <strong>{value.trim()}</strong>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
