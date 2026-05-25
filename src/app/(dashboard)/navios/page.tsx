@@ -308,6 +308,9 @@ export default function NaviosPage() {
       return;
     }
 
+    // Costado não usa produto/porão — força null pra não persistir lixo se o
+    // usuário tiver preenchido antes de trocar pra Costado.
+    const isCostado = form.operation_type === "COSTADO";
     const payload = {
       name: form.name.trim(),
       arrival_date: form.arrival_date || null,
@@ -315,10 +318,10 @@ export default function NaviosPage() {
       port: form.port.trim() || null,
       status: form.status,
       assigned_team: form.assigned_team || null,
-      cargo_type: form.cargo_type.trim() || null,
-      holds_count: holdsParsed,
+      cargo_type: isCostado ? null : (form.cargo_type.trim() || null),
+      holds_count: isCostado ? null : holdsParsed,
       client_name: form.client_name.trim() || null,
-      services: form.operation_type === "COSTADO" ? ["COSTADO"] : form.services.filter((s) => s !== "COSTADO"),
+      services: isCostado ? ["COSTADO"] : form.services.filter((s) => s !== "COSTADO"),
       notes: form.notes.trim() || null,
       created_by: profile?.full_name || "sistema",
     };
@@ -657,7 +660,7 @@ export default function NaviosPage() {
                           const subs = (ship.services || []).filter((s) => s !== "COSTADO");
                           return (
                             <>
-                              <span>Tipo: <span className="font-medium text-text">{t === "EMBARQUE" ? "⚓ Embarque" : "🛟 Costado"}</span></span>
+                              <span>Tipo: <span className="font-medium text-text">{t === "EMBARQUE" ? "⚓ Embarque" : "🧹 Costado"}</span></span>
                               {t === "EMBARQUE" && subs.length > 0 && (
                                 <span>Serviços: <span className="font-medium text-text">{subs.map((s) => SERVICE_LABELS[s] || s).join(", ")}</span></span>
                               )}
@@ -740,7 +743,7 @@ export default function NaviosPage() {
                   <>
                     <p>
                       <span className="text-text-light">Tipo:</span>{" "}
-                      <span className="font-medium">{t === "EMBARQUE" ? "⚓ Embarque" : "🛟 Costado"}</span>
+                      <span className="font-medium">{t === "EMBARQUE" ? "⚓ Embarque" : "🧹 Costado"}</span>
                     </p>
                     {t === "EMBARQUE" && subs.length > 0 && (
                       <p>
@@ -950,7 +953,7 @@ export default function NaviosPage() {
                           onChange={() => setForm({ ...form, operation_type: t, services: t === "COSTADO" ? [] : form.services })}
                           className="h-4 w-4 accent-primary"
                         />
-                        <span>{t === "EMBARQUE" ? "⚓ Embarque" : "🛟 Costado"}</span>
+                        <span>{t === "EMBARQUE" ? "⚓ Embarque" : "🧹 Costado"}</span>
                       </label>
                     );
                   })}
@@ -993,41 +996,43 @@ export default function NaviosPage() {
                   </div>
                 ) : (
                   <p className="text-[11px] text-text-light mt-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
-                    🛟 <strong>Costado:</strong> escalação por hora, sem sub-serviços.
+                    🧹 <strong>Costado:</strong> escalação por hora, sem sub-serviços.
                   </p>
                 )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-text mb-1">Produto / Carga</label>
-                  <input
-                    type="text"
-                    value={form.cargo_type}
-                    onChange={(e) => setForm({ ...form, cargo_type: e.target.value.toUpperCase() })}
-                    placeholder="Ex: CARVÃO"
-                    list="cargo-options"
-                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                  />
-                  <datalist id="cargo-options">
-                    {CARGO_OPTIONS.map((c) => (
-                      <option key={c} value={c} />
-                    ))}
-                  </datalist>
-                  <p className="text-[10px] text-text-light mt-1">Selecione ou digite o produto transportado</p>
+              {form.operation_type === "EMBARQUE" && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-text mb-1">Produto / Carga</label>
+                    <input
+                      type="text"
+                      value={form.cargo_type}
+                      onChange={(e) => setForm({ ...form, cargo_type: e.target.value.toUpperCase() })}
+                      placeholder="Ex: CARVÃO"
+                      list="cargo-options"
+                      className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                    />
+                    <datalist id="cargo-options">
+                      {CARGO_OPTIONS.map((c) => (
+                        <option key={c} value={c} />
+                      ))}
+                    </datalist>
+                    <p className="text-[10px] text-text-light mt-1">Selecione ou digite o produto transportado</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-text mb-1">Porão (qtd)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={form.holds_count}
+                      onChange={(e) => setForm({ ...form, holds_count: e.target.value })}
+                      placeholder="Ex: 5"
+                      className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-text mb-1">Porão (qtd)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={form.holds_count}
-                    onChange={(e) => setForm({ ...form, holds_count: e.target.value })}
-                    placeholder="Ex: 5"
-                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                  />
-                </div>
-              </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-text mb-1">Observações</label>
