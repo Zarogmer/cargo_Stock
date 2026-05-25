@@ -60,6 +60,17 @@ function brl(n: number | string | null | undefined): string {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+// Formata datas dos Jobs (start_date/end_date) que vêm do Postgres como
+// ISO ("2026-05-26T00:00:00.000Z") ou string plana ("2026-05-26"). Usamos
+// só os 10 primeiros caracteres pra evitar shift de timezone na exibição.
+function formatJobDate(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const parts = iso.slice(0, 10).split("-");
+  if (parts.length !== 3) return iso;
+  const [y, m, d] = parts;
+  return `${d}/${m}/${y}`;
+}
+
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -900,7 +911,7 @@ function TrabalhosTab({
                       {j.ships?.name && <span className="text-xs text-text-light">⚓ {j.ships.name}</span>}
                     </div>
                     <p className="text-xs text-text-light mt-1">
-                      {j.start_date} {j.end_date ? `→ ${j.end_date}` : "→ em aberto"}
+                      {formatJobDate(j.start_date)} {j.end_date ? `→ ${formatJobDate(j.end_date)}` : "→ em aberto"}
                     </p>
                   </div>
                   <div className="flex gap-3 items-center text-xs flex-wrap">
@@ -2278,8 +2289,8 @@ function FaturarTab({
                     </div>
                     <p className="text-xs text-text-light mt-1">
                       {j.client && <>Cliente: <strong>{j.client}</strong> · </>}
-                      {jobAllocs.length} funcionário(s) · {j.start_date}
-                      {j.end_date ? ` → ${j.end_date}` : ""}
+                      {jobAllocs.length} funcionário(s) · {formatJobDate(j.start_date)}
+                      {j.end_date ? ` → ${formatJobDate(j.end_date)}` : ""}
                     </p>
                   </div>
                   <div className="text-right">
@@ -2956,7 +2967,7 @@ function CostadoTab({
                       {j.ships?.name && <span className="text-xs text-text-light">⚓ {j.ships.name}</span>}
                     </div>
                     <p className="text-xs text-text-light mt-1">
-                      {j.start_date} {j.end_date ? `→ ${j.end_date}` : "→ em aberto"} · {allocs.length} aloc. · {shifts} turnos · {hours}h
+                      {formatJobDate(j.start_date)} {j.end_date ? `→ ${formatJobDate(j.end_date)}` : "→ em aberto"} · {allocs.length} aloc. · {shifts} turnos · {hours}h
                     </p>
                   </div>
                   <div className="flex gap-3 items-center text-xs flex-wrap">
