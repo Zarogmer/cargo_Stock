@@ -35,6 +35,8 @@ function formatDateBr(d: Date | null | undefined): string | null {
 
 // Monta a mensagem inicial que vai pro grupo logo após criar o grupo,
 // avisando os funcionários sobre a operação (data, produto, serviços, porto, etc.).
+// Retorna duas variantes: `description` (só info, vira descrição do grupo) e
+// `message` (info + assinatura "Aguardem...", vai como mensagem no chat).
 function buildShipWelcomeMessage(ship: {
   name: string;
   arrival_date: Date | null;
@@ -45,7 +47,7 @@ function buildShipWelcomeMessage(ship: {
   services: string[];
   assigned_team: string | null;
   client_name: string | null;
-}): string {
+}): { description: string; message: string } {
   const isCostado = ship.services.includes("COSTADO");
   const opType = isCostado ? "COSTADO" : "EMBARQUE";
   const opEmoji = isCostado ? "🛟" : "⚓";
@@ -80,10 +82,9 @@ function buildShipWelcomeMessage(ship: {
     lines.push(`👥 *Equipe:* ${TEAM_LABELS[ship.assigned_team] || ship.assigned_team}`);
   }
 
-  lines.push("");
-  lines.push("_Aguardem instruções da supervisão. Bom trabalho! 🚀_");
-
-  return lines.join("\n");
+  const description = lines.join("\n");
+  const message = `${description}\n\n_Aguardem instruções da supervisão. Bom trabalho! 🚀_`;
+  return { description, message };
 }
 
 // POST /api/whatsapp/groups
@@ -182,16 +183,16 @@ export async function POST(request: NextRequest) {
           },
         });
         if (ship) {
-          const text = buildShipWelcomeMessage(ship);
-          // Descrição do grupo recebe o mesmo texto da mensagem inicial — assim
-          // os participantes veem o briefing direto nos dados do grupo, sem
-          // precisar rolar o histórico. Falha aqui é não-fatal.
+          const { description, message } = buildShipWelcomeMessage(ship);
+          // Descrição do grupo recebe só as infos da operação (sem o
+          // "Aguardem instruções..."), pra ficar limpo no painel do grupo.
+          // Falha aqui é não-fatal.
           try {
-            await setWhatsappGroupDescription(jid, text);
+            await setWhatsappGroupDescription(jid, description);
           } catch (descErr) {
             console.warn("[groups] set description failed:", (descErr as Error).message);
           }
-          await sendWhatsappTextToGroup(jid, text);
+          await sendWhatsappTextToGroup(jid, message);
         }
       } catch (err) {
         console.warn("[groups] welcome message failed:", (err as Error).message);

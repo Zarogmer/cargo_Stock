@@ -90,9 +90,9 @@ export async function POST(request: NextRequest) {
 
   function dmFor(name: string): string {
     if (isCostado) {
-      return `Olá, ${name}!\n\nVocê foi escalado(a) para o navio *${shipName}* — turno da ${shiftLabel} do dia ${dateLabel}.\n\nCargo Stock`;
+      return `Olá, ${name}!\n\nVocê foi escalado(a) para o navio *${shipName}* — turno da ${shiftLabel} do dia ${dateLabel}.\n\n~Equipe Cargo Ships`;
     }
-    return `Olá, ${name}!\n\nVocê foi escalado(a) para o embarque do navio *${shipName}*.\n\nCargo Stock`;
+    return `Olá, ${name}!\n\nVocê foi escalado(a) para o embarque do navio *${shipName}*.\n\n~Equipe Cargo Ships`;
   }
 
   const targets: NotifyTargets = body.targets || "BOTH";
