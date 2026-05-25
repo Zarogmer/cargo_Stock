@@ -174,8 +174,8 @@ export default function FinanceiroPage() {
       ),
     },
     {
-      key: "trabalhos",
-      label: "🚢 Fechamento",
+      key: "embarque",
+      label: "🚢 Pagamento de Embarque",
       content: (
         <TrabalhosTab
           jobs={jobs}
@@ -192,15 +192,14 @@ export default function FinanceiroPage() {
       ),
     },
     {
-      key: "faturar",
-      label: "🧾 Faturar",
-      content: (
-        <FaturarTab
-          jobs={jobs}
-          allocations={allocations}
-          loading={loading}
-        />
-      ),
+      key: "costado",
+      label: "⚓ Pagamento de Costado",
+      content: <CostadoPlaceholder />,
+    },
+    {
+      key: "documentos",
+      label: "📄 Documentos",
+      content: <DocumentosPlaceholder />,
     },
     {
       key: "resumo",
@@ -2748,5 +2747,32 @@ function FaturamentoModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+// ─── PLACEHOLDERS (fases seguintes) ─────────────────────────────────────────
+
+function CostadoPlaceholder() {
+  return (
+    <div className="bg-white rounded-xl border border-border p-8 text-center">
+      <div className="text-4xl mb-3">⚓</div>
+      <h3 className="text-lg font-semibold text-text mb-1">Pagamento de Costado</h3>
+      <p className="text-sm text-text-light max-w-md mx-auto">
+        Em desenvolvimento. Aqui o pagamento será calculado por <strong>horas trabalhadas</strong>
+        {" "}(turnos × 6h × valor/hora da função), a partir da Escalação de Costado.
+      </p>
+    </div>
+  );
+}
+
+function DocumentosPlaceholder() {
+  return (
+    <div className="bg-white rounded-xl border border-border p-8 text-center">
+      <div className="text-4xl mb-3">📄</div>
+      <h3 className="text-lg font-semibold text-text mb-1">Documentos</h3>
+      <p className="text-sm text-text-light max-w-md mx-auto">
+        Em desenvolvimento. Geração de planilhas e relatórios financeiros — padrão similar ao de RH &gt; Documentos.
+      </p>
+    </div>
   );
 }
