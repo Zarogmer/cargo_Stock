@@ -514,6 +514,50 @@ export default function NaviosPage() {
           }
         }
       }
+
+      // 4) DMs individuais — mesmo endpoint que a aba Escalação usa pra mandar
+      //    "Você foi escalado pro navio X" no privado de cada funcionário.
+      //    Uso targets="DM" porque a mensagem rica do grupo já foi enviada
+      //    pelo /api/whatsapp/groups (NOVA OPERAÇÃO), evitando duplicação.
+      //    Falha aqui é só warning — escala e grupo já foram criados.
+      if (createGroup && groupParticipants.size > 0 && newShipId) {
+        try {
+          const notifyBody: Record<string, unknown> = {
+            shipId: newShipId,
+            kind: isCostado ? "COSTADO" : "EMBARQUE",
+            employeeIds: Array.from(groupParticipants),
+            targets: "DM",
+          };
+          if (isCostado) {
+            notifyBody.shiftDate = costadoShiftDate;
+            notifyBody.shiftPeriod = costadoShiftPeriod;
+          }
+          const notifyRes = await fetch("/api/escalacao/notify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(notifyBody),
+          });
+          const notifyJson = await notifyRes.json().catch(() => ({} as any));
+          if (!notifyRes.ok) {
+            console.warn("[navios] notify DMs failed:", notifyJson.error || notifyRes.status);
+            setGroupWarning(
+              `Navio, escala e grupo criados, mas DMs individuais falharam: ${notifyJson.error || `HTTP ${notifyRes.status}`}`,
+            );
+          } else if (notifyJson.results) {
+            // Surface partial DM failures (ex.: funcionário sem telefone) sem bloquear.
+            const failed = (notifyJson.results as Array<{ ok: boolean; error?: string; target: string }>)
+              .filter((r) => !r.ok);
+            if (failed.length > 0) {
+              setGroupWarning(
+                `Navio, escala e grupo criados. ${notifyJson.sent || 0} DM(s) enviada(s), ${failed.length} falharam (ex.: ${failed[0].target} — ${failed[0].error}).`,
+              );
+            }
+          }
+        } catch (err) {
+          console.warn("[navios] notify DMs exception:", (err as Error).message);
+          setGroupWarning(`Navio, escala e grupo criados, mas falha ao enviar DMs: ${(err as Error).message}`);
+        }
+      }
     }
 
     setSaving(false);
