@@ -2955,13 +2955,38 @@ function CostadoTab({
 // ─── PLACEHOLDERS (fase 5) ──────────────────────────────────────────────────
 
 function DocumentosPlaceholder() {
+  // Sub-abas pensadas (não implementadas ainda): Folha de Pagamento, Recibos,
+  // Resumo Mensal, etc. Padrão será o mesmo de RH › Documentos (sub-tabs por ?doc=…).
+  const sketches = [
+    { icon: "💵", label: "Folha de Pagamento", desc: "Planilha consolidada para envio à contabilidade." },
+    { icon: "🧾", label: "Recibos", desc: "Geração de recibo por colaborador." },
+    { icon: "📊", label: "Resumo Mensal", desc: "Relatório financeiro do mês." },
+  ];
   return (
-    <div className="bg-white rounded-xl border border-border p-8 text-center">
-      <div className="text-4xl mb-3">📄</div>
-      <h3 className="text-lg font-semibold text-text mb-1">Documentos</h3>
-      <p className="text-sm text-text-light max-w-md mx-auto">
-        Em desenvolvimento. Geração de planilhas e relatórios financeiros — padrão similar ao de RH &gt; Documentos.
-      </p>
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+        <div className="flex items-start gap-3">
+          <div className="text-3xl">📄</div>
+          <div>
+            <h3 className="font-semibold text-blue-900">Documentos — em desenvolvimento</h3>
+            <p className="text-sm text-blue-800 mt-0.5">
+              Geração de planilhas e relatórios financeiros. Vai seguir o mesmo padrão de
+              {" "}<strong>RH › Documentos</strong> (sub-abas por tipo de documento).
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {sketches.map((s) => (
+          <div key={s.label} className="bg-white border border-dashed border-border rounded-xl p-4 text-center opacity-70">
+            <div className="text-3xl mb-2">{s.icon}</div>
+            <p className="font-semibold text-sm">{s.label}</p>
+            <p className="text-xs text-text-light mt-1">{s.desc}</p>
+            <p className="text-[10px] uppercase tracking-wider font-semibold text-amber-700 mt-3">Em breve</p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
