@@ -82,17 +82,28 @@ function categoryLabel(cat: string | null | undefined): string {
   return EXPENSE_CATEGORIES.find((c) => c.value === cat)?.label || cat;
 }
 
+// Embarque allocations are paid per porão: rate × holds_count × quantity.
+// Costado / legacy / no-kind: rate × quantity (Costado horas come in fase 3).
+function calcAllocBase(a: JobAllocation, holdsCount: number | null): number {
+  const k = a.kind || "EMBARQUE";
+  const qty = a.quantity;
+  const rate = Number(a.rate);
+  const extra = Number(a.extra_value || 0);
+  if (k === "EMBARQUE") {
+    const holds = Math.max(1, Number(holdsCount || 1));
+    return rate * holds * qty + extra;
+  }
+  return rate * qty + extra;
+}
+
 function calcJobCost(job: Job, allocations: JobAllocation[], adjustments: JobAdjustment[]): {
-  base: number;     // soma dos pagamentos base (rate × dias) + rateios
+  base: number;     // soma dos pagamentos base + rateios
   adj: number;      // ajustes (adicionais menos reduções)
   total: number;
 } {
   const jobAllocs = allocations.filter((a) => a.job_id === job.id);
   const jobAdjs = adjustments.filter((a) => a.job_id === job.id);
-  const base = jobAllocs.reduce(
-    (sum, a) => sum + Number(a.rate) * a.quantity + Number(a.extra_value || 0),
-    0,
-  );
+  const base = jobAllocs.reduce((sum, a) => sum + calcAllocBase(a, job.holds_count), 0);
   const adj = jobAdjs.reduce(
     (sum, a) => sum + (a.type === "ADICIONAL" ? Number(a.amount) : -Number(a.amount)),
     0
@@ -230,14 +241,14 @@ export default function FinanceiroPage() {
           )}
         </div>
         <p className="text-text-light text-sm mt-0.5">
-          Catálogo de funções, fechamento de navios e faturamento
+          Catálogo de funções, pagamentos e documentos
         </p>
       </div>
 
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <KpiCard label="Funções Ativas" value={kpis.activeFunctions.toString()} accent="blue" />
-        <KpiCard label="Fechamentos Abertos" value={kpis.openJobs.toString()} accent="amber" />
+        <KpiCard label="Pagamentos Abertos" value={kpis.openJobs.toString()} accent="amber" />
         <KpiCard label="Custo do Mês" value={brl(kpis.monthCost)} accent="red" />
         <KpiCard label="Receita do Mês" value={brl(kpis.monthRevenue)} accent="emerald" />
         <KpiCard
@@ -406,7 +417,7 @@ function FuncoesTab({
 
       <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-900">
         💡 Esses são os <strong>valores médios padrão</strong> por função. De navio para navio podem ser ajustados,
-        e a confirmação final dos valores é feita no <strong>Fechamento</strong> (em "Ajustar Valor por Função") antes de fechar.
+        e a confirmação final dos valores é feita no <strong>Pagamento de Embarque</strong> (em "Ajustar Valor por Função") antes de fechar.
       </div>
 
       {loading ? (
@@ -797,7 +808,7 @@ function TrabalhosTab({
         </div>
         {canEdit && (
           <Button size="sm" onClick={() => { setEditJob(null); setShowJobForm(true); }}>
-            <PlusIcon className="w-4 h-4" />Novo Fechamento
+            <PlusIcon className="w-4 h-4" />Novo Pagamento
           </Button>
         )}
       </div>
@@ -807,7 +818,7 @@ function TrabalhosTab({
       ) : filtered.length === 0 ? (
         <div className="text-center py-12 bg-card rounded-xl border border-border">
           <p className="text-3xl mb-2">🚢</p>
-          <p className="text-sm text-text-light">Nenhum fechamento encontrado</p>
+          <p className="text-sm text-text-light">Nenhum pagamento encontrado</p>
         </div>
       ) : (
         <div className="grid gap-2">
@@ -875,12 +886,13 @@ function TrabalhosTab({
       <JobDetailModal
         open={!!detailJob}
         job={detailJob}
-        allocations={allocations.filter((a) => a.job_id === detailJob?.id)}
+        allocations={allocations.filter((a) => a.job_id === detailJob?.id && (a.kind || "EMBARQUE") === "EMBARQUE")}
         adjustments={adjustments.filter((a) => a.job_id === detailJob?.id)}
         functions={functions}
         employees={employees}
         canEdit={canEdit}
         profileName={profileName}
+        kindFilter="EMBARQUE"
         onClose={() => setDetailJob(null)}
         onChange={() => { onChange(); }}
       />
@@ -892,7 +904,7 @@ function TrabalhosTab({
           await db.from("jobs").delete().eq("id", deleteJob!.id);
           setDeleteJob(null); onChange();
         }}
-        title="Excluir Fechamento"
+        title="Excluir Pagamento"
         message={`Excluir "${deleteJob?.name}"? As alocações e ajustes vinculados também serão removidos.`}
       />
     </div>
@@ -979,7 +991,7 @@ function JobFormModal({
   const sectionTitle = "text-xs font-semibold text-text-light uppercase tracking-wider mb-2";
 
   return (
-    <Modal open={open} onClose={onClose} title={item ? "Editar Fechamento" : "Novo Fechamento"} maxWidth="max-w-2xl">
+    <Modal open={open} onClose={onClose} title={item ? "Editar Pagamento" : "Novo Pagamento"} maxWidth="max-w-2xl">
       <form onSubmit={handleSave} className="space-y-4">
         <div>
           <p className={sectionTitle}>Identificação</p>
@@ -997,7 +1009,7 @@ function JobFormModal({
         </div>
 
         <div className="border-t border-border pt-3">
-          <p className={sectionTitle}>Operação (cabeçalho do fechamento)</p>
+          <p className={sectionTitle}>Operação (cabeçalho do pagamento)</p>
           <div className="grid grid-cols-2 gap-4">
             <div><label className="block text-sm font-medium mb-1">Cliente</label><input type="text" value={client} onChange={(e) => setClient(e.target.value.toUpperCase())} className={inputCls} placeholder="DEEP" /></div>
             <div><label className="block text-sm font-medium mb-1">Supervisor</label><input type="text" value={supervisor} onChange={(e) => setSupervisor(e.target.value.toUpperCase())} className={inputCls} placeholder="ADELMO" /></div>
@@ -1046,7 +1058,7 @@ function JobFormModal({
 // ─── Job Detail Modal (alocações + ajustes) ─────────────────────────────────
 
 function JobDetailModal({
-  open, job, allocations, adjustments, functions, employees, canEdit, profileName, onClose, onChange,
+  open, job, allocations, adjustments, functions, employees, canEdit, profileName, kindFilter, onClose, onChange,
 }: {
   open: boolean;
   job: Job | null;
@@ -1056,9 +1068,15 @@ function JobDetailModal({
   employees: Employee[];
   canEdit: boolean;
   profileName: string;
+  // When set, people come from Escalação (read-only); modal only edits financial layer.
+  kindFilter?: "EMBARQUE" | "COSTADO";
   onClose: () => void;
   onChange: () => void;
 }) {
+  // Embarque payment formula: rate (per porão) × holds_count × quantity.
+  // When kindFilter is set, allocations are managed in Escalação (this modal doesn't add/remove people).
+  const peopleReadOnly = !!kindFilter;
+  const holdsMultiplier = kindFilter === "EMBARQUE" ? Math.max(1, Number(job?.holds_count || 1)) : 1;
   const [showAddAlloc, setShowAddAlloc] = useState(false);
   const [allocEmp, setAllocEmp] = useState("");
   const [allocFn, setAllocFn] = useState("");
@@ -1279,7 +1297,7 @@ function JobDetailModal({
   }
 
   async function handleReopen() {
-    if (!confirm("Reabrir fechamento? Isso limpa a verificação e o status fechado.")) return;
+    if (!confirm("Reabrir pagamento? Isso limpa a verificação e o status fechado.")) return;
     await db.from("jobs").update({
       status: "EM_ANDAMENTO",
       verified_at: null,
@@ -1479,14 +1497,21 @@ function JobDetailModal({
         {/* Alocações */}
         <div>
           <div className="flex justify-between items-center mb-2 gap-2 flex-wrap">
-            <h3 className="text-sm font-semibold">👥 Equipe Alocada ({allocations.length})</h3>
+            <div>
+              <h3 className="text-sm font-semibold">👥 Equipe Alocada ({allocations.length})</h3>
+              {peopleReadOnly && (
+                <p className="text-[10px] text-text-light mt-0.5">
+                  Lista gerenciada na Escalação{kindFilter === "EMBARQUE" ? " de Embarque" : " de Costado"} — aqui edita-se só o financeiro.
+                </p>
+              )}
+            </div>
             <div className="flex gap-2">
               {canEdit && !isReadOnly && !showRateio && allocations.length > 0 && (
                 <button onClick={() => setShowRateio(true)} className="text-xs px-2 py-1 bg-amber-600 text-white rounded hover:bg-amber-700" title="Distribuir o pagamento de quem faltou entre os que foram">
                   ⚖️ Aplicar Rateio
                 </button>
               )}
-              {canEdit && !isReadOnly && !showAddAlloc && (
+              {canEdit && !isReadOnly && !peopleReadOnly && !showAddAlloc && (
                 <button onClick={() => setShowAddAlloc(true)} className="text-xs px-2 py-1 bg-primary text-white rounded hover:bg-primary-dark">
                   + Adicionar Funcionário
                 </button>
@@ -1611,27 +1636,39 @@ function JobDetailModal({
           )}
 
           {allocations.length === 0 ? (
-            <p className="text-xs text-text-light italic text-center py-4">Sem alocações.</p>
+            <p className="text-xs text-text-light italic text-center py-4">
+              {peopleReadOnly ? "Nenhuma alocação na Escalação para este navio." : "Sem alocações."}
+            </p>
           ) : (
             <div className="bg-card border border-border rounded-lg overflow-x-auto">
+              {kindFilter === "EMBARQUE" && (
+                <div className="px-3 py-2 bg-blue-50 border-b border-blue-200 text-[11px] text-blue-900">
+                  💡 Pagamento Embarque = <strong>Valor/Porão</strong> × <strong>{holdsMultiplier} porão{holdsMultiplier === 1 ? "" : "ões"}</strong> × <strong>Qtd</strong>
+                </div>
+              )}
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-border">
                   <tr>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">#</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Funcionário / Função</th>
-                    <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">Dias</th>
-                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Valor Diário</th>
+                    <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">Qtd</th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">
+                      {kindFilter === "EMBARQUE" ? "Valor/Porão" : "Valor Diário"}
+                    </th>
+                    {kindFilter === "EMBARQUE" && (
+                      <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">Porões</th>
+                    )}
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Base</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light" title="Rateio aplicado">Extra</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Total</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Pluxee</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Folha</th>
-                    {canEdit && !isReadOnly && <th className="w-16"></th>}
+                    {canEdit && !isReadOnly && !peopleReadOnly && <th className="w-16"></th>}
                   </tr>
                 </thead>
                 <tbody>
                   {allocations.map((a, idx) => {
-                    const subtotal = Number(a.rate) * a.quantity;
+                    const subtotal = Number(a.rate) * a.quantity * holdsMultiplier;
                     const extra = Number(a.extra_value || 0);
                     const pluxee = Number(a.pluxee_value || 0);
                     const folha = subtotal + extra - pluxee;
@@ -1649,12 +1686,15 @@ function JobDetailModal({
                         </td>
                         <td className="px-3 py-2 text-center">{a.quantity}</td>
                         <td className="px-3 py-2 text-right">{brl(a.rate)}</td>
+                        {kindFilter === "EMBARQUE" && (
+                          <td className="px-3 py-2 text-center text-text-light">× {holdsMultiplier}</td>
+                        )}
                         <td className="px-3 py-2 text-right">{brl(subtotal)}</td>
                         <td className="px-3 py-2 text-right text-amber-700">{extra > 0 ? `+ ${brl(extra)}` : "—"}</td>
                         <td className="px-3 py-2 text-right font-semibold text-emerald-700">{brl(subtotal + extra)}</td>
                         <td className="px-3 py-2 text-right text-amber-700">{brl(pluxee)}</td>
                         <td className="px-3 py-2 text-right text-purple-700">{brl(folha)}</td>
-                        {canEdit && !isReadOnly && (
+                        {canEdit && !isReadOnly && !peopleReadOnly && (
                           <td className="px-2 py-2">
                             <div className="flex gap-1 justify-end">
                               <button onClick={() => startEditAlloc(a)} className="p-1 text-primary hover:bg-blue-50 rounded" title="Editar">
@@ -1671,15 +1711,23 @@ function JobDetailModal({
                   })}
                 </tbody>
                 <tfoot className="bg-gray-50 border-t-2 border-border font-semibold">
-                  <tr>
-                    <td colSpan={4} className="px-3 py-2 text-text-light text-right">TOTAL</td>
-                    <td className="px-3 py-2 text-right">{brl(allocations.reduce((s, a) => s + Number(a.rate) * a.quantity, 0))}</td>
-                    <td className="px-3 py-2 text-right text-amber-700">{brl(allocations.reduce((s, a) => s + Number(a.extra_value || 0), 0))}</td>
-                    <td className="px-3 py-2 text-right text-emerald-700">{brl(allocations.reduce((s, a) => s + Number(a.rate) * a.quantity + Number(a.extra_value || 0), 0))}</td>
-                    <td className="px-3 py-2 text-right text-amber-700">{brl(allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0))}</td>
-                    <td className="px-3 py-2 text-right text-purple-700">{brl(allocations.reduce((s, a) => s + Number(a.rate) * a.quantity + Number(a.extra_value || 0) - Number(a.pluxee_value || 0), 0))}</td>
-                    {canEdit && !isReadOnly && <td></td>}
-                  </tr>
+                  {(() => {
+                    const baseTotal = allocations.reduce((s, a) => s + Number(a.rate) * a.quantity * holdsMultiplier, 0);
+                    const extraTotal = allocations.reduce((s, a) => s + Number(a.extra_value || 0), 0);
+                    const pluxeeTotal = allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
+                    const labelColSpan = kindFilter === "EMBARQUE" ? 5 : 4;
+                    return (
+                      <tr>
+                        <td colSpan={labelColSpan} className="px-3 py-2 text-text-light text-right">TOTAL</td>
+                        <td className="px-3 py-2 text-right">{brl(baseTotal)}</td>
+                        <td className="px-3 py-2 text-right text-amber-700">{brl(extraTotal)}</td>
+                        <td className="px-3 py-2 text-right text-emerald-700">{brl(baseTotal + extraTotal)}</td>
+                        <td className="px-3 py-2 text-right text-amber-700">{brl(pluxeeTotal)}</td>
+                        <td className="px-3 py-2 text-right text-purple-700">{brl(baseTotal + extraTotal - pluxeeTotal)}</td>
+                        {canEdit && !isReadOnly && !peopleReadOnly && <td></td>}
+                      </tr>
+                    );
+                  })()}
                 </tfoot>
               </table>
             </div>
