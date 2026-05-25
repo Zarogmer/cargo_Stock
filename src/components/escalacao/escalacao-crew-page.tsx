@@ -28,13 +28,6 @@ interface Ship {
   services: string[] | null;
 }
 
-function brl(n: number | string | null | undefined): string {
-  if (n === null || n === undefined) return "—";
-  const v = typeof n === "number" ? n : parseFloat(String(n));
-  if (!Number.isFinite(v)) return "—";
-  return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
-
 function formatDateTime(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -372,7 +365,7 @@ function EscalacaoTab({
           </div>
         )}
         <div className="ml-auto text-[10px] text-text-light italic max-w-md text-right">
-          Valores e dias trabalhados são preenchidos no <strong>Financeiro</strong> ao final do trabalho.
+          Os valores são preenchidos em <strong>Financeiro › Pagamento de Embarque</strong>.
         </div>
       </div>
 
@@ -1017,7 +1010,7 @@ function RemoveModal({
       <form onSubmit={handleRemove} className="space-y-4">
         <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs">
           <p className="font-semibold text-red-900 mb-1">⚠️ Remover do navio:</p>
-          <p>{target.employees?.name || "—"} · {target.job_functions?.name} · {brl(target.rate)}/dia</p>
+          <p>{target.employees?.name || "—"} · {target.job_functions?.name}</p>
           <p className="text-[10px] text-red-700 mt-2">A alocação fica registrada no histórico, marcada como REMOVIDA.</p>
         </div>
         <div>

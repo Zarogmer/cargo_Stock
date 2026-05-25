@@ -563,7 +563,7 @@ function HistoricoView({
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <header className="px-6 pt-4 pb-3 border-b border-border">
           <h2 className="text-base font-semibold text-text">Por colaborador · {shipName}</h2>
-          <p className="text-xs text-text-light mt-0.5">Base para fechamento de pagamento — quantos turnos e dias cada um trabalhou.</p>
+          <p className="text-xs text-text-light mt-0.5">Quantos turnos e dias cada um trabalhou. Os valores são preenchidos em <strong>Financeiro › Pagamento de Costado</strong>.</p>
         </header>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
