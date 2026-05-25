@@ -28,16 +28,23 @@ interface Ship {
   created_by: string;
 }
 
-const SERVICE_OPTIONS: { value: string; label: string }[] = [
+type OperationType = "EMBARQUE" | "COSTADO";
+
+const EMBARQUE_SERVICES: { value: string; label: string }[] = [
   { value: "LAVAGEM_PORAO", label: "Lavagem de Porão" },
   { value: "PINTURA", label: "Pintura" },
   { value: "RASPAGEM", label: "Raspagem" },
-  { value: "COSTADO", label: "Costado" },
 ];
 
-const SERVICE_LABELS: Record<string, string> = Object.fromEntries(
-  SERVICE_OPTIONS.map((s) => [s.value, s.label])
-);
+const SERVICE_LABELS: Record<string, string> = {
+  ...Object.fromEntries(EMBARQUE_SERVICES.map((s) => [s.value, s.label])),
+  COSTADO: "Costado",
+};
+
+// Tipo é derivado de services: ["COSTADO"] = Costado; senão = Embarque.
+function getOperationType(services: string[] | null | undefined): OperationType {
+  return services && services.includes("COSTADO") ? "COSTADO" : "EMBARQUE";
+}
 
 interface Employee {
   id: number;
@@ -92,7 +99,8 @@ const EMPTY_FORM = {
   cargo_type: "",
   holds_count: "" as string, // stored as text in the form so the input can be empty
   client_name: "",
-  services: [] as string[],
+  operation_type: "EMBARQUE" as OperationType,
+  services: [] as string[], // só populado quando operation_type=EMBARQUE
   notes: "",
 };
 
@@ -261,7 +269,8 @@ export default function NaviosPage() {
       cargo_type: ship.cargo_type || "",
       holds_count: ship.holds_count != null ? String(ship.holds_count) : "",
       client_name: ship.client_name || "",
-      services: ship.services || [],
+      operation_type: getOperationType(ship.services),
+      services: (ship.services || []).filter((s) => s !== "COSTADO"),
       notes: ship.notes || "",
     });
     setFormError("");
@@ -293,7 +302,7 @@ export default function NaviosPage() {
       cargo_type: form.cargo_type.trim() || null,
       holds_count: holdsParsed,
       client_name: form.client_name.trim() || null,
-      services: form.services,
+      services: form.operation_type === "COSTADO" ? ["COSTADO"] : form.services.filter((s) => s !== "COSTADO"),
       notes: form.notes.trim() || null,
       created_by: profile?.full_name || "sistema",
     };
@@ -580,9 +589,18 @@ export default function NaviosPage() {
                         {ship.holds_count != null && (
                           <span>Porão: <span className="font-medium text-text">{ship.holds_count}</span></span>
                         )}
-                        {ship.services && ship.services.length > 0 && (
-                          <span>Serviços: <span className="font-medium text-text">{ship.services.map((s) => SERVICE_LABELS[s] || s).join(", ")}</span></span>
-                        )}
+                        {(() => {
+                          const t = getOperationType(ship.services);
+                          const subs = (ship.services || []).filter((s) => s !== "COSTADO");
+                          return (
+                            <>
+                              <span>Tipo: <span className="font-medium text-text">{t === "EMBARQUE" ? "⚓ Embarque" : "🛟 Costado"}</span></span>
+                              {t === "EMBARQUE" && subs.length > 0 && (
+                                <span>Serviços: <span className="font-medium text-text">{subs.map((s) => SERVICE_LABELS[s] || s).join(", ")}</span></span>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                       {ship.notes && (
                         <p className="text-xs text-text-light mt-1.5 line-clamp-1 italic">&ldquo;{ship.notes}&rdquo;</p>
@@ -652,12 +670,24 @@ export default function NaviosPage() {
               {selectedShip.holds_count != null && (
                 <p><span className="text-text-light">Porão:</span> <span className="font-medium">{selectedShip.holds_count}</span></p>
               )}
-              {selectedShip.services && selectedShip.services.length > 0 && (
-                <p>
-                  <span className="text-text-light">Serviços:</span>{" "}
-                  <span className="font-medium">{selectedShip.services.map((s) => SERVICE_LABELS[s] || s).join(", ")}</span>
-                </p>
-              )}
+              {(() => {
+                const t = getOperationType(selectedShip.services);
+                const subs = (selectedShip.services || []).filter((s) => s !== "COSTADO");
+                return (
+                  <>
+                    <p>
+                      <span className="text-text-light">Tipo:</span>{" "}
+                      <span className="font-medium">{t === "EMBARQUE" ? "⚓ Embarque" : "🛟 Costado"}</span>
+                    </p>
+                    {t === "EMBARQUE" && subs.length > 0 && (
+                      <p>
+                        <span className="text-text-light">Serviços:</span>{" "}
+                        <span className="font-medium">{subs.map((s) => SERVICE_LABELS[s] || s).join(", ")}</span>
+                      </p>
+                    )}
+                  </>
+                );
+              })()}
               {selectedShip.notes && (
                 <p className="text-text-light italic text-xs pt-1">&ldquo;{selectedShip.notes}&rdquo;</p>
               )}
@@ -837,38 +867,72 @@ export default function NaviosPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-text mb-1">Serviços</label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {SERVICE_OPTIONS.map((s) => {
-                    const checked = form.services.includes(s.value);
+                <label className="block text-sm font-medium text-text mb-1">Tipo da Operação</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(["EMBARQUE", "COSTADO"] as OperationType[]).map((t) => {
+                    const checked = form.operation_type === t;
                     return (
                       <label
-                        key={s.value}
+                        key={t}
                         className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border cursor-pointer transition ${
                           checked
-                            ? "border-primary bg-primary/5 text-primary"
+                            ? "border-primary bg-primary/5 text-primary font-semibold"
                             : "border-border hover:bg-gray-50 text-text"
                         }`}
                       >
                         <input
-                          type="checkbox"
+                          type="radio"
+                          name="operation_type"
                           checked={checked}
-                          onChange={(e) => {
-                            setForm({
-                              ...form,
-                              services: e.target.checked
-                                ? [...form.services, s.value]
-                                : form.services.filter((x) => x !== s.value),
-                            });
-                          }}
+                          onChange={() => setForm({ ...form, operation_type: t, services: t === "COSTADO" ? [] : form.services })}
                           className="h-4 w-4 accent-primary"
                         />
-                        <span>{s.label}</span>
+                        <span>{t === "EMBARQUE" ? "⚓ Embarque" : "🛟 Costado"}</span>
                       </label>
                     );
                   })}
                 </div>
-                <p className="text-[10px] text-text-light mt-1">Marque um ou mais serviços que serão executados.</p>
+
+                {form.operation_type === "EMBARQUE" ? (
+                  <div className="mt-3">
+                    <label className="block text-sm font-medium text-text mb-1">Serviços do Embarque</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {EMBARQUE_SERVICES.map((s) => {
+                        const checked = form.services.includes(s.value);
+                        return (
+                          <label
+                            key={s.value}
+                            className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border cursor-pointer transition ${
+                              checked
+                                ? "border-primary bg-primary/5 text-primary"
+                                : "border-border hover:bg-gray-50 text-text"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                setForm({
+                                  ...form,
+                                  services: e.target.checked
+                                    ? [...form.services, s.value]
+                                    : form.services.filter((x) => x !== s.value),
+                                });
+                              }}
+                              className="h-4 w-4 accent-primary"
+                            />
+                            <span>{s.label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-text-light mt-1">Marque um ou mais serviços que serão executados.</p>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-text-light mt-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
+                    🛟 <strong>Costado:</strong> escalação por hora, sem sub-serviços.
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

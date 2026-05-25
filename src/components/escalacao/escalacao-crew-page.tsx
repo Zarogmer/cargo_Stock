@@ -25,6 +25,7 @@ interface Ship {
   port: string | null;
   status: string;
   assigned_team: string | null;
+  services: string[] | null;
 }
 
 function brl(n: number | string | null | undefined): string {
@@ -71,7 +72,9 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
         db.from("jobs").select("*"),
         db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)").order("added_at", { ascending: true }),
       ]);
-      setShips((shipsRes.data as Ship[]) || []);
+      // Embarque tab shows only ships that are NOT costado (services array doesn't include "COSTADO").
+      const allShips = (shipsRes.data as Ship[]) || [];
+      setShips(allShips.filter((s) => !(s.services || []).includes("COSTADO")));
       setEmployees((empRes.data as Employee[]) || []);
       setFunctions((fnRes.data as JobFunction[]) || []);
       setJobs((jobsRes.data as Job[]) || []);

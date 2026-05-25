@@ -11,6 +11,7 @@ export interface Ship {
   port: string | null;
   status: string;
   assigned_team: string | null;
+  services?: string[] | null;
 }
 
 export function ShipSelector({

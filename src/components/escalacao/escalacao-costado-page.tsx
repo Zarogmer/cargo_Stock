@@ -67,7 +67,9 @@ export function EscalacaoCostadoPage() {
         db.from("job_allocations").select("*, job_functions(name, unit), employees(name)").order("added_at", { ascending: true }),
         db.from("costado_period_status").select("*"),
       ]);
-      setShips((shipsRes.data as Ship[]) || []);
+      // Costado tab shows only ships marked as Costado (services array includes "COSTADO").
+      const allShips = (shipsRes.data as Ship[]) || [];
+      setShips(allShips.filter((s) => (s.services || []).includes("COSTADO")));
       setEmployees((empRes.data as Employee[]) || []);
       setFunctions((fnRes.data as JobFunction[]) || []);
       setJobs((jobsRes.data as Job[]) || []);
