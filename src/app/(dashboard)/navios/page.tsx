@@ -50,6 +50,8 @@ interface Employee {
   id: number;
   name: string;
   team: string | null;
+  phone: string | null;
+  status: string | null;
 }
 
 interface ShipEmployee {
@@ -172,6 +174,12 @@ export default function NaviosPage() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
+  // WhatsApp group creation (only when creating a new ship)
+  const [createGroup, setCreateGroup] = useState(false);
+  const [groupParticipants, setGroupParticipants] = useState<Set<number>>(new Set());
+  const [groupSearch, setGroupSearch] = useState("");
+  const [groupWarning, setGroupWarning] = useState<string | null>(null);
+
   // Ship detail / crew panel
   const [selectedShip, setSelectedShip] = useState<Ship | null>(null);
   const [shipTeam, setShipTeam] = useState<string | null>(null); // "EQUIPE_1" | "EQUIPE_2" | null
@@ -218,7 +226,7 @@ export default function NaviosPage() {
     try {
       const { data } = await db
         .from("employees")
-        .select("id, name, team")
+        .select("id, name, team, phone, status")
         .order("name");
       setEmployees((data as any[]) || []);
     } catch (err) {
@@ -253,11 +261,19 @@ export default function NaviosPage() {
     setEditingShip(null);
     setForm(EMPTY_FORM);
     setFormError("");
+    setCreateGroup(false);
+    setGroupParticipants(new Set());
+    setGroupSearch("");
+    setGroupWarning(null);
     setShowModal(true);
   }
 
   function openEdit(ship: Ship) {
     setEditingShip(ship);
+    setCreateGroup(false);
+    setGroupParticipants(new Set());
+    setGroupSearch("");
+    setGroupWarning(null);
     setForm({
       name: ship.name,
       // <input type="date"> needs YYYY-MM-DD — the DB returns full ISO timestamps.
@@ -317,8 +333,55 @@ export default function NaviosPage() {
         setSelectedShip({ ...editingShip, ...payload });
       }
     } else {
-      const { error } = await db.from("ships").insert(payload);
-      if (error) { setFormError(error.message); setSaving(false); return; }
+      const insertResult: any = await db.from("ships").insert(payload);
+      if (insertResult.error) { setFormError(insertResult.error.message); setSaving(false); return; }
+
+      // Optional: create WhatsApp group with selected employees.
+      // Failure here is non-fatal — the ship was already created. Surface a
+      // warning so the user can retry the group from the Conversas page.
+      const newShip = insertResult.data;
+      const newShipId: string | undefined =
+        Array.isArray(newShip) ? newShip[0]?.id : newShip?.id;
+
+      if (createGroup && groupParticipants.size > 0) {
+        const participantPhones = Array.from(groupParticipants)
+          .map((id) => employees.find((e) => e.id === id)?.phone || "")
+          .filter((p) => p.trim().length > 0);
+
+        if (participantPhones.length === 0) {
+          setGroupWarning("Navio criado, mas nenhum dos colaboradores selecionados tem telefone válido.");
+        } else {
+          try {
+            const res = await fetch("/api/whatsapp/groups", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                subject: payload.name,
+                participants: participantPhones,
+                shipId: newShipId,
+              }),
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              setGroupWarning(`Navio criado, mas não foi possível criar o grupo no WhatsApp: ${body.error || `HTTP ${res.status}`}`);
+              setSaving(false);
+              loadShips();
+              return; // keep modal open so user can read the warning
+            }
+            if (body.status === "partial" && body.warning) {
+              setGroupWarning(body.warning);
+              setSaving(false);
+              loadShips();
+              return;
+            }
+          } catch (err) {
+            setGroupWarning(`Navio criado, mas falha ao chamar a API de grupo: ${(err as Error).message}`);
+            setSaving(false);
+            loadShips();
+            return;
+          }
+        }
+      }
     }
 
     setSaving(false);
@@ -977,8 +1040,98 @@ export default function NaviosPage() {
                 />
               </div>
 
+              {!editingShip && (
+                <div className="border border-emerald-200 bg-emerald-50/40 rounded-lg p-3 space-y-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={createGroup}
+                      onChange={(e) => setCreateGroup(e.target.checked)}
+                      className="h-4 w-4 accent-emerald-600"
+                    />
+                    <span className="text-sm font-medium text-text">
+                      💬 Criar grupo no WhatsApp para este navio
+                    </span>
+                  </label>
+
+                  {createGroup && (() => {
+                    const eligible = employees.filter(
+                      (e) => (e.status ?? "ATIVO") === "ATIVO" && (e.phone || "").trim().length > 0,
+                    );
+                    const q = groupSearch.trim().toLowerCase();
+                    const filteredEmps = q
+                      ? eligible.filter((e) => e.name.toLowerCase().includes(q))
+                      : eligible;
+
+                    return (
+                      <div className="space-y-2">
+                        <p className="text-[11px] text-text-light">
+                          Selecione os funcionários. O grupo será criado com o nome do navio
+                          {form.name.trim() && <> (<strong className="text-text">{form.name.trim()}</strong>)</>}.
+                          Só colaboradores ATIVOS com telefone aparecem na lista.
+                        </p>
+                        <input
+                          type="text"
+                          value={groupSearch}
+                          onChange={(e) => setGroupSearch(e.target.value)}
+                          placeholder="🔍 Buscar colaborador..."
+                          className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm bg-white"
+                        />
+                        <div className="max-h-48 overflow-y-auto border border-border rounded-lg bg-white">
+                          {filteredEmps.length === 0 ? (
+                            <p className="px-3 py-3 text-xs text-text-light italic text-center">
+                              {eligible.length === 0
+                                ? "Nenhum colaborador ATIVO com telefone cadastrado."
+                                : "Nenhum colaborador corresponde à busca."}
+                            </p>
+                          ) : (
+                            filteredEmps.map((emp) => {
+                              const checked = groupParticipants.has(emp.id);
+                              return (
+                                <label
+                                  key={emp.id}
+                                  className={`flex items-center gap-2 px-3 py-2 border-b border-border last:border-0 cursor-pointer transition ${
+                                    checked ? "bg-emerald-50 hover:bg-emerald-100" : "hover:bg-gray-50"
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      setGroupParticipants((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(emp.id)) next.delete(emp.id);
+                                        else next.add(emp.id);
+                                        return next;
+                                      });
+                                    }}
+                                    className="w-4 h-4 accent-emerald-600"
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-text truncate">{emp.name}</p>
+                                    <p className="text-[10px] text-text-light">{emp.phone}</p>
+                                  </div>
+                                </label>
+                              );
+                            })
+                          )}
+                        </div>
+                        <p className="text-[11px] text-text-light">
+                          <strong className="text-text">{groupParticipants.size}</strong> selecionado(s)
+                        </p>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
               {formError && (
                 <p className="text-sm text-danger bg-red-50 border border-red-200 rounded-lg px-3 py-2">{formError}</p>
+              )}
+              {groupWarning && (
+                <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  {groupWarning}
+                </p>
               )}
             </div>
             <div className="p-5 border-t border-border flex justify-end gap-3">
