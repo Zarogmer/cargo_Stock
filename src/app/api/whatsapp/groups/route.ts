@@ -5,6 +5,7 @@ import {
   createWhatsappGroup,
   isEvolutionConfigured,
   sendWhatsappTextToGroup,
+  setWhatsappGroupDescription,
 } from "@/lib/services/evolution-api";
 import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 
@@ -182,6 +183,14 @@ export async function POST(request: NextRequest) {
         });
         if (ship) {
           const text = buildShipWelcomeMessage(ship);
+          // Descrição do grupo recebe o mesmo texto da mensagem inicial — assim
+          // os participantes veem o briefing direto nos dados do grupo, sem
+          // precisar rolar o histórico. Falha aqui é não-fatal.
+          try {
+            await setWhatsappGroupDescription(jid, text);
+          } catch (descErr) {
+            console.warn("[groups] set description failed:", (descErr as Error).message);
+          }
           await sendWhatsappTextToGroup(jid, text);
         }
       } catch (err) {

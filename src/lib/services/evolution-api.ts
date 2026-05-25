@@ -194,6 +194,20 @@ export async function createWhatsappGroup(
   );
 }
 
+// Updates a group's description (the long text shown under "Adicionar descrição"
+// on WhatsApp). Used right after createWhatsappGroup so the operation info
+// stays pinned at the top of the group info panel.
+export async function setWhatsappGroupDescription(groupJid: string, description: string): Promise<unknown> {
+  const cfg = readConfig();
+  if (!groupJid.endsWith("@g.us")) throw new Error("JID de grupo inválido.");
+  const token = await getInstanceToken();
+  return evolutionFetch(
+    `/group/updateGroupDescription/${encodeURIComponent(cfg.instance)}?groupJid=${encodeURIComponent(groupJid)}`,
+    { method: "POST", body: JSON.stringify({ description }) },
+    token,
+  );
+}
+
 export async function getInstanceStatus(): Promise<{ state?: string } & Record<string, unknown>> {
   const cfg = readConfig();
   return evolutionFetch(`/instance/connectionState/${encodeURIComponent(cfg.instance)}`);
