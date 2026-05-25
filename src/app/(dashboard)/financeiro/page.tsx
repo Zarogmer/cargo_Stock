@@ -82,8 +82,10 @@ function categoryLabel(cat: string | null | undefined): string {
   return EXPENSE_CATEGORIES.find((c) => c.value === cat)?.label || cat;
 }
 
-// Embarque allocations are paid per porão: rate × holds_count × quantity.
-// Costado / legacy / no-kind: rate × quantity (Costado horas come in fase 3).
+// Pagamentos:
+//   EMBARQUE: rate (valor/porão) × holds_count × quantidade alocada.
+//   COSTADO:  rate (valor/hora) × 6 × quantidade (cada quantidade = 1 turno de 6h).
+const HOURS_PER_SHIFT = 6;
 function calcAllocBase(a: JobAllocation, holdsCount: number | null): number {
   const k = a.kind || "EMBARQUE";
   const qty = a.quantity;
@@ -92,6 +94,9 @@ function calcAllocBase(a: JobAllocation, holdsCount: number | null): number {
   if (k === "EMBARQUE") {
     const holds = Math.max(1, Number(holdsCount || 1));
     return rate * holds * qty + extra;
+  }
+  if (k === "COSTADO") {
+    return rate * HOURS_PER_SHIFT * qty + extra;
   }
   return rate * qty + extra;
 }
@@ -137,7 +142,7 @@ export default function FinanceiroPage() {
       db.from("jobs").select("*, ships(name)").order("start_date", { ascending: false }),
       db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)"),
       db.from("job_adjustments").select("*").order("created_at", { ascending: false }),
-      db.from("ships").select("id, name, status").order("arrival_date", { ascending: false }).limit(50),
+      db.from("ships").select("id, name, status, services").order("arrival_date", { ascending: false }).limit(50),
       db.from("employees").select("id, name, role, bank_name, bank_agency, bank_account, bank_account_type, status").order("name"),
     ]);
     setFunctions((fnRes.data as JobFunction[]) || []);
@@ -205,7 +210,20 @@ export default function FinanceiroPage() {
     {
       key: "costado",
       label: "⚓ Pagamento de Costado",
-      content: <CostadoPlaceholder />,
+      content: (
+        <CostadoTab
+          jobs={jobs}
+          allocations={allocations}
+          adjustments={adjustments}
+          functions={functions}
+          ships={ships}
+          employees={employees}
+          canEdit={canEdit}
+          profileName={profile?.full_name || "Sistema"}
+          onChange={loadAll}
+          loading={loading}
+        />
+      ),
     },
     {
       key: "documentos",
@@ -788,7 +806,12 @@ function TrabalhosTab({
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
   const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("TODOS");
 
-  const filtered = jobs.filter((j) => statusFilter === "TODOS" || j.status === statusFilter);
+  // Embarque tab excludes Costado ships (those have services=["COSTADO"]).
+  const costadoShipIds = new Set(
+    ships.filter((s) => (s.services || []).includes("COSTADO")).map((s) => s.id)
+  );
+  const embarqueJobs = jobs.filter((j) => !j.ship_id || !costadoShipIds.has(j.ship_id));
+  const filtered = embarqueJobs.filter((j) => statusFilter === "TODOS" || j.status === statusFilter);
 
   return (
     <div className="space-y-3">
@@ -823,7 +846,9 @@ function TrabalhosTab({
       ) : (
         <div className="grid gap-2">
           {filtered.map((j) => {
-            const cost = calcJobCost(j, allocations, adjustments);
+            // Only Embarque allocations contribute to cost in this tab.
+            const embarqueAllocs = allocations.filter((a) => (a.kind || "EMBARQUE") === "EMBARQUE");
+            const cost = calcJobCost(j, embarqueAllocs, adjustments);
             const revenue = Number(j.contract_value || 0);
             const profit = revenue - cost.total;
             return (
@@ -1073,10 +1098,16 @@ function JobDetailModal({
   onClose: () => void;
   onChange: () => void;
 }) {
-  // Embarque payment formula: rate (per porão) × holds_count × quantity.
+  // Embarque: rate (valor/porão) × holds × qty. Costado: rate (valor/hora) × 6 × qty.
   // When kindFilter is set, allocations are managed in Escalação (this modal doesn't add/remove people).
   const peopleReadOnly = !!kindFilter;
-  const holdsMultiplier = kindFilter === "EMBARQUE" ? Math.max(1, Number(job?.holds_count || 1)) : 1;
+  const holdsMultiplier =
+    kindFilter === "EMBARQUE" ? Math.max(1, Number(job?.holds_count || 1))
+    : kindFilter === "COSTADO" ? HOURS_PER_SHIFT
+    : 1;
+  const rateLabel = kindFilter === "EMBARQUE" ? "Valor/Porão" : kindFilter === "COSTADO" ? "Valor/Hora" : "Valor Diário";
+  const multiplierLabel = kindFilter === "EMBARQUE" ? "Porões" : kindFilter === "COSTADO" ? "Horas" : null;
+  const qtyLabel = kindFilter === "COSTADO" ? "Turnos" : "Qtd";
   const [showAddAlloc, setShowAddAlloc] = useState(false);
   const [allocEmp, setAllocEmp] = useState("");
   const [allocFn, setAllocFn] = useState("");
@@ -1646,17 +1677,20 @@ function JobDetailModal({
                   💡 Pagamento Embarque = <strong>Valor/Porão</strong> × <strong>{holdsMultiplier} porão{holdsMultiplier === 1 ? "" : "ões"}</strong> × <strong>Qtd</strong>
                 </div>
               )}
+              {kindFilter === "COSTADO" && (
+                <div className="px-3 py-2 bg-cyan-50 border-b border-cyan-200 text-[11px] text-cyan-900">
+                  💡 Pagamento Costado = <strong>Valor/Hora</strong> × <strong>{HOURS_PER_SHIFT}h por turno</strong> × <strong>nº de turnos</strong>
+                </div>
+              )}
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-border">
                   <tr>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">#</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Funcionário / Função</th>
-                    <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">Qtd</th>
-                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">
-                      {kindFilter === "EMBARQUE" ? "Valor/Porão" : "Valor Diário"}
-                    </th>
-                    {kindFilter === "EMBARQUE" && (
-                      <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">Porões</th>
+                    <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">{qtyLabel}</th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">{rateLabel}</th>
+                    {multiplierLabel && (
+                      <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">{multiplierLabel}</th>
                     )}
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Base</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light" title="Rateio aplicado">Extra</th>
@@ -1686,7 +1720,7 @@ function JobDetailModal({
                         </td>
                         <td className="px-3 py-2 text-center">{a.quantity}</td>
                         <td className="px-3 py-2 text-right">{brl(a.rate)}</td>
-                        {kindFilter === "EMBARQUE" && (
+                        {multiplierLabel && (
                           <td className="px-3 py-2 text-center text-text-light">× {holdsMultiplier}</td>
                         )}
                         <td className="px-3 py-2 text-right">{brl(subtotal)}</td>
@@ -1715,7 +1749,7 @@ function JobDetailModal({
                     const baseTotal = allocations.reduce((s, a) => s + Number(a.rate) * a.quantity * holdsMultiplier, 0);
                     const extraTotal = allocations.reduce((s, a) => s + Number(a.extra_value || 0), 0);
                     const pluxeeTotal = allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
-                    const labelColSpan = kindFilter === "EMBARQUE" ? 5 : 4;
+                    const labelColSpan = multiplierLabel ? 5 : 4;
                     return (
                       <tr>
                         <td colSpan={labelColSpan} className="px-3 py-2 text-text-light text-right">TOTAL</td>
@@ -2798,20 +2832,127 @@ function FaturamentoModal({
   );
 }
 
-// ─── PLACEHOLDERS (fases seguintes) ─────────────────────────────────────────
+// ─── COSTADO TAB ────────────────────────────────────────────────────────────
 
-function CostadoPlaceholder() {
+function CostadoTab({
+  jobs, allocations, adjustments, functions, ships, employees, canEdit, profileName, onChange, loading,
+}: {
+  jobs: Job[];
+  allocations: JobAllocation[];
+  adjustments: JobAdjustment[];
+  functions: JobFunction[];
+  ships: Ship[];
+  employees: Employee[];
+  canEdit: boolean;
+  profileName: string;
+  onChange: () => void;
+  loading: boolean;
+}) {
+  const [detailJob, setDetailJob] = useState<Job | null>(null);
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("TODOS");
+
+  // Costado jobs = jobs whose ship is marked as Costado OR that have any COSTADO allocation.
+  const costadoShipIds = new Set(
+    ships.filter((s) => (s.services || []).includes("COSTADO")).map((s) => s.id)
+  );
+  const jobsWithCostadoAlloc = new Set(
+    allocations.filter((a) => a.kind === "COSTADO").map((a) => a.job_id)
+  );
+  const costadoJobs = jobs.filter(
+    (j) => (j.ship_id && costadoShipIds.has(j.ship_id)) || jobsWithCostadoAlloc.has(j.id),
+  );
+  const filtered = costadoJobs.filter((j) => statusFilter === "TODOS" || j.status === statusFilter);
+
+  // For job cards, compute Costado-only cost (filter allocs to kind=COSTADO).
+  function costadoCost(job: Job) {
+    const allocs = allocations.filter((a) => a.job_id === job.id && a.kind === "COSTADO");
+    const adjs = adjustments.filter((a) => a.job_id === job.id);
+    const base = allocs.reduce((s, a) => s + calcAllocBase(a, job.holds_count), 0);
+    const adj = adjs.reduce((s, a) => s + (a.type === "ADICIONAL" ? Number(a.amount) : -Number(a.amount)), 0);
+    return base + adj;
+  }
+
   return (
-    <div className="bg-white rounded-xl border border-border p-8 text-center">
-      <div className="text-4xl mb-3">⚓</div>
-      <h3 className="text-lg font-semibold text-text mb-1">Pagamento de Costado</h3>
-      <p className="text-sm text-text-light max-w-md mx-auto">
-        Em desenvolvimento. Aqui o pagamento será calculado por <strong>horas trabalhadas</strong>
-        {" "}(turnos × 6h × valor/hora da função), a partir da Escalação de Costado.
-      </p>
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2 items-center justify-between">
+        <div className="flex gap-2 flex-wrap">
+          {(["TODOS", "ABERTO", "EM_ANDAMENTO", "VERIFICADO", "FECHADO", "CANCELADO"] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => setStatusFilter(s)}
+              className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${
+                statusFilter === s ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"
+              }`}
+            >
+              {s === "TODOS" ? "Todos" : STATUS_LABELS[s]}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="text-center text-text-light py-12">Carregando...</p>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-12 bg-card rounded-xl border border-border">
+          <p className="text-3xl mb-2">⚓</p>
+          <p className="text-sm text-text-light">Nenhum pagamento de Costado encontrado.</p>
+          <p className="text-xs text-text-light mt-1">
+            Crie um navio marcado como <strong>Costado</strong> e aloque a equipe na Escalação de Costado.
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-2">
+          {filtered.map((j) => {
+            const total = costadoCost(j);
+            const allocs = allocations.filter((a) => a.job_id === j.id && a.kind === "COSTADO");
+            const shifts = allocs.reduce((s, a) => s + a.quantity, 0);
+            const hours = shifts * HOURS_PER_SHIFT;
+            return (
+              <div key={j.id} className="bg-card rounded-xl border border-border p-4 hover:shadow-md transition cursor-pointer" onClick={() => setDetailJob(j)}>
+                <div className="flex flex-wrap justify-between items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-semibold">{j.name}</h3>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[j.status]}`}>
+                        {STATUS_LABELS[j.status]}
+                      </span>
+                      {j.ships?.name && <span className="text-xs text-text-light">⚓ {j.ships.name}</span>}
+                    </div>
+                    <p className="text-xs text-text-light mt-1">
+                      {j.start_date} {j.end_date ? `→ ${j.end_date}` : "→ em aberto"} · {allocs.length} aloc. · {shifts} turnos · {hours}h
+                    </p>
+                  </div>
+                  <div className="flex gap-3 items-center text-xs flex-wrap">
+                    <div>
+                      <p className="text-text-light">Custo Costado</p>
+                      <p className="font-semibold text-red-700">{brl(total)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <JobDetailModal
+        open={!!detailJob}
+        job={detailJob}
+        allocations={allocations.filter((a) => a.job_id === detailJob?.id && a.kind === "COSTADO")}
+        adjustments={adjustments.filter((a) => a.job_id === detailJob?.id)}
+        functions={functions}
+        employees={employees}
+        canEdit={canEdit}
+        profileName={profileName}
+        kindFilter="COSTADO"
+        onClose={() => setDetailJob(null)}
+        onChange={() => { onChange(); }}
+      />
     </div>
   );
 }
+
+// ─── PLACEHOLDERS (fase 5) ──────────────────────────────────────────────────
 
 function DocumentosPlaceholder() {
   return (

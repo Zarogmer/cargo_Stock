@@ -190,6 +190,9 @@ export interface Ship {
   status: "AGENDADO" | "EM_OPERACAO" | "CONCLUIDO" | "CANCELADO";
   assigned_team: string | null;
   notes: string | null;
+  // Empty (or no "COSTADO") = Embarque; ["COSTADO"] = Costado-only.
+  // Embarque sub-services: "LAVAGEM_PORAO" | "PINTURA" | "RASPAGEM".
+  services?: string[] | null;
   created_by: string;
   created_at: string;
 }
