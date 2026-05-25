@@ -18,7 +18,6 @@ import type {
   JobAllocation,
   JobAdjustment,
   JobStatus,
-  AdjustmentType,
   Ship,
   Employee,
 } from "@/types/database";
@@ -1070,7 +1069,6 @@ function JobDetailModal({
   const [editAllocId, setEditAllocId] = useState<number | null>(null);
 
   const [showAddAdj, setShowAddAdj] = useState(false);
-  const [adjType, setAdjType] = useState<AdjustmentType>("ADICIONAL");
   const [adjCategory, setAdjCategory] = useState<ExpenseCategory>("COMPRAS");
   const [adjDesc, setAdjDesc] = useState("");
   const [adjAmt, setAdjAmt] = useState("");
@@ -1093,7 +1091,7 @@ function JobDetailModal({
       setShowFunctionForm(false); setShowRateio(false);
       setAllocEmp(""); setAllocFn(""); setAllocDays("1"); setAllocRate(""); setAllocPluxee("0");
       setEditAllocId(null);
-      setAdjType("ADICIONAL"); setAdjCategory("COMPRAS"); setAdjDesc(""); setAdjAmt("");
+      setAdjCategory("COMPRAS"); setAdjDesc(""); setAdjAmt("");
       setRateioFnId(""); setRateioMissing("1");
       setPayrollValue(job?.payroll_value?.toString() || "");
     }
@@ -1144,7 +1142,7 @@ function JobDetailModal({
     if (!adjDesc.trim() || !adjAmt) return;
     await db.from("job_adjustments").insert({
       job_id: job!.id,
-      type: adjType,
+      type: "REDUCAO",
       category: adjCategory,
       description: adjDesc.trim(),
       amount: parseFloat(adjAmt),
@@ -1702,30 +1700,21 @@ function JobDetailModal({
 
           {showAddAdj && (
             <form onSubmit={handleAddAdj} className="bg-amber-50 rounded-lg p-3 mb-2 border border-amber-200 space-y-2">
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs font-medium mb-1">Categoria *</label>
-                  <select value={adjCategory} onChange={(e) => setAdjCategory(e.target.value as ExpenseCategory)} className={inputCls}>
-                    {EXPENSE_CATEGORIES.map((c) => (
-                      <option key={c.value} value={c.value}>{c.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1">Tipo</label>
-                  <select value={adjType} onChange={(e) => setAdjType(e.target.value as AdjustmentType)} className={inputCls}>
-                    <option value="ADICIONAL">Adicional (+)</option>
-                    <option value="REDUCAO">Redução (−)</option>
-                  </select>
-                </div>
-              </div>
               <div>
-                <label className="block text-xs font-medium mb-1">Descrição *</label>
-                <input type="text" value={adjDesc} onChange={(e) => setAdjDesc(e.target.value)} required className={inputCls} placeholder="Detergente, sabão, etc." />
+                <label className="block text-xs font-medium mb-1">Categoria *</label>
+                <select value={adjCategory} onChange={(e) => setAdjCategory(e.target.value as ExpenseCategory)} className={inputCls}>
+                  {EXPENSE_CATEGORIES.map((c) => (
+                    <option key={c.value} value={c.value}>{c.label}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block text-xs font-medium mb-1">Valor (R$) *</label>
                 <input type="number" step="0.01" value={adjAmt} onChange={(e) => setAdjAmt(e.target.value)} required className={inputCls} placeholder="100,00" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1">Descrição *</label>
+                <input type="text" value={adjDesc} onChange={(e) => setAdjDesc(e.target.value)} required className={inputCls} placeholder="Detergente, sabão, etc." />
               </div>
               <div className="flex gap-2 justify-end">
                 <Button variant="secondary" size="sm" type="button" onClick={() => setShowAddAdj(false)}>Cancelar</Button>
