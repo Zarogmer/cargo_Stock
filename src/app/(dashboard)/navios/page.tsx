@@ -52,6 +52,7 @@ interface Employee {
   team: string | null;
   phone: string | null;
   status: string | null;
+  role: string | null;
 }
 
 interface ShipEmployee {
@@ -174,11 +175,18 @@ export default function NaviosPage() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
-  // WhatsApp group creation (only when creating a new ship)
+  // WhatsApp group + scale creation (only when creating a new ship)
   const [createGroup, setCreateGroup] = useState(false);
   const [groupParticipants, setGroupParticipants] = useState<Set<number>>(new Set());
   const [groupSearch, setGroupSearch] = useState("");
   const [groupWarning, setGroupWarning] = useState<string | null>(null);
+  // Per-employee function chosen by the user (employeeId → functionId as string)
+  const [groupPerEmpFn, setGroupPerEmpFn] = useState<Map<number, string>>(new Map());
+  // Active job functions, loaded once for the function selector
+  const [jobFunctions, setJobFunctions] = useState<{ id: number; name: string; active: boolean }[]>([]);
+  // Costado-only: shift date + period for the bulk-allocated rows
+  const [costadoShiftDate, setCostadoShiftDate] = useState("");
+  const [costadoShiftPeriod, setCostadoShiftPeriod] = useState("07-13");
 
   // Ship detail / crew panel
   const [selectedShip, setSelectedShip] = useState<Ship | null>(null);
@@ -226,11 +234,25 @@ export default function NaviosPage() {
     try {
       const { data } = await db
         .from("employees")
-        .select("id, name, team, phone, status")
+        .select("id, name, team, phone, status, role")
         .order("name");
       setEmployees((data as any[]) || []);
     } catch (err) {
       console.error("loadEmployees error:", err);
+    }
+  }, []);
+
+  // Loads active job functions so the user can pick a função for each
+  // employee in the "criar grupo + escalar" panel of the new-ship modal.
+  const loadJobFunctions = useCallback(async () => {
+    try {
+      const { data } = await db
+        .from("job_functions")
+        .select("id, name, active")
+        .order("name");
+      setJobFunctions(((data as any[]) || []).filter((f) => f.active !== false));
+    } catch (err) {
+      console.error("loadJobFunctions error:", err);
     }
   }, []);
 
@@ -243,7 +265,8 @@ export default function NaviosPage() {
   useEffect(() => {
     loadShips();
     loadEmployees();
-  }, [loadShips, loadEmployees, pathname]);
+    loadJobFunctions();
+  }, [loadShips, loadEmployees, loadJobFunctions, pathname]);
 
   // ── Filter ─────────────────────────────────────────────────────────────────
 
@@ -265,6 +288,10 @@ export default function NaviosPage() {
     setGroupParticipants(new Set());
     setGroupSearch("");
     setGroupWarning(null);
+    setGroupPerEmpFn(new Map());
+    // Default shift date = today (the form's arrival_date is empty at this point).
+    setCostadoShiftDate(new Date().toISOString().slice(0, 10));
+    setCostadoShiftPeriod("07-13");
     setShowModal(true);
   }
 
@@ -274,6 +301,9 @@ export default function NaviosPage() {
     setGroupParticipants(new Set());
     setGroupSearch("");
     setGroupWarning(null);
+    setGroupPerEmpFn(new Map());
+    setCostadoShiftDate(new Date().toISOString().slice(0, 10));
+    setCostadoShiftPeriod("07-13");
     setForm({
       name: ship.name,
       // <input type="date"> needs YYYY-MM-DD — the DB returns full ISO timestamps.
@@ -336,19 +366,37 @@ export default function NaviosPage() {
         setSelectedShip({ ...editingShip, ...payload });
       }
     } else {
+      // ── Validações pré-flight da seção "criar grupo + escalar" ────────────
+      // Faço antes do INSERT do navio pra evitar criar registro sem validar a
+      // intenção do usuário primeiro. Se algo aqui falha, ninguém é criado.
+      if (createGroup && groupParticipants.size > 0) {
+        const missingFn = Array.from(groupParticipants).filter((id) => !groupPerEmpFn.get(id));
+        if (missingFn.length > 0) {
+          const names = missingFn
+            .map((id) => employees.find((e) => e.id === id)?.name)
+            .filter(Boolean)
+            .join(", ");
+          setFormError(`Defina a função para: ${names}`);
+          setSaving(false);
+          return;
+        }
+        if (isCostado && (!costadoShiftDate || !costadoShiftPeriod)) {
+          setFormError("Defina data e período do turno para escalar Costado.");
+          setSaving(false);
+          return;
+        }
+      }
+
       const insertResult: any = await db.from("ships").insert(payload);
       if (insertResult.error) { setFormError(insertResult.error.message); setSaving(false); return; }
 
-      // Optional: create WhatsApp group with selected employees.
-      // Failure here is non-fatal — the ship was already created. Surface a
-      // warning so the user can retry the group from the Conversas page.
       const newShip = insertResult.data;
       const newShipId: string | undefined =
         Array.isArray(newShip) ? newShip[0]?.id : newShip?.id;
 
-      // Auto-create financial Job linked to the new ship so it shows up in
-      // Financeiro → Pagamento de Embarque (or Costado, depending on services).
-      // Best-effort: failure here doesn't roll the ship back, just logs a warning.
+      // 1) Auto-cria Job financeiro vinculado ao navio. Capturo o id pra
+      //    poder pendurar job_allocations nele se o usuário escolheu escalar.
+      let newJobId: string | undefined;
       if (newShipId) {
         try {
           const jobPayload: Record<string, unknown> = {
@@ -366,19 +414,72 @@ export default function NaviosPage() {
           const jobRes: any = await db.from("jobs").insert(jobPayload);
           if (jobRes.error) {
             console.warn("[navios] auto-create Job failed:", jobRes.error.message);
+          } else {
+            const j = jobRes.data;
+            newJobId = Array.isArray(j) ? j[0]?.id : j?.id;
           }
         } catch (err) {
           console.warn("[navios] auto-create Job exception:", (err as Error).message);
         }
       }
 
+      // 2) Escalação: cria uma job_allocation por colaborador selecionado,
+      //    com a função escolhida no modal. Pra Costado também grava o turno.
+      //    Status ATIVO, quantity/rate/pluxee zeram (a aba Financeiro ajusta
+      //    depois — mesma convenção da Escalação manual).
+      if (createGroup && groupParticipants.size > 0 && newJobId) {
+        const profileName = profile?.full_name || "sistema";
+        const now = new Date().toISOString();
+        const allocationErrors: string[] = [];
+        for (const empId of Array.from(groupParticipants)) {
+          const fnId = groupPerEmpFn.get(empId);
+          if (!fnId) continue; // já validado, mas defensivo
+          try {
+            const row: Record<string, unknown> = {
+              job_id: newJobId,
+              function_id: parseInt(fnId, 10),
+              employee_id: empId,
+              quantity: 0,
+              rate: 0,
+              pluxee_value: 0,
+              status: "ATIVO",
+              kind: isCostado ? "COSTADO" : "EMBARQUE",
+              added_by: profileName,
+              added_at: now,
+            };
+            if (isCostado) {
+              row.shift_date = costadoShiftDate;
+              row.shift_period = costadoShiftPeriod;
+            }
+            const allocRes: any = await db.from("job_allocations").insert(row);
+            if (allocRes.error) allocationErrors.push(allocRes.error.message);
+          } catch (err) {
+            allocationErrors.push((err as Error).message);
+          }
+        }
+        if (allocationErrors.length > 0) {
+          setGroupWarning(
+            `Navio criado, mas ${allocationErrors.length} colaborador(es) não puderam ser escalados: ${allocationErrors[0]}`,
+          );
+        }
+      } else if (createGroup && groupParticipants.size > 0 && !newJobId) {
+        setGroupWarning(
+          "Navio criado, mas o pagamento financeiro não foi gerado — sem ele não é possível escalar. Tente em Pagamento de Embarque → Sincronizar navios.",
+        );
+      }
+
+      // 3) Cria grupo no WhatsApp com os mesmos colaboradores.
       if (createGroup && groupParticipants.size > 0) {
         const participantPhones = Array.from(groupParticipants)
           .map((id) => employees.find((e) => e.id === id)?.phone || "")
           .filter((p) => p.trim().length > 0);
 
         if (participantPhones.length === 0) {
-          setGroupWarning("Navio criado, mas nenhum dos colaboradores selecionados tem telefone válido.");
+          setGroupWarning(
+            (prev) =>
+              prev ||
+              "Navio criado, mas nenhum dos colaboradores selecionados tem telefone válido pra criar o grupo.",
+          );
         } else {
           try {
             const res = await fetch("/api/whatsapp/groups", {
@@ -392,7 +493,9 @@ export default function NaviosPage() {
             });
             const body = await res.json().catch(() => ({}));
             if (!res.ok) {
-              setGroupWarning(`Navio criado, mas não foi possível criar o grupo no WhatsApp: ${body.error || `HTTP ${res.status}`}`);
+              setGroupWarning(
+                `Navio e escala criados, mas o grupo no WhatsApp falhou: ${body.error || `HTTP ${res.status}`}`,
+              );
               setSaving(false);
               loadShips();
               return; // keep modal open so user can read the warning
@@ -404,7 +507,7 @@ export default function NaviosPage() {
               return;
             }
           } catch (err) {
-            setGroupWarning(`Navio criado, mas falha ao chamar a API de grupo: ${(err as Error).message}`);
+            setGroupWarning(`Navio e escala criados, mas falha ao chamar a API de grupo: ${(err as Error).message}`);
             setSaving(false);
             loadShips();
             return;
@@ -1081,7 +1184,7 @@ export default function NaviosPage() {
                       className="h-4 w-4 accent-emerald-600"
                     />
                     <span className="text-sm font-medium text-text">
-                      💬 Criar grupo no WhatsApp para este navio
+                      💬 Criar grupo no WhatsApp + escalar colaboradores
                     </span>
                   </label>
 
@@ -1093,14 +1196,110 @@ export default function NaviosPage() {
                     const filteredEmps = q
                       ? eligible.filter((e) => e.name.toLowerCase().includes(q))
                       : eligible;
+                    const isCostadoForm = form.operation_type === "COSTADO";
+                    const selectedList = Array.from(groupParticipants)
+                      .map((id) => employees.find((e) => e.id === id))
+                      .filter(Boolean) as Employee[];
 
                     return (
-                      <div className="space-y-2">
+                      <div className="space-y-3">
                         <p className="text-[11px] text-text-light">
-                          Selecione os funcionários. O grupo será criado com o nome do navio
+                          O grupo será criado com o nome do navio
                           {form.name.trim() && <> (<strong className="text-text">{form.name.trim()}</strong>)</>}.
-                          Só colaboradores ATIVOS com telefone aparecem na lista.
+                          Cada colaborador é também escalado em{" "}
+                          <strong className="text-text">
+                            {isCostadoForm ? "🧹 Escalação de Costado" : "⚓ Escalação de Embarque"}
+                          </strong>{" "}
+                          — escolha a função de cada um.
                         </p>
+
+                        {isCostadoForm && (
+                          <div className="grid grid-cols-2 gap-2 p-2 bg-white border border-emerald-100 rounded-md">
+                            <div>
+                              <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">
+                                Data do turno
+                              </label>
+                              <input
+                                type="date"
+                                value={costadoShiftDate}
+                                onChange={(e) => setCostadoShiftDate(e.target.value)}
+                                className="w-full px-2 py-1.5 border border-border rounded text-xs focus:outline-none focus:ring-2 focus:ring-primary/30"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">
+                                Período
+                              </label>
+                              <select
+                                value={costadoShiftPeriod}
+                                onChange={(e) => setCostadoShiftPeriod(e.target.value)}
+                                className="w-full px-2 py-1.5 border border-border rounded text-xs focus:outline-none focus:ring-2 focus:ring-primary/30 bg-white"
+                              >
+                                <option value="07-13">07-13</option>
+                                <option value="13-19">13-19</option>
+                                <option value="19-01">19-01</option>
+                                <option value="01-07">01-07</option>
+                              </select>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Lista de selecionados com select de função */}
+                        {selectedList.length > 0 && (
+                          <div className="p-2 bg-white border border-emerald-200 rounded-lg">
+                            <p className="text-[10px] font-semibold text-emerald-900 uppercase tracking-wider mb-2">
+                              {selectedList.length} selecionado(s) — defina a função
+                            </p>
+                            <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                              {selectedList.map((emp) => {
+                                const curFn = groupPerEmpFn.get(emp.id) || "";
+                                const fnMissing = !curFn;
+                                return (
+                                  <div
+                                    key={emp.id}
+                                    className="flex items-center gap-2 bg-white border border-emerald-100 rounded-md px-2 py-1.5"
+                                  >
+                                    <span className="flex-1 min-w-0 text-xs font-medium truncate">{emp.name}</span>
+                                    <select
+                                      value={curFn}
+                                      onChange={(ev) =>
+                                        setGroupPerEmpFn((m) => new Map(m).set(emp.id, ev.target.value))
+                                      }
+                                      className={`text-xs px-2 py-1 border rounded ${
+                                        fnMissing ? "border-red-300 bg-red-50" : "border-border"
+                                      }`}
+                                    >
+                                      <option value="">Função...</option>
+                                      {jobFunctions.map((f) => (
+                                        <option key={f.id} value={f.id}>{f.name}</option>
+                                      ))}
+                                    </select>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setGroupParticipants((prev) => {
+                                          const next = new Set(prev);
+                                          next.delete(emp.id);
+                                          return next;
+                                        });
+                                        setGroupPerEmpFn((m) => {
+                                          const nm = new Map(m);
+                                          nm.delete(emp.id);
+                                          return nm;
+                                        });
+                                      }}
+                                      className="text-xs text-red-600 hover:bg-red-50 rounded p-1"
+                                      title="Remover"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
                         <input
                           type="text"
                           value={groupSearch}
@@ -1135,21 +1334,31 @@ export default function NaviosPage() {
                                         else next.add(emp.id);
                                         return next;
                                       });
+                                      // If unchecking, drop the function selection too
+                                      if (groupParticipants.has(emp.id)) {
+                                        setGroupPerEmpFn((m) => {
+                                          const nm = new Map(m);
+                                          nm.delete(emp.id);
+                                          return nm;
+                                        });
+                                      }
                                     }}
                                     className="w-4 h-4 accent-emerald-600"
                                   />
                                   <div className="flex-1 min-w-0">
                                     <p className="text-sm font-medium text-text truncate">{emp.name}</p>
-                                    <p className="text-[10px] text-text-light">{emp.phone}</p>
+                                    <p className="text-[10px] text-text-light">{emp.phone}{emp.role ? ` · ${emp.role}` : ""}</p>
                                   </div>
                                 </label>
                               );
                             })
                           )}
                         </div>
-                        <p className="text-[11px] text-text-light">
-                          <strong className="text-text">{groupParticipants.size}</strong> selecionado(s)
-                        </p>
+                        {jobFunctions.length === 0 && (
+                          <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                            ⚠️ Nenhuma função cadastrada em Financeiro → Funções e Valores. Cadastre antes pra poder escalar.
+                          </p>
+                        )}
                       </div>
                     );
                   })()}
