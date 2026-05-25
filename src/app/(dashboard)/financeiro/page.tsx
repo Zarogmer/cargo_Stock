@@ -805,6 +805,8 @@ function TrabalhosTab({
   const [detailJob, setDetailJob] = useState<Job | null>(null);
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
   const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("TODOS");
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   // Embarque tab excludes Costado ships (those have services=["COSTADO"]).
   const costadoShipIds = new Set(
@@ -812,6 +814,24 @@ function TrabalhosTab({
   );
   const embarqueJobs = jobs.filter((j) => !j.ship_id || !costadoShipIds.has(j.ship_id));
   const filtered = embarqueJobs.filter((j) => statusFilter === "TODOS" || j.status === statusFilter);
+
+  async function handleSyncShips() {
+    setSyncing(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetch("/api/financeiro/jobs/backfill", { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setSyncMessage(`✅ ${body.created} pagamento(s) criado(s), ${body.skipped} já existia(m).`);
+      onChange();
+    } catch (err) {
+      setSyncMessage(`❌ ${(err as Error).message}`);
+    } finally {
+      setSyncing(false);
+      // auto-clear the toast after a few seconds
+      setTimeout(() => setSyncMessage(null), 5000);
+    }
+  }
 
   return (
     <div className="space-y-3">
@@ -830,11 +850,28 @@ function TrabalhosTab({
           ))}
         </div>
         {canEdit && (
-          <Button size="sm" onClick={() => { setEditJob(null); setShowJobForm(true); }}>
-            <PlusIcon className="w-4 h-4" />Novo Pagamento
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={handleSyncShips}
+              disabled={syncing}
+              title="Cria Pagamento para todo navio que ainda não tem um"
+            >
+              {syncing ? "Sincronizando..." : "🔄 Sincronizar navios"}
+            </Button>
+            <Button size="sm" onClick={() => { setEditJob(null); setShowJobForm(true); }}>
+              <PlusIcon className="w-4 h-4" />Novo Pagamento
+            </Button>
+          </div>
         )}
       </div>
+
+      {syncMessage && (
+        <p className="text-xs px-3 py-2 rounded-lg bg-blue-50 border border-blue-200 text-blue-800">
+          {syncMessage}
+        </p>
+      )}
 
       {loading ? (
         <p className="text-center text-text-light py-12">Carregando...</p>

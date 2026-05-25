@@ -346,6 +346,32 @@ export default function NaviosPage() {
       const newShipId: string | undefined =
         Array.isArray(newShip) ? newShip[0]?.id : newShip?.id;
 
+      // Auto-create financial Job linked to the new ship so it shows up in
+      // Financeiro → Pagamento de Embarque (or Costado, depending on services).
+      // Best-effort: failure here doesn't roll the ship back, just logs a warning.
+      if (newShipId) {
+        try {
+          const jobPayload: Record<string, unknown> = {
+            name: payload.name,
+            ship_id: newShipId,
+            start_date: payload.arrival_date || new Date().toISOString().slice(0, 10),
+            end_date: payload.departure_date,
+            status: "ABERTO",
+            client: payload.client_name,
+            cargo_type: payload.cargo_type,
+            holds_count: payload.holds_count,
+            port: payload.port,
+            created_by: profile?.full_name || "sistema",
+          };
+          const jobRes: any = await db.from("jobs").insert(jobPayload);
+          if (jobRes.error) {
+            console.warn("[navios] auto-create Job failed:", jobRes.error.message);
+          }
+        } catch (err) {
+          console.warn("[navios] auto-create Job exception:", (err as Error).message);
+        }
+      }
+
       if (createGroup && groupParticipants.size > 0) {
         const participantPhones = Array.from(groupParticipants)
           .map((id) => employees.find((e) => e.id === id)?.phone || "")
