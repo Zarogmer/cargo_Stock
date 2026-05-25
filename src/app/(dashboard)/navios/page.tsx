@@ -1096,13 +1096,23 @@ export default function NaviosPage() {
 
               <div>
                 <label className="block text-sm font-medium text-text mb-1">Cliente</label>
-                <input
-                  type="text"
-                  value={form.client_name}
-                  onChange={(e) => setForm({ ...form, client_name: e.target.value })}
-                  placeholder="Ex: DEEP, VALE, BUNGE..."
-                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={form.client_name}
+                    onChange={(e) => setForm({ ...form, client_name: e.target.value })}
+                    placeholder="Selecione ou digite um cliente..."
+                    list="client-options"
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                  />
+                  <datalist id="client-options">
+                    <option value="Deep" />
+                    <option value="Transatlântica" />
+                    <option value="Continental" />
+                    <option value="Wilson" />
+                  </datalist>
+                </div>
+                <p className="text-[10px] text-text-light mt-1">Selecione um cliente ou digite um novo</p>
               </div>
 
               <div>
