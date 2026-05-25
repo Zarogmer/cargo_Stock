@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { whatsappBus } from "@/lib/services/whatsapp-bus";
 
 // Evolution API posts events here whenever messages arrive (or are sent),
 // connection state changes, etc. The URL is registered via /webhook/set on
@@ -144,6 +145,24 @@ export async function POST(req: NextRequest) {
       },
     });
     console.log("[whatsapp-webhook] persisted:", remoteJid, "fromMe:", fromMe, "type:", messageType);
+
+    // Fan out to any /api/whatsapp/events subscribers so the UI updates in
+    // real time. Best-effort: emit failures shouldn't fail the webhook (the
+    // DB row is the source of truth — fallback polling would catch it).
+    try {
+      whatsappBus.emit("message", {
+        type: "message",
+        remote_jid: remoteJid,
+        from_me: fromMe,
+        message_type: messageType,
+        text,
+        push_name: data?.pushName || null,
+        timestamp_ms: timestampSeconds * 1000,
+      });
+    } catch (busErr) {
+      console.warn("[whatsapp-webhook] bus emit failed:", (busErr as Error).message);
+    }
+
     return NextResponse.json({ status: "ok" });
   } catch (err) {
     console.error("[whatsapp-webhook] persist error:", (err as Error).message);

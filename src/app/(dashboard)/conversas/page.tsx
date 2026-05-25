@@ -289,18 +289,60 @@ export default function ConversasPage() {
     }
   }, []);
 
+  // Background polling — kept as a fallback for the SSE stream below.
+  // The SSE stream pushes updates the moment Evolution delivers a message;
+  // this polling is the safety net for when the SSE connection drops (mobile
+  // background, proxy timeout, server restart). Bumped from 5s to 30s now
+  // that SSE handles the live case.
   useEffect(() => {
     loadConversations();
-    const interval = setInterval(loadConversations, 5000);
+    const interval = setInterval(loadConversations, 30000);
     return () => clearInterval(interval);
   }, [loadConversations]);
 
   useEffect(() => {
     if (!selectedJid) return;
     loadMessages(selectedJid);
-    const interval = setInterval(() => loadMessages(selectedJid), 5000);
+    const interval = setInterval(() => loadMessages(selectedJid), 30000);
     return () => clearInterval(interval);
   }, [selectedJid, loadMessages]);
+
+  // Real-time updates via Server-Sent Events. The webhook emits to an
+  // in-process bus on every message persisted, and /api/whatsapp/events
+  // streams that out as SSE. When we receive an event we reload the
+  // conversation list (so unread counts / last-message previews update) and
+  // also reload the open thread if the event matches the JID we're viewing.
+  //
+  // We stash selectedJid in a ref so the EventSource doesn't need to be
+  // recreated every time the user switches conversations — recreating it
+  // would lose any in-flight events.
+  const selectedJidRef = useRef(selectedJid);
+  useEffect(() => { selectedJidRef.current = selectedJid; }, [selectedJid]);
+
+  useEffect(() => {
+    const es = new EventSource("/api/whatsapp/events");
+
+    const onMessage = (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as { remote_jid?: string };
+        loadConversations();
+        if (data.remote_jid && data.remote_jid === selectedJidRef.current) {
+          loadMessages(data.remote_jid);
+        }
+      } catch {
+        // ignore malformed payloads — the next event will recover
+      }
+    };
+
+    es.addEventListener("message", onMessage);
+    // The browser auto-retries on error; we only need to swallow the noise.
+    es.onerror = () => { /* no-op */ };
+
+    return () => {
+      es.removeEventListener("message", onMessage);
+      es.close();
+    };
+  }, [loadConversations, loadMessages]);
 
   // Auto-scroll to bottom when new messages arrive (but not when just polling
   // with the same count, so we don't fight the user's scroll position).
