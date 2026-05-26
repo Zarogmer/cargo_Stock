@@ -849,34 +849,35 @@ function EmployeeRatesModal({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
+  const [savedToast, setSavedToast] = useState<string | null>(null);
+
+  const loadRates = useCallback(async () => {
+    if (!fn) return;
+    setLoading(true);
+    const [empRes, rateRes] = await Promise.all([
+      db.from("employees").select("id, name, status").order("name"),
+      db.from("employee_function_rates").select("*").eq("function_id", fn!.id),
+    ]);
+    const emps = ((empRes.data as { id: number; name: string; status: string | null }[]) || [])
+      .filter((e) => e.status !== "INATIVO");
+    setEmployees(emps);
+    const map: Record<number, { id?: number; rate: string }> = {};
+    const origs: Record<number, number> = {};
+    for (const r of (rateRes.data || []) as { id: number; employee_id: number; rate: string | number }[]) {
+      map[r.employee_id] = { id: r.id, rate: Number(r.rate).toFixed(2).replace(".", ",") };
+      origs[r.employee_id] = Number(r.rate);
+    }
+    setOverrides(map);
+    setOriginalRates(origs);
+    setLoading(false);
+  }, [fn]);
 
   useEffect(() => {
     if (!open || !fn) return;
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
-      const [empRes, rateRes] = await Promise.all([
-        db.from("employees").select("id, name, status").order("name"),
-        db.from("employee_function_rates").select("*").eq("function_id", fn!.id),
-      ]);
-      if (cancelled) return;
-      const emps = ((empRes.data as { id: number; name: string; status: string | null }[]) || [])
-        .filter((e) => e.status !== "INATIVO");
-      setEmployees(emps);
-      const map: Record<number, { id?: number; rate: string }> = {};
-      const origs: Record<number, number> = {};
-      for (const r of (rateRes.data || []) as { id: number; employee_id: number; rate: string | number }[]) {
-        map[r.employee_id] = { id: r.id, rate: Number(r.rate).toFixed(2).replace(".", ",") };
-        origs[r.employee_id] = Number(r.rate);
-      }
-      setOverrides(map);
-      setOriginalRates(origs);
-      setSearch("");
-      setLoading(false);
-    }
-    load();
-    return () => { cancelled = true; };
-  }, [open, fn]);
+    setSearch("");
+    setSavedToast(null);
+    loadRates();
+  }, [open, fn, loadRates]);
 
   function setRate(empId: number, value: string) {
     setOverrides((prev) => ({ ...prev, [empId]: { ...(prev[empId] || {}), rate: value } }));
@@ -897,6 +898,9 @@ function EmployeeRatesModal({
   async function handleSave() {
     if (!fn) return;
     setSaving(true);
+    setSavedToast(null);
+    let changedCount = 0;
+    const errors: string[] = [];
     try {
       // Jobs em aberto (não-FECHADO/CANCELADO) recebem o novo rate nas
       // alocações desse funcionário/função, pra que pagamentos abertos
@@ -906,7 +910,7 @@ function EmployeeRatesModal({
         .select("id")
         .in("status", ["ABERTO", "EM_ANDAMENTO", "VERIFICADO"]);
       const openJobIds = ((openJobs as { id: number }[]) || []).map((j) => j.id);
-      const defaultRate = Number(fn.default_rate);
+      const defaultRateLocal = Number(fn.default_rate);
 
       for (const emp of employees) {
         const o = overrides[emp.id];
@@ -915,22 +919,23 @@ function EmployeeRatesModal({
         const hasValue = raw !== "" && Number.isFinite(num) && num > 0;
         const orig = originalRates[emp.id];
         const wasOverride = orig != null;
-        // Pula só quando não havia override e não há valor digitado.
         if (!wasOverride && !hasValue) continue;
 
         if (hasValue) {
-          // DB update apenas se mudou. Mas sempre sincroniza alocações pra
-          // garantir consistência (cobre dados antigos pré-sincronização).
           if (o?.id) {
             if (orig !== num) {
-              await db.from("employee_function_rates").update({ rate: num }).eq("id", o.id);
+              const res = await db.from("employee_function_rates").update({ rate: num }).eq("id", o.id);
+              if (res?.error) errors.push(`${emp.name}: ${res.error.message}`);
+              else changedCount++;
             }
           } else {
-            await db.from("employee_function_rates").insert({
+            const res = await db.from("employee_function_rates").insert({
               employee_id: emp.id,
               function_id: fn.id,
               rate: num,
             });
+            if (res?.error) errors.push(`${emp.name}: ${res.error.message}`);
+            else changedCount++;
           }
           if (openJobIds.length > 0) {
             await db.from("job_allocations").update({ rate: num })
@@ -939,20 +944,27 @@ function EmployeeRatesModal({
               .in("job_id", openJobIds);
           }
         } else if (o?.id) {
-          // Sem valor → remove o override e volta as alocações pro default.
-          await db.from("employee_function_rates").delete().eq("id", o.id);
+          const res = await db.from("employee_function_rates").delete().eq("id", o.id);
+          if (res?.error) errors.push(`${emp.name}: ${res.error.message}`);
+          else changedCount++;
           if (openJobIds.length > 0) {
-            await db.from("job_allocations").update({ rate: defaultRate })
+            await db.from("job_allocations").update({ rate: defaultRateLocal })
               .eq("employee_id", emp.id)
               .eq("function_id", fn.id)
               .in("job_id", openJobIds);
           }
         }
       }
+      // Recarrega os dados pra o usuário ver imediatamente os valores que ficaram salvos.
+      await loadRates();
       onChange?.();
-      onClose();
+      if (errors.length > 0) {
+        setSavedToast(`⚠️ ${errors.length} erro(s) ao salvar: ${errors.slice(0, 3).join("; ")}${errors.length > 3 ? "…" : ""}`);
+      } else {
+        setSavedToast(`✓ ${changedCount === 0 ? "Sem alterações pendentes." : `${changedCount} valor(es) salvos com sucesso.`}`);
+      }
     } catch (err) {
-      alert("Erro ao salvar: " + (err as Error).message);
+      setSavedToast("❌ Erro ao salvar: " + (err as Error).message);
     } finally {
       setSaving(false);
     }
@@ -961,10 +973,11 @@ function EmployeeRatesModal({
   const filtered = employees.filter((e) =>
     e.name.toLowerCase().includes(search.toLowerCase())
   );
-  const overrideCount = Object.values(overrides).filter(
-    (o) => o.rate && Number(o.rate.replace(",", ".")) > 0,
-  ).length;
-  const inputCls = "w-32 px-2 py-1 border border-border rounded text-sm text-right focus:ring-2 focus:ring-primary outline-none";
+  const defaultRate = Number(fn?.default_rate || 0);
+  const overrideCount = Object.values(overrides).filter((o) => {
+    const n = Number((o.rate || "").toString().replace(",", "."));
+    return n > 0 && n !== defaultRate;
+  }).length;
 
   return (
     <Modal open={open} onClose={onClose} title={fn ? `Valores especiais — ${fn.name}` : ""} maxWidth="max-w-2xl">
@@ -999,19 +1012,34 @@ function EmployeeRatesModal({
                 <thead className="bg-gray-50 sticky top-0">
                   <tr>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Funcionário</th>
-                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Valor especial (R$)</th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Valor (R$)</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Comparação</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map((emp) => {
                     const o = overrides[emp.id];
-                    const hasOverride = !!o && o.rate && Number((o.rate || "").toString().replace(",", ".")) > 0;
+                    const rawText = (o?.rate ?? "").toString();
+                    const num = Number(rawText.replace(",", "."));
+                    const hasNumber = rawText.trim() !== "" && Number.isFinite(num) && num > 0;
+                    const diff = hasNumber ? num - defaultRate : 0;
+                    const isOverride = hasNumber && diff !== 0;
+                    // Estilo do input muda conforme a diferença pra dar feedback visual.
+                    const inputStyle = !hasNumber
+                      ? "border-border text-text-light"
+                      : diff > 0
+                        ? "border-emerald-400 bg-emerald-50 text-emerald-800 font-semibold"
+                        : diff < 0
+                          ? "border-red-400 bg-red-50 text-red-800 font-semibold"
+                          : "border-border text-text";
                     return (
                       <tr key={emp.id} className="border-b border-border last:border-0 hover:bg-gray-50">
                         <td className="px-3 py-2">
                           {emp.name}
-                          {hasOverride && (
-                            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 font-bold">ESPECIAL</span>
+                          {isOverride && (
+                            <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded font-bold ${diff > 0 ? "bg-emerald-200 text-emerald-900" : "bg-red-200 text-red-900"}`}>
+                              ESPECIAL
+                            </span>
                           )}
                         </td>
                         <td className="px-3 py-2 text-right">
@@ -1021,16 +1049,33 @@ function EmployeeRatesModal({
                             value={o?.rate ?? ""}
                             onChange={(e) => setRate(emp.id, e.target.value)}
                             onBlur={() => formatRateOnBlur(emp.id)}
-                            placeholder={Number(fn.default_rate).toFixed(2).replace(".", ",")}
+                            placeholder={`padrão ${defaultRate.toFixed(2).replace(".", ",")}`}
                             disabled={!canEdit}
-                            className={inputCls}
+                            className={`w-32 px-2 py-1 border-2 rounded text-sm text-right focus:ring-2 focus:ring-primary outline-none transition-colors ${inputStyle}`}
                           />
+                        </td>
+                        <td className="px-3 py-2 text-xs">
+                          {!hasNumber ? (
+                            <span className="text-text-light italic">usa padrão {brl(defaultRate)}</span>
+                          ) : diff > 0 ? (
+                            <span className="text-emerald-700 font-semibold">▲ recebe + {brl(diff)} acima do padrão</span>
+                          ) : diff < 0 ? (
+                            <span className="text-red-700 font-semibold">▼ recebe − {brl(Math.abs(diff))} abaixo do padrão</span>
+                          ) : (
+                            <span className="text-text-light">= padrão {brl(defaultRate)}</span>
+                          )}
                         </td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {savedToast && (
+            <div className={`text-xs px-3 py-2 rounded-lg border ${savedToast.startsWith("✓") ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-amber-50 border-amber-200 text-amber-900"}`}>
+              {savedToast}
             </div>
           )}
 
