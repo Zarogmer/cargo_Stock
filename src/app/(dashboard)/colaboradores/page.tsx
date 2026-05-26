@@ -1024,7 +1024,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
             <label className="block text-sm font-medium mb-1">Tipo de Contrato</label>
             <select value={contractType} onChange={(e) => setContractType(e.target.value)} className={inputCls}>
               <option value="">—</option>
-              <option value="REGISTRADO">Registrado</option>
+              <option value="REGISTRADO">Mensalista</option>
               <option value="INTERMITENTE">Contrato Intermitente</option>
             </select>
           </div>
@@ -1341,7 +1341,7 @@ function renderCell(emp: Employee, key: keyof Employee): React.ReactNode {
   }
   if (key === "contract_type") {
     const cls = v === "REGISTRADO" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700";
-    const label = v === "REGISTRADO" ? "Registrado" : "Intermitente";
+    const label = v === "REGISTRADO" ? "Mensalista" : "Intermitente";
     return <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${cls}`}>{label}</span>;
   }
   if (key === "nrs_training") {
