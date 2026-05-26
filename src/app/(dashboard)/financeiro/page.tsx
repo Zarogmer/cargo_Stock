@@ -391,6 +391,7 @@ function FuncoesTab({
   const [showFnForm, setShowFnForm] = useState(false);
   const [historyFn, setHistoryFn] = useState<JobFunction | null>(null);
   const [deleteFn, setDeleteFn] = useState<JobFunction | null>(null);
+  const [ratesFn, setRatesFn] = useState<JobFunction | null>(null);
   const [search, setSearch] = useState("");
 
   // Count distinct allocations (records), not the sum of worked days. With the
@@ -485,6 +486,9 @@ function FuncoesTab({
                   <td className="px-4 py-2.5 text-text-light text-xs">{allocCount(f.id)}× alocada(s)</td>
                   <td className="px-4 py-2.5 text-right">
                     <div className="flex gap-1 justify-end">
+                      <button onClick={() => setRatesFn(f)} className="p-1.5 text-amber-700 hover:bg-amber-50 rounded" title="Valores especiais por funcionário">
+                        <span className="text-base leading-none">👤</span>
+                      </button>
                       {canEdit && (
                         <>
                           <button onClick={() => { setEditFn(f); setShowFnForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded" title="Editar tudo">
@@ -524,6 +528,13 @@ function FuncoesTab({
         canEdit={canEdit}
         onClose={() => setHistoryFn(null)}
         onChange={onChange}
+      />
+
+      <EmployeeRatesModal
+        open={!!ratesFn}
+        fn={ratesFn}
+        canEdit={canEdit}
+        onClose={() => setRatesFn(null)}
       />
 
       <ConfirmDialog
@@ -776,6 +787,168 @@ function RateHistoryModal({
               ))}
             </div>
           )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ─── EMPLOYEE RATES MODAL ──────────────────────────────────────────────────
+// Permite cadastrar um valor especial pra um funcionário específico nesta
+// função (override do default_rate). Usado pra funcionários antigos que
+// recebem um pouco a mais — a allocation nova já entra com esse valor.
+function EmployeeRatesModal({
+  open, fn, canEdit, onClose,
+}: {
+  open: boolean;
+  fn: JobFunction | null;
+  canEdit: boolean;
+  onClose: () => void;
+}) {
+  const [employees, setEmployees] = useState<{ id: number; name: string; status: string | null }[]>([]);
+  const [overrides, setOverrides] = useState<Record<number, { id?: number; rate: string }>>({});
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    if (!open || !fn) return;
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      const [empRes, rateRes] = await Promise.all([
+        db.from("employees").select("id, name, status").order("name"),
+        db.from("employee_function_rates").select("*").eq("function_id", fn!.id),
+      ]);
+      if (cancelled) return;
+      const emps = ((empRes.data as { id: number; name: string; status: string | null }[]) || [])
+        .filter((e) => e.status !== "INATIVO");
+      setEmployees(emps);
+      const map: Record<number, { id?: number; rate: string }> = {};
+      for (const r of (rateRes.data || []) as { id: number; employee_id: number; rate: string | number }[]) {
+        map[r.employee_id] = { id: r.id, rate: String(r.rate) };
+      }
+      setOverrides(map);
+      setSearch("");
+      setLoading(false);
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [open, fn]);
+
+  function setRate(empId: number, value: string) {
+    setOverrides((prev) => ({ ...prev, [empId]: { ...(prev[empId] || {}), rate: value } }));
+  }
+
+  async function handleSave() {
+    if (!fn) return;
+    setSaving(true);
+    try {
+      for (const emp of employees) {
+        const o = overrides[emp.id];
+        const raw = (o?.rate ?? "").toString().trim();
+        const hasValue = raw !== "" && Number(raw) > 0;
+        if (hasValue) {
+          // upsert
+          if (o?.id) {
+            await db.from("employee_function_rates").update({ rate: Number(raw) }).eq("id", o.id);
+          } else {
+            await db.from("employee_function_rates").insert({
+              employee_id: emp.id,
+              function_id: fn.id,
+              rate: Number(raw),
+            });
+          }
+        } else if (o?.id) {
+          // Sem valor → remove o override (volta ao padrão)
+          await db.from("employee_function_rates").delete().eq("id", o.id);
+        }
+      }
+      onClose();
+    } catch (err) {
+      alert("Erro ao salvar: " + (err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const filtered = employees.filter((e) =>
+    e.name.toLowerCase().includes(search.toLowerCase())
+  );
+  const overrideCount = Object.values(overrides).filter((o) => o.rate && Number(o.rate) > 0).length;
+  const inputCls = "w-32 px-2 py-1 border border-border rounded text-sm text-right focus:ring-2 focus:ring-primary outline-none";
+
+  return (
+    <Modal open={open} onClose={onClose} title={fn ? `Valores especiais — ${fn.name}` : ""} maxWidth="max-w-2xl">
+      {!fn ? null : (
+        <div className="space-y-3">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900">
+            💡 Defina um valor especial pra funcionários que ganham diferente do padrão (
+            <strong>{brl(fn.default_rate)}</strong>). Deixe em branco pra usar o padrão.
+            {overrideCount > 0 && <span className="ml-1 font-semibold">· {overrideCount} override(s) ativos.</span>}
+          </div>
+
+          <input
+            type="text"
+            placeholder="Buscar funcionário..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+          />
+
+          {loading ? (
+            <p className="text-center text-text-light py-8 text-sm">Carregando...</p>
+          ) : filtered.length === 0 ? (
+            <p className="text-center text-text-light py-8 text-sm">Nenhum funcionário encontrado.</p>
+          ) : (
+            <div className="border border-border rounded-lg overflow-hidden max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Funcionário</th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Valor especial (R$)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((emp) => {
+                    const o = overrides[emp.id];
+                    const hasOverride = !!o && o.rate && Number(o.rate) > 0;
+                    return (
+                      <tr key={emp.id} className="border-b border-border last:border-0 hover:bg-gray-50">
+                        <td className="px-3 py-2">
+                          {emp.name}
+                          {hasOverride && (
+                            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 font-bold">ESPECIAL</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={o?.rate ?? ""}
+                            onChange={(e) => setRate(emp.id, e.target.value)}
+                            placeholder={String(Number(fn.default_rate).toFixed(2))}
+                            disabled={!canEdit}
+                            className={inputCls}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="flex gap-2 justify-end pt-2 border-t border-border">
+            <Button variant="secondary" type="button" onClick={onClose}>Fechar</Button>
+            {canEdit && (
+              <Button type="button" onClick={handleSave} disabled={saving || loading}>
+                {saving ? "Salvando..." : "Salvar"}
+              </Button>
+            )}
+          </div>
         </div>
       )}
     </Modal>

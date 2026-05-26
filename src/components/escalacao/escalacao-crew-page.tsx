@@ -621,19 +621,34 @@ function CrewFormModal({
     try {
       const jobId = await ensureJob();
       const now = new Date().toISOString();
+      // Carrega overrides de valor por funcionário (Valores especiais em
+      // Funções e Valores). Funcionário com override → usa esse rate;
+      // caso contrário, default_rate da função.
+      const fnIdsInUse = Array.from(new Set(
+        Array.from(selectedIds).map((id) => parseInt(perEmpFn.get(id)!))
+      ));
+      const overridesMap = new Map<string, number>();
+      if (fnIdsInUse.length > 0) {
+        const { data: ovData } = await db
+          .from("employee_function_rates")
+          .select("employee_id, function_id, rate")
+          .in("function_id", fnIdsInUse);
+        for (const o of (ovData || []) as { employee_id: number; function_id: number; rate: string | number }[]) {
+          overridesMap.set(`${o.employee_id}-${o.function_id}`, Number(o.rate));
+        }
+      }
       const rows = Array.from(selectedIds).map((id) => {
         const fnId = parseInt(perEmpFn.get(id)!);
-        // Inicializa o rate com o valor padrão cadastrado em Funções e
-        // Valores — assim o Pagamento de Embarque já abre com o valor certo
-        // sem precisar passar pelo "Ajustar Valor por Função".
         const fn = functions.find((f) => f.id === fnId);
-        const fnDefaultRate = Number(fn?.default_rate ?? 0);
+        const rate = Number(
+          overridesMap.get(`${id}-${fnId}`) ?? fn?.default_rate ?? 0,
+        );
         return {
           job_id: jobId,
           function_id: fnId,
           employee_id: id,
           quantity: 0,
-          rate: fnDefaultRate,
+          rate,
           pluxee_value: 0,
           status: "ATIVO",
           kind,

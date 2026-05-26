@@ -250,6 +250,17 @@ export interface JobFunctionRate {
   created_at: string;
 }
 
+// Override por funcionário do default_rate da função.
+export interface EmployeeFunctionRate {
+  id: number;
+  employee_id: number;
+  function_id: number;
+  rate: string | number;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Job {
   id: string;
   name: string;

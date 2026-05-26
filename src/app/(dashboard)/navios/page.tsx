@@ -473,15 +473,33 @@ export default function NaviosPage() {
         const profileName = profile?.full_name || "sistema";
         const now = new Date().toISOString();
         const allocationErrors: string[] = [];
+        // Pré-carrega overrides de valor por funcionário pra estas funções
+        // — assim funcionários com valor especial cadastrado em "Valores
+        // especiais" já entram com o rate correto, sem precisar editar.
+        const fnIdsInUse = Array.from(new Set(
+          Array.from(groupPerEmpFn.values()).map((v) => parseInt(v, 10))
+        ));
+        let overridesMap = new Map<string, number>(); // chave: `${empId}-${fnId}`
+        if (fnIdsInUse.length > 0) {
+          const { data: ovData } = await db
+            .from("employee_function_rates")
+            .select("employee_id, function_id, rate")
+            .in("function_id", fnIdsInUse);
+          for (const o of (ovData || []) as { employee_id: number; function_id: number; rate: string | number }[]) {
+            overridesMap.set(`${o.employee_id}-${o.function_id}`, Number(o.rate));
+          }
+        }
         for (const empId of Array.from(groupParticipants)) {
           const fnId = groupPerEmpFn.get(empId);
           if (!fnId) continue; // já validado, mas defensivo
           const fnIdNum = parseInt(fnId, 10);
-          // Puxa o default_rate da função pra inicializar o pagamento — sem
-          // isso a tela Pagamento de Embarque mostraria R$ 0,00 até alguém
-          // abrir "Ajustar Valor por Função".
+          // Prioridade: override por funcionário > default_rate da função.
+          // Sem isso o Pagamento de Embarque abriria com R$ 0,00 até alguém
+          // ajustar manualmente.
           const fnRow = jobFunctions.find((f) => f.id === fnIdNum);
-          const fnDefaultRate = Number(fnRow?.default_rate ?? 0);
+          const fnDefaultRate = Number(
+            overridesMap.get(`${empId}-${fnIdNum}`) ?? fnRow?.default_rate ?? 0,
+          );
           try {
             const row: Record<string, unknown> = {
               job_id: newJobId,

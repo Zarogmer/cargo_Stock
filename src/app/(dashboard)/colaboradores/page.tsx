@@ -342,7 +342,7 @@ export default function ColaboradoresPage() {
     { key: "contract_type", label: "Contrato", hideOnMobile: true, render: (e: Employee) => {
       if (!e.contract_type) return <span className="text-text-light text-xs">—</span>;
       const cls = e.contract_type === "REGISTRADO" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700";
-      const label = e.contract_type === "REGISTRADO" ? "Registrado" : "Intermitente";
+      const label = e.contract_type === "REGISTRADO" ? "Mensalista" : "Intermitente";
       return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}>{label}</span>;
     }},
     { key: "sector", label: "Setor", hideOnMobile: true, render: (e: Employee) => e.sector || "—" },
@@ -629,7 +629,7 @@ export default function ColaboradoresPage() {
                 <span className={`text-xs px-2 py-1 rounded-full font-medium ${
                   selectedEmp.contract_type === "REGISTRADO" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700"
                 }`}>
-                  {selectedEmp.contract_type === "REGISTRADO" ? "Registrado" : "Intermitente"}
+                  {selectedEmp.contract_type === "REGISTRADO" ? "Mensalista" : "Intermitente"}
                 </span>
               )}
               {selectedEmp.sector && <span className="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-700 font-medium">{selectedEmp.sector}</span>}
