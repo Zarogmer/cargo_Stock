@@ -1552,14 +1552,14 @@ function JobDetailModal({
 
   async function handleAddAdj(e: React.FormEvent) {
     e.preventDefault();
-    if (!adjDesc.trim() || !adjAmt) return;
+    if (!adjAmt) return;
     // Despesas (comida, compras, química, etc.) são custos adicionais que SOMAM
     // ao total da operação. Por isso entram como ADICIONAL.
     await db.from("job_adjustments").insert({
       job_id: job!.id,
       type: "ADICIONAL",
       category: adjCategory,
-      description: adjDesc.trim(),
+      description: adjDesc.trim() || null,
       amount: parseFloat(adjAmt),
     });
     setShowAddAdj(false);
@@ -2209,78 +2209,108 @@ function JobDetailModal({
             );
           })()}
 
-          {showAddAlloc && (
-            <form onSubmit={handleAddAlloc} className="bg-blue-50 rounded-lg p-3 mb-2 border border-blue-200 space-y-2">
-              <div className="grid grid-cols-2 gap-2">
+          {showAddAlloc && (() => {
+            // Resolve a função e o rate automaticamente a partir do funcionário
+            // selecionado. Se ele tiver valor especial cadastrado em
+            // Função/Valores/Pagas → 👤, usa esse valor. Senão, valor padrão.
+            const selectedEmp = allocEmp ? employees.find((e) => String(e.id) === allocEmp) : null;
+            const resolvedFn = selectedEmp
+              ? functions.find((f) => f.name.toUpperCase() === (selectedEmp.role || "").toUpperCase())
+              : null;
+            const resolvedRate = selectedEmp && resolvedFn
+              ? rateForEmpFn(selectedEmp.id, resolvedFn)
+              : 0;
+            const hasSpecial = selectedEmp && resolvedFn
+              ? specialRates.get(`${selectedEmp.id}-${resolvedFn.id}`) != null
+              : false;
+            const canSubmit = !!(selectedEmp && resolvedFn);
+            const submitQuick = async (ev: React.FormEvent) => {
+              ev.preventDefault();
+              if (!selectedEmp || !resolvedFn) return;
+              const payload: Record<string, unknown> = {
+                function_id: resolvedFn.id,
+                employee_id: selectedEmp.id,
+                quantity: kindFilter === "EMBARQUE" ? 1 : (parseInt(allocDays) || 1),
+                rate: resolvedRate,
+                pluxee_value: 0,
+              };
+              if (editAllocId) {
+                await db.from("job_allocations").update(payload).eq("id", editAllocId);
+              } else {
+                await db.from("job_allocations").insert({
+                  ...payload,
+                  job_id: job!.id,
+                  status: "ATIVO",
+                  kind: kindFilter || "EMBARQUE",
+                });
+              }
+              setShowAddAlloc(false);
+              setAllocEmp(""); setAllocFn(""); setAllocDays("1"); setAllocRate(""); setAllocPluxee("0");
+              setEditAllocId(null);
+              onChange();
+            };
+            return (
+              <form
+                onSubmit={submitQuick}
+                className="bg-blue-50 rounded-lg p-3 mb-2 border border-blue-200 space-y-2"
+              >
                 <div>
-                  <label className="block text-xs font-medium mb-1">Funcionário</label>
-                  <select value={allocEmp} onChange={(e) => pickEmployee(e.target.value)} className={inputCls}>
-                    <option value="">— sem nome (agregado) —</option>
+                  <label className="block text-xs font-medium mb-1">Funcionário *</label>
+                  <select
+                    value={allocEmp}
+                    onChange={(e) => pickEmployee(e.target.value)}
+                    required
+                    className={inputCls}
+                  >
+                    <option value="">Selecione...</option>
                     {employees.filter((e) => e.status === "ATIVO").map((e) => (
                       <option key={e.id} value={e.id}>{e.name} {e.role ? `· ${e.role}` : ""}</option>
                     ))}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1">Função *</label>
-                  <select value={allocFn} onChange={(e) => pickFunction(e.target.value)} required className={inputCls}>
-                    <option value="">Selecione...</option>
-                    {functions.filter((f) => f.active).map((f) => (
-                      <option key={f.id} value={f.id}>{f.name} ({brl(f.default_rate)})</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className={`grid gap-2 ${kindFilter === "EMBARQUE" ? "grid-cols-2" : "grid-cols-3"}`}>
+
+                {selectedEmp && !resolvedFn && (
+                  <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                    ⚠️ {selectedEmp.name} não tem função cadastrada em RH › Colaboradores. Defina a função
+                    dele antes de adicionar aqui.
+                  </p>
+                )}
+
+                {selectedEmp && resolvedFn && (
+                  <div className="bg-white border border-blue-200 rounded p-2 text-xs space-y-0.5">
+                    <p>
+                      Função: <strong>{resolvedFn.name}</strong>
+                      {" · "}
+                      {kindFilter === "EMBARQUE" ? "Valor/Porão" : kindFilter === "COSTADO" ? "Valor/Hora" : "Valor"}: <strong>{brl(resolvedRate)}</strong>
+                      {hasSpecial && (
+                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-300 text-amber-900 font-bold">
+                          VALOR ESPECIAL
+                        </span>
+                      )}
+                    </p>
+                    {kindFilter === "EMBARQUE" && (
+                      <p className="text-text-light">
+                        Total: <strong className="text-emerald-700">{brl(resolvedRate * Math.max(1, Number(job?.holds_count || 1)))}</strong>
+                        {" "}({Math.max(1, Number(job?.holds_count || 1))} porões × {brl(resolvedRate)})
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {kindFilter !== "EMBARQUE" && (
                   <div>
                     <label className="block text-xs font-medium mb-1">{kindFilter === "COSTADO" ? "Turnos *" : "Dias *"}</label>
                     <input type="number" min={1} value={allocDays} onChange={(e) => setAllocDays(e.target.value)} required className={inputCls} />
                   </div>
                 )}
-                <div>
-                  <label className="block text-xs font-medium mb-1">{rateLabel} (R$) *</label>
-                  <input type="number" step="0.01" value={allocRate} onChange={(e) => setAllocRate(e.target.value)} required className={inputCls} />
+
+                <div className="flex gap-2 justify-end">
+                  <Button variant="secondary" size="sm" type="button" onClick={() => { setShowAddAlloc(false); setEditAllocId(null); setAllocEmp(""); setAllocFn(""); setAllocRate(""); }}>Cancelar</Button>
+                  <Button size="sm" type="submit" disabled={!canSubmit}>{editAllocId ? "Salvar Alterações" : "Adicionar"}</Button>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1">Pluxee (R$)</label>
-                  <input type="number" step="0.01" value={allocPluxee} onChange={(e) => setAllocPluxee(e.target.value)} className={inputCls} placeholder="0,00" />
-                </div>
-              </div>
-              {allocRate && (() => {
-                const rateNum = parseFloat(allocRate) || 0;
-                if (kindFilter === "EMBARQUE") {
-                  const holds = Math.max(1, Number(job?.holds_count || 1));
-                  return (
-                    <p className="text-xs text-blue-700">
-                      Total: <strong>{brl(rateNum * holds)}</strong>
-                      {" "}({holds} porão{holds === 1 ? "" : "ões"} × {brl(rateNum)})
-                    </p>
-                  );
-                }
-                if (kindFilter === "COSTADO") {
-                  const qty = parseInt(allocDays) || 0;
-                  return (
-                    <p className="text-xs text-blue-700">
-                      Total: <strong>{brl(qty * HOURS_PER_SHIFT * rateNum)}</strong>
-                      {" "}({qty} {qty === 1 ? "turno" : "turnos"} × {HOURS_PER_SHIFT}h × {brl(rateNum)})
-                    </p>
-                  );
-                }
-                const days = parseInt(allocDays) || 0;
-                return (
-                  <p className="text-xs text-blue-700">
-                    Total: <strong>{brl(days * rateNum)}</strong>
-                    {" "}({days} {days === 1 ? "dia" : "dias"} × {brl(rateNum)})
-                  </p>
-                );
-              })()}
-              <div className="flex gap-2 justify-end">
-                <Button variant="secondary" size="sm" type="button" onClick={() => { setShowAddAlloc(false); setEditAllocId(null); }}>Cancelar</Button>
-                <Button size="sm" type="submit">{editAllocId ? "Salvar Alterações" : "Adicionar"}</Button>
-              </div>
-            </form>
-          )}
+              </form>
+            );
+          })()}
 
           {allocations.length === 0 ? (
             <p className="text-xs text-text-light italic text-center py-4">
@@ -2361,7 +2391,7 @@ function JobDetailModal({
                         )}
                         <td className="px-3 py-2 text-right">{brl(base)}</td>
                         <td
-                          className={`px-3 py-2 text-right ${extra < 0 ? "text-red-700" : "text-amber-700"}`}
+                          className={`px-3 py-2 text-right whitespace-nowrap ${extra < 0 ? "text-red-700" : "text-amber-700"}`}
                           title={
                             specialDelta !== 0 && rateioExtra > 0
                               ? `Valor especial ${specialDelta >= 0 ? "+" : ""}${brl(specialDelta)} + Rateio ${brl(rateioExtra)}`
@@ -2456,7 +2486,7 @@ function JobDetailModal({
                       <tr>
                         <td colSpan={labelColSpan} className="px-3 py-2 text-text-light text-right">TOTAL</td>
                         <td className="px-3 py-2 text-right">{brl(baseTotal)}</td>
-                        <td className={`px-3 py-2 text-right ${extraTotal < 0 ? "text-red-700" : "text-amber-700"}`}>
+                        <td className={`px-3 py-2 text-right whitespace-nowrap ${extraTotal < 0 ? "text-red-700" : "text-amber-700"}`}>
                           {extraTotal === 0 ? "—" : `${extraTotal > 0 ? "+ " : "− "}${brl(Math.abs(extraTotal))}`}
                         </td>
                         <td className="px-3 py-2 text-right text-emerald-700">{brl(baseTotal + extraTotal)}</td>
@@ -2498,8 +2528,8 @@ function JobDetailModal({
                 <input type="number" step="0.01" value={adjAmt} onChange={(e) => setAdjAmt(e.target.value)} required className={inputCls} placeholder="100,00" />
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1">Descrição *</label>
-                <input type="text" value={adjDesc} onChange={(e) => setAdjDesc(e.target.value)} required className={inputCls} placeholder="Detergente, sabão, etc." />
+                <label className="block text-xs font-medium mb-1">Descrição</label>
+                <input type="text" value={adjDesc} onChange={(e) => setAdjDesc(e.target.value)} className={inputCls} placeholder="Opcional — detergente, sabão, etc." />
               </div>
               <div className="flex gap-2 justify-end">
                 <Button variant="secondary" size="sm" type="button" onClick={() => setShowAddAdj(false)}>Cancelar</Button>
