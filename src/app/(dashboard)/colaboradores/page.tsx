@@ -32,6 +32,7 @@ export default function ColaboradoresPage() {
   const [empSearch, setEmpSearch] = useState("");
   const [empTeamFilter, setEmpTeamFilter] = useState("Todos");
   const [empStatusFilter, setEmpStatusFilter] = useState<"Todos" | "ATIVO" | "INATIVO" | "PENDENCIA">("ATIVO");
+  const [empEscalaFilter, setEmpEscalaFilter] = useState<"Todos" | "DISPONIVEL" | "EMBARCADO" | "COSTADO">("Todos");
   const [empViewMode, setEmpViewMode] = useState<"cards" | "spreadsheet">("cards");
   const [exportingXlsx, setExportingXlsx] = useState(false);
   const [empForm, setEmpForm] = useState(false);
@@ -408,7 +409,12 @@ export default function ColaboradoresPage() {
             empTeamFilter === "Equipe 3" ? e.team === "EQUIPE_3" :
             empTeamFilter === "Costado" ? e.team === "COSTADO" :
             empTeamFilter === "Sem equipe" ? !e.team : true;
-          return nameMatch && statusMatch && teamMatch;
+          const k = escalaStatus.get(e.id);
+          const escalaMatch = empEscalaFilter === "Todos" ? true :
+            empEscalaFilter === "DISPONIVEL" ? !k :
+            empEscalaFilter === "EMBARCADO" ? k === "EMBARQUE" :
+            empEscalaFilter === "COSTADO" ? k === "COSTADO" : true;
+          return nameMatch && statusMatch && teamMatch && escalaMatch;
         });
         return (
           <div className="space-y-3">
@@ -448,6 +454,20 @@ export default function ColaboradoresPage() {
                 <button key={t} onClick={() => setEmpTeamFilter(t)}
                   className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${empTeamFilter === t ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}>
                   {t}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2 flex-wrap items-center">
+              <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Escalação:</span>
+              {([
+                { key: "Todos", label: "Todos" },
+                { key: "DISPONIVEL", label: "✓ Disponível" },
+                { key: "EMBARCADO", label: "⚓ Embarcado" },
+                { key: "COSTADO", label: "⛏️ Costado" },
+              ] as const).map((t) => (
+                <button key={t.key} onClick={() => setEmpEscalaFilter(t.key as typeof empEscalaFilter)}
+                  className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${empEscalaFilter === t.key ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}>
+                  {t.label}
                 </button>
               ))}
             </div>
