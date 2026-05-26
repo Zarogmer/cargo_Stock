@@ -1510,8 +1510,12 @@ function JobDetailModal({
   const cost = calcJobCost(job, allocations.map((a) => ({ ...a, job_id: job.id })), adjustments.map((a) => ({ ...a, job_id: job.id })));
   const revenue = Number(job.contract_value || 0);
   const profit = revenue - cost.total;
-  const folhaValue = Number(job.payroll_value || 0);
-  // Valor que precisamos = TOTAL - VALOR DA FOLHA (conforme fluxo do usuário)
+  // Folha = soma de (base + extra - pluxee) por funcionário = cost.base - pluxeeTotal.
+  // payroll_value no banco nunca é gravado, então o valor vem das próprias
+  // alocações pra refletir 1:1 a coluna Folha da tabela.
+  const pluxeeTotal = allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
+  const folhaValue = cost.base - pluxeeTotal;
+  // Valor que precisamos = TOTAL - VALOR DA FOLHA (Pluxee + ajustes/despesas)
   const liquidValue = cost.total - folhaValue;
 
   async function handleAddAlloc(e: React.FormEvent) {
@@ -1911,7 +1915,7 @@ function JobDetailModal({
   const isReadOnly = job.status === "FECHADO";
 
   return (
-    <Modal open={open} onClose={onClose} title={job.name} maxWidth="max-w-4xl">
+    <Modal open={open} onClose={onClose} title={job.name} maxWidth="max-w-6xl">
       <div className="space-y-4">
         {/* Header com cliente/supervisor/cargo/porões */}
         {(job.client || job.supervisor || job.cargo_type || job.holds_count) && (
@@ -1939,33 +1943,36 @@ function JobDetailModal({
           <div className={`rounded-lg border p-3 ${revenue > 0 ? "border-blue-200 bg-blue-50" : "border-gray-200 bg-gray-50"}`}>
             <p className={`text-[10px] font-semibold uppercase tracking-wider ${revenue > 0 ? "text-blue-700" : "text-text-light"}`}>Contrato</p>
             {contractEditing && canEdit && !isReadOnly ? (
-              <input
-                type="number"
-                step="0.01"
-                value={contractDraft}
-                onChange={(e) => setContractDraft(e.target.value)}
-                onBlur={async () => {
-                  const n = parseFloat(contractDraft.replace(",", "."));
-                  if (Number.isFinite(n) && n !== revenue) {
-                    await db.from("jobs").update({ contract_value: n }).eq("id", job.id);
-                    onChange();
-                  }
-                  setContractEditing(false);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                  if (e.key === "Escape") { setContractEditing(false); setContractDraft(""); }
-                }}
-                autoFocus
-                placeholder="0,00"
-                className="w-full text-lg font-bold text-blue-700 bg-white border-2 border-primary rounded px-1 outline-none"
-              />
+              <div className="relative">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-blue-700 text-sm font-bold pointer-events-none">R$</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={contractDraft}
+                  onChange={(e) => setContractDraft(e.target.value.replace(/[^\d.,]/g, ""))}
+                  onBlur={async () => {
+                    const n = parseFloat(contractDraft.replace(/\./g, "").replace(",", "."));
+                    if (Number.isFinite(n) && n !== revenue) {
+                      await db.from("jobs").update({ contract_value: n }).eq("id", job.id);
+                      onChange();
+                    }
+                    setContractEditing(false);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                    if (e.key === "Escape") { setContractEditing(false); setContractDraft(""); }
+                  }}
+                  autoFocus
+                  placeholder="0,00"
+                  className="w-full text-lg font-bold text-blue-700 bg-white border-2 border-primary rounded pl-9 pr-2 py-0.5 outline-none"
+                />
+              </div>
             ) : (
               <button
                 type="button"
                 disabled={!canEdit || isReadOnly}
                 onClick={() => {
-                  setContractDraft(revenue ? revenue.toString() : "");
+                  setContractDraft(revenue ? revenue.toFixed(2).replace(".", ",") : "");
                   setContractEditing(true);
                 }}
                 className={`text-lg font-bold ${revenue > 0 ? "text-blue-700" : "text-text-light"} ${canEdit && !isReadOnly ? "hover:bg-white/40 rounded px-1 -mx-1 transition cursor-text" : ""}`}
@@ -2326,21 +2333,21 @@ function JobDetailModal({
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-border">
                   <tr>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">#</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Funcionário / Função</th>
+                    <th className="px-2 py-2 text-left text-xs font-semibold text-text-light w-8">#</th>
+                    <th className="px-2 py-2 text-left text-xs font-semibold text-text-light min-w-[14rem]">Funcionário / Função</th>
                     {showQtyColumn && (
-                      <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">{qtyLabel}</th>
+                      <th className="px-2 py-2 text-center text-xs font-semibold text-text-light">{qtyLabel}</th>
                     )}
-                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">{rateLabel}</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-text-light whitespace-nowrap">{rateLabel}</th>
                     {multiplierLabel && (
-                      <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">{multiplierLabel}</th>
+                      <th className="px-2 py-2 text-center text-xs font-semibold text-text-light">{multiplierLabel}</th>
                     )}
-                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Base</th>
-                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light" title="Valor especial + rateio">Extra</th>
-                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Total</th>
-                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Pluxee</th>
-                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Folha</th>
-                    {canEdit && !isReadOnly && !peopleReadOnly && <th className="w-16"></th>}
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Base</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-text-light" title="Valor especial + rateio">Extra</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Total</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Pluxee</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Folha</th>
+                    {canEdit && !isReadOnly && !peopleReadOnly && <th className="w-14"></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -2362,9 +2369,9 @@ function JobDetailModal({
                     const folha = base + extra - pluxee;
                     return (
                       <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
-                        <td className="px-3 py-2 text-text-light">{idx + 1}</td>
-                        <td className="px-3 py-2">
-                          <p className="font-medium">{a.employees?.name || a.job_functions?.name || `#${a.function_id}`}</p>
+                        <td className="px-2 py-2 text-text-light">{idx + 1}</td>
+                        <td className="px-2 py-2">
+                          <p className="font-medium whitespace-nowrap">{a.employees?.name || a.job_functions?.name || `#${a.function_id}`}</p>
                           {a.employees?.name && <p className="text-[10px] text-text-light">{a.job_functions?.name}</p>}
                           {specialDelta !== 0 && (
                             <p className="text-[10px] text-blue-700 italic mt-0.5" title={`Valor especial: ${brl(actualRate)}/porão (padrão ${brl(defaultRate)})`}>
@@ -2378,15 +2385,15 @@ function JobDetailModal({
                           )}
                         </td>
                         {showQtyColumn && (
-                          <td className="px-3 py-2 text-center">{a.quantity}</td>
+                          <td className="px-2 py-2 text-center">{a.quantity}</td>
                         )}
-                        <td className="px-3 py-2 text-right">{brl(displayRate)}</td>
+                        <td className="px-2 py-2 text-right whitespace-nowrap">{brl(displayRate)}</td>
                         {multiplierLabel && (
-                          <td className="px-3 py-2 text-center text-text-light">× {holdsMultiplier}</td>
+                          <td className="px-2 py-2 text-center text-text-light">× {holdsMultiplier}</td>
                         )}
-                        <td className="px-3 py-2 text-right">{brl(base)}</td>
+                        <td className="px-2 py-2 text-right whitespace-nowrap">{brl(base)}</td>
                         <td
-                          className={`px-3 py-2 text-right whitespace-nowrap ${extra < 0 ? "text-red-700" : "text-amber-700"}`}
+                          className={`px-2 py-2 text-right whitespace-nowrap ${extra < 0 ? "text-red-700" : "text-amber-700"}`}
                           title={
                             specialDelta !== 0 && rateioExtra > 0
                               ? `Valor especial ${specialDelta >= 0 ? "+" : ""}${brl(specialDelta)} + Rateio ${brl(rateioExtra)}`
@@ -2399,9 +2406,9 @@ function JobDetailModal({
                         >
                           {extra === 0 ? "—" : `${extra > 0 ? "+ " : "− "}${brl(Math.abs(extra))}`}
                         </td>
-                        <td className="px-3 py-2 text-right font-semibold text-emerald-700">{brl(base + extra)}</td>
-                        <td className="px-3 py-2 text-right text-amber-700">{brl(pluxee)}</td>
-                        <td className="px-3 py-2 text-right">
+                        <td className="px-2 py-2 text-right font-semibold text-emerald-700 whitespace-nowrap">{brl(base + extra)}</td>
+                        <td className="px-2 py-2 text-right text-amber-700 whitespace-nowrap">{brl(pluxee)}</td>
+                        <td className="px-2 py-2 text-right whitespace-nowrap">
                           {editingFolhaId === a.id && canEdit && !isReadOnly ? (
                             <input
                               type="number"
@@ -2479,14 +2486,14 @@ function JobDetailModal({
                     const labelColSpan = (showQtyColumn ? 4 : 3) + (multiplierLabel ? 1 : 0);
                     return (
                       <tr>
-                        <td colSpan={labelColSpan} className="px-3 py-2 text-text-light text-right">TOTAL</td>
-                        <td className="px-3 py-2 text-right">{brl(baseTotal)}</td>
-                        <td className={`px-3 py-2 text-right whitespace-nowrap ${extraTotal < 0 ? "text-red-700" : "text-amber-700"}`}>
+                        <td colSpan={labelColSpan} className="px-2 py-2 text-text-light text-right">TOTAL</td>
+                        <td className="px-2 py-2 text-right whitespace-nowrap">{brl(baseTotal)}</td>
+                        <td className={`px-2 py-2 text-right whitespace-nowrap ${extraTotal < 0 ? "text-red-700" : "text-amber-700"}`}>
                           {extraTotal === 0 ? "—" : `${extraTotal > 0 ? "+ " : "− "}${brl(Math.abs(extraTotal))}`}
                         </td>
-                        <td className="px-3 py-2 text-right text-emerald-700">{brl(baseTotal + extraTotal)}</td>
-                        <td className="px-3 py-2 text-right text-amber-700">{brl(pluxeeTotal)}</td>
-                        <td className="px-3 py-2 text-right text-purple-700">{brl(baseTotal + extraTotal - pluxeeTotal)}</td>
+                        <td className="px-2 py-2 text-right text-emerald-700 whitespace-nowrap">{brl(baseTotal + extraTotal)}</td>
+                        <td className="px-2 py-2 text-right text-amber-700 whitespace-nowrap">{brl(pluxeeTotal)}</td>
+                        <td className="px-2 py-2 text-right text-purple-700 whitespace-nowrap">{brl(baseTotal + extraTotal - pluxeeTotal)}</td>
                         {canEdit && !isReadOnly && !peopleReadOnly && <td></td>}
                       </tr>
                     );
