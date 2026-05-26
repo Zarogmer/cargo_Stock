@@ -1997,13 +1997,15 @@ function JobDetailModal({
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-2">
+              <div className={`grid gap-2 ${kindFilter === "EMBARQUE" ? "grid-cols-2" : "grid-cols-3"}`}>
+                {kindFilter !== "EMBARQUE" && (
+                  <div>
+                    <label className="block text-xs font-medium mb-1">{kindFilter === "COSTADO" ? "Turnos *" : "Dias *"}</label>
+                    <input type="number" min={1} value={allocDays} onChange={(e) => setAllocDays(e.target.value)} required className={inputCls} />
+                  </div>
+                )}
                 <div>
-                  <label className="block text-xs font-medium mb-1">Dias *</label>
-                  <input type="number" min={1} value={allocDays} onChange={(e) => setAllocDays(e.target.value)} required className={inputCls} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1">Valor Diário (R$) *</label>
+                  <label className="block text-xs font-medium mb-1">{rateLabel} (R$) *</label>
                   <input type="number" step="0.01" value={allocRate} onChange={(e) => setAllocRate(e.target.value)} required className={inputCls} />
                 </div>
                 <div>
@@ -2011,12 +2013,34 @@ function JobDetailModal({
                   <input type="number" step="0.01" value={allocPluxee} onChange={(e) => setAllocPluxee(e.target.value)} className={inputCls} placeholder="0,00" />
                 </div>
               </div>
-              {allocDays && allocRate && (
-                <p className="text-xs text-blue-700">
-                  Total: <strong>{brl((parseInt(allocDays) || 0) * (parseFloat(allocRate) || 0))}</strong>
-                  {" "}({allocDays} {parseInt(allocDays) === 1 ? "dia" : "dias"} × {brl(allocRate)})
-                </p>
-              )}
+              {allocRate && (() => {
+                const rateNum = parseFloat(allocRate) || 0;
+                if (kindFilter === "EMBARQUE") {
+                  const holds = Math.max(1, Number(job?.holds_count || 1));
+                  return (
+                    <p className="text-xs text-blue-700">
+                      Total: <strong>{brl(rateNum * holds)}</strong>
+                      {" "}({holds} porão{holds === 1 ? "" : "ões"} × {brl(rateNum)})
+                    </p>
+                  );
+                }
+                if (kindFilter === "COSTADO") {
+                  const qty = parseInt(allocDays) || 0;
+                  return (
+                    <p className="text-xs text-blue-700">
+                      Total: <strong>{brl(qty * HOURS_PER_SHIFT * rateNum)}</strong>
+                      {" "}({qty} {qty === 1 ? "turno" : "turnos"} × {HOURS_PER_SHIFT}h × {brl(rateNum)})
+                    </p>
+                  );
+                }
+                const days = parseInt(allocDays) || 0;
+                return (
+                  <p className="text-xs text-blue-700">
+                    Total: <strong>{brl(days * rateNum)}</strong>
+                    {" "}({days} {days === 1 ? "dia" : "dias"} × {brl(rateNum)})
+                  </p>
+                );
+              })()}
               <div className="flex gap-2 justify-end">
                 <Button variant="secondary" size="sm" type="button" onClick={() => { setShowAddAlloc(false); setEditAllocId(null); }}>Cancelar</Button>
                 <Button size="sm" type="submit">{editAllocId ? "Salvar Alterações" : "Adicionar"}</Button>
