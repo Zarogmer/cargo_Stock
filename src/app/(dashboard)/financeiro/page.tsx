@@ -1361,6 +1361,11 @@ function JobDetailModal({
   }>({ kind: "idle" });
   const [exporting, setExporting] = useState(false);
 
+  // Overrides do `employee_function_rates` — funcionários com valor diferente do
+  // default_rate. Carregado uma vez ao abrir o modal pra auto-fill do form.
+  // Chave: `${employee_id}-${function_id}` → rate especial.
+  const [specialRates, setSpecialRates] = useState<Map<string, number>>(new Map());
+
   useEffect(() => {
     if (open) {
       setShowAddAlloc(false); setShowAddAdj(false); setShowRateio(false);
@@ -1372,6 +1377,23 @@ function JobDetailModal({
       setPdfStatus({ kind: "idle" });
     }
   }, [open, job]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await db
+        .from("employee_function_rates")
+        .select("employee_id, function_id, rate");
+      if (cancelled) return;
+      const map = new Map<string, number>();
+      for (const r of (data || []) as { employee_id: number; function_id: number; rate: string | number }[]) {
+        map.set(`${r.employee_id}-${r.function_id}`, Number(r.rate));
+      }
+      setSpecialRates(map);
+    })();
+    return () => { cancelled = true; };
+  }, [open]);
 
   if (!job) return null;
 
@@ -1641,6 +1663,16 @@ function JobDetailModal({
     onChange();
   }
 
+  // Se o funcionário tem valor especial cadastrado pra essa função, usa ele;
+  // senão cai no default_rate. Mantém o form coerente com "Valores Especiais".
+  function rateForEmpFn(empId: number | null, fn: JobFunction): number {
+    if (empId != null) {
+      const special = specialRates.get(`${empId}-${fn.id}`);
+      if (special != null) return special;
+    }
+    return Number(fn.default_rate);
+  }
+
   function pickEmployee(empIdStr: string) {
     setAllocEmp(empIdStr);
     if (!empIdStr) return;
@@ -1650,14 +1682,17 @@ function JobDetailModal({
     const fn = functions.find((f) => f.name.toUpperCase() === (emp.role || "").toUpperCase());
     if (fn) {
       setAllocFn(String(fn.id));
-      setAllocRate(fn.default_rate.toString());
+      setAllocRate(rateForEmpFn(emp.id, fn).toString());
     }
   }
 
   function pickFunction(fnIdStr: string) {
     setAllocFn(fnIdStr);
     const fn = functions.find((f) => f.id === parseInt(fnIdStr));
-    if (fn) setAllocRate(fn.default_rate.toString());
+    if (fn) {
+      const empId = allocEmp ? parseInt(allocEmp) : null;
+      setAllocRate(rateForEmpFn(empId, fn).toString());
+    }
   }
 
   async function handleReopen() {
