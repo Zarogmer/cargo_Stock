@@ -1789,7 +1789,7 @@ function JobDetailModal({
                   className={`text-xs px-2 py-1 rounded cursor-pointer ${pdfStatus.kind === "parsing" ? "bg-blue-300 text-white" : "bg-blue-600 text-white hover:bg-blue-700"}`}
                   title="Importa a Relação de Líquidos (PDF) e preenche a coluna Folha"
                 >
-                  {pdfStatus.kind === "parsing" ? "Lendo…" : "📄 Importar PDF (Folha)"}
+                  {pdfStatus.kind === "parsing" ? "Lendo…" : "📄 Importar Contabilidade"}
                   <input
                     type="file"
                     accept="application/pdf"
