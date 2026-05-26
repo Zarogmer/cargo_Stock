@@ -33,6 +33,48 @@ function formatDateBr(d: Date | null | undefined): string | null {
   return `${day}/${month}/${dt.getUTCFullYear()}`;
 }
 
+// "2026-05-26T13:00:00.000Z" → "26/05 às 13h00". Usa horário local de São Paulo
+// pra evitar confusão com UTC — o operador no galpão raciocina em horário local.
+function formatScheduledBr(d: Date | null | undefined): string | null {
+  if (!d) return null;
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return null;
+  const fmt = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit", month: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+    hour12: false,
+  });
+  // Output ex: "26/05/2026 13:00" — quebro em data + hora pra ler natural.
+  const parts = fmt.formatToParts(dt);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value || "";
+  const day = get("day"), month = get("month");
+  const hour = get("hour"), minute = get("minute");
+  return `${day}/${month} às ${hour}h${minute}`;
+}
+
+// Linha de cabeçalho que muda conforme a situação do embarque.
+// Retorna null se não houver situação informada (fallback genérico).
+function situationLine(
+  situation: string | null | undefined,
+  scheduledAt: Date | null | undefined,
+): string | null {
+  switch (situation) {
+    case "VISTORIA":
+      return "🔍 *Situação:* Navio passando por vistoria — aguardem liberação.";
+    case "IMEDIATO":
+      return "🚨 *Situação:* Embarque imediato — prontidão total.";
+    case "AGENDADO": {
+      const when = formatScheduledBr(scheduledAt);
+      return when
+        ? `🗓️ *Situação:* Embarque agendado — estar no galpão dia ${when}.`
+        : "🗓️ *Situação:* Embarque agendado — aguardar horário definido pela supervisão.";
+    }
+    default:
+      return null;
+  }
+}
+
 // Monta a mensagem inicial que vai pro grupo logo após criar o grupo,
 // avisando os funcionários sobre a operação (data, produto, serviços, porto, etc.).
 // Retorna duas variantes: `description` (só info, vira descrição do grupo) e
@@ -46,7 +88,8 @@ function buildShipWelcomeMessage(ship: {
   holds_count: number | null;
   services: string[];
   assigned_team: string | null;
-  client_name: string | null;
+  boarding_situation: string | null;
+  boarding_scheduled_at: Date | null;
 }): { description: string; message: string } {
   const isCostado = ship.services.includes("COSTADO");
   const opType = isCostado ? "COSTADO" : "EMBARQUE";
@@ -56,6 +99,12 @@ function buildShipWelcomeMessage(ship: {
   lines.push(`📢 *NOVA OPERAÇÃO — ${opType}* ${opEmoji}`);
   lines.push("");
   lines.push(`🚢 *Navio:* ${ship.name}`);
+
+  // Situação só faz sentido pra EMBARQUE — Costado tem fluxo próprio (Escalação > Costado).
+  if (!isCostado) {
+    const sit = situationLine(ship.boarding_situation, ship.boarding_scheduled_at);
+    if (sit) lines.push(sit);
+  }
 
   const arr = formatDateBr(ship.arrival_date);
   const dep = formatDateBr(ship.departure_date);
@@ -77,7 +126,7 @@ function buildShipWelcomeMessage(ship: {
     lines.push(`🔧 *Serviço:* Costado`);
   }
 
-  if (ship.client_name) lines.push(`🏢 *Cliente:* ${ship.client_name}`);
+  // Cliente fica fora do texto: os funcionários não precisam dessa informação.
   if (ship.assigned_team) {
     lines.push(`👥 *Equipe:* ${TEAM_LABELS[ship.assigned_team] || ship.assigned_team}`);
   }
@@ -193,7 +242,8 @@ export async function POST(request: NextRequest) {
             holds_count: true,
             services: true,
             assigned_team: true,
-            client_name: true,
+            boarding_situation: true,
+            boarding_scheduled_at: true,
           },
         });
         if (ship) {

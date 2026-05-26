@@ -43,6 +43,21 @@ function formatBRDate(iso: string): string {
   return `${d}/${m}/${y}`;
 }
 
+// "2026-05-26T13:00:00.000Z" → "26/05 às 13h00" (horário local de São Paulo).
+function formatScheduledBr(d: Date | null | undefined): string | null {
+  if (!d) return null;
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit", month: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+    hour12: false,
+  }).formatToParts(dt);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value || "";
+  return `${get("day")}/${get("month")} às ${get("hour")}h${get("minute")}`;
+}
+
 // POST /api/escalacao/notify
 // Best-effort: returns 200 with a per-target breakdown so the caller can log
 // (or surface) partial failures without blocking the underlying escalação save.
@@ -69,7 +84,13 @@ export async function POST(request: NextRequest) {
 
   const ship = await prisma.ship.findUnique({
     where: { id: body.shipId },
-    select: { id: true, name: true, whatsapp_group_jid: true },
+    select: {
+      id: true,
+      name: true,
+      whatsapp_group_jid: true,
+      boarding_situation: true,
+      boarding_scheduled_at: true,
+    },
   });
   if (!ship) return NextResponse.json({ error: "Navio não encontrado" }, { status: 404 });
 
@@ -117,11 +138,32 @@ export async function POST(request: NextRequest) {
   }
   const namesList = employees.map(lineFor).join("\n");
 
+  // Embarque: cabeçalho varia conforme a situação cadastrada no navio.
+  // Capturo em consts pra ajudar o TS com narrowing (ship já foi validado acima).
+  const situation = ship.boarding_situation;
+  const scheduledAt = ship.boarding_scheduled_at;
+  function embarqueHeader(): string {
+    switch (situation) {
+      case "VISTORIA":
+        return "🔍 Equipe escalada — navio passando por vistoria, aguardem liberação:";
+      case "IMEDIATO":
+        return "🚨 Equipe escalada — embarque imediato, prontidão total:";
+      case "AGENDADO": {
+        const when = formatScheduledBr(scheduledAt);
+        return when
+          ? `🗓️ Equipe escalada — estar no galpão dia ${when} para embarque:`
+          : "🗓️ Equipe escalada — embarque agendado, aguardar horário:";
+      }
+      default:
+        return "⚓ Equipe escalada para o embarque:";
+    }
+  }
+
   const groupMessage = isPreview && isCostado
     ? `🚢 *${shipName}*\n🧹 Operação de limpeza no costado em breve — aguardem instruções.`
     : isCostado
       ? `🚢 *${shipName}*\n📅 Escala da ${shiftLabel} — ${dateLabel}\n\n${namesList}`
-      : `🚢 *${shipName}*\n⚓ Equipe escalada para o embarque:\n\n${namesList}`;
+      : `🚢 *${shipName}*\n${embarqueHeader()}\n\n${namesList}`;
 
   function dmFor(name: string): string {
     if (isPreview && isCostado) {

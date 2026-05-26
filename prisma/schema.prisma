@@ -299,6 +299,13 @@ model Ship {
   holds_count    Int?          // quantidade de porões
   client_name    String?       // cliente que contratou o serviço (texto livre)
   services       String[]      @default([]) // serviços executados: LAVAGEM_PORAO, PINTURA, RASPAGEM, COSTADO
+  // Situação do embarque, usada pra adaptar a copy do grupo do WhatsApp.
+  //   VISTORIA  = "Navio passando por vistoria" (sem horário)
+  //   IMEDIATO  = "Embarque imediato" (sem horário)
+  //   AGENDADO  = "Embarque agendado" — usa boarding_scheduled_at pro horário
+  // Null = não informado (copy genérica, comportamento legado).
+  boarding_situation    String?
+  boarding_scheduled_at DateTime? @db.Timestamptz()
   whatsapp_group_jid String?   // JID do grupo do WhatsApp deste navio (ex.: "12036...@g.us") — alvo da mensagem automática de escalação
   created_by     String
   created_at     DateTime      @default(now()) @db.Timestamptz()

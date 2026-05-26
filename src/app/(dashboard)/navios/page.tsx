@@ -12,6 +12,8 @@ import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 
 type ShipStatus = "AGENDADO" | "EM_OPERACAO" | "CONCLUIDO" | "CANCELADO";
 
+type BoardingSituation = "VISTORIA" | "IMEDIATO" | "AGENDADO";
+
 interface Ship {
   id: string;
   name: string;
@@ -25,6 +27,8 @@ interface Ship {
   holds_count: number | null;
   client_name: string | null;
   services: string[];
+  boarding_situation: BoardingSituation | null;
+  boarding_scheduled_at: string | null;
   created_at: string;
   created_by: string;
 }
@@ -105,7 +109,17 @@ const EMPTY_FORM = {
   client_name: "",
   operation_type: "EMBARQUE" as OperationType,
   services: [] as string[], // só populado quando operation_type=EMBARQUE
+  // Situação do embarque (EMBARQUE only). "" = não informado.
+  boarding_situation: "" as BoardingSituation | "",
+  // Usado só quando boarding_situation=AGENDADO. Formato datetime-local: "YYYY-MM-DDTHH:mm".
+  boarding_scheduled_at: "",
   notes: "",
+};
+
+const BOARDING_SITUATION_LABELS: Record<BoardingSituation, string> = {
+  VISTORIA: "Navio passando por vistoria",
+  IMEDIATO: "Embarque imediato",
+  AGENDADO: "Embarque agendado (com horário)",
 };
 
 const CARGO_OPTIONS = ["CARVÃO", "CIMENTO", "UREIA", "SOJA", "MILHO", "AÇÚCAR"];
@@ -358,6 +372,9 @@ export default function NaviosPage() {
       client_name: ship.client_name || "",
       operation_type: getOperationType(ship.services),
       services: (ship.services || []).filter((s) => s !== "COSTADO"),
+      boarding_situation: (ship.boarding_situation || "") as BoardingSituation | "",
+      // DB devolve ISO "2026-05-26T13:00:00.000Z". datetime-local quer "2026-05-26T13:00".
+      boarding_scheduled_at: ship.boarding_scheduled_at ? ship.boarding_scheduled_at.slice(0, 16) : "",
       notes: ship.notes || "",
     });
     setFormError("");
@@ -382,6 +399,12 @@ export default function NaviosPage() {
     // Costado não usa produto/porão — força null pra não persistir lixo se o
     // usuário tiver preenchido antes de trocar pra Costado.
     const isCostado = form.operation_type === "COSTADO";
+    // Situação do embarque só faz sentido pra EMBARQUE. AGENDADO sem horário cai pra null.
+    const boardingSituation = !isCostado && form.boarding_situation ? form.boarding_situation : null;
+    const boardingScheduledAt =
+      boardingSituation === "AGENDADO" && form.boarding_scheduled_at
+        ? new Date(form.boarding_scheduled_at).toISOString()
+        : null;
     const payload = {
       name: form.name.trim(),
       arrival_date: form.arrival_date || null,
@@ -393,6 +416,8 @@ export default function NaviosPage() {
       holds_count: isCostado ? null : holdsParsed,
       client_name: form.client_name.trim() || null,
       services: isCostado ? ["COSTADO"] : form.services.filter((s) => s !== "COSTADO"),
+      boarding_situation: boardingSituation,
+      boarding_scheduled_at: boardingScheduledAt,
       notes: form.notes.trim() || null,
       created_by: profile?.full_name || "sistema",
     };
@@ -1250,6 +1275,53 @@ export default function NaviosPage() {
                   </p>
                 )}
               </div>
+
+              {form.operation_type === "EMBARQUE" && (
+                <div>
+                  <label className="block text-sm font-medium text-text mb-1">Situação do Embarque</label>
+                  <div className="grid grid-cols-1 gap-2">
+                    {(["VISTORIA", "IMEDIATO", "AGENDADO"] as BoardingSituation[]).map((s) => {
+                      const checked = form.boarding_situation === s;
+                      return (
+                        <label
+                          key={s}
+                          className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border cursor-pointer transition ${
+                            checked
+                              ? "border-primary bg-primary/5 text-primary font-semibold"
+                              : "border-border hover:bg-gray-50 text-text"
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="boarding_situation"
+                            checked={checked}
+                            onChange={() => setForm({ ...form, boarding_situation: s })}
+                            className="h-4 w-4 accent-primary"
+                          />
+                          <span>{BOARDING_SITUATION_LABELS[s]}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {form.boarding_situation === "AGENDADO" && (
+                    <div className="mt-3">
+                      <label className="block text-sm font-medium text-text mb-1">Data e horário no galpão</label>
+                      <input
+                        type="datetime-local"
+                        value={form.boarding_scheduled_at}
+                        onChange={(e) => setForm({ ...form, boarding_scheduled_at: e.target.value })}
+                        className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                      />
+                      <p className="text-[10px] text-text-light mt-1">
+                        Aparecerá na mensagem do grupo (ex.: &quot;estar no galpão dia 26/05 às 13h&quot;).
+                      </p>
+                    </div>
+                  )}
+                  <p className="text-[10px] text-text-light mt-1">
+                    Escolha a situação — o texto enviado ao grupo do WhatsApp se adapta automaticamente.
+                  </p>
+                </div>
+              )}
 
               {form.operation_type === "EMBARQUE" && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
