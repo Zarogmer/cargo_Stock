@@ -605,7 +605,7 @@ function FunctionFormModal({
     if (item) {
       setName(item.name);
       setDescription(item.description || "");
-      setDefaultRate(item.default_rate.toString());
+      setDefaultRate(Number(item.default_rate).toFixed(2).replace(".", ","));
       setUnit(item.unit);
       setActive(item.active);
     } else {
@@ -613,14 +613,22 @@ function FunctionFormModal({
     }
   }, [item, open]);
 
+  function handleRateBlur() {
+    const raw = defaultRate.replace(/\./g, "").replace(",", ".");
+    const n = parseFloat(raw);
+    if (!Number.isFinite(n)) { setDefaultRate(""); return; }
+    setDefaultRate(n.toFixed(2).replace(".", ","));
+  }
+
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
     setSaving(true);
+    const rateNum = parseFloat(defaultRate.replace(/\./g, "").replace(",", ".")) || 0;
     const payload = {
       name: name.trim().toUpperCase(),
       description: description.trim() || null,
-      default_rate: parseFloat(defaultRate) || 0,
+      default_rate: rateNum,
       unit,
       active,
     };
@@ -649,7 +657,7 @@ function FunctionFormModal({
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium mb-1">Valor Padrão (R$)</label>
-            <input type="number" step="0.01" value={defaultRate} onChange={(e) => setDefaultRate(e.target.value)} className={inputCls} placeholder="0,00" />
+            <input type="text" inputMode="decimal" value={defaultRate} onChange={(e) => setDefaultRate(e.target.value.replace(/[^\d.,]/g, ""))} onBlur={handleRateBlur} className={inputCls} placeholder="0,00" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Unidade</label>
