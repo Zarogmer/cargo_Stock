@@ -830,7 +830,7 @@ function EmployeeRatesModal({
       setEmployees(emps);
       const map: Record<number, { id?: number; rate: string }> = {};
       for (const r of (rateRes.data || []) as { id: number; employee_id: number; rate: string | number }[]) {
-        map[r.employee_id] = { id: r.id, rate: String(r.rate) };
+        map[r.employee_id] = { id: r.id, rate: Number(r.rate).toFixed(2).replace(".", ",") };
       }
       setOverrides(map);
       setSearch("");
@@ -844,23 +844,36 @@ function EmployeeRatesModal({
     setOverrides((prev) => ({ ...prev, [empId]: { ...(prev[empId] || {}), rate: value } }));
   }
 
+  function formatRateOnBlur(empId: number) {
+    setOverrides((prev) => {
+      const cur = prev[empId];
+      if (!cur) return prev;
+      const raw = (cur.rate ?? "").toString().trim().replace(",", ".");
+      if (raw === "") return prev;
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0) return prev;
+      return { ...prev, [empId]: { ...cur, rate: n.toFixed(2).replace(".", ",") } };
+    });
+  }
+
   async function handleSave() {
     if (!fn) return;
     setSaving(true);
     try {
       for (const emp of employees) {
         const o = overrides[emp.id];
-        const raw = (o?.rate ?? "").toString().trim();
-        const hasValue = raw !== "" && Number(raw) > 0;
+        const raw = (o?.rate ?? "").toString().trim().replace(",", ".");
+        const num = Number(raw);
+        const hasValue = raw !== "" && Number.isFinite(num) && num > 0;
         if (hasValue) {
           // upsert
           if (o?.id) {
-            await db.from("employee_function_rates").update({ rate: Number(raw) }).eq("id", o.id);
+            await db.from("employee_function_rates").update({ rate: num }).eq("id", o.id);
           } else {
             await db.from("employee_function_rates").insert({
               employee_id: emp.id,
               function_id: fn.id,
-              rate: Number(raw),
+              rate: num,
             });
           }
         } else if (o?.id) {
@@ -879,7 +892,9 @@ function EmployeeRatesModal({
   const filtered = employees.filter((e) =>
     e.name.toLowerCase().includes(search.toLowerCase())
   );
-  const overrideCount = Object.values(overrides).filter((o) => o.rate && Number(o.rate) > 0).length;
+  const overrideCount = Object.values(overrides).filter(
+    (o) => o.rate && Number(o.rate.replace(",", ".")) > 0,
+  ).length;
   const inputCls = "w-32 px-2 py-1 border border-border rounded text-sm text-right focus:ring-2 focus:ring-primary outline-none";
 
   return (
@@ -916,7 +931,7 @@ function EmployeeRatesModal({
                 <tbody>
                   {filtered.map((emp) => {
                     const o = overrides[emp.id];
-                    const hasOverride = !!o && o.rate && Number(o.rate) > 0;
+                    const hasOverride = !!o && o.rate && Number((o.rate || "").toString().replace(",", ".")) > 0;
                     return (
                       <tr key={emp.id} className="border-b border-border last:border-0 hover:bg-gray-50">
                         <td className="px-3 py-2">
@@ -927,12 +942,12 @@ function EmployeeRatesModal({
                         </td>
                         <td className="px-3 py-2 text-right">
                           <input
-                            type="number"
-                            step="0.01"
-                            min="0"
+                            type="text"
+                            inputMode="decimal"
                             value={o?.rate ?? ""}
                             onChange={(e) => setRate(emp.id, e.target.value)}
-                            placeholder={String(Number(fn.default_rate).toFixed(2))}
+                            onBlur={() => formatRateOnBlur(emp.id)}
+                            placeholder={Number(fn.default_rate).toFixed(2).replace(".", ",")}
                             disabled={!canEdit}
                             className={inputCls}
                           />
