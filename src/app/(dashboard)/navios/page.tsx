@@ -1404,8 +1404,13 @@ export default function NaviosPage() {
                   </label>
 
                   {createGroup && (() => {
+                    // Setor Administrativo não aparece pra escalar — eles entram
+                    // só pela caixinha "Incluir setor Administrativo no grupo".
                     const eligible = employees.filter(
-                      (e) => (e.status ?? "ATIVO") === "ATIVO" && (e.phone || "").trim().length > 0,
+                      (e) =>
+                        (e.status ?? "ATIVO") === "ATIVO" &&
+                        (e.phone || "").trim().length > 0 &&
+                        e.sector !== "ADMINISTRATIVO",
                     );
                     const q = groupSearch.trim().toLowerCase();
                     const filteredEmps = q
