@@ -861,8 +861,14 @@ function EmployeeRatesModal({
     const emps = ((empRes.data as { id: number; name: string; status: string | null }[]) || [])
       .filter((e) => e.status !== "INATIVO");
     setEmployees(emps);
+    const defaultStr = Number(fn.default_rate).toFixed(2).replace(".", ",");
+    // Pré-popula TODOS os funcionários com o valor padrão. Quem tiver override
+    // no banco recebe esse valor por cima. Assim a lista vira "editável direto".
     const map: Record<number, { id?: number; rate: string }> = {};
     const origs: Record<number, number> = {};
+    for (const e of emps) {
+      map[e.id] = { rate: defaultStr };
+    }
     for (const r of (rateRes.data || []) as { id: number; employee_id: number; rate: string | number }[]) {
       map[r.employee_id] = { id: r.id, rate: Number(r.rate).toFixed(2).replace(".", ",") };
       origs[r.employee_id] = Number(r.rate);
@@ -919,9 +925,13 @@ function EmployeeRatesModal({
         const hasValue = raw !== "" && Number.isFinite(num) && num > 0;
         const orig = originalRates[emp.id];
         const wasOverride = orig != null;
-        if (!wasOverride && !hasValue) continue;
+        // Considera "override" apenas quando o valor difere do padrão.
+        // Igual ao padrão (ou em branco) → remove override do banco.
+        const isOverride = hasValue && num !== defaultRateLocal;
 
-        if (hasValue) {
+        if (!wasOverride && !isOverride) continue;
+
+        if (isOverride) {
           if (o?.id) {
             if (orig !== num) {
               const res = await db.from("employee_function_rates").update({ rate: num }).eq("id", o.id);
@@ -944,6 +954,7 @@ function EmployeeRatesModal({
               .in("job_id", openJobIds);
           }
         } else if (o?.id) {
+          // Valor voltou pro padrão (ou foi apagado) → remove o override.
           const res = await db.from("employee_function_rates").delete().eq("id", o.id);
           if (res?.error) errors.push(`${emp.name}: ${res.error.message}`);
           else changedCount++;
@@ -985,12 +996,13 @@ function EmployeeRatesModal({
         <div className="space-y-3">
           <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900 space-y-1">
             <p>
-              💡 Defina um valor especial pra funcionários que ganham diferente do padrão (
-              <strong>{brl(fn.default_rate)}</strong>). Deixe em branco pra usar o padrão.
-              {overrideCount > 0 && <span className="ml-1 font-semibold">· {overrideCount} override(s) ativos.</span>}
+              💡 Cada funcionário começa com o valor padrão da função (
+              <strong>{brl(fn.default_rate)}</strong>). Altere direto na linha quem ganha diferente —
+              fica destacado em <strong>amarelo</strong> quando recebe a mais.
+              {overrideCount > 0 && <span className="ml-1 font-semibold">· {overrideCount} com valor especial.</span>}
             </p>
             <p className="text-amber-800">
-              ↻ Mudanças se aplicam também a alocações em pagamentos <strong>em aberto</strong> (não-fechados).
+              ↻ Mudanças se aplicam também a alocações em pagamentos <strong>em aberto</strong>.
             </p>
           </div>
 
@@ -1013,7 +1025,6 @@ function EmployeeRatesModal({
                   <tr>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Funcionário</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Valor (R$)</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Comparação</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1022,23 +1033,19 @@ function EmployeeRatesModal({
                     const rawText = (o?.rate ?? "").toString();
                     const num = Number(rawText.replace(",", "."));
                     const hasNumber = rawText.trim() !== "" && Number.isFinite(num) && num > 0;
-                    const diff = hasNumber ? num - defaultRate : 0;
-                    const isOverride = hasNumber && diff !== 0;
-                    // Estilo do input muda conforme a diferença pra dar feedback visual.
-                    const inputStyle = !hasNumber
-                      ? "border-border text-text-light"
-                      : diff > 0
-                        ? "border-emerald-400 bg-emerald-50 text-emerald-800 font-semibold"
-                        : diff < 0
-                          ? "border-red-400 bg-red-50 text-red-800 font-semibold"
-                          : "border-border text-text";
+                    // Destaque amarelo quando recebe MAIS que o padrão.
+                    const receivesMore = hasNumber && num > defaultRate;
+                    const rowBg = receivesMore ? "bg-amber-50 hover:bg-amber-100" : "hover:bg-gray-50";
+                    const inputStyle = receivesMore
+                      ? "border-amber-400 bg-amber-100 text-amber-900 font-semibold"
+                      : "border-border text-text";
                     return (
-                      <tr key={emp.id} className="border-b border-border last:border-0 hover:bg-gray-50">
+                      <tr key={emp.id} className={`border-b border-border last:border-0 ${rowBg}`}>
                         <td className="px-3 py-2">
                           {emp.name}
-                          {isOverride && (
-                            <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded font-bold ${diff > 0 ? "bg-emerald-200 text-emerald-900" : "bg-red-200 text-red-900"}`}>
-                              ESPECIAL
+                          {receivesMore && (
+                            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded font-bold bg-amber-300 text-amber-900">
+                              + {brl(num - defaultRate)}
                             </span>
                           )}
                         </td>
@@ -1049,21 +1056,9 @@ function EmployeeRatesModal({
                             value={o?.rate ?? ""}
                             onChange={(e) => setRate(emp.id, e.target.value)}
                             onBlur={() => formatRateOnBlur(emp.id)}
-                            placeholder={`padrão ${defaultRate.toFixed(2).replace(".", ",")}`}
                             disabled={!canEdit}
                             className={`w-32 px-2 py-1 border-2 rounded text-sm text-right focus:ring-2 focus:ring-primary outline-none transition-colors ${inputStyle}`}
                           />
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          {!hasNumber ? (
-                            <span className="text-text-light italic">usa padrão {brl(defaultRate)}</span>
-                          ) : diff > 0 ? (
-                            <span className="text-emerald-700 font-semibold">▲ recebe + {brl(diff)} acima do padrão</span>
-                          ) : diff < 0 ? (
-                            <span className="text-red-700 font-semibold">▼ recebe − {brl(Math.abs(diff))} abaixo do padrão</span>
-                          ) : (
-                            <span className="text-text-light">= padrão {brl(defaultRate)}</span>
-                          )}
                         </td>
                       </tr>
                     );
