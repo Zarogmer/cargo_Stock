@@ -206,6 +206,7 @@ export default function FinanceiroPage() {
           functions={functions}
           rates={rates}
           allocations={allocations}
+          employees={employees}
           canEdit={canEdit}
           onChange={loadAll}
           loading={loading}
@@ -390,11 +391,12 @@ function InlineRateEditor({ value, canEdit, onSave }: { value: number; canEdit: 
 }
 
 function FuncoesTab({
-  functions, rates, allocations, canEdit, onChange, loading,
+  functions, rates, allocations, employees, canEdit, onChange, loading,
 }: {
   functions: JobFunction[];
   rates: JobFunctionRate[];
   allocations: JobAllocation[];
+  employees: Employee[];
   canEdit: boolean;
   onChange: () => void;
   loading: boolean;
@@ -412,6 +414,15 @@ function FuncoesTab({
   // safety because the FK constraint cares about row presence, not values.
   const allocCount = (fnId: number) =>
     allocations.filter((a) => a.function_id === fnId).length;
+
+  // Conta colaboradores ATIVOS cuja função (role) bate com o nome da função.
+  // Comparação case-insensitive e ignora INATIVO/PENDENCIA.
+  const employeeCount = (fnName: string) => {
+    const target = fnName.trim().toUpperCase();
+    return employees.filter(
+      (e) => (e.status ?? "ATIVO") === "ATIVO" && (e.role || "").trim().toUpperCase() === target,
+    ).length;
+  };
 
   const filtered = functions.filter((f) =>
     f.name.toLowerCase().includes(search.toLowerCase())
@@ -479,7 +490,7 @@ function FuncoesTab({
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Função</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Valor Padrão</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Unidade</th>
-                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Alocações</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Colaboradores</th>
                 <th className="px-4 py-2.5 text-right text-xs font-semibold text-text-light uppercase tracking-wider">Ações</th>
               </tr>
             </thead>
@@ -495,7 +506,14 @@ function FuncoesTab({
                     />
                   </td>
                   <td className="px-4 py-2.5 text-text-light text-xs">{UNIT_LABELS[f.unit]}</td>
-                  <td className="px-4 py-2.5 text-text-light text-xs">{allocCount(f.id)}× alocada(s)</td>
+                  <td className="px-4 py-2.5 text-text-light text-xs">
+                    {(() => {
+                      const n = employeeCount(f.name);
+                      return n === 0
+                        ? <span className="text-text-light/60">— nenhum cadastrado</span>
+                        : <span><strong className="text-text">{n}</strong> {n === 1 ? "colaborador" : "colaboradores"}</span>;
+                    })()}
+                  </td>
                   <td className="px-4 py-2.5 text-right">
                     <div className="flex gap-1 justify-end">
                       <button onClick={() => setRatesFn(f)} className="p-1.5 text-amber-700 hover:bg-amber-50 rounded" title="Valores especiais por funcionário">
