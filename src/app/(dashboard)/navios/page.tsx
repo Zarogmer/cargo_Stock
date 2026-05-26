@@ -58,6 +58,7 @@ interface Employee {
   phone: string | null;
   status: string | null;
   role: string | null;
+  sector: "OPERACIONAL" | "ADMINISTRATIVO" | null;
 }
 
 interface ShipEmployee {
@@ -200,6 +201,9 @@ export default function NaviosPage() {
   // WhatsApp group + scale creation (only when creating a new ship)
   const [createGroup, setCreateGroup] = useState(false);
   const [groupParticipants, setGroupParticipants] = useState<Set<number>>(new Set());
+  // Quando marcado, todo funcionário ATIVO do setor ADMINISTRATIVO com telefone
+  // entra no grupo do WhatsApp (mas NÃO é escalado — admin não trabalha no navio).
+  const [includeAdminSector, setIncludeAdminSector] = useState(false);
   const [groupSearch, setGroupSearch] = useState("");
   const [groupWarning, setGroupWarning] = useState<string | null>(null);
   // Per-employee function chosen by the user (employeeId → functionId as string)
@@ -266,7 +270,7 @@ export default function NaviosPage() {
     try {
       const { data } = await db
         .from("employees")
-        .select("id, name, team, phone, status, role")
+        .select("id, name, team, phone, status, role, sector")
         .order("name");
       setEmployees((data as any[]) || []);
     } catch (err) {
@@ -341,6 +345,7 @@ export default function NaviosPage() {
     setFormError("");
     setCreateGroup(false);
     setGroupParticipants(new Set());
+    setIncludeAdminSector(false);
     setGroupSearch("");
     setGroupWarning(null);
     setGroupPerEmpFn(new Map());
@@ -354,6 +359,7 @@ export default function NaviosPage() {
     setEditingShip(ship);
     setCreateGroup(false);
     setGroupParticipants(new Set());
+    setIncludeAdminSector(false);
     setGroupSearch("");
     setGroupWarning(null);
     setGroupPerEmpFn(new Map());
@@ -561,7 +567,22 @@ export default function NaviosPage() {
 
       // 3) Cria grupo no WhatsApp com os mesmos colaboradores.
       if (createGroup && groupParticipants.size > 0) {
-        const participantPhones = Array.from(groupParticipants)
+        // Admin sector members (entram só no grupo, sem escalação).
+        const adminMemberIds = includeAdminSector
+          ? employees
+              .filter(
+                (e) =>
+                  (e.status ?? "ATIVO") === "ATIVO" &&
+                  e.sector === "ADMINISTRATIVO" &&
+                  (e.phone || "").trim().length > 0,
+              )
+              .map((e) => e.id)
+          : [];
+        // União dedup'd (operacionais selecionados + administrativos opcionais).
+        const allMemberIds = Array.from(
+          new Set<number>([...Array.from(groupParticipants), ...adminMemberIds]),
+        );
+        const participantPhones = allMemberIds
           .map((id) => employees.find((e) => e.id === id)?.phone || "")
           .filter((p) => p.trim().length > 0);
 
@@ -583,7 +604,8 @@ export default function NaviosPage() {
                 // Manda os IDs dos colaboradores selecionados pra o app
                 // conseguir exibir nomes em "Dados do grupo" mesmo quando
                 // o WhatsApp devolve LIDs opacos no lugar dos telefones.
-                employeeIds: Array.from(groupParticipants),
+                // Inclui admin sector quando a opção está marcada.
+                employeeIds: allMemberIds,
               }),
             });
             const body = await res.json().catch(() => ({}));
@@ -1393,6 +1415,14 @@ export default function NaviosPage() {
                     const selectedList = Array.from(groupParticipants)
                       .map((id) => employees.find((e) => e.id === id))
                       .filter(Boolean) as Employee[];
+                    // Funcionários do setor Administrativo com telefone (entram só
+                    // no grupo do WhatsApp, sem escalar nem precisar de função).
+                    const adminMembers = employees.filter(
+                      (e) =>
+                        (e.status ?? "ATIVO") === "ATIVO" &&
+                        e.sector === "ADMINISTRATIVO" &&
+                        (e.phone || "").trim().length > 0,
+                    );
 
                     return (
                       <div className="space-y-3">
@@ -1412,6 +1442,25 @@ export default function NaviosPage() {
                             </>
                           )}
                         </p>
+
+                        <label className="flex items-start gap-2 cursor-pointer bg-white border border-emerald-200 rounded-md px-2 py-2">
+                          <input
+                            type="checkbox"
+                            checked={includeAdminSector}
+                            onChange={(e) => setIncludeAdminSector(e.target.checked)}
+                            className="h-4 w-4 mt-0.5 accent-emerald-600"
+                          />
+                          <div className="text-xs">
+                            <p className="font-medium text-text">
+                              👔 Incluir setor Administrativo no grupo
+                            </p>
+                            <p className="text-text-light mt-0.5">
+                              {adminMembers.length === 0
+                                ? "Nenhum funcionário ATIVO do Administrativo com telefone cadastrado."
+                                : `${adminMembers.length} pessoa(s) do Administrativo serão adicionadas ao grupo — sem escalar, só para receber as mensagens.`}
+                            </p>
+                          </div>
+                        </label>
 
                         {/* Lista de selecionados com select de função (só Embarque — Costado não escala ainda) */}
                         {!isCostadoForm && selectedList.length > 0 && (
