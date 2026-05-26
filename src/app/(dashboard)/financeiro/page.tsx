@@ -190,7 +190,7 @@ export default function FinanceiroPage() {
   const financeiroTabs = [
     {
       key: "funcoes",
-      label: "💰 Funções e Valores",
+      label: "💰 Função/Valores/Pagas",
       content: (
         <FuncoesTab
           functions={functions}
