@@ -33,18 +33,20 @@ const UNIT_LABELS: Record<JobUnit, string> = {
   POR_OPERACAO: "Porão",
 };
 
+// Fluxo simplificado: tudo que não foi pago aparece como "Em Andamento" (cobre
+// também os legados ABERTO e VERIFICADO). FECHADO = "Pago".
 const STATUS_LABELS: Record<JobStatus, string> = {
-  ABERTO: "Aberto",
+  ABERTO: "Em Andamento",
   EM_ANDAMENTO: "Em Andamento",
-  VERIFICADO: "Verificado",
-  FECHADO: "Fechado",
+  VERIFICADO: "Em Andamento",
+  FECHADO: "Pago",
   CANCELADO: "Cancelado",
 };
 
 const STATUS_COLORS: Record<JobStatus, string> = {
-  ABERTO: "bg-blue-100 text-blue-700",
+  ABERTO: "bg-amber-100 text-amber-700",
   EM_ANDAMENTO: "bg-amber-100 text-amber-700",
-  VERIFICADO: "bg-purple-100 text-purple-700",
+  VERIFICADO: "bg-amber-100 text-amber-700",
   FECHADO: "bg-emerald-100 text-emerald-700",
   CANCELADO: "bg-red-100 text-red-700",
 };
@@ -190,7 +192,8 @@ export default function FinanceiroPage() {
     const totalRevenueMonth = monthJobs.reduce((s, j) => s + Number(j.contract_value || 0), 0);
     return {
       activeFunctions: functions.filter((f) => f.active).length,
-      openJobs: jobs.filter((j) => j.status === "ABERTO" || j.status === "EM_ANDAMENTO").length,
+      // "Em Andamento" cobre todos os status que não são Pago (FECHADO) nem Cancelado.
+      openJobs: jobs.filter((j) => j.status !== "FECHADO" && j.status !== "CANCELADO").length,
       monthCost: totalCostMonth,
       monthRevenue: totalRevenueMonth,
       monthProfit: totalRevenueMonth - totalCostMonth,
@@ -1118,7 +1121,13 @@ function TrabalhosTab({
     ships.filter((s) => (s.services || []).includes("COSTADO")).map((s) => s.id)
   );
   const embarqueJobs = jobs.filter((j) => !j.ship_id || !costadoShipIds.has(j.ship_id));
-  const filtered = embarqueJobs.filter((j) => statusFilter === "TODOS" || j.status === statusFilter);
+  // O filtro "EM_ANDAMENTO" pega qualquer status que NÃO é Pago nem Cancelado
+  // (cobre os legados ABERTO/VERIFICADO).
+  const filtered = embarqueJobs.filter((j) => {
+    if (statusFilter === "TODOS") return true;
+    if (statusFilter === "EM_ANDAMENTO") return j.status !== "FECHADO" && j.status !== "CANCELADO";
+    return j.status === statusFilter;
+  });
 
   async function handleSyncShips() {
     setSyncing(true);
@@ -1142,7 +1151,7 @@ function TrabalhosTab({
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2 items-center justify-between">
         <div className="flex gap-2 flex-wrap">
-          {(["TODOS", "ABERTO", "EM_ANDAMENTO", "VERIFICADO", "FECHADO", "CANCELADO"] as const).map((s) => (
+          {(["TODOS", "EM_ANDAMENTO", "FECHADO", "CANCELADO"] as const).map((s) => (
             <button
               key={s}
               onClick={() => setStatusFilter(s)}
@@ -1291,16 +1300,16 @@ function JobFormModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [name, setName] = useState("");
   const [shipId, setShipId] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [status, setStatus] = useState<JobStatus>("ABERTO");
+  // Status simplificado: só Em Andamento e Pago. Internamente FECHADO = Pago,
+  // EM_ANDAMENTO cobre os legados ABERTO/VERIFICADO.
+  const [status, setStatus] = useState<"EM_ANDAMENTO" | "FECHADO">("EM_ANDAMENTO");
   const [contractValue, setContractValue] = useState("");
   const [notes, setNotes] = useState("");
-  // Metadata fechamento
+  // Metadata cabeçalho
   const [client, setClient] = useState("");
-  const [supervisor, setSupervisor] = useState("");
   const [cargoType, setCargoType] = useState("");
   const [holdsCount, setHoldsCount] = useState("");
   const [port, setPort] = useState("");
@@ -1308,39 +1317,41 @@ function JobFormModal({
 
   useEffect(() => {
     if (item) {
-      setName(item.name);
       setShipId(item.ship_id || "");
       setStartDate(item.start_date.slice(0, 10));
       setEndDate(item.end_date?.slice(0, 10) || "");
-      setStatus(item.status);
+      // Status legados (ABERTO, VERIFICADO) viram "Em Andamento" no UI.
+      setStatus(item.status === "FECHADO" ? "FECHADO" : "EM_ANDAMENTO");
       setContractValue(item.contract_value?.toString() || "");
       setNotes(item.notes || "");
       setClient(item.client || "");
-      setSupervisor(item.supervisor || "");
       setCargoType(item.cargo_type || "");
       setHoldsCount(item.holds_count?.toString() || "");
       setPort(item.port || "");
     } else {
-      setName(""); setShipId(""); setStartDate(isoDate(new Date()));
-      setEndDate(""); setStatus("ABERTO"); setContractValue(""); setNotes("");
-      setClient(""); setSupervisor(""); setCargoType(""); setHoldsCount(""); setPort("SANTOS");
+      setShipId(""); setStartDate(isoDate(new Date()));
+      setEndDate(""); setStatus("EM_ANDAMENTO"); setContractValue(""); setNotes("");
+      setClient(""); setCargoType(""); setHoldsCount(""); setPort("SANTOS");
     }
   }, [item, open]);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !startDate) return;
+    if (!shipId || !startDate) return;
     setSaving(true);
+    // Nome do pagamento sempre derivado do navio escolhido. Supervisor é
+    // gravado automaticamente como quem está logado.
+    const ship = ships.find((s) => s.id === shipId);
     const payload = {
-      name: name.trim(),
-      ship_id: shipId || null,
+      name: ship?.name?.trim() || "Pagamento",
+      ship_id: shipId,
       start_date: startDate,
       end_date: endDate || null,
       status,
       contract_value: contractValue ? parseFloat(contractValue) : null,
       notes: notes.trim() || null,
       client: client.trim() || null,
-      supervisor: supervisor.trim() || null,
+      supervisor: profileName || null,
       cargo_type: cargoType.trim() || null,
       holds_count: holdsCount ? parseInt(holdsCount) : null,
       port: port.trim() || null,
@@ -1364,15 +1375,15 @@ function JobFormModal({
         <div>
           <p className={sectionTitle}>Identificação</p>
           <div>
-            <label className="block text-sm font-medium mb-1">Nome *</label>
-            <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} placeholder="10 - M/V LEO OCEAN - 31/03/26 ..." />
-          </div>
-          <div className="mt-3">
-            <label className="block text-sm font-medium mb-1">Navio</label>
-            <select value={shipId} onChange={(e) => setShipId(e.target.value)} className={inputCls}>
-              <option value="">— Sem navio vinculado —</option>
+            <label className="block text-sm font-medium mb-1">Navio *</label>
+            <select value={shipId} onChange={(e) => setShipId(e.target.value)} required className={inputCls}>
+              <option value="">Selecione o navio...</option>
               {ships.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
+            <p className="text-[10px] text-text-light mt-1">O nome do pagamento é o nome do navio.</p>
+          </div>
+          <div className="mt-3 p-2 bg-gray-50 border border-border rounded-lg text-xs text-text-light">
+            <span className="font-medium text-text">Supervisor:</span> {profileName} <span className="text-[10px]">(usuário logado)</span>
           </div>
         </div>
 
@@ -1380,10 +1391,9 @@ function JobFormModal({
           <p className={sectionTitle}>Operação (cabeçalho do pagamento)</p>
           <div className="grid grid-cols-2 gap-4">
             <div><label className="block text-sm font-medium mb-1">Cliente</label><input type="text" value={client} onChange={(e) => setClient(e.target.value.toUpperCase())} className={inputCls} placeholder="DEEP" /></div>
-            <div><label className="block text-sm font-medium mb-1">Supervisor</label><input type="text" value={supervisor} onChange={(e) => setSupervisor(e.target.value.toUpperCase())} className={inputCls} placeholder="ADELMO" /></div>
-          </div>
-          <div className="grid grid-cols-3 gap-4 mt-3">
             <div><label className="block text-sm font-medium mb-1">Carga</label><input type="text" value={cargoType} onChange={(e) => setCargoType(e.target.value.toUpperCase())} className={inputCls} placeholder="CARVÃO" /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-4 mt-3">
             <div><label className="block text-sm font-medium mb-1">Nº Porões</label><input type="number" value={holdsCount} onChange={(e) => setHoldsCount(e.target.value)} className={inputCls} placeholder="5" /></div>
             <div><label className="block text-sm font-medium mb-1">Porto</label><input type="text" value={port} onChange={(e) => setPort(e.target.value.toUpperCase())} className={inputCls} placeholder="SANTOS" /></div>
           </div>
@@ -1398,12 +1408,9 @@ function JobFormModal({
           <div className="grid grid-cols-2 gap-4 mt-3">
             <div>
               <label className="block text-sm font-medium mb-1">Status</label>
-              <select value={status} onChange={(e) => setStatus(e.target.value as JobStatus)} className={inputCls}>
-                <option value="ABERTO">Aberto</option>
+              <select value={status} onChange={(e) => setStatus(e.target.value as "EM_ANDAMENTO" | "FECHADO")} className={inputCls}>
                 <option value="EM_ANDAMENTO">Em Andamento</option>
-                <option value="VERIFICADO">Verificado</option>
-                <option value="FECHADO">Fechado</option>
-                <option value="CANCELADO">Cancelado</option>
+                <option value="FECHADO">Pago</option>
               </select>
             </div>
             <div><label className="block text-sm font-medium mb-1">Valor do Contrato (R$)</label><input type="number" step="0.01" value={contractValue} onChange={(e) => setContractValue(e.target.value)} className={inputCls} placeholder="0,00" /></div>
@@ -1416,7 +1423,7 @@ function JobFormModal({
         </div>
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>
+          <Button type="submit" disabled={saving || !shipId}>{saving ? "Salvando..." : "Salvar"}</Button>
         </div>
       </form>
     </Modal>
@@ -3510,7 +3517,11 @@ function CostadoTab({
   const costadoJobs = jobs.filter(
     (j) => (j.ship_id && costadoShipIds.has(j.ship_id)) || jobsWithCostadoAlloc.has(j.id),
   );
-  const filtered = costadoJobs.filter((j) => statusFilter === "TODOS" || j.status === statusFilter);
+  const filtered = costadoJobs.filter((j) => {
+    if (statusFilter === "TODOS") return true;
+    if (statusFilter === "EM_ANDAMENTO") return j.status !== "FECHADO" && j.status !== "CANCELADO";
+    return j.status === statusFilter;
+  });
 
   // For job cards, compute Costado-only cost (filter allocs to kind=COSTADO).
   function costadoCost(job: Job) {
@@ -3525,7 +3536,7 @@ function CostadoTab({
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2 items-center justify-between">
         <div className="flex gap-2 flex-wrap">
-          {(["TODOS", "ABERTO", "EM_ANDAMENTO", "VERIFICADO", "FECHADO", "CANCELADO"] as const).map((s) => (
+          {(["TODOS", "EM_ANDAMENTO", "FECHADO", "CANCELADO"] as const).map((s) => (
             <button
               key={s}
               onClick={() => setStatusFilter(s)}
