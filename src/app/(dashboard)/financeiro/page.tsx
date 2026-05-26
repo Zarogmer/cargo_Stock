@@ -1772,9 +1772,8 @@ function JobDetailModal({
         ws[addr] = { t, v, s };
       };
 
-      // Linha 3: título "PAGAMENTO EM ..." (mesclado D3:E3)
+      // Linha 3: título "PAGAMENTO EM ..." (mesclado D3:G3 pra caber o texto inteiro)
       set("D3", `PAGAMENTO EM ${dateLabel || ""}`, styleTitle);
-      set("E3", "", styleTitle);
       // Linha 6: rótulos C=FUNCIONÁRIOS, K=cliente
       set("C6", "FUNCIONÁRIOS", styleSummaryTitle);
       set("K6", job!.client || "", styleClient);
@@ -1843,7 +1842,7 @@ function JobDetailModal({
       ];
       ws["!rows"] = Array.from({ length: row + 2 }, (_, i) => (i === 6 ? { hpt: 38 } : { hpt: 18 }));
       ws["!merges"] = [
-        { s: { c: 3, r: 2 }, e: { c: 4, r: 2 } }, // D3:E3 título mesclado
+        { s: { c: 3, r: 2 }, e: { c: 6, r: 2 } }, // D3:G3 título mesclado (mais largo pra caber "PAGAMENTO EM DD/MM/AA")
       ];
 
       const wb = XLSX.utils.book_new();
