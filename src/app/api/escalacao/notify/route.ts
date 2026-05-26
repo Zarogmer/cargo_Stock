@@ -22,6 +22,9 @@ interface NotifyBody {
   shiftPeriod?: string;      // "07-13" | "13-19" | "19-01" | "01-07"
   employeeIds: number[];
   targets?: NotifyTargets;
+  // PREVIEW (Costado only): grupo já foi criado, ainda não escalou — apenas
+  // avisa no privado que vai haver limpeza no costado.
+  mode?: "FULL" | "PREVIEW";
 }
 
 // Friendlier label for each costado shift — used on the group post so the
@@ -77,6 +80,7 @@ export async function POST(request: NextRequest) {
 
   // ── Build the messages ──────────────────────────────────────────────────
   const isCostado = body.kind === "COSTADO";
+  const isPreview = body.mode === "PREVIEW";
   const dateLabel = body.shiftDate ? formatBRDate(body.shiftDate) : "";
   const shiftLabel = body.shiftPeriod ? (SHIFT_LABEL[body.shiftPeriod] || body.shiftPeriod) : "";
   const shipName = ship.name;
@@ -84,11 +88,16 @@ export async function POST(request: NextRequest) {
   const names = employees.map((e) => e.name);
   const namesList = names.map((n) => `• ${n}`).join("\n");
 
-  const groupMessage = isCostado
-    ? `🚢 *${shipName}*\n📅 Escala da ${shiftLabel} — ${dateLabel}\n\n${namesList}`
-    : `🚢 *${shipName}*\n⚓ Equipe escalada para o embarque:\n\n${namesList}`;
+  const groupMessage = isPreview && isCostado
+    ? `🚢 *${shipName}*\n🧹 Operação de limpeza no costado em breve — aguardem instruções.`
+    : isCostado
+      ? `🚢 *${shipName}*\n📅 Escala da ${shiftLabel} — ${dateLabel}\n\n${namesList}`
+      : `🚢 *${shipName}*\n⚓ Equipe escalada para o embarque:\n\n${namesList}`;
 
   function dmFor(name: string): string {
+    if (isPreview && isCostado) {
+      return `Olá, ${name}!\n\nAviso prévio: o navio *${shipName}* terá limpeza no costado. Aguarde a escalação com data e turno.\n\n~Equipe Cargo Ships`;
+    }
     if (isCostado) {
       return `Olá, ${name}!\n\nVocê foi escalado(a) para o navio *${shipName}* — turno da ${shiftLabel} do dia ${dateLabel}.\n\n~Equipe Cargo Ships`;
     }

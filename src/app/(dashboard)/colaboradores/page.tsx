@@ -12,6 +12,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatDate, formatDateTime, formatPhone, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, type NrCode, type NrDates, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
+import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
 import type { Employee, Epi, Uniform, EpiMovement, UniformMovement, EpiMovementType } from "@/types/database";
 import { DocumentosTab } from "./documentos-tab";
 
@@ -74,6 +75,15 @@ export default function ColaboradoresPage() {
     setLoading(true);
     setDbError(null);
     try {
+      // Antes de listar, libera quem está embarcado em navio cuja data de
+      // saída já passou. Mantém a coluna "Escalação" coerente sem exigir
+      // intervenção manual do RH.
+      try {
+        await releaseFinishedShipAllocations(profile?.full_name || "sistema");
+      } catch (err) {
+        console.warn("[colaboradores] auto-release failed:", (err as Error).message);
+      }
+
       const [empRes, epiRes, uniRes, epiMovRes, uniMovRes, allocRes] = await Promise.all([
         db.from("employees").select("*").order("name"),
         db.from("epis").select("*").order("name"),
@@ -127,7 +137,7 @@ export default function ColaboradoresPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [profile?.full_name]);
 
   useEffect(() => { loadAll(); }, [loadAll, pathname]);
 

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { hasPermission } from "@/lib/rbac";
 import { db } from "@/lib/db";
+import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -225,6 +226,16 @@ export default function NaviosPage() {
   const loadShips = useCallback(async () => {
     setLoading(true);
     try {
+      // Faxina automática: libera funcionários presos em navios cuja data de
+      // saída já passou. O resultado fica disponível em background — a UI já
+      // mostra a lista atualizada na próxima leitura porque a tabela de
+      // colaboradores observa job_allocations.status=ATIVO.
+      try {
+        await releaseFinishedShipAllocations(profile?.full_name || "sistema");
+      } catch (err) {
+        console.warn("[navios] auto-release failed:", (err as Error).message);
+      }
+
       const { data } = await db
         .from("ships")
         .select("*")
@@ -235,7 +246,7 @@ export default function NaviosPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [profile?.full_name]);
 
   const loadEmployees = useCallback(async () => {
     try {
@@ -399,7 +410,9 @@ export default function NaviosPage() {
       // ── Validações pré-flight da seção "criar grupo + escalar" ────────────
       // Faço antes do INSERT do navio pra evitar criar registro sem validar a
       // intenção do usuário primeiro. Se algo aqui falha, ninguém é criado.
-      if (createGroup && groupParticipants.size > 0) {
+      // Costado não escala no momento da criação, então pula a checagem de
+      // função por colaborador (que é exigida só pra montar a allocation).
+      if (!isCostado && createGroup && groupParticipants.size > 0) {
         const missingFn = Array.from(groupParticipants).filter((id) => !groupPerEmpFn.get(id));
         if (missingFn.length > 0) {
           const names = missingFn
@@ -407,11 +420,6 @@ export default function NaviosPage() {
             .filter(Boolean)
             .join(", ");
           setFormError(`Defina a função para: ${names}`);
-          setSaving(false);
-          return;
-        }
-        if (isCostado && (!costadoShiftDate || !costadoShiftPeriod)) {
-          setFormError("Defina data e período do turno para escalar Costado.");
           setSaving(false);
           return;
         }
@@ -457,7 +465,11 @@ export default function NaviosPage() {
       //    com a função escolhida no modal. Pra Costado também grava o turno.
       //    Status ATIVO, quantity/rate/pluxee zeram (a aba Financeiro ajusta
       //    depois — mesma convenção da Escalação manual).
-      if (createGroup && groupParticipants.size > 0 && newJobId) {
+      //
+      //    Costado: pula a escalação automática (só cria o grupo + manda DM
+      //    avisando "vai ter limpeza no costado"). Quem escala depois é o
+      //    supervisor pela aba Escalação > Costado, com data e turno.
+      if (!isCostado && createGroup && groupParticipants.size > 0 && newJobId) {
         const profileName = profile?.full_name || "sistema";
         const now = new Date().toISOString();
         const allocationErrors: string[] = [];
@@ -559,8 +571,8 @@ export default function NaviosPage() {
             targets: "DM",
           };
           if (isCostado) {
-            notifyBody.shiftDate = costadoShiftDate;
-            notifyBody.shiftPeriod = costadoShiftPeriod;
+            // Costado: aviso prévio no privado, sem escalação ainda.
+            notifyBody.mode = "PREVIEW";
           }
           const notifyRes = await fetch("/api/escalacao/notify", {
             method: "POST",
@@ -596,6 +608,27 @@ export default function NaviosPage() {
   }
 
   async function handleDelete(id: string) {
+    // Libera os colaboradores embarcados antes de apagar o navio. Sem isso, as
+    // job_allocations ficam órfãs com status=ATIVO e o RH vê o funcionário
+    // como "Embarcado" eternamente. Fluxo:
+    //  1) acha os jobs vinculados ao navio
+    //  2) marca todas as job_allocations ATIVAS desses jobs como REMOVIDO
+    //  3) marca os jobs como CANCELADO (preserva histórico)
+    //  4) só então apaga o navio
+    const jobsRes = await db.from("jobs").select("id").eq("ship_id", id);
+    const jobIds: string[] = (jobsRes.data || []).map((j: { id: string }) => j.id);
+    if (jobIds.length > 0) {
+      const now = new Date().toISOString();
+      const actor = profile?.full_name || "sistema";
+      for (const jobId of jobIds) {
+        await db
+          .from("job_allocations")
+          .update({ status: "REMOVIDO", removed_at: now, removed_by: actor, removal_reason: "Navio apagado" })
+          .eq("job_id", jobId)
+          .eq("status", "ATIVO");
+        await db.from("jobs").update({ status: "CANCELADO" }).eq("id", jobId);
+      }
+    }
     await db.from("ships").delete().eq("id", id);
     if (selectedShip?.id === id) setSelectedShip(null);
     setDeleteId(null);
@@ -1093,19 +1126,6 @@ export default function NaviosPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-text mb-1">Status</label>
-                <select
-                  value={form.status}
-                  onChange={(e) => setForm({ ...form, status: e.target.value as ShipStatus })}
-                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm bg-white"
-                >
-                  {STATUS_OPTIONS.map((s) => (
-                    <option key={s} value={s}>{STATUS_LABELS[s]}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
                 <label className="block text-sm font-medium text-text mb-1">Equipe Designada</label>
                 <select
                   value={form.assigned_team}
@@ -1196,7 +1216,7 @@ export default function NaviosPage() {
                   </div>
                 ) : (
                   <p className="text-[11px] text-text-light mt-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
-                    🧹 <strong>Costado:</strong> escalação por hora, sem sub-serviços.
+                    🧹 <strong>Costado:</strong> sem sub-serviços.
                   </p>
                 )}
               </div>
@@ -1276,47 +1296,23 @@ export default function NaviosPage() {
                       <div className="space-y-3">
                         <p className="text-[11px] text-text-light">
                           O grupo será criado com o nome do navio
-                          {form.name.trim() && <> (<strong className="text-text">{form.name.trim()}</strong>)</>}.
-                          Cada colaborador é também escalado em{" "}
-                          <strong className="text-text">
-                            {isCostadoForm ? "🧹 Escalação de Costado" : "⚓ Escalação de Embarque"}
-                          </strong>{" "}
-                          — escolha a função de cada um.
+                          {form.name.trim() && <> (<strong className="text-text">{form.name.trim()}</strong>)</>}.{" "}
+                          {isCostadoForm ? (
+                            <>
+                              Cada colaborador recebe um <strong className="text-text">aviso no privado</strong> de que haverá limpeza no costado. A escalação com data e turno é feita depois em{" "}
+                              <strong className="text-text">🧹 Escalação de Costado</strong>.
+                            </>
+                          ) : (
+                            <>
+                              Cada colaborador é também escalado em{" "}
+                              <strong className="text-text">⚓ Escalação de Embarque</strong>{" "}
+                              — escolha a função de cada um.
+                            </>
+                          )}
                         </p>
 
-                        {isCostadoForm && (
-                          <div className="grid grid-cols-2 gap-2 p-2 bg-white border border-emerald-100 rounded-md">
-                            <div>
-                              <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">
-                                Data do turno
-                              </label>
-                              <input
-                                type="date"
-                                value={costadoShiftDate}
-                                onChange={(e) => setCostadoShiftDate(e.target.value)}
-                                className="w-full px-2 py-1.5 border border-border rounded text-xs focus:outline-none focus:ring-2 focus:ring-primary/30"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">
-                                Período
-                              </label>
-                              <select
-                                value={costadoShiftPeriod}
-                                onChange={(e) => setCostadoShiftPeriod(e.target.value)}
-                                className="w-full px-2 py-1.5 border border-border rounded text-xs focus:outline-none focus:ring-2 focus:ring-primary/30 bg-white"
-                              >
-                                <option value="07-13">07-13</option>
-                                <option value="13-19">13-19</option>
-                                <option value="19-01">19-01</option>
-                                <option value="01-07">01-07</option>
-                              </select>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Lista de selecionados com select de função */}
-                        {selectedList.length > 0 && (
+                        {/* Lista de selecionados com select de função (só Embarque — Costado não escala ainda) */}
+                        {!isCostadoForm && selectedList.length > 0 && (
                           <div className="p-2 bg-white border border-emerald-200 rounded-lg">
                             <p className="text-[10px] font-semibold text-emerald-900 uppercase tracking-wider mb-2">
                               {selectedList.length} selecionado(s) — defina a função
@@ -1367,6 +1363,39 @@ export default function NaviosPage() {
                                   </div>
                                 );
                               })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Costado: mostra lista enxuta de selecionados (sem função, sem turno) */}
+                        {isCostadoForm && selectedList.length > 0 && (
+                          <div className="p-2 bg-white border border-emerald-200 rounded-lg">
+                            <p className="text-[10px] font-semibold text-emerald-900 uppercase tracking-wider mb-2">
+                              {selectedList.length} selecionado(s)
+                            </p>
+                            <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                              {selectedList.map((emp) => (
+                                <div
+                                  key={emp.id}
+                                  className="flex items-center gap-2 bg-white border border-emerald-100 rounded-md px-2 py-1.5"
+                                >
+                                  <span className="flex-1 min-w-0 text-xs font-medium truncate">{emp.name}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setGroupParticipants((prev) => {
+                                        const next = new Set(prev);
+                                        next.delete(emp.id);
+                                        return next;
+                                      });
+                                    }}
+                                    className="text-xs text-red-600 hover:bg-red-50 rounded p-1"
+                                    title="Remover"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              ))}
                             </div>
                           </div>
                         )}
@@ -1425,7 +1454,7 @@ export default function NaviosPage() {
                             })
                           )}
                         </div>
-                        {jobFunctions.length === 0 && (
+                        {!isCostadoForm && jobFunctions.length === 0 && (
                           <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
                             ⚠️ Nenhuma função cadastrada em Financeiro → Funções e Valores. Cadastre antes pra poder escalar.
                           </p>

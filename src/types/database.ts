@@ -225,7 +225,7 @@ export interface ToolRequest {
 
 // ── Sistema Financeiro ────────────────────────────────────────────────────────
 
-export type JobUnit = "POR_NAVIO" | "POR_DIA" | "POR_HORA" | "POR_OPERACAO";
+export type JobUnit = "MENSALISTA" | "PORAO" | "POR_NAVIO" | "POR_DIA" | "POR_HORA" | "POR_OPERACAO";
 export type JobStatus = "ABERTO" | "EM_ANDAMENTO" | "VERIFICADO" | "FECHADO" | "CANCELADO";
 export type AdjustmentType = "ADICIONAL" | "REDUCAO";
 

@@ -25,10 +25,12 @@ import type {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 const UNIT_LABELS: Record<JobUnit, string> = {
-  POR_NAVIO: "por navio",
-  POR_DIA: "por dia",
-  POR_HORA: "por hora",
-  POR_OPERACAO: "por operação",
+  MENSALISTA: "Mensalista",
+  PORAO: "Porão",
+  POR_NAVIO: "Porão",
+  POR_DIA: "Mensalista",
+  POR_HORA: "Mensalista",
+  POR_OPERACAO: "Porão",
 };
 
 const STATUS_LABELS: Record<JobStatus, string> = {
@@ -465,7 +467,6 @@ function FuncoesTab({
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Valor Padrão</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Unidade</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Alocações</th>
-                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Status</th>
                 <th className="px-4 py-2.5 text-right text-xs font-semibold text-text-light uppercase tracking-wider">Ações</th>
               </tr>
             </thead>
@@ -482,20 +483,8 @@ function FuncoesTab({
                   </td>
                   <td className="px-4 py-2.5 text-text-light text-xs">{UNIT_LABELS[f.unit]}</td>
                   <td className="px-4 py-2.5 text-text-light text-xs">{allocCount(f.id)}× alocada(s)</td>
-                  <td className="px-4 py-2.5">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${f.active ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-500"}`}>
-                      {f.active ? "Ativa" : "Inativa"}
-                    </span>
-                  </td>
                   <td className="px-4 py-2.5 text-right">
                     <div className="flex gap-1 justify-end">
-                      <button
-                        onClick={() => setHistoryFn(f)}
-                        className="px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 rounded transition"
-                        title="Histórico de valores"
-                      >
-                        📈 Histórico
-                      </button>
                       {canEdit && (
                         <>
                           <button onClick={() => { setEditFn(f); setShowFnForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded" title="Editar tudo">
@@ -597,7 +586,7 @@ function FunctionFormModal({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [defaultRate, setDefaultRate] = useState("");
-  const [unit, setUnit] = useState<JobUnit>("POR_NAVIO");
+  const [unit, setUnit] = useState<JobUnit>("PORAO");
   const [active, setActive] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -609,7 +598,7 @@ function FunctionFormModal({
       setUnit(item.unit);
       setActive(item.active);
     } else {
-      setName(""); setDescription(""); setDefaultRate(""); setUnit("POR_NAVIO"); setActive(true);
+      setName(""); setDescription(""); setDefaultRate(""); setUnit("PORAO"); setActive(true);
     }
   }, [item, open]);
 
@@ -654,10 +643,8 @@ function FunctionFormModal({
           <div>
             <label className="block text-sm font-medium mb-1">Unidade</label>
             <select value={unit} onChange={(e) => setUnit(e.target.value as JobUnit)} className={inputCls}>
-              <option value="POR_NAVIO">Por Navio</option>
-              <option value="POR_DIA">Por Dia</option>
-              <option value="POR_HORA">Por Hora</option>
-              <option value="POR_OPERACAO">Por Operação</option>
+              <option value="MENSALISTA">Mensalista</option>
+              <option value="PORAO">Porão</option>
             </select>
           </div>
         </div>

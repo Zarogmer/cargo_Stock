@@ -74,7 +74,7 @@ function buildShipWelcomeMessage(ship: {
       lines.push(`🔧 *Serviços:* ${labels}`);
     }
   } else {
-    lines.push(`🔧 *Serviço:* Costado (escalação por hora)`);
+    lines.push(`🔧 *Serviço:* Costado`);
   }
 
   if (ship.client_name) lines.push(`🏢 *Cliente:* ${ship.client_name}`);
