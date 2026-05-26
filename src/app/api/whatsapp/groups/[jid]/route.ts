@@ -47,7 +47,9 @@ export async function GET(
       select: { id: true, name: true, phone: true, team: true, status: true },
     });
     const byPhone = new Map<string, typeof allEmployees[number]>();
+    const byId = new Map<number, typeof allEmployees[number]>();
     for (const e of allEmployees) {
+      byId.set(e.id, e);
       const digits = (e.phone || "").replace(/\D/g, "");
       if (!digits) continue;
       byPhone.set(digits, e);
@@ -58,7 +60,23 @@ export async function GET(
       }
     }
 
-    const participants = (info.participants || []).map((p) => {
+    // O WhatsApp moderno expõe participantes como LIDs opacos (ex.: 7787…@lid),
+    // não como números de telefone — então o cross-reference por phone falha
+    // para muitos grupos. Usamos os employee_ids salvos no stub de criação
+    // como fonte canônica de quem foi convidado pelo app.
+    const createStub = await prisma.whatsappMessage.findFirst({
+      where: { remote_jid: jid, message_type: "systemNotice" },
+      orderBy: { timestamp_ms: "desc" },
+      select: { raw_event: true },
+    });
+    const stubEmployeeIds: number[] = Array.isArray(
+      (createStub?.raw_event as Record<string, unknown> | null)?.employee_ids,
+    )
+      ? ((createStub!.raw_event as Record<string, unknown>).employee_ids as unknown[])
+          .filter((n): n is number => typeof n === "number")
+      : [];
+
+    const evolutionParticipants = (info.participants || []).map((p) => {
       const pj = p.id || "";
       const digits = jidToDigits(pj);
       const emp =
@@ -77,6 +95,33 @@ export async function GET(
         } : null,
       };
     });
+
+    // Se quase ninguém casou por phone (típico quando o grupo veio em LIDs),
+    // troca a lista pelos employees convidados via app. Mantemos os admins
+    // do Evolution porque essa info ("Dono") só vem de lá.
+    const matchedCount = evolutionParticipants.filter((p) => p.employee).length;
+    const useStubAsSource =
+      stubEmployeeIds.length > 0 &&
+      matchedCount < Math.max(1, evolutionParticipants.length / 2);
+
+    let participants: typeof evolutionParticipants;
+    if (useStubAsSource) {
+      const adminByEmpId = new Map<number, string | null>();
+      for (const p of evolutionParticipants) {
+        if (p.employee && p.admin) adminByEmpId.set(p.employee.id, p.admin);
+      }
+      participants = stubEmployeeIds
+        .map((eid) => byId.get(eid))
+        .filter((e): e is NonNullable<typeof e> => !!e)
+        .map((e) => ({
+          jid: "",
+          phone: (e.phone || "").replace(/\D/g, ""),
+          admin: adminByEmpId.get(e.id) || null,
+          employee: { id: e.id, name: e.name, team: e.team, status: e.status },
+        }));
+    } else {
+      participants = evolutionParticipants;
+    }
 
     // Sort: admins/superadmins first, then by employee name (or phone).
     participants.sort((a, b) => {

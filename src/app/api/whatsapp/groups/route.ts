@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Evolution API não configurada" }, { status: 503 });
   }
 
-  let body: { subject?: string; participants?: string[]; shipId?: string };
+  let body: { subject?: string; participants?: string[]; shipId?: string; employeeIds?: number[] };
   try {
     body = await request.json();
   } catch {
@@ -112,6 +112,13 @@ export async function POST(request: NextRequest) {
   const subject = body.subject?.trim();
   const participants = Array.isArray(body.participants) ? body.participants : [];
   const shipId = body.shipId?.trim() || null;
+  // IDs dos colaboradores que o usuário selecionou no app. Guardamos no stub
+  // pra usar como fonte da verdade nos "Dados do grupo" — o WhatsApp moderno
+  // expõe LIDs opacos (não-telefone) nos participantes, então não dá pra
+  // confiar só no mapeamento por phone.
+  const employeeIds = Array.isArray(body.employeeIds)
+    ? body.employeeIds.filter((n): n is number => typeof n === "number")
+    : [];
 
   if (!subject) return NextResponse.json({ error: "Nome do grupo é obrigatório" }, { status: 400 });
   if (participants.length === 0) {
@@ -140,7 +147,14 @@ export async function POST(request: NextRequest) {
             text: "✨ Grupo criado",
             timestamp_ms: BigInt(Date.now()),
             sent_by_user_id: session.user.id || null,
-            raw_event: { source: "groups-create", subject, participants_count: participants.length },
+            raw_event: {
+              source: "groups-create",
+              subject,
+              participants_count: participants.length,
+              // Lista canônica de quem foi convidado pelo app. O GET dos dados
+              // do grupo lê isso pra mostrar nomes em vez de LIDs opacos.
+              employee_ids: employeeIds,
+            },
           },
         });
       } catch (stubErr) {
@@ -193,6 +207,27 @@ export async function POST(request: NextRequest) {
             console.warn("[groups] set description failed:", (descErr as Error).message);
           }
           await sendWhatsappTextToGroup(jid, message);
+          // Persiste a mensagem rica de boas-vindas no histórico do app —
+          // sem isso a aba Conversas só mostra o stub "Grupo criado" e o
+          // usuário não vê no app o que foi enviado pro WhatsApp.
+          try {
+            await prisma.whatsappMessage.create({
+              data: {
+                message_id: `welcome-${jid}-${Date.now()}`,
+                instance_name: process.env.EVOLUTION_INSTANCE || "default",
+                remote_jid: jid,
+                from_me: true,
+                push_name: subject,
+                message_type: "conversation",
+                text: message,
+                timestamp_ms: BigInt(Date.now()),
+                sent_by_user_id: session.user.id || null,
+                raw_event: { source: "groups-welcome", subject },
+              },
+            });
+          } catch (welcomeStubErr) {
+            console.warn("[groups] welcome stub insert failed:", (welcomeStubErr as Error).message);
+          }
         }
       } catch (err) {
         console.warn("[groups] welcome message failed:", (err as Error).message);

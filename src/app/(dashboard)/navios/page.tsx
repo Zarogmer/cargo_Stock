@@ -531,6 +531,10 @@ export default function NaviosPage() {
                 subject: payload.name,
                 participants: participantPhones,
                 shipId: newShipId,
+                // Manda os IDs dos colaboradores selecionados pra o app
+                // conseguir exibir nomes em "Dados do grupo" mesmo quando
+                // o WhatsApp devolve LIDs opacos no lugar dos telefones.
+                employeeIds: Array.from(groupParticipants),
               }),
             });
             const body = await res.json().catch(() => ({}));
