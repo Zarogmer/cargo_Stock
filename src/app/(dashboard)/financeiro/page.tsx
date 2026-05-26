@@ -1796,7 +1796,7 @@ function JobDetailModal({
                       <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">{multiplierLabel}</th>
                     )}
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Base</th>
-                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light" title="Rateio aplicado">Extra</th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold text-text-light" title="Valor especial + rateio">Extra</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Total</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Pluxee</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">Folha</th>
@@ -1805,21 +1805,33 @@ function JobDetailModal({
                 </thead>
                 <tbody>
                   {allocations.map((a, idx) => {
-                    // EMBARQUE: rate × holds (uma operação por pessoa).
-                    // COSTADO/outros: rate × multiplicador × qty.
-                    const subtotal = kindFilter === "EMBARQUE"
-                      ? Number(a.rate) * holdsMultiplier
-                      : Number(a.rate) * a.quantity * holdsMultiplier;
-                    const extra = Number(a.extra_value || 0);
+                    // No EMBARQUE: Base usa o valor FIXO da função (default_rate);
+                    // diferenças (overrides) entram como Extra. No COSTADO mantemos rate × qty.
+                    const fn = functions.find((f) => f.id === a.function_id);
+                    const defaultRate = Number(fn?.default_rate ?? a.rate);
+                    const actualRate = Number(a.rate);
+                    const isEmbarque = kindFilter === "EMBARQUE";
+                    const displayRate = isEmbarque ? defaultRate : actualRate;
+                    const base = isEmbarque
+                      ? defaultRate * holdsMultiplier
+                      : actualRate * a.quantity * holdsMultiplier;
+                    const specialDelta = isEmbarque ? (actualRate - defaultRate) * holdsMultiplier : 0;
+                    const rateioExtra = Number(a.extra_value || 0);
+                    const extra = specialDelta + rateioExtra;
                     const pluxee = Number(a.pluxee_value || 0);
-                    const folha = subtotal + extra - pluxee;
+                    const folha = base + extra - pluxee;
                     return (
                       <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
                         <td className="px-3 py-2 text-text-light">{idx + 1}</td>
                         <td className="px-3 py-2">
                           <p className="font-medium">{a.employees?.name || a.job_functions?.name || `#${a.function_id}`}</p>
                           {a.employees?.name && <p className="text-[10px] text-text-light">{a.job_functions?.name}</p>}
-                          {extra > 0 && a.extra_reason && (
+                          {specialDelta !== 0 && (
+                            <p className="text-[10px] text-blue-700 italic mt-0.5" title={`Valor especial: ${brl(actualRate)}/porão (padrão ${brl(defaultRate)})`}>
+                              💰 Valor especial {brl(actualRate)}/porão
+                            </p>
+                          )}
+                          {rateioExtra > 0 && a.extra_reason && (
                             <p className="text-[10px] text-amber-700 italic mt-0.5" title={a.extra_reason}>
                               ⚖️ {a.extra_reason}
                             </p>
@@ -1828,13 +1840,26 @@ function JobDetailModal({
                         {showQtyColumn && (
                           <td className="px-3 py-2 text-center">{a.quantity}</td>
                         )}
-                        <td className="px-3 py-2 text-right">{brl(a.rate)}</td>
+                        <td className="px-3 py-2 text-right">{brl(displayRate)}</td>
                         {multiplierLabel && (
                           <td className="px-3 py-2 text-center text-text-light">× {holdsMultiplier}</td>
                         )}
-                        <td className="px-3 py-2 text-right">{brl(subtotal)}</td>
-                        <td className="px-3 py-2 text-right text-amber-700">{extra > 0 ? `+ ${brl(extra)}` : "—"}</td>
-                        <td className="px-3 py-2 text-right font-semibold text-emerald-700">{brl(subtotal + extra)}</td>
+                        <td className="px-3 py-2 text-right">{brl(base)}</td>
+                        <td
+                          className={`px-3 py-2 text-right ${extra < 0 ? "text-red-700" : "text-amber-700"}`}
+                          title={
+                            specialDelta !== 0 && rateioExtra > 0
+                              ? `Valor especial ${specialDelta >= 0 ? "+" : ""}${brl(specialDelta)} + Rateio ${brl(rateioExtra)}`
+                              : specialDelta !== 0
+                                ? `Valor especial ${specialDelta >= 0 ? "+" : ""}${brl(specialDelta)}`
+                                : rateioExtra > 0
+                                  ? `Rateio ${brl(rateioExtra)}`
+                                  : undefined
+                          }
+                        >
+                          {extra === 0 ? "—" : `${extra > 0 ? "+ " : "− "}${brl(Math.abs(extra))}`}
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold text-emerald-700">{brl(base + extra)}</td>
                         <td className="px-3 py-2 text-right text-amber-700">{brl(pluxee)}</td>
                         <td className="px-3 py-2 text-right text-purple-700">{brl(folha)}</td>
                         {canEdit && !isReadOnly && !peopleReadOnly && (
@@ -1855,15 +1880,25 @@ function JobDetailModal({
                 </tbody>
                 <tfoot className="bg-gray-50 border-t-2 border-border font-semibold">
                   {(() => {
-                    const baseTotal = allocations.reduce(
-                      (s, a) =>
-                        s +
-                        (kindFilter === "EMBARQUE"
-                          ? Number(a.rate) * holdsMultiplier
-                          : Number(a.rate) * a.quantity * holdsMultiplier),
-                      0,
-                    );
-                    const extraTotal = allocations.reduce((s, a) => s + Number(a.extra_value || 0), 0);
+                    const isEmbarque = kindFilter === "EMBARQUE";
+                    const baseTotal = allocations.reduce((s, a) => {
+                      if (isEmbarque) {
+                        const fn = functions.find((f) => f.id === a.function_id);
+                        const defaultRate = Number(fn?.default_rate ?? a.rate);
+                        return s + defaultRate * holdsMultiplier;
+                      }
+                      return s + Number(a.rate) * a.quantity * holdsMultiplier;
+                    }, 0);
+                    const extraTotal = allocations.reduce((s, a) => {
+                      const rateio = Number(a.extra_value || 0);
+                      if (isEmbarque) {
+                        const fn = functions.find((f) => f.id === a.function_id);
+                        const defaultRate = Number(fn?.default_rate ?? a.rate);
+                        const special = (Number(a.rate) - defaultRate) * holdsMultiplier;
+                        return s + special + rateio;
+                      }
+                      return s + rateio;
+                    }, 0);
                     const pluxeeTotal = allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
                     // colSpan = "#" + nome + (qty?) + rate = 3 ou 4, mais +1 se houver coluna multiplicador
                     const labelColSpan = (showQtyColumn ? 4 : 3) + (multiplierLabel ? 1 : 0);
@@ -1871,7 +1906,9 @@ function JobDetailModal({
                       <tr>
                         <td colSpan={labelColSpan} className="px-3 py-2 text-text-light text-right">TOTAL</td>
                         <td className="px-3 py-2 text-right">{brl(baseTotal)}</td>
-                        <td className="px-3 py-2 text-right text-amber-700">{brl(extraTotal)}</td>
+                        <td className={`px-3 py-2 text-right ${extraTotal < 0 ? "text-red-700" : "text-amber-700"}`}>
+                          {extraTotal === 0 ? "—" : `${extraTotal > 0 ? "+ " : "− "}${brl(Math.abs(extraTotal))}`}
+                        </td>
                         <td className="px-3 py-2 text-right text-emerald-700">{brl(baseTotal + extraTotal)}</td>
                         <td className="px-3 py-2 text-right text-amber-700">{brl(pluxeeTotal)}</td>
                         <td className="px-3 py-2 text-right text-purple-700">{brl(baseTotal + extraTotal - pluxeeTotal)}</td>
