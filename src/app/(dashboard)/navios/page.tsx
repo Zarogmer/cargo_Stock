@@ -561,10 +561,12 @@ export default function NaviosPage() {
         }
       }
 
-      // 4) DMs individuais — mesmo endpoint que a aba Escalação usa pra mandar
-      //    "Você foi escalado pro navio X" no privado de cada funcionário.
-      //    Uso targets="DM" porque a mensagem rica do grupo já foi enviada
-      //    pelo /api/whatsapp/groups (NOVA OPERAÇÃO), evitando duplicação.
+      // 4) Notificações WhatsApp — endpoint compartilhado com a aba Escalação.
+      //    EMBARQUE: dispara DOIS posts no grupo (NOVA OPERAÇÃO já foi enviada
+      //    pelo /api/whatsapp/groups; aqui sai o segundo "Equipe escalada"
+      //    com a função de cada um) + DMs individuais. targets="BOTH".
+      //    COSTADO: targets="DM" + mode="PREVIEW" (aviso "vai ter limpeza";
+      //    a escalação real ocorre depois em Escalação > Costado).
       //    Falha aqui é só warning — escala e grupo já foram criados.
       if (createGroup && groupParticipants.size > 0 && newShipId) {
         try {
@@ -572,7 +574,7 @@ export default function NaviosPage() {
             shipId: newShipId,
             kind: isCostado ? "COSTADO" : "EMBARQUE",
             employeeIds: Array.from(groupParticipants),
-            targets: "DM",
+            targets: isCostado ? "DM" : "BOTH",
           };
           if (isCostado) {
             // Costado: aviso prévio no privado, sem escalação ainda.

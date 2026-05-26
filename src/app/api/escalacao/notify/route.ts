@@ -85,8 +85,37 @@ export async function POST(request: NextRequest) {
   const shiftLabel = body.shiftPeriod ? (SHIFT_LABEL[body.shiftPeriod] || body.shiftPeriod) : "";
   const shipName = ship.name;
 
-  const names = employees.map((e) => e.name);
-  const namesList = names.map((n) => `• ${n}`).join("\n");
+  // Cruza com job_allocations ATIVAS desse navio pra incluir a função no
+  // texto do grupo (ex.: "• Fulano — WAP"). Pega só o Job do navio.
+  const jobsForShip = await prisma.job.findMany({
+    where: { ship_id: ship.id },
+    select: { id: true },
+  });
+  const allocations = jobsForShip.length > 0
+    ? await prisma.jobAllocation.findMany({
+        where: {
+          job_id: { in: jobsForShip.map((j) => j.id) },
+          status: "ATIVO",
+          employee_id: { in: body.employeeIds },
+        },
+        select: {
+          employee_id: true,
+          job_functions: { select: { name: true } },
+        },
+      })
+    : [];
+  const fnByEmployee = new Map<number, string>();
+  for (const a of allocations) {
+    if (a.employee_id != null && a.job_functions?.name) {
+      fnByEmployee.set(a.employee_id, a.job_functions.name);
+    }
+  }
+
+  function lineFor(emp: { id: number; name: string }): string {
+    const fn = fnByEmployee.get(emp.id);
+    return fn ? `• ${emp.name} — *${fn}*` : `• ${emp.name}`;
+  }
+  const namesList = employees.map(lineFor).join("\n");
 
   const groupMessage = isPreview && isCostado
     ? `🚢 *${shipName}*\n🧹 Operação de limpeza no costado em breve — aguardem instruções.`
@@ -116,6 +145,26 @@ export async function POST(request: NextRequest) {
       try {
         await sendWhatsappTextToGroup(ship.whatsapp_group_jid, groupMessage);
         results.push({ target: `grupo:${ship.whatsapp_group_jid}`, ok: true });
+        // Espelha a mensagem no histórico do app — sem isso o usuário vê no
+        // WhatsApp mas não na aba Conversas.
+        try {
+          await prisma.whatsappMessage.create({
+            data: {
+              message_id: `escala-${ship.whatsapp_group_jid}-${Date.now()}`,
+              instance_name: process.env.EVOLUTION_INSTANCE || "default",
+              remote_jid: ship.whatsapp_group_jid,
+              from_me: true,
+              push_name: shipName,
+              message_type: "conversation",
+              text: groupMessage,
+              timestamp_ms: BigInt(Date.now()),
+              sent_by_user_id: session.user.id || null,
+              raw_event: { source: "escalacao-notify", kind: body.kind, mode: body.mode || "FULL" },
+            },
+          });
+        } catch (stubErr) {
+          console.warn("[notify] group stub insert failed:", (stubErr as Error).message);
+        }
       } catch (err) {
         results.push({
           target: `grupo:${ship.whatsapp_group_jid}`,
