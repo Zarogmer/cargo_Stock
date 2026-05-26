@@ -535,6 +535,7 @@ function FuncoesTab({
         fn={ratesFn}
         canEdit={canEdit}
         onClose={() => setRatesFn(null)}
+        onChange={onChange}
       />
 
       <ConfirmDialog
@@ -802,15 +803,19 @@ function RateHistoryModal({
 // função (override do default_rate). Usado pra funcionários antigos que
 // recebem um pouco a mais — a allocation nova já entra com esse valor.
 function EmployeeRatesModal({
-  open, fn, canEdit, onClose,
+  open, fn, canEdit, onClose, onChange,
 }: {
   open: boolean;
   fn: JobFunction | null;
   canEdit: boolean;
   onClose: () => void;
+  onChange?: () => void;
 }) {
   const [employees, setEmployees] = useState<{ id: number; name: string; status: string | null }[]>([]);
   const [overrides, setOverrides] = useState<Record<number, { id?: number; rate: string }>>({});
+  // Snapshot dos rates carregados do banco — usado pra detectar quais funcionários
+  // realmente mudaram no Save (e só sincronizar as alocações que precisam).
+  const [originalRates, setOriginalRates] = useState<Record<number, number>>({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
@@ -829,10 +834,13 @@ function EmployeeRatesModal({
         .filter((e) => e.status !== "INATIVO");
       setEmployees(emps);
       const map: Record<number, { id?: number; rate: string }> = {};
+      const origs: Record<number, number> = {};
       for (const r of (rateRes.data || []) as { id: number; employee_id: number; rate: string | number }[]) {
         map[r.employee_id] = { id: r.id, rate: Number(r.rate).toFixed(2).replace(".", ",") };
+        origs[r.employee_id] = Number(r.rate);
       }
       setOverrides(map);
+      setOriginalRates(origs);
       setSearch("");
       setLoading(false);
     }
@@ -860,13 +868,27 @@ function EmployeeRatesModal({
     if (!fn) return;
     setSaving(true);
     try {
+      // Jobs em aberto (não-FECHADO/CANCELADO) recebem o novo rate nas
+      // alocações desse funcionário/função, pra que pagamentos abertos
+      // reflitam imediatamente o "valor do funcionário".
+      const { data: openJobs } = await db
+        .from("jobs")
+        .select("id")
+        .in("status", ["ABERTO", "EM_ANDAMENTO", "VERIFICADO"]);
+      const openJobIds = ((openJobs as { id: number }[]) || []).map((j) => j.id);
+      const defaultRate = Number(fn.default_rate);
+
       for (const emp of employees) {
         const o = overrides[emp.id];
         const raw = (o?.rate ?? "").toString().trim().replace(",", ".");
         const num = Number(raw);
         const hasValue = raw !== "" && Number.isFinite(num) && num > 0;
+        const orig = originalRates[emp.id];
+        // Detecta mudança real pra evitar UPDATEs supérfluos.
+        const changed = hasValue ? orig !== num : orig != null;
+        if (!changed) continue;
+
         if (hasValue) {
-          // upsert
           if (o?.id) {
             await db.from("employee_function_rates").update({ rate: num }).eq("id", o.id);
           } else {
@@ -876,11 +898,24 @@ function EmployeeRatesModal({
               rate: num,
             });
           }
+          if (openJobIds.length > 0) {
+            await db.from("job_allocations").update({ rate: num })
+              .eq("employee_id", emp.id)
+              .eq("function_id", fn.id)
+              .in("job_id", openJobIds);
+          }
         } else if (o?.id) {
-          // Sem valor → remove o override (volta ao padrão)
+          // Sem valor → remove o override e volta as alocações pro default.
           await db.from("employee_function_rates").delete().eq("id", o.id);
+          if (openJobIds.length > 0) {
+            await db.from("job_allocations").update({ rate: defaultRate })
+              .eq("employee_id", emp.id)
+              .eq("function_id", fn.id)
+              .in("job_id", openJobIds);
+          }
         }
       }
+      onChange?.();
       onClose();
     } catch (err) {
       alert("Erro ao salvar: " + (err as Error).message);
@@ -901,10 +936,15 @@ function EmployeeRatesModal({
     <Modal open={open} onClose={onClose} title={fn ? `Valores especiais — ${fn.name}` : ""} maxWidth="max-w-2xl">
       {!fn ? null : (
         <div className="space-y-3">
-          <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900">
-            💡 Defina um valor especial pra funcionários que ganham diferente do padrão (
-            <strong>{brl(fn.default_rate)}</strong>). Deixe em branco pra usar o padrão.
-            {overrideCount > 0 && <span className="ml-1 font-semibold">· {overrideCount} override(s) ativos.</span>}
+          <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-900 space-y-1">
+            <p>
+              💡 Defina um valor especial pra funcionários que ganham diferente do padrão (
+              <strong>{brl(fn.default_rate)}</strong>). Deixe em branco pra usar o padrão.
+              {overrideCount > 0 && <span className="ml-1 font-semibold">· {overrideCount} override(s) ativos.</span>}
+            </p>
+            <p className="text-amber-800">
+              ↻ Mudanças se aplicam também a alocações em pagamentos <strong>em aberto</strong> (não-fechados).
+            </p>
           </div>
 
           <input
