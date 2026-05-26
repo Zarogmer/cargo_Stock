@@ -145,11 +145,15 @@ export default function FinanceiroPage() {
   const [adjustments, setAdjustments] = useState<JobAdjustment[]>([]);
   const [ships, setShips] = useState<Ship[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  // Map<"empId-fnId", rate> — overrides do employee_function_rates carregados
+  // junto com o resto, pra que qualquer modal já tenha o lookup pronto e
+  // não dependa de fetch assíncrono ao abrir o form (evita race condition).
+  const [specialRates, setSpecialRates] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
-    const [fnRes, rtRes, jbRes, alRes, adRes, shRes, emRes] = await Promise.all([
+    const [fnRes, rtRes, jbRes, alRes, adRes, shRes, emRes, srRes] = await Promise.all([
       db.from("job_functions").select("*").order("name"),
       db.from("job_function_rates").select("*").order("valid_from", { ascending: false }),
       db.from("jobs").select("*, ships(name)").order("start_date", { ascending: false }),
@@ -157,6 +161,7 @@ export default function FinanceiroPage() {
       db.from("job_adjustments").select("*").order("created_at", { ascending: false }),
       db.from("ships").select("id, name, status, services").order("arrival_date", { ascending: false }).limit(50),
       db.from("employees").select("id, name, role, bank_name, bank_agency, bank_account, bank_account_type, status").order("name"),
+      db.from("employee_function_rates").select("employee_id, function_id, rate"),
     ]);
     setFunctions((fnRes.data as JobFunction[]) || []);
     setRates((rtRes.data as JobFunctionRate[]) || []);
@@ -165,6 +170,11 @@ export default function FinanceiroPage() {
     setAdjustments((adRes.data as JobAdjustment[]) || []);
     setShips((shRes.data as Ship[]) || []);
     setEmployees((emRes.data as Employee[]) || []);
+    const srMap = new Map<string, number>();
+    for (const r of (srRes.data || []) as { employee_id: number; function_id: number; rate: string | number }[]) {
+      srMap.set(`${r.employee_id}-${r.function_id}`, Number(r.rate));
+    }
+    setSpecialRates(srMap);
     setLoading(false);
   }, []);
 
@@ -213,6 +223,7 @@ export default function FinanceiroPage() {
           functions={functions}
           ships={ships}
           employees={employees}
+          specialRates={specialRates}
           canEdit={canEdit}
           profileName={profile?.full_name || "Sistema"}
           onChange={loadAll}
@@ -231,6 +242,7 @@ export default function FinanceiroPage() {
           functions={functions}
           ships={ships}
           employees={employees}
+          specialRates={specialRates}
           canEdit={canEdit}
           profileName={profile?.full_name || "Sistema"}
           onChange={loadAll}
@@ -884,13 +896,17 @@ function EmployeeRatesModal({
         const num = Number(raw);
         const hasValue = raw !== "" && Number.isFinite(num) && num > 0;
         const orig = originalRates[emp.id];
-        // Detecta mudança real pra evitar UPDATEs supérfluos.
-        const changed = hasValue ? orig !== num : orig != null;
-        if (!changed) continue;
+        const wasOverride = orig != null;
+        // Pula só quando não havia override e não há valor digitado.
+        if (!wasOverride && !hasValue) continue;
 
         if (hasValue) {
+          // DB update apenas se mudou. Mas sempre sincroniza alocações pra
+          // garantir consistência (cobre dados antigos pré-sincronização).
           if (o?.id) {
-            await db.from("employee_function_rates").update({ rate: num }).eq("id", o.id);
+            if (orig !== num) {
+              await db.from("employee_function_rates").update({ rate: num }).eq("id", o.id);
+            }
           } else {
             await db.from("employee_function_rates").insert({
               employee_id: emp.id,
@@ -1017,7 +1033,7 @@ function EmployeeRatesModal({
 // ─── TRABALHOS TAB ──────────────────────────────────────────────────────────
 
 function TrabalhosTab({
-  jobs, allocations, adjustments, functions, ships, employees, canEdit, profileName, onChange, loading,
+  jobs, allocations, adjustments, functions, ships, employees, specialRates, canEdit, profileName, onChange, loading,
 }: {
   jobs: Job[];
   allocations: JobAllocation[];
@@ -1025,6 +1041,7 @@ function TrabalhosTab({
   functions: JobFunction[];
   ships: Ship[];
   employees: Employee[];
+  specialRates: Map<string, number>;
   canEdit: boolean;
   profileName: string;
   onChange: () => void;
@@ -1182,6 +1199,7 @@ function TrabalhosTab({
         adjustments={adjustments.filter((a) => a.job_id === detailJob?.id)}
         functions={functions}
         employees={employees}
+        specialRates={specialRates}
         canEdit={canEdit}
         profileName={profileName}
         kindFilter="EMBARQUE"
@@ -1350,7 +1368,7 @@ function JobFormModal({
 // ─── Job Detail Modal (alocações + ajustes) ─────────────────────────────────
 
 function JobDetailModal({
-  open, job, allocations, adjustments, functions, employees, canEdit, profileName, kindFilter, onClose, onChange,
+  open, job, allocations, adjustments, functions, employees, specialRates, canEdit, profileName, kindFilter, onClose, onChange,
 }: {
   open: boolean;
   job: Job | null;
@@ -1358,6 +1376,7 @@ function JobDetailModal({
   adjustments: JobAdjustment[];
   functions: JobFunction[];
   employees: Employee[];
+  specialRates: Map<string, number>;
   canEdit: boolean;
   profileName: string;
   // When set, people come from Escalação (read-only); modal only edits financial layer.
@@ -1416,11 +1435,6 @@ function JobDetailModal({
   }>({ kind: "idle" });
   const [exporting, setExporting] = useState(false);
 
-  // Overrides do `employee_function_rates` — funcionários com valor diferente do
-  // default_rate. Carregado uma vez ao abrir o modal pra auto-fill do form.
-  // Chave: `${employee_id}-${function_id}` → rate especial.
-  const [specialRates, setSpecialRates] = useState<Map<string, number>>(new Map());
-
   useEffect(() => {
     if (open) {
       setShowAddAlloc(false); setShowAddAdj(false); setShowRateio(false);
@@ -1432,23 +1446,6 @@ function JobDetailModal({
       setPdfStatus({ kind: "idle" });
     }
   }, [open, job]);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    (async () => {
-      const { data } = await db
-        .from("employee_function_rates")
-        .select("employee_id, function_id, rate");
-      if (cancelled) return;
-      const map = new Map<string, number>();
-      for (const r of (data || []) as { employee_id: number; function_id: number; rate: string | number }[]) {
-        map.set(`${r.employee_id}-${r.function_id}`, Number(r.rate));
-      }
-      setSpecialRates(map);
-    })();
-    return () => { cancelled = true; };
-  }, [open]);
 
   if (!job) return null;
 
@@ -3415,7 +3412,7 @@ function FaturamentoModal({
 // ─── COSTADO TAB ────────────────────────────────────────────────────────────
 
 function CostadoTab({
-  jobs, allocations, adjustments, functions, ships, employees, canEdit, profileName, onChange, loading,
+  jobs, allocations, adjustments, functions, ships, employees, specialRates, canEdit, profileName, onChange, loading,
 }: {
   jobs: Job[];
   allocations: JobAllocation[];
@@ -3423,6 +3420,7 @@ function CostadoTab({
   functions: JobFunction[];
   ships: Ship[];
   employees: Employee[];
+  specialRates: Map<string, number>;
   canEdit: boolean;
   profileName: string;
   onChange: () => void;
@@ -3522,6 +3520,7 @@ function CostadoTab({
         adjustments={adjustments.filter((a) => a.job_id === detailJob?.id)}
         functions={functions}
         employees={employees}
+        specialRates={specialRates}
         canEdit={canEdit}
         profileName={profileName}
         kindFilter="COSTADO"
