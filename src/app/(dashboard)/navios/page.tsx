@@ -1579,19 +1579,30 @@ export default function NaviosPage() {
                                     type="checkbox"
                                     checked={checked}
                                     onChange={() => {
+                                      const wasChecked = groupParticipants.has(emp.id);
                                       setGroupParticipants((prev) => {
                                         const next = new Set(prev);
                                         if (next.has(emp.id)) next.delete(emp.id);
                                         else next.add(emp.id);
                                         return next;
                                       });
-                                      // If unchecking, drop the function selection too
-                                      if (groupParticipants.has(emp.id)) {
+                                      if (wasChecked) {
+                                        // Desmarcou → limpa a função selecionada.
                                         setGroupPerEmpFn((m) => {
                                           const nm = new Map(m);
                                           nm.delete(emp.id);
                                           return nm;
                                         });
+                                      } else {
+                                        // Marcou → auto-preenche com a função cadastrada
+                                        // no colaborador (emp.role), se houver match.
+                                        const role = (emp.role || "").trim().toUpperCase();
+                                        const fn = role
+                                          ? jobFunctions.find((f) => f.name.toUpperCase() === role)
+                                          : null;
+                                        if (fn) {
+                                          setGroupPerEmpFn((m) => new Map(m).set(emp.id, String(fn.id)));
+                                        }
                                       }
                                     }}
                                     className="w-4 h-4 accent-emerald-600"
