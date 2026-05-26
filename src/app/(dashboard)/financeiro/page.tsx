@@ -1579,34 +1579,107 @@ function JobDetailModal({
   }
 
   // Exporta a planilha de pagamento no formato da "PLANILHA BASE" usado pela
-  // contabilidade (linhas/colunas posicionadas como no template do usuário).
+  // contabilidade. Usa xlsx-js-style pra aplicar bordas, alinhamento e formato BRL.
   async function handleExportExcel() {
     setExporting(true);
     try {
-      const XLSX = await import("xlsx");
-      const aoa: (string | number | null)[][] = [];
+      const XLSX = (await import("xlsx-js-style")).default;
       const dateLabel = formatDateBR(job!.end_date) || formatDateBR(job!.start_date);
       const shipLabel = `${job!.name}${job!.holds_count ? ` - ${job!.holds_count} PORÕES` : ""}${job!.cargo_type ? `-${job!.cargo_type}` : ""}${job!.port ? `-${job!.port}` : ""}${job!.start_date ? ` ${formatDateBR(job!.start_date)}` : ""}${job!.end_date ? ` a ${formatDateBR(job!.end_date)}` : ""}${dateLabel ? ` - VENCTO: ${dateLabel}` : ""}`;
 
-      // Padding linhas 1-2 (template original deixa em branco)
-      aoa.push([]);
-      aoa.push([]);
-      // Linha 3 col D: PAGAMENTO EM XX/XX/XX
-      aoa.push([null, null, null, `PAGAMENTO EM ${dateLabel}`]);
-      aoa.push([]);
-      aoa.push([]);
-      // Linha 6 col C: FUNCIONÁRIOS, col K: cliente
-      aoa.push([null, null, "FUNCIONÁRIOS", null, null, null, null, null, null, null, job!.client || ""]);
-      // Linha 7: cabeçalho completo
-      aoa.push([
-        null, null,
-        " Limpeza de porão                                                         PAGAMENTO: ",
-        "AGÊNCIA", "CONTA", "ITAÚ/SANTANDER",
-        "PAGTO PLUXEE", "PAGTO NA FOLHA", "DESCONTO GERAL", "Perda de Material",
-        `MV 1: ${shipLabel}`,
-      ]);
-      aoa.push([]);
+      // Estilos reutilizáveis (xlsx-js-style aceita objeto `s` em cada célula).
+      const thin = { style: "thin", color: { rgb: "000000" } };
+      const allBorders = { top: thin, bottom: thin, left: thin, right: thin };
+      const BRL = 'R$ #,##0.00;R$ -#,##0.00;"R$ -"';
+      const styleTitle = {
+        font: { bold: true, sz: 14, color: { rgb: "1F4E78" } },
+        alignment: { horizontal: "center", vertical: "center" },
+      };
+      const styleClient = {
+        font: { bold: true, sz: 12, color: { rgb: "1F4E78" } },
+        alignment: { horizontal: "center", vertical: "center" },
+      };
+      const styleHeader = {
+        font: { bold: true, sz: 10, color: { rgb: "FFFFFF" } },
+        fill: { patternType: "solid", fgColor: { rgb: "2E75B6" } },
+        alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        border: allBorders,
+      };
+      const styleSubHeader = {
+        font: { bold: true, sz: 10 },
+        fill: { patternType: "solid", fgColor: { rgb: "DDEBF7" } },
+        alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        border: allBorders,
+      };
+      const styleCellCenter = {
+        font: { sz: 10 },
+        alignment: { horizontal: "center", vertical: "center" },
+        border: allBorders,
+      };
+      const styleCellMoney = {
+        font: { sz: 10 },
+        alignment: { horizontal: "right", vertical: "center" },
+        border: allBorders,
+        numFmt: BRL,
+      };
+      const styleTotalLabel = {
+        font: { bold: true, sz: 10 },
+        fill: { patternType: "solid", fgColor: { rgb: "FFE699" } },
+        alignment: { horizontal: "center", vertical: "center" },
+        border: allBorders,
+      };
+      const styleTotalMoney = {
+        font: { bold: true, sz: 10 },
+        fill: { patternType: "solid", fgColor: { rgb: "FFE699" } },
+        alignment: { horizontal: "right", vertical: "center" },
+        border: allBorders,
+        numFmt: BRL,
+      };
+      const styleSummaryLabel = {
+        font: { bold: true, sz: 10 },
+        alignment: { horizontal: "right", vertical: "center" },
+      };
+      const styleSummaryMoney = {
+        font: { bold: true, sz: 10, color: { rgb: "1F4E78" } },
+        alignment: { horizontal: "right", vertical: "center" },
+        numFmt: BRL,
+      };
+      const styleSummaryTitle = {
+        font: { bold: true, sz: 11 },
+        alignment: { horizontal: "left", vertical: "center" },
+      };
 
+      // Monta o sheet célula a célula com estilo aplicado.
+      const ws: Record<string, unknown> = {};
+      const set = (
+        addr: string,
+        v: string | number | null,
+        s: Record<string, unknown>,
+        t: "s" | "n" = typeof v === "number" ? "n" : "s",
+      ) => {
+        if (v === null || v === undefined || v === "") { ws[addr] = { t: "s", v: "", s }; return; }
+        ws[addr] = { t, v, s };
+      };
+
+      // Linha 3: título "PAGAMENTO EM ..." (mesclado D3:E3)
+      set("D3", `PAGAMENTO EM ${dateLabel || ""}`, styleTitle);
+      set("E3", "", styleTitle);
+      // Linha 6: rótulos C=FUNCIONÁRIOS, K=cliente
+      set("C6", "FUNCIONÁRIOS", styleSummaryTitle);
+      set("K6", job!.client || "", styleClient);
+      // Linha 7: cabeçalho da tabela
+      set("C7", "Limpeza de porão", styleSubHeader);
+      set("D7", "AGÊNCIA", styleHeader);
+      set("E7", "CONTA", styleHeader);
+      set("F7", "ITAÚ/SANTANDER", styleHeader);
+      set("G7", "PAGTO PLUXEE", styleHeader);
+      set("H7", "PAGTO NA FOLHA", styleHeader);
+      set("I7", "DESCONTO GERAL", styleHeader);
+      set("J7", "Perda de Material", styleHeader);
+      set("K7", `MV 1: ${shipLabel}`, styleHeader);
+
+      // Funcionários começam na linha 9 (linha 8 fica em branco como no template)
+      let row = 9;
       let totalPluxee = 0, totalFolha = 0, totalNavio = 0;
       allocations.forEach((a, idx) => {
         const e = a.employees;
@@ -1616,36 +1689,52 @@ function JobDetailModal({
         totalPluxee += pluxee;
         totalFolha += folha;
         totalNavio += total;
-        aoa.push([
-          null, idx + 1,
-          e?.name || a.job_functions?.name || `#${a.function_id}`,
-          e?.bank_agency || "",
-          e?.bank_account || "",
-          formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null),
-          pluxee || 0,
-          folha || 0,
-          null,
-          null,
-          total || 0,
-        ]);
+        set(`B${row}`, idx + 1, styleCellCenter, "n");
+        set(`C${row}`, e?.name || a.job_functions?.name || `#${a.function_id}`, styleCellCenter);
+        set(`D${row}`, e?.bank_agency || "", styleCellCenter);
+        set(`E${row}`, e?.bank_account || "", styleCellCenter);
+        set(`F${row}`, formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null), styleCellCenter);
+        set(`G${row}`, pluxee, styleCellMoney, "n");
+        set(`H${row}`, folha, styleCellMoney, "n");
+        set(`I${row}`, 0, styleCellMoney, "n");
+        set(`J${row}`, 0, styleCellMoney, "n");
+        set(`K${row}`, total, styleCellMoney, "n");
+        row++;
       });
 
-      aoa.push([]);
-      // Linha de TOTAL
-      aoa.push([null, null, null, null, null, "TOTAL", totalPluxee, totalFolha, 0, 0, totalNavio]);
-      aoa.push([]);
-      aoa.push([null, null, "TOTAL PAGAMENTO DOS MVs s/ desconto:"]);
-      aoa.push([null, null, "MV 1:", null, null, "TOTAIS:"]);
-      aoa.push([null, null, totalNavio, null, null, "ADTO:", 0]);
-      aoa.push([null, null, null, null, null, "PAGTO PLUXEE:", totalPluxee]);
-      aoa.push([null, null, null, null, null, "PAGTO FOLHA:", totalFolha]);
-      aoa.push([null, null, null, null, null, "PAGTO NAVIO:", totalNavio]);
+      row++; // linha em branco
+      const totalRow = row;
+      set(`F${totalRow}`, "TOTAL", styleTotalLabel);
+      set(`G${totalRow}`, totalPluxee, styleTotalMoney, "n");
+      set(`H${totalRow}`, totalFolha, styleTotalMoney, "n");
+      set(`I${totalRow}`, 0, styleTotalMoney, "n");
+      set(`J${totalRow}`, 0, styleTotalMoney, "n");
+      set(`K${totalRow}`, totalNavio, styleTotalMoney, "n");
+      row += 2;
 
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      set(`C${row}`, "TOTAL PAGAMENTO DOS MVs s/ desconto:", styleSummaryTitle); row++;
+      set(`C${row}`, "MV 1:", styleSummaryLabel);
+      set(`F${row}`, "TOTAIS:", styleSummaryLabel); row++;
+      set(`C${row}`, totalNavio, styleSummaryMoney, "n");
+      set(`F${row}`, "ADTO:", styleSummaryLabel);
+      set(`G${row}`, 0, styleSummaryMoney, "n"); row++;
+      set(`F${row}`, "PAGTO PLUXEE:", styleSummaryLabel);
+      set(`G${row}`, totalPluxee, styleSummaryMoney, "n"); row++;
+      set(`F${row}`, "PAGTO FOLHA:", styleSummaryLabel);
+      set(`G${row}`, totalFolha, styleSummaryMoney, "n"); row++;
+      set(`F${row}`, "PAGTO NAVIO:", styleSummaryLabel);
+      set(`G${row}`, totalNavio, styleSummaryMoney, "n");
+
+      ws["!ref"] = `A1:M${row + 2}`;
       ws["!cols"] = [
-        { wch: 3 }, { wch: 4 }, { wch: 38 }, { wch: 9 }, { wch: 14 },
-        { wch: 16 }, { wch: 13 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 60 },
+        { wch: 3 }, { wch: 5 }, { wch: 38 }, { wch: 10 }, { wch: 16 },
+        { wch: 18 }, { wch: 14 }, { wch: 15 }, { wch: 14 }, { wch: 16 }, { wch: 70 },
       ];
+      ws["!rows"] = Array.from({ length: row + 2 }, (_, i) => (i === 6 ? { hpt: 38 } : { hpt: 18 }));
+      ws["!merges"] = [
+        { s: { c: 3, r: 2 }, e: { c: 4, r: 2 } }, // D3:E3 título mesclado
+      ];
+
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "PLANILHA BASE");
       const safeName = (job!.name || "planilha").replace(/[^a-zA-Z0-9_-]+/g, "_");
