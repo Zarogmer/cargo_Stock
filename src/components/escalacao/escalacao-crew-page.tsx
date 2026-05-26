@@ -60,7 +60,7 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
     try {
       const [shipsRes, empRes, fnRes, jobsRes, allocsRes] = await Promise.all([
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
-        db.from("employees").select("id, name, role, status, bank_name, bank_agency, bank_account, bank_account_type").order("name"),
+        db.from("employees").select("id, name, role, status, sector, bank_name, bank_agency, bank_account, bank_account_type").order("name"),
         db.from("job_functions").select("*").order("name"),
         db.from("jobs").select("*"),
         db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)").order("added_at", { ascending: true }),
@@ -538,6 +538,8 @@ function CrewFormModal({
 
   const matches = employees
     .filter((e) => e.status === "ATIVO")
+    // Admin não escala — só entra em grupo de WhatsApp pela caixinha do form de Navio.
+    .filter((e) => e.sector !== "ADMINISTRATIVO")
     .filter((e) => !allocatedIds.has(e.id))
     .filter((e) => {
       if (!search.trim()) return true;
