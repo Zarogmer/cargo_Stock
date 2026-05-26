@@ -96,7 +96,7 @@ function categoryLabel(cat: string | null | undefined): string {
 }
 
 // Pagamentos:
-//   EMBARQUE: rate (valor/porão) × holds_count × quantidade alocada.
+//   EMBARQUE: rate (valor/porão) × holds_count, por funcionário (qty não importa).
 //   COSTADO:  rate (valor/hora) × 6 × quantidade (cada quantidade = 1 turno de 6h).
 const HOURS_PER_SHIFT = 6;
 function calcAllocBase(a: JobAllocation, holdsCount: number | null): number {
@@ -106,7 +106,7 @@ function calcAllocBase(a: JobAllocation, holdsCount: number | null): number {
   const extra = Number(a.extra_value || 0);
   if (k === "EMBARQUE") {
     const holds = Math.max(1, Number(holdsCount || 1));
-    return rate * holds * qty + extra;
+    return rate * holds + extra;
   }
   if (k === "COSTADO") {
     return rate * HOURS_PER_SHIFT * qty + extra;
@@ -1310,7 +1310,7 @@ function JobDetailModal({
   onClose: () => void;
   onChange: () => void;
 }) {
-  // Embarque: rate (valor/porão) × holds × qty. Costado: rate (valor/hora) × 6 × qty.
+  // Embarque: rate (valor/porão) × holds, por funcionário. Costado: rate (valor/hora) × 6 × qty.
   // When kindFilter is set, allocations are managed in Escalação (this modal doesn't add/remove people).
   const peopleReadOnly = !!kindFilter;
   const holdsMultiplier =
@@ -1319,6 +1319,8 @@ function JobDetailModal({
     : 1;
   const rateLabel = kindFilter === "EMBARQUE" ? "Valor/Porão" : kindFilter === "COSTADO" ? "Valor/Hora" : "Valor Diário";
   const multiplierLabel = kindFilter === "EMBARQUE" ? "Porões" : kindFilter === "COSTADO" ? "Horas" : null;
+  // Embarque é pago por porão (uma operação só) — não há "qty" relevante por linha.
+  const showQtyColumn = kindFilter !== "EMBARQUE";
   const qtyLabel = kindFilter === "COSTADO" ? "Turnos" : "Qtd";
   const [showAddAlloc, setShowAddAlloc] = useState(false);
   const [allocEmp, setAllocEmp] = useState("");
@@ -1337,23 +1339,16 @@ function JobDetailModal({
   const [showRateio, setShowRateio] = useState(false);
   const [rateioFnId, setRateioFnId] = useState<string>("");
   const [rateioMissing, setRateioMissing] = useState<string>("1");
+  const [rateioSelectedIds, setRateioSelectedIds] = useState<Set<number>>(new Set());
   const [rateioSaving, setRateioSaving] = useState(false);
-
-  const [showCloseForm, setShowCloseForm] = useState(false);
-  const [showFunctionForm, setShowFunctionForm] = useState(false);
-  const [payrollValue, setPayrollValue] = useState("");
-
-  const [exporting, setExporting] = useState<"none" | "fechamento" | "planilha">("none");
 
   useEffect(() => {
     if (open) {
-      setShowAddAlloc(false); setShowAddAdj(false); setShowCloseForm(false);
-      setShowFunctionForm(false); setShowRateio(false);
+      setShowAddAlloc(false); setShowAddAdj(false); setShowRateio(false);
       setAllocEmp(""); setAllocFn(""); setAllocDays("1"); setAllocRate(""); setAllocPluxee("0");
       setEditAllocId(null);
       setAdjCategory("COMPRAS"); setAdjDesc(""); setAdjAmt("");
-      setRateioFnId(""); setRateioMissing("1");
-      setPayrollValue(job?.payroll_value?.toString() || "");
+      setRateioFnId(""); setRateioMissing("1"); setRateioSelectedIds(new Set());
     }
   }, [open, job]);
 
@@ -1400,9 +1395,11 @@ function JobDetailModal({
   async function handleAddAdj(e: React.FormEvent) {
     e.preventDefault();
     if (!adjDesc.trim() || !adjAmt) return;
+    // Despesas (comida, compras, química, etc.) são custos adicionais que SOMAM
+    // ao total da operação. Por isso entram como ADICIONAL.
     await db.from("job_adjustments").insert({
       job_id: job!.id,
-      type: "REDUCAO",
+      type: "ADICIONAL",
       category: adjCategory,
       description: adjDesc.trim(),
       amount: parseFloat(adjAmt),
@@ -1412,26 +1409,28 @@ function JobDetailModal({
     onChange();
   }
 
-  // Rateio: divides (rate × dias) × missingCount equally among the allocations
-  // of the chosen function, persisting on extra_value with an explanatory reason.
+  // Rateio (Pagamento Embarque): pega o valor FIXO da função × porões × quem faltou
+  // e divide somente entre os colaboradores selecionados pelo usuário.
   async function handleApplyRateio() {
     const fnId = parseInt(rateioFnId, 10);
     const missing = parseInt(rateioMissing, 10);
     if (!fnId || !missing || missing < 1) return;
-    const fnAllocs = allocations.filter((a) => a.function_id === fnId && a.status === "ATIVO");
-    if (fnAllocs.length === 0) return;
+    const selected = allocations.filter(
+      (a) => a.status === "ATIVO" && rateioSelectedIds.has(a.id),
+    );
+    if (selected.length === 0) return;
 
-    // Reference rate/days: take the most common (or the first) row.
-    const refRate = Number(fnAllocs[0].rate);
-    const refDays = fnAllocs[0].quantity;
-    const missingPay = refRate * refDays * missing;
-    const perPerson = +(missingPay / fnAllocs.length).toFixed(2);
-    const fnName = functions.find((f) => f.id === fnId)?.name || `Função ${fnId}`;
-    const reason = `Rateio: ${missing} ${fnName} faltou(aram), valor (${brl(refRate * refDays)} × ${missing}) dividido entre ${fnAllocs.length}`;
+    const fn = functions.find((f) => f.id === fnId);
+    const fixedRate = Number(fn?.default_rate || 0);
+    const holds = Math.max(1, Number(job?.holds_count || 1));
+    const missingPay = fixedRate * holds * missing;
+    const perPerson = +(missingPay / selected.length).toFixed(2);
+    const fnName = fn?.name || `Função ${fnId}`;
+    const reason = `Rateio: ${missing} ${fnName} faltou(aram), valor (${brl(fixedRate)} × ${holds} porão${holds === 1 ? "" : "ões"} × ${missing}) dividido entre ${selected.length}`;
 
     setRateioSaving(true);
     try {
-      for (const a of fnAllocs) {
+      for (const a of selected) {
         const current = Number(a.extra_value || 0);
         await db.from("job_allocations").update({
           extra_value: current + perPerson,
@@ -1439,7 +1438,7 @@ function JobDetailModal({
         }).eq("id", a.id);
       }
       setShowRateio(false);
-      setRateioFnId(""); setRateioMissing("1");
+      setRateioFnId(""); setRateioMissing("1"); setRateioSelectedIds(new Set());
       onChange();
     } finally {
       setRateioSaving(false);
@@ -1457,33 +1456,6 @@ function JobDetailModal({
       }).eq("id", a.id);
     }
     onChange();
-  }
-
-  // Export the closing as an Excel file matching the user's template layout.
-  async function handleExportFechamentoXlsx() {
-    setExporting("fechamento");
-    try {
-      const params = new URLSearchParams({ jobId: job!.id });
-      const res = await fetch(`/api/financeiro/jobs/export-fechamento?${params}`);
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const safeName = (job!.name || "fechamento").replace(/[^a-z0-9-_ ]/gi, "_").slice(0, 80);
-      a.download = `Fechamento_${safeName}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      alert(`Falha ao exportar: ${(err as Error).message}`);
-    } finally {
-      setExporting("none");
-    }
   }
 
   async function handleDeleteAlloc(id: number) {
@@ -1515,30 +1487,6 @@ function JobDetailModal({
     if (fn) setAllocRate(fn.default_rate.toString());
   }
 
-  // ── Workflow handlers ────────────────────────────────────────────────────
-  async function handleVerify() {
-    if (!confirm(`Confirmar verificação dos valores totais (${brl(cost.total)})?`)) return;
-    await db.from("jobs").update({
-      status: "VERIFICADO",
-      verified_at: new Date().toISOString(),
-      verified_by: profileName,
-    }).eq("id", job!.id);
-    onChange();
-  }
-
-  async function handleClose(e: React.FormEvent) {
-    e.preventDefault();
-    if (!payrollValue) return;
-    await db.from("jobs").update({
-      status: "FECHADO",
-      payroll_value: parseFloat(payrollValue),
-      closed_at: new Date().toISOString(),
-      closed_by: profileName,
-    }).eq("id", job!.id);
-    setShowCloseForm(false);
-    onChange();
-  }
-
   async function handleReopen() {
     if (!confirm("Reabrir pagamento? Isso limpa a verificação e o status fechado.")) return;
     await db.from("jobs").update({
@@ -1551,120 +1499,8 @@ function JobDetailModal({
     onChange();
   }
 
-  // ── Export handlers ──────────────────────────────────────────────────────
-  async function handleExportFechamento() {
-    setExporting("fechamento");
-    try {
-      const XLSX = await import("xlsx");
-      const aoa: (string | number)[][] = [];
-      // Padding empty rows to match original (header at row 9-10)
-      for (let i = 0; i < 9; i++) aoa.push([]);
-      const headerLine = `${job!.name}${job!.holds_count ? ` - ${job!.holds_count} PORÕES` : ""}${job!.cargo_type ? ` - ${job!.cargo_type}` : ""}${job!.port ? ` - ${job!.port}` : ""}${job!.start_date ? ` - ${job!.start_date.slice(0, 10).split("-").reverse().join("/")}` : ""}`;
-      aoa.push(["", "", headerLine]);
-      aoa.push(["", "", `CLIENTE: ${job!.client || "—"}${job!.supervisor ? ` - SUPERVISOR ${job!.supervisor}` : ""}`]);
-      aoa.push([]);
-      aoa.push([]);
-      aoa.push([]);
-      aoa.push(["", "", "FUNCIONARIOS", "VALOR"]);
-      let i = 1;
-      for (const a of allocations) {
-        const empName = a.employees?.name || a.job_functions?.name || `#${a.function_id}`;
-        const subtotal = Number(a.rate) * a.quantity;
-        aoa.push(["", i, empName, subtotal]);
-        i++;
-      }
-      // Padding rows up to row 32
-      while (aoa.length < 32) aoa.push(["", i++, "", ""]);
-      aoa.push(["", i++, "MÃO DE OBRA", cost.base]);
-      while (aoa.length < 41) aoa.push(["", i++, "", ""]);
-      const adjTotal = adjustments.reduce(
-        (s, a) => s + (a.type === "ADICIONAL" ? Number(a.amount) : -Number(a.amount)),
-        0
-      );
-      aoa.push(["", i++, "DESPESAS DIVERSAS", adjTotal]);
-      while (aoa.length < 44) aoa.push(["", i++, "", ""]);
-      aoa.push(["", i++, "TOTAL GERAL", cost.total]);
-      aoa.push([]);
-      aoa.push([]);
-      aoa.push([]);
-      aoa.push([]);
-      aoa.push(["", "", "CARGO SHIPS CLEANING LTDA."]);
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "LIMPEZA");
-      const safeName = (job!.name || "fechamento").replace(/[^a-zA-Z0-9_-]+/g, "_");
-      XLSX.writeFile(wb, `Fechamento_${safeName}.xlsx`);
-    } catch (err) {
-      console.error(err);
-      alert("Falha ao gerar XLSX. Veja o console.");
-    } finally {
-      setExporting("none");
-    }
-  }
-
-  async function handleExportPlanilha() {
-    setExporting("planilha");
-    try {
-      const XLSX = await import("xlsx");
-      const aoa: (string | number)[][] = [];
-      // Padding rows
-      for (let i = 0; i < 2; i++) aoa.push([]);
-      aoa.push(["", "", "", `PAGAMENTO EM ${job!.start_date.slice(0, 10).split("-").reverse().join("/")}`]);
-      aoa.push([]);
-      aoa.push([]);
-      aoa.push(["", "", "FUNCIONÁRIOS", "", "", "", "", "", "", job!.client || ""]);
-      aoa.push([
-        "", "", " Limpeza de porão", "AGÊNCIA", "CONTA", "BANCO",
-        "PAGTO PLUXEE", "PAGTO NA FOLHA", "DESCONTO GERAL",
-        "Perda de Material", `MV 1: ${job!.name}`,
-      ]);
-      aoa.push([]);
-      let i = 1;
-      let totalPluxee = 0, totalFolha = 0, totalNavio = 0;
-      for (const a of allocations) {
-        const empName = a.employees?.name || a.job_functions?.name || `#${a.function_id}`;
-        const bankName = a.employees?.bank_name || "";
-        const bankAgency = a.employees?.bank_agency || "";
-        const bankAccount = a.employees?.bank_account || "";
-        const bankType = a.employees?.bank_account_type || "";
-        const bank = bankType ? `${bankName}-${bankType}` : bankName;
-        const subtotal = Number(a.rate) * a.quantity;
-        const pluxee = Number(a.pluxee_value || 0);
-        const folha = subtotal - pluxee;
-        totalPluxee += pluxee;
-        totalFolha += folha;
-        totalNavio += subtotal;
-        aoa.push([
-          "", i, empName, bankAgency, bankAccount, bank,
-          pluxee, folha, "", "", subtotal,
-        ]);
-        i++;
-      }
-      aoa.push([]);
-      aoa.push(["", "", "TOTAL", "", "", "", totalPluxee, totalFolha, 0, 0, totalNavio]);
-      aoa.push([]);
-      aoa.push(["", "", "TOTAL PAGAMENTO DOS MVs s/ desconto:"]);
-      aoa.push(["", "", "MV 1:", "", "", "TOTAIS:"]);
-      aoa.push([totalNavio, "", "", "", "ADTO:", 0]);
-      aoa.push(["PAGTO PLUXEE:", totalPluxee]);
-      aoa.push(["PAGTO FOLHA:", totalFolha]);
-      aoa.push(["PAGTO NAVIO:", totalNavio]);
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "PLANILHA BASE");
-      const safeName = (job!.name || "planilha").replace(/[^a-zA-Z0-9_-]+/g, "_");
-      XLSX.writeFile(wb, `Planilha_${safeName}.xlsx`);
-    } catch (err) {
-      console.error(err);
-      alert("Falha ao gerar XLSX. Veja o console.");
-    } finally {
-      setExporting("none");
-    }
-  }
-
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
   // Fechamento fica somente-leitura apenas após o último OK do gerente.
-  // O verificador pode ajustar valores enquanto está em conferência (VERIFICADO).
   const isReadOnly = job.status === "FECHADO";
 
   return (
@@ -1685,21 +1521,6 @@ function JobDetailModal({
             </span>
           </div>
         )}
-
-        {/* Quick actions row — export Excel sits here so the user can grab the
-            closing as a spreadsheet at any point regardless of status. */}
-        <div className="flex flex-wrap gap-2 justify-end">
-          <Button
-            size="sm"
-            variant="secondary"
-            type="button"
-            onClick={handleExportFechamentoXlsx}
-            disabled={exporting !== "none"}
-            title="Baixar o fechamento como planilha Excel"
-          >
-            {exporting === "fechamento" ? "Gerando..." : "📥 Exportar Excel"}
-          </Button>
-        </div>
 
         {/* Resumo financeiro */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -1763,9 +1584,8 @@ function JobDetailModal({
           </div>
 
           {showRateio && (() => {
-            // Per-function summary inside the rateio form — shows the user
-            // how many people are in each role so they can pick which one
-            // needs the rateio.
+            // Agrupa alocações ativas por função pra montar o seletor + lista de
+            // colaboradores que podem receber a divisão.
             const fnGroups = new Map<number, JobAllocation[]>();
             for (const a of allocations) {
               if (a.status !== "ATIVO") continue;
@@ -1774,27 +1594,44 @@ function JobDetailModal({
             }
             const fnId = parseInt(rateioFnId, 10);
             const groupAllocs = fnId ? (fnGroups.get(fnId) || []) : [];
-            const refRate = groupAllocs[0] ? Number(groupAllocs[0].rate) : 0;
-            const refDays = groupAllocs[0]?.quantity || 0;
+            const fn = fnId ? functions.find((f) => f.id === fnId) : undefined;
+            const fixedRate = Number(fn?.default_rate || 0);
+            const holds = Math.max(1, Number(job?.holds_count || 1));
             const missing = parseInt(rateioMissing, 10) || 0;
-            const present = groupAllocs.length;
-            const missingPay = refRate * refDays * missing;
-            const perPerson = present > 0 ? missingPay / present : 0;
+            const missingPay = fixedRate * holds * missing;
+            const selectedCount = groupAllocs.filter((a) => rateioSelectedIds.has(a.id)).length;
+            const perPerson = selectedCount > 0 ? missingPay / selectedCount : 0;
             return (
               <form onSubmit={(e) => { e.preventDefault(); handleApplyRateio(); }} className="bg-amber-50 rounded-lg p-3 mb-2 border border-amber-200 space-y-2">
                 <p className="text-xs text-amber-900 font-medium">
-                  ⚖️ Rateio — divide o pagamento de quem faltou entre os que foram da mesma função.
+                  ⚖️ Rateio — divide o pagamento de quem faltou entre os colaboradores selecionados (valor fixo da função × porões).
                 </p>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-xs font-medium mb-1">Função *</label>
-                    <select value={rateioFnId} onChange={(e) => setRateioFnId(e.target.value)} required className={inputCls}>
+                    <select
+                      value={rateioFnId}
+                      onChange={(e) => {
+                        setRateioFnId(e.target.value);
+                        // ao trocar de função, marca todos da nova função por padrão
+                        const newId = parseInt(e.target.value, 10);
+                        const next = new Set<number>();
+                        if (newId) {
+                          for (const a of allocations) {
+                            if (a.function_id === newId && a.status === "ATIVO") next.add(a.id);
+                          }
+                        }
+                        setRateioSelectedIds(next);
+                      }}
+                      required
+                      className={inputCls}
+                    >
                       <option value="">Selecione...</option>
                       {Array.from(fnGroups.entries()).map(([id, grp]) => {
-                        const fn = functions.find((f) => f.id === id);
+                        const f = functions.find((ff) => ff.id === id);
                         return (
                           <option key={id} value={id}>
-                            {fn?.name || `Função ${id}`} ({grp.length} {grp.length === 1 ? "pessoa" : "pessoas"})
+                            {f?.name || `Função ${id}`} ({grp.length} {grp.length === 1 ? "pessoa" : "pessoas"})
                           </option>
                         );
                       })}
@@ -1805,11 +1642,63 @@ function JobDetailModal({
                     <input type="number" min={1} value={rateioMissing} onChange={(e) => setRateioMissing(e.target.value)} required className={inputCls} />
                   </div>
                 </div>
-                {fnId > 0 && present > 0 && missing > 0 && (
+
+                {fnId > 0 && groupAllocs.length > 0 && (
+                  <div className="bg-white border border-amber-300 rounded-lg p-2 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium text-amber-900">
+                        Quem recebe o rateio ({selectedCount}/{groupAllocs.length})
+                      </p>
+                      <div className="flex gap-2 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = new Set<number>();
+                            for (const a of groupAllocs) next.add(a.id);
+                            setRateioSelectedIds(next);
+                          }}
+                          className="text-blue-700 hover:underline"
+                        >
+                          Marcar todos
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRateioSelectedIds(new Set())}
+                          className="text-blue-700 hover:underline"
+                        >
+                          Desmarcar todos
+                        </button>
+                      </div>
+                    </div>
+                    <div className="max-h-40 overflow-y-auto space-y-0.5">
+                      {groupAllocs.map((a) => {
+                        const checked = rateioSelectedIds.has(a.id);
+                        return (
+                          <label key={a.id} className="flex items-center gap-2 px-1 py-1 text-xs hover:bg-amber-50 rounded cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                const next = new Set(rateioSelectedIds);
+                                if (e.target.checked) next.add(a.id);
+                                else next.delete(a.id);
+                                setRateioSelectedIds(next);
+                              }}
+                            />
+                            <span className="flex-1">{a.employees?.name || a.job_functions?.name || `#${a.function_id}`}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {fnId > 0 && missing > 0 && selectedCount > 0 && (
                   <div className="bg-white border border-amber-300 rounded-lg p-2 text-xs space-y-0.5">
-                    <p>Pagamento de referência: <strong>{brl(refRate)} × {refDays} dia{refDays === 1 ? "" : "s"} = {brl(refRate * refDays)}</strong></p>
-                    <p>Valor de quem faltou: <strong>{brl(refRate * refDays)} × {missing} = {brl(missingPay)}</strong></p>
-                    <p>Dividido entre {present} {present === 1 ? "pessoa presente" : "pessoas presentes"}: <strong className="text-emerald-700">+ {brl(perPerson)} por pessoa</strong></p>
+                    <p>Valor fixo da função: <strong>{brl(fixedRate)}</strong></p>
+                    <p>Pagamento por porões: <strong>{brl(fixedRate)} × {holds} porão{holds === 1 ? "" : "ões"} = {brl(fixedRate * holds)}</strong></p>
+                    <p>Valor de quem faltou: <strong>{brl(fixedRate * holds)} × {missing} = {brl(missingPay)}</strong></p>
+                    <p>Dividido entre {selectedCount} {selectedCount === 1 ? "colaborador selecionado" : "colaboradores selecionados"}: <strong className="text-emerald-700">+ {brl(perPerson)} por pessoa</strong></p>
                   </div>
                 )}
                 <div className="flex gap-2 justify-between flex-wrap">
@@ -1820,7 +1709,7 @@ function JobDetailModal({
                   )}
                   <div className="flex gap-2 ml-auto">
                     <Button variant="secondary" size="sm" type="button" onClick={() => setShowRateio(false)} disabled={rateioSaving}>Cancelar</Button>
-                    <Button size="sm" type="submit" disabled={rateioSaving || !fnId || !missing}>
+                    <Button size="sm" type="submit" disabled={rateioSaving || !fnId || !missing || selectedCount === 0}>
                       {rateioSaving ? "Aplicando..." : "Aplicar Rateio"}
                     </Button>
                   </div>
@@ -1886,7 +1775,7 @@ function JobDetailModal({
             <div className="bg-card border border-border rounded-lg overflow-x-auto">
               {kindFilter === "EMBARQUE" && (
                 <div className="px-3 py-2 bg-blue-50 border-b border-blue-200 text-[11px] text-blue-900">
-                  💡 Pagamento Embarque = <strong>Valor/Porão</strong> × <strong>{holdsMultiplier} porão{holdsMultiplier === 1 ? "" : "ões"}</strong> × <strong>Qtd</strong>
+                  💡 Pagamento Embarque = <strong>Valor/Porão</strong> × <strong>{holdsMultiplier} porão{holdsMultiplier === 1 ? "" : "ões"}</strong> (por funcionário)
                 </div>
               )}
               {kindFilter === "COSTADO" && (
@@ -1899,7 +1788,9 @@ function JobDetailModal({
                   <tr>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">#</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Funcionário / Função</th>
-                    <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">{qtyLabel}</th>
+                    {showQtyColumn && (
+                      <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">{qtyLabel}</th>
+                    )}
                     <th className="px-3 py-2 text-right text-xs font-semibold text-text-light">{rateLabel}</th>
                     {multiplierLabel && (
                       <th className="px-3 py-2 text-center text-xs font-semibold text-text-light">{multiplierLabel}</th>
@@ -1914,7 +1805,11 @@ function JobDetailModal({
                 </thead>
                 <tbody>
                   {allocations.map((a, idx) => {
-                    const subtotal = Number(a.rate) * a.quantity * holdsMultiplier;
+                    // EMBARQUE: rate × holds (uma operação por pessoa).
+                    // COSTADO/outros: rate × multiplicador × qty.
+                    const subtotal = kindFilter === "EMBARQUE"
+                      ? Number(a.rate) * holdsMultiplier
+                      : Number(a.rate) * a.quantity * holdsMultiplier;
                     const extra = Number(a.extra_value || 0);
                     const pluxee = Number(a.pluxee_value || 0);
                     const folha = subtotal + extra - pluxee;
@@ -1930,7 +1825,9 @@ function JobDetailModal({
                             </p>
                           )}
                         </td>
-                        <td className="px-3 py-2 text-center">{a.quantity}</td>
+                        {showQtyColumn && (
+                          <td className="px-3 py-2 text-center">{a.quantity}</td>
+                        )}
                         <td className="px-3 py-2 text-right">{brl(a.rate)}</td>
                         {multiplierLabel && (
                           <td className="px-3 py-2 text-center text-text-light">× {holdsMultiplier}</td>
@@ -1958,10 +1855,18 @@ function JobDetailModal({
                 </tbody>
                 <tfoot className="bg-gray-50 border-t-2 border-border font-semibold">
                   {(() => {
-                    const baseTotal = allocations.reduce((s, a) => s + Number(a.rate) * a.quantity * holdsMultiplier, 0);
+                    const baseTotal = allocations.reduce(
+                      (s, a) =>
+                        s +
+                        (kindFilter === "EMBARQUE"
+                          ? Number(a.rate) * holdsMultiplier
+                          : Number(a.rate) * a.quantity * holdsMultiplier),
+                      0,
+                    );
                     const extraTotal = allocations.reduce((s, a) => s + Number(a.extra_value || 0), 0);
                     const pluxeeTotal = allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
-                    const labelColSpan = multiplierLabel ? 5 : 4;
+                    // colSpan = "#" + nome + (qty?) + rate = 3 ou 4, mais +1 se houver coluna multiplicador
+                    const labelColSpan = (showQtyColumn ? 4 : 3) + (multiplierLabel ? 1 : 0);
                     return (
                       <tr>
                         <td colSpan={labelColSpan} className="px-3 py-2 text-text-light text-right">TOTAL</td>
@@ -2051,30 +1956,6 @@ function JobDetailModal({
           )}
         </div>
 
-        {/* Form de fechamento (gerente preenche valor da folha) */}
-        {showCloseForm && (
-          <form onSubmit={handleClose} className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 space-y-2">
-            <p className="text-sm font-semibold text-emerald-900">🔒 Fazer Último OK</p>
-            <p className="text-xs text-emerald-800">
-              Preencha o <strong>Valor da Folha</strong> conforme retornado pela contabilidade.
-              O Valor Líquido (Total − Folha) será calculado automaticamente.
-            </p>
-            <div>
-              <label className="block text-xs font-medium mb-1">Valor da Folha (R$) *</label>
-              <input type="number" step="0.01" value={payrollValue} onChange={(e) => setPayrollValue(e.target.value)} required className={inputCls} placeholder="0,00" autoFocus />
-            </div>
-            {payrollValue && (
-              <p className="text-xs">
-                Valor Líquido = <strong>{brl(cost.total - parseFloat(payrollValue))}</strong>
-              </p>
-            )}
-            <div className="flex gap-2 justify-end">
-              <Button variant="secondary" size="sm" type="button" onClick={() => setShowCloseForm(false)}>Cancelar</Button>
-              <Button size="sm" type="submit">🔒 Fechar Definitivo</Button>
-            </div>
-          </form>
-        )}
-
         {job.notes && (
           <div className="border-t border-border pt-3">
             <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-1">Observações</p>
@@ -2082,59 +1963,14 @@ function JobDetailModal({
           </div>
         )}
 
-        {/* Action bar */}
-        <div className="border-t border-border pt-4 flex flex-wrap gap-2 justify-between">
-          <div className="flex flex-wrap gap-2">
-            {canEdit && job.status !== "FECHADO" && allocations.length > 0 && (
-              <button
-                onClick={() => setShowFunctionForm(true)}
-                className="px-3 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-              >
-                ⚖️ Ajustar Valor por Função
-              </button>
-            )}
-            {canEdit && (job.status === "ABERTO" || job.status === "EM_ANDAMENTO") && allocations.length > 0 && (
-              <button onClick={handleVerify} className="px-3 py-2 text-sm font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition">
-                ✓ Verificar Valores
-              </button>
-            )}
-            {canEdit && job.status === "VERIFICADO" && !showCloseForm && (
-              <button onClick={() => setShowCloseForm(true)} className="px-3 py-2 text-sm font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition">
-                🔒 Fazer Último OK
-              </button>
-            )}
-            {canEdit && (job.status === "VERIFICADO" || job.status === "FECHADO") && (
-              <button onClick={handleReopen} className="px-3 py-2 text-sm font-medium bg-gray-200 text-text rounded-lg hover:bg-gray-300 transition">
-                ↺ Reabrir
-              </button>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={handleExportFechamento}
-              disabled={exporting !== "none"}
-              className="px-3 py-2 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
-            >
-              {exporting === "fechamento" ? "Gerando..." : "📥 Exportar Fechamento"}
-            </button>
-            <button
-              onClick={handleExportPlanilha}
-              disabled={exporting !== "none"}
-              className="px-3 py-2 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
-            >
-              {exporting === "planilha" ? "Gerando..." : "📥 Exportar Planilha Base"}
+        {/* Action bar — só reabertura caso esteja verificado/fechado */}
+        {canEdit && (job.status === "VERIFICADO" || job.status === "FECHADO") && (
+          <div className="border-t border-border pt-4 flex flex-wrap gap-2 justify-end">
+            <button onClick={handleReopen} className="px-3 py-2 text-sm font-medium bg-gray-200 text-text rounded-lg hover:bg-gray-300 transition">
+              ↺ Reabrir
             </button>
           </div>
-        </div>
-
-        {/* Modal aninhado: Ajustar valor por função */}
-        <FunctionRateModal
-          open={showFunctionForm}
-          allocations={allocations}
-          functions={functions}
-          onClose={() => setShowFunctionForm(false)}
-          onSaved={() => { setShowFunctionForm(false); onChange(); }}
-        />
+        )}
       </div>
     </Modal>
   );
