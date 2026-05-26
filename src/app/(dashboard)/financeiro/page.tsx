@@ -99,10 +99,18 @@ function categoryLabel(cat: string | null | undefined): string {
 //   EMBARQUE: rate (valor/porão) × holds_count × quantidade alocada.
 //   COSTADO:  rate (valor/hora) × 6 × quantidade (cada quantidade = 1 turno de 6h).
 const HOURS_PER_SHIFT = 6;
-function calcAllocBase(a: JobAllocation, holdsCount: number | null): number {
+// Quando a allocation foi gravada com rate=0 (cenário antigo, antes do fix
+// que puxa default_rate ao escalar), caímos no default_rate da função pra
+// que a tela e os cards de "Custo do mês" mostrem o valor cadastrado em
+// Funções e Valores em vez de R$ 0,00.
+function calcAllocBase(a: JobAllocation, holdsCount: number | null, functions?: JobFunction[]): number {
   const k = a.kind || "EMBARQUE";
   const qty = a.quantity;
-  const rate = Number(a.rate);
+  const rawRate = Number(a.rate);
+  const fallbackRate = rawRate > 0
+    ? rawRate
+    : Number(functions?.find((f) => f.id === a.function_id)?.default_rate ?? 0);
+  const rate = fallbackRate;
   const extra = Number(a.extra_value || 0);
   if (k === "EMBARQUE") {
     const holds = Math.max(1, Number(holdsCount || 1));
@@ -114,14 +122,14 @@ function calcAllocBase(a: JobAllocation, holdsCount: number | null): number {
   return rate * qty + extra;
 }
 
-function calcJobCost(job: Job, allocations: JobAllocation[], adjustments: JobAdjustment[]): {
+function calcJobCost(job: Job, allocations: JobAllocation[], adjustments: JobAdjustment[], functions?: JobFunction[]): {
   base: number;     // soma dos pagamentos base + rateios
   adj: number;      // ajustes (adicionais menos reduções)
   total: number;
 } {
   const jobAllocs = allocations.filter((a) => a.job_id === job.id);
   const jobAdjs = adjustments.filter((a) => a.job_id === job.id);
-  const base = jobAllocs.reduce((sum, a) => sum + calcAllocBase(a, job.holds_count), 0);
+  const base = jobAllocs.reduce((sum, a) => sum + calcAllocBase(a, job.holds_count, functions), 0);
   const adj = jobAdjs.reduce(
     (sum, a) => sum + (a.type === "ADICIONAL" ? Number(a.amount) : -Number(a.amount)),
     0
@@ -176,7 +184,7 @@ export default function FinanceiroPage() {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const monthJobs = jobs.filter((j) => new Date(j.start_date) >= monthStart);
-    const totalCostMonth = monthJobs.reduce((s, j) => s + calcJobCost(j, allocations, adjustments).total, 0);
+    const totalCostMonth = monthJobs.reduce((s, j) => s + calcJobCost(j, allocations, adjustments, functions).total, 0);
     const totalRevenueMonth = monthJobs.reduce((s, j) => s + Number(j.contract_value || 0), 0);
     return {
       activeFunctions: functions.filter((f) => f.active).length,
@@ -883,7 +891,7 @@ function TrabalhosTab({
           {filtered.map((j) => {
             // Only Embarque allocations contribute to cost in this tab.
             const embarqueAllocs = allocations.filter((a) => (a.kind || "EMBARQUE") === "EMBARQUE");
-            const cost = calcJobCost(j, embarqueAllocs, adjustments);
+            const cost = calcJobCost(j, embarqueAllocs, adjustments, functions);
             const revenue = Number(j.contract_value || 0);
             const profit = revenue - cost.total;
             return (
@@ -1182,7 +1190,7 @@ function JobDetailModal({
 
   if (!job) return null;
 
-  const cost = calcJobCost(job, allocations.map((a) => ({ ...a, job_id: job.id })), adjustments.map((a) => ({ ...a, job_id: job.id })));
+  const cost = calcJobCost(job, allocations.map((a) => ({ ...a, job_id: job.id })), adjustments.map((a) => ({ ...a, job_id: job.id })), functions);
   const revenue = Number(job.contract_value || 0);
   const profit = revenue - cost.total;
   const folhaValue = Number(job.payroll_value || 0);
@@ -1737,7 +1745,14 @@ function JobDetailModal({
                 </thead>
                 <tbody>
                   {allocations.map((a, idx) => {
-                    const subtotal = Number(a.rate) * a.quantity * holdsMultiplier;
+                    // Fallback pro default_rate da função quando a allocation
+                    // foi criada antes do fix (rate=0 hardcoded) — assim a
+                    // tela já mostra o valor cadastrado em Funções e Valores
+                    // sem precisar abrir "Ajustar Valor por Função".
+                    const rawRate = Number(a.rate);
+                    const fnDefault = Number(functions.find((f) => f.id === a.function_id)?.default_rate ?? 0);
+                    const effRate = rawRate > 0 ? rawRate : fnDefault;
+                    const subtotal = effRate * a.quantity * holdsMultiplier;
                     const extra = Number(a.extra_value || 0);
                     const pluxee = Number(a.pluxee_value || 0);
                     const folha = subtotal + extra - pluxee;
@@ -1754,7 +1769,7 @@ function JobDetailModal({
                           )}
                         </td>
                         <td className="px-3 py-2 text-center">{a.quantity}</td>
-                        <td className="px-3 py-2 text-right">{brl(a.rate)}</td>
+                        <td className="px-3 py-2 text-right">{brl(effRate)}</td>
                         {multiplierLabel && (
                           <td className="px-3 py-2 text-center text-text-light">× {holdsMultiplier}</td>
                         )}
@@ -1781,7 +1796,12 @@ function JobDetailModal({
                 </tbody>
                 <tfoot className="bg-gray-50 border-t-2 border-border font-semibold">
                   {(() => {
-                    const baseTotal = allocations.reduce((s, a) => s + Number(a.rate) * a.quantity * holdsMultiplier, 0);
+                    const rateOf = (a: JobAllocation) => {
+                      const r = Number(a.rate);
+                      if (r > 0) return r;
+                      return Number(functions.find((f) => f.id === a.function_id)?.default_rate ?? 0);
+                    };
+                    const baseTotal = allocations.reduce((s, a) => s + rateOf(a) * a.quantity * holdsMultiplier, 0);
                     const extraTotal = allocations.reduce((s, a) => s + Number(a.extra_value || 0), 0);
                     const pluxeeTotal = allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
                     const labelColSpan = multiplierLabel ? 5 : 4;
@@ -2142,7 +2162,7 @@ function ResumoTab({
 }) {
   const closedJobs = jobs.filter((j) => j.status === "FECHADO");
   const totalRevenue = closedJobs.reduce((s, j) => s + Number(j.contract_value || 0), 0);
-  const totalCost = closedJobs.reduce((s, j) => s + calcJobCost(j, allocations, adjustments).total, 0);
+  const totalCost = closedJobs.reduce((s, j) => s + calcJobCost(j, allocations, adjustments, functions).total, 0);
   const totalProfit = totalRevenue - totalCost;
   const margin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
 
@@ -2902,7 +2922,7 @@ function CostadoTab({
   function costadoCost(job: Job) {
     const allocs = allocations.filter((a) => a.job_id === job.id && a.kind === "COSTADO");
     const adjs = adjustments.filter((a) => a.job_id === job.id);
-    const base = allocs.reduce((s, a) => s + calcAllocBase(a, job.holds_count), 0);
+    const base = allocs.reduce((s, a) => s + calcAllocBase(a, job.holds_count, functions), 0);
     const adj = adjs.reduce((s, a) => s + (a.type === "ADICIONAL" ? Number(a.amount) : -Number(a.amount)), 0);
     return base + adj;
   }
