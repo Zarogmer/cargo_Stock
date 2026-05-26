@@ -1552,7 +1552,8 @@ function JobDetailModal({
 
   async function handleAddAdj(e: React.FormEvent) {
     e.preventDefault();
-    if (!adjAmt) return;
+    const amountNum = parseFloat(adjAmt.replace(/\./g, "").replace(",", "."));
+    if (!Number.isFinite(amountNum) || amountNum <= 0) return;
     // Despesas (comida, compras, química, etc.) são custos adicionais que SOMAM
     // ao total da operação. Por isso entram como ADICIONAL.
     await db.from("job_adjustments").insert({
@@ -1560,7 +1561,7 @@ function JobDetailModal({
       type: "ADICIONAL",
       category: adjCategory,
       description: adjDesc.trim() || null,
-      amount: parseFloat(adjAmt),
+      amount: amountNum,
     });
     setShowAddAdj(false);
     setAdjDesc(""); setAdjAmt("");
@@ -2318,11 +2319,6 @@ function JobDetailModal({
             </p>
           ) : (
             <div className="bg-card border border-border rounded-lg overflow-x-auto">
-              {kindFilter === "EMBARQUE" && (
-                <div className="px-3 py-2 bg-blue-50 border-b border-blue-200 text-[11px] text-blue-900">
-                  💡 Pagamento Embarque = <strong>Valor/Porão</strong> × <strong>{holdsMultiplier} porão{holdsMultiplier === 1 ? "" : "ões"}</strong> (por funcionário)
-                </div>
-              )}
               {kindFilter === "COSTADO" && (
                 <div className="px-3 py-2 bg-cyan-50 border-b border-cyan-200 text-[11px] text-cyan-900">
                   💡 Pagamento Costado = <strong>Valor/Hora</strong> × <strong>{HOURS_PER_SHIFT}h por turno</strong> × <strong>nº de turnos</strong>
@@ -2525,7 +2521,24 @@ function JobDetailModal({
               </div>
               <div>
                 <label className="block text-xs font-medium mb-1">Valor (R$) *</label>
-                <input type="number" step="0.01" value={adjAmt} onChange={(e) => setAdjAmt(e.target.value)} required className={inputCls} placeholder="100,00" />
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-light text-sm pointer-events-none">R$</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={adjAmt}
+                    onChange={(e) => setAdjAmt(e.target.value.replace(/[^\d.,]/g, ""))}
+                    onBlur={() => {
+                      const raw = adjAmt.replace(/\./g, "").replace(",", ".");
+                      const n = parseFloat(raw);
+                      if (!Number.isFinite(n)) { setAdjAmt(""); return; }
+                      setAdjAmt(n.toFixed(2).replace(".", ","));
+                    }}
+                    required
+                    className={`${inputCls} pl-9`}
+                    placeholder="0,00"
+                  />
+                </div>
               </div>
               <div>
                 <label className="block text-xs font-medium mb-1">Descrição</label>
