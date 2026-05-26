@@ -1475,10 +1475,6 @@ function JobDetailModal({
   const [rateioSelectedIds, setRateioSelectedIds] = useState<Set<number>>(new Set());
   const [rateioSaving, setRateioSaving] = useState(false);
 
-  // Edição inline do Contrato (mesma vibe da coluna Extra: click → input → blur salva).
-  const [contractEditing, setContractEditing] = useState(false);
-  const [contractDraft, setContractDraft] = useState("");
-
   // Edição inline da Folha (atualiza pluxee_value = total - folha).
   const [editingFolhaId, setEditingFolhaId] = useState<number | null>(null);
   const [folhaDraft, setFolhaDraft] = useState("");
@@ -1500,7 +1496,6 @@ function JobDetailModal({
       setEditAllocId(null);
       setAdjCategory("COMPRAS"); setAdjDesc(""); setAdjAmt("");
       setRateioFnId(""); setRateioMissing("1"); setRateioSelectedIds(new Set());
-      setContractEditing(false); setContractDraft("");
       setPdfStatus({ kind: "idle" });
     }
   }, [open, job]);
@@ -1508,8 +1503,6 @@ function JobDetailModal({
   if (!job) return null;
 
   const cost = calcJobCost(job, allocations.map((a) => ({ ...a, job_id: job.id })), adjustments.map((a) => ({ ...a, job_id: job.id })));
-  const revenue = Number(job.contract_value || 0);
-  const profit = revenue - cost.total;
   // Folha = soma de (base + extra - pluxee) por funcionário = cost.base - pluxeeTotal.
   // payroll_value no banco nunca é gravado, então o valor vem das próprias
   // alocações pra refletir 1:1 a coluna Folha da tabela.
@@ -1557,16 +1550,25 @@ function JobDetailModal({
   async function handleAddAdj(e: React.FormEvent) {
     e.preventDefault();
     const amountNum = parseFloat(adjAmt.replace(/\./g, "").replace(",", "."));
-    if (!Number.isFinite(amountNum) || amountNum <= 0) return;
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      alert("Informe um valor válido para a despesa.");
+      return;
+    }
+    // description é NOT NULL no schema → quando vazio, manda string vazia em vez de null.
     // Despesas (comida, compras, química, etc.) são custos adicionais que SOMAM
     // ao total da operação. Por isso entram como ADICIONAL.
-    await db.from("job_adjustments").insert({
+    const res = await db.from("job_adjustments").insert({
       job_id: job!.id,
       type: "ADICIONAL",
       category: adjCategory,
-      description: adjDesc.trim() || null,
+      description: adjDesc.trim(),
       amount: amountNum,
     });
+    if (res?.error) {
+      console.error("Erro ao adicionar despesa:", res.error);
+      alert(`Não consegui salvar a despesa: ${res.error.message}`);
+      return;
+    }
     setShowAddAdj(false);
     setAdjDesc(""); setAdjAmt("");
     onChange();
@@ -1940,48 +1942,10 @@ function JobDetailModal({
             <p className="text-lg font-bold text-red-700">{brl(cost.total)}</p>
             <p className="text-[10px] text-red-600">Mão de obra {brl(cost.base)} {cost.adj !== 0 && (cost.adj > 0 ? "+" : "")}{cost.adj !== 0 ? brl(cost.adj) : ""}</p>
           </div>
-          <div className={`rounded-lg border p-3 ${revenue > 0 ? "border-blue-200 bg-blue-50" : "border-gray-200 bg-gray-50"}`}>
-            <p className={`text-[10px] font-semibold uppercase tracking-wider ${revenue > 0 ? "text-blue-700" : "text-text-light"}`}>Contrato</p>
-            {contractEditing && canEdit && !isReadOnly ? (
-              <div className="relative">
-                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-blue-700 text-sm font-bold pointer-events-none">R$</span>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={contractDraft}
-                  onChange={(e) => setContractDraft(e.target.value.replace(/[^\d.,]/g, ""))}
-                  onBlur={async () => {
-                    const n = parseFloat(contractDraft.replace(/\./g, "").replace(",", "."));
-                    if (Number.isFinite(n) && n !== revenue) {
-                      await db.from("jobs").update({ contract_value: n }).eq("id", job.id);
-                      onChange();
-                    }
-                    setContractEditing(false);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                    if (e.key === "Escape") { setContractEditing(false); setContractDraft(""); }
-                  }}
-                  autoFocus
-                  placeholder="0,00"
-                  className="w-full text-lg font-bold text-blue-700 bg-white border-2 border-primary rounded pl-9 pr-2 py-0.5 outline-none"
-                />
-              </div>
-            ) : (
-              <button
-                type="button"
-                disabled={!canEdit || isReadOnly}
-                onClick={() => {
-                  setContractDraft(revenue ? revenue.toFixed(2).replace(".", ",") : "");
-                  setContractEditing(true);
-                }}
-                className={`text-lg font-bold ${revenue > 0 ? "text-blue-700" : "text-text-light"} ${canEdit && !isReadOnly ? "hover:bg-white/40 rounded px-1 -mx-1 transition cursor-text" : ""}`}
-                title={canEdit && !isReadOnly ? "Clique para editar" : ""}
-              >
-                {revenue > 0 ? brl(revenue) : "—"}
-              </button>
-            )}
-            <p className="text-[10px] text-text-light">{canEdit && !isReadOnly && !contractEditing ? "clique para editar" : "valor do contrato"}</p>
+          <div className={`rounded-lg border p-3 ${cost.adj > 0 ? "border-amber-200 bg-amber-50" : "border-gray-200 bg-gray-50"}`}>
+            <p className={`text-[10px] font-semibold uppercase tracking-wider ${cost.adj > 0 ? "text-amber-700" : "text-text-light"}`}>Despesas</p>
+            <p className={`text-lg font-bold ${cost.adj > 0 ? "text-amber-700" : "text-text-light"}`}>{cost.adj > 0 ? brl(cost.adj) : "—"}</p>
+            <p className="text-[10px] text-text-light">{adjustments.length === 0 ? "sem despesas" : `${adjustments.length} lançamento${adjustments.length === 1 ? "" : "s"}`}</p>
           </div>
           <div className={`rounded-lg border p-3 ${folhaValue > 0 ? "border-purple-200 bg-purple-50" : "border-gray-200 bg-gray-50"}`}>
             <p className={`text-[10px] font-semibold uppercase tracking-wider ${folhaValue > 0 ? "text-purple-700" : "text-text-light"}`}>Valor da Folha</p>
@@ -2507,7 +2471,7 @@ function JobDetailModal({
         {/* Ajustes */}
         <div>
           <div className="flex justify-between items-center mb-2">
-            <h3 className="text-sm font-semibold">🪙 Ajustes (Despesas Diversas)</h3>
+            <h3 className="text-sm font-semibold">🪙 Despesas</h3>
             {canEdit && !isReadOnly && !showAddAdj && (
               <button onClick={() => setShowAddAdj(true)} className="text-xs px-2 py-1 bg-primary text-white rounded hover:bg-primary-dark">
                 + Adicionar
