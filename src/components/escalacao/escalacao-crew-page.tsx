@@ -621,18 +621,26 @@ function CrewFormModal({
     try {
       const jobId = await ensureJob();
       const now = new Date().toISOString();
-      const rows = Array.from(selectedIds).map((id) => ({
-        job_id: jobId,
-        function_id: parseInt(perEmpFn.get(id)!),
-        employee_id: id,
-        quantity: 0,
-        rate: 0,
-        pluxee_value: 0,
-        status: "ATIVO",
-        kind,
-        added_by: profileName,
-        added_at: now,
-      }));
+      const rows = Array.from(selectedIds).map((id) => {
+        const fnId = parseInt(perEmpFn.get(id)!);
+        // Inicializa o rate com o valor padrão cadastrado em Funções e
+        // Valores — assim o Pagamento de Embarque já abre com o valor certo
+        // sem precisar passar pelo "Ajustar Valor por Função".
+        const fn = functions.find((f) => f.id === fnId);
+        const fnDefaultRate = Number(fn?.default_rate ?? 0);
+        return {
+          job_id: jobId,
+          function_id: fnId,
+          employee_id: id,
+          quantity: 0,
+          rate: fnDefaultRate,
+          pluxee_value: 0,
+          status: "ATIVO",
+          kind,
+          added_by: profileName,
+          added_at: now,
+        };
+      });
       for (const row of rows) {
         await db.from("job_allocations").insert(row);
       }

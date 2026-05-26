@@ -739,12 +739,17 @@ function AddCostadoCrewModal({
       const jobId = await ensureJob();
       const now = new Date().toISOString();
       for (const id of selectedIds) {
+        const fnId = parseInt(perEmpFn.get(id)!);
+        // Inicializa o rate com o default_rate da função pra evitar R$ 0,00
+        // no Pagamento de Costado até alguém ajustar manualmente.
+        const fn = functions.find((f) => f.id === fnId);
+        const fnDefaultRate = Number(fn?.default_rate ?? 0);
         await db.from("job_allocations").insert({
           job_id: jobId,
-          function_id: parseInt(perEmpFn.get(id)!),
+          function_id: fnId,
           employee_id: id,
           quantity: 0,
-          rate: 0,
+          rate: fnDefaultRate,
           pluxee_value: 0,
           status: "ATIVO",
           kind: "COSTADO",

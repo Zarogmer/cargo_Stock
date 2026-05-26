@@ -191,7 +191,7 @@ export default function NaviosPage() {
   // Per-employee function chosen by the user (employeeId → functionId as string)
   const [groupPerEmpFn, setGroupPerEmpFn] = useState<Map<number, string>>(new Map());
   // Active job functions, loaded once for the function selector
-  const [jobFunctions, setJobFunctions] = useState<{ id: number; name: string; active: boolean }[]>([]);
+  const [jobFunctions, setJobFunctions] = useState<{ id: number; name: string; active: boolean; default_rate: string | number }[]>([]);
   // Costado-only: shift date + period for the bulk-allocated rows
   const [costadoShiftDate, setCostadoShiftDate] = useState("");
   const [costadoShiftPeriod, setCostadoShiftPeriod] = useState("07-13");
@@ -266,7 +266,7 @@ export default function NaviosPage() {
     try {
       const { data } = await db
         .from("job_functions")
-        .select("id, name, active")
+        .select("id, name, active, default_rate")
         .order("name");
       setJobFunctions(((data as any[]) || []).filter((f) => f.active !== false));
     } catch (err) {
@@ -476,13 +476,19 @@ export default function NaviosPage() {
         for (const empId of Array.from(groupParticipants)) {
           const fnId = groupPerEmpFn.get(empId);
           if (!fnId) continue; // já validado, mas defensivo
+          const fnIdNum = parseInt(fnId, 10);
+          // Puxa o default_rate da função pra inicializar o pagamento — sem
+          // isso a tela Pagamento de Embarque mostraria R$ 0,00 até alguém
+          // abrir "Ajustar Valor por Função".
+          const fnRow = jobFunctions.find((f) => f.id === fnIdNum);
+          const fnDefaultRate = Number(fnRow?.default_rate ?? 0);
           try {
             const row: Record<string, unknown> = {
               job_id: newJobId,
-              function_id: parseInt(fnId, 10),
+              function_id: fnIdNum,
               employee_id: empId,
               quantity: 0,
-              rate: 0,
+              rate: fnDefaultRate,
               pluxee_value: 0,
               status: "ATIVO",
               kind: isCostado ? "COSTADO" : "EMBARQUE",
