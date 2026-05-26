@@ -1311,8 +1311,9 @@ function JobDetailModal({
   onChange: () => void;
 }) {
   // Embarque: rate (valor/porão) × holds, por funcionário. Costado: rate (valor/hora) × 6 × qty.
-  // When kindFilter is set, allocations are managed in Escalação (this modal doesn't add/remove people).
-  const peopleReadOnly = !!kindFilter;
+  // Costado é gerenciado exclusivamente pela Escalação de Costado. Embarque permite
+  // adicionar/remover funcionários direto daqui também (além da Escalação).
+  const peopleReadOnly = kindFilter === "COSTADO";
   const holdsMultiplier =
     kindFilter === "EMBARQUE" ? Math.max(1, Number(job?.holds_count || 1))
     : kindFilter === "COSTADO" ? HOURS_PER_SHIFT
@@ -1342,6 +1343,24 @@ function JobDetailModal({
   const [rateioSelectedIds, setRateioSelectedIds] = useState<Set<number>>(new Set());
   const [rateioSaving, setRateioSaving] = useState(false);
 
+  // Edição inline do Contrato (mesma vibe da coluna Extra: click → input → blur salva).
+  const [contractEditing, setContractEditing] = useState(false);
+  const [contractDraft, setContractDraft] = useState("");
+
+  // Edição inline da Folha (atualiza pluxee_value = total - folha).
+  const [editingFolhaId, setEditingFolhaId] = useState<number | null>(null);
+  const [folhaDraft, setFolhaDraft] = useState("");
+
+  // Status do import de PDF da Relação de Líquidos.
+  const [pdfStatus, setPdfStatus] = useState<{
+    kind: "idle" | "parsing" | "done" | "error";
+    msg?: string;
+    matched?: number;
+    total?: number;
+    unmatched?: { name: string; value: number }[];
+  }>({ kind: "idle" });
+  const [exporting, setExporting] = useState(false);
+
   useEffect(() => {
     if (open) {
       setShowAddAlloc(false); setShowAddAdj(false); setShowRateio(false);
@@ -1349,6 +1368,8 @@ function JobDetailModal({
       setEditAllocId(null);
       setAdjCategory("COMPRAS"); setAdjDesc(""); setAdjAmt("");
       setRateioFnId(""); setRateioMissing("1"); setRateioSelectedIds(new Set());
+      setContractEditing(false); setContractDraft("");
+      setPdfStatus({ kind: "idle" });
     }
   }, [open, job]);
 
@@ -1374,7 +1395,12 @@ function JobDetailModal({
     if (editAllocId) {
       await db.from("job_allocations").update(payload).eq("id", editAllocId);
     } else {
-      await db.from("job_allocations").insert({ ...payload, job_id: job!.id });
+      await db.from("job_allocations").insert({
+        ...payload,
+        job_id: job!.id,
+        status: "ATIVO",
+        kind: kindFilter || "EMBARQUE",
+      });
     }
     setShowAddAlloc(false);
     setAllocEmp(""); setAllocFn(""); setAllocDays("1"); setAllocRate(""); setAllocPluxee("0");
@@ -1463,6 +1489,153 @@ function JobDetailModal({
     onChange();
   }
 
+  // Folha vem do PDF (Relação de Líquidos) ou é editada manualmente; Pluxee é o resto.
+  async function handleSetFolha(allocId: number, totalPerson: number, folhaValue: number) {
+    const newPluxee = +Math.max(0, totalPerson - folhaValue).toFixed(2);
+    await db.from("job_allocations").update({ pluxee_value: newPluxee }).eq("id", allocId);
+    onChange();
+  }
+
+  // Calcula o total que cada alocação recebe (base + extras). Reusado no PDF e no
+  // Excel — fica aqui pra ficar consistente com o que aparece na tabela.
+  function allocTotalPerson(a: JobAllocation): number {
+    const fn = functions.find((f) => f.id === a.function_id);
+    const defaultRate = Number(fn?.default_rate ?? a.rate);
+    const actualRate = Number(a.rate);
+    const isEmbarque = kindFilter === "EMBARQUE";
+    const base = isEmbarque
+      ? defaultRate * holdsMultiplier
+      : actualRate * a.quantity * holdsMultiplier;
+    const specialDelta = isEmbarque ? (actualRate - defaultRate) * holdsMultiplier : 0;
+    const rateioExtra = Number(a.extra_value || 0);
+    return base + specialDelta + rateioExtra;
+  }
+
+  // Import da Relação de Líquidos (PDF da contabilidade). Casa cada linha do PDF
+  // com uma alocação pelo nome e atualiza pluxee_value = total - folhaDoPDF.
+  async function handlePdfUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setPdfStatus({ kind: "parsing", msg: "Lendo PDF…" });
+    try {
+      const buf = await file.arrayBuffer();
+      const pdfjs: typeof import("pdfjs-dist") = await import("pdfjs-dist");
+      (pdfjs as { GlobalWorkerOptions: { workerSrc: string } }).GlobalWorkerOptions.workerSrc =
+        "/pdf.worker.min.mjs";
+      const doc = await pdfjs.getDocument({ data: buf }).promise;
+      const allLines: string[] = [];
+      for (let p = 1; p <= doc.numPages; p++) {
+        const page = await doc.getPage(p);
+        const content = await page.getTextContent();
+        const items = content.items as { str: string; transform: number[] }[];
+        allLines.push(...reconstructLinesFromPdfItems(items));
+      }
+      const entries = parseLiquidosPdf(allLines);
+      if (entries.length === 0) {
+        setPdfStatus({ kind: "error", msg: "Nenhum registro reconhecido. Confira se é a 'Relação Geral dos Líquidos'." });
+        return;
+      }
+      const used = new Set<number>();
+      let matched = 0;
+      for (const a of allocations) {
+        const name = a.employees?.name || a.job_functions?.name || "";
+        const m = findBestPdfMatch(name, entries, used);
+        if (!m) continue;
+        used.add(m.idx);
+        matched++;
+        const total = allocTotalPerson(a);
+        const newPluxee = +Math.max(0, total - m.entry.value).toFixed(2);
+        await db.from("job_allocations").update({ pluxee_value: newPluxee }).eq("id", a.id);
+      }
+      const unmatched = entries.filter((_, i) => !used.has(i));
+      onChange();
+      setPdfStatus({ kind: "done", matched, total: entries.length, unmatched });
+    } catch (err) {
+      setPdfStatus({ kind: "error", msg: "Falha ao ler PDF: " + (err as Error).message });
+    }
+  }
+
+  // Exporta a planilha de pagamento no formato da "PLANILHA BASE" usado pela
+  // contabilidade (linhas/colunas posicionadas como no template do usuário).
+  async function handleExportExcel() {
+    setExporting(true);
+    try {
+      const XLSX = await import("xlsx");
+      const aoa: (string | number | null)[][] = [];
+      const dateLabel = formatDateBR(job!.end_date) || formatDateBR(job!.start_date);
+      const shipLabel = `${job!.name}${job!.holds_count ? ` - ${job!.holds_count} PORÕES` : ""}${job!.cargo_type ? `-${job!.cargo_type}` : ""}${job!.port ? `-${job!.port}` : ""}${job!.start_date ? ` ${formatDateBR(job!.start_date)}` : ""}${job!.end_date ? ` a ${formatDateBR(job!.end_date)}` : ""}${dateLabel ? ` - VENCTO: ${dateLabel}` : ""}`;
+
+      // Padding linhas 1-2 (template original deixa em branco)
+      aoa.push([]);
+      aoa.push([]);
+      // Linha 3 col D: PAGAMENTO EM XX/XX/XX
+      aoa.push([null, null, null, `PAGAMENTO EM ${dateLabel}`]);
+      aoa.push([]);
+      aoa.push([]);
+      // Linha 6 col C: FUNCIONÁRIOS, col K: cliente
+      aoa.push([null, null, "FUNCIONÁRIOS", null, null, null, null, null, null, null, job!.client || ""]);
+      // Linha 7: cabeçalho completo
+      aoa.push([
+        null, null,
+        " Limpeza de porão                                                         PAGAMENTO: ",
+        "AGÊNCIA", "CONTA", "ITAÚ/SANTANDER",
+        "PAGTO PLUXEE", "PAGTO NA FOLHA", "DESCONTO GERAL", "Perda de Material",
+        `MV 1: ${shipLabel}`,
+      ]);
+      aoa.push([]);
+
+      let totalPluxee = 0, totalFolha = 0, totalNavio = 0;
+      allocations.forEach((a, idx) => {
+        const e = a.employees;
+        const total = allocTotalPerson(a);
+        const pluxee = Number(a.pluxee_value || 0);
+        const folha = +(total - pluxee).toFixed(2);
+        totalPluxee += pluxee;
+        totalFolha += folha;
+        totalNavio += total;
+        aoa.push([
+          null, idx + 1,
+          e?.name || a.job_functions?.name || `#${a.function_id}`,
+          e?.bank_agency || "",
+          e?.bank_account || "",
+          formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null),
+          pluxee || 0,
+          folha || 0,
+          null,
+          null,
+          total || 0,
+        ]);
+      });
+
+      aoa.push([]);
+      // Linha de TOTAL
+      aoa.push([null, null, null, null, null, "TOTAL", totalPluxee, totalFolha, 0, 0, totalNavio]);
+      aoa.push([]);
+      aoa.push([null, null, "TOTAL PAGAMENTO DOS MVs s/ desconto:"]);
+      aoa.push([null, null, "MV 1:", null, null, "TOTAIS:"]);
+      aoa.push([null, null, totalNavio, null, null, "ADTO:", 0]);
+      aoa.push([null, null, null, null, null, "PAGTO PLUXEE:", totalPluxee]);
+      aoa.push([null, null, null, null, null, "PAGTO FOLHA:", totalFolha]);
+      aoa.push([null, null, null, null, null, "PAGTO NAVIO:", totalNavio]);
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws["!cols"] = [
+        { wch: 3 }, { wch: 4 }, { wch: 38 }, { wch: 9 }, { wch: 14 },
+        { wch: 16 }, { wch: 13 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 60 },
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "PLANILHA BASE");
+      const safeName = (job!.name || "planilha").replace(/[^a-zA-Z0-9_-]+/g, "_");
+      const dateForFile = (job!.end_date || job!.start_date).slice(0, 10);
+      XLSX.writeFile(wb, `${dateForFile}_${safeName}.xlsx`);
+    } catch (err) {
+      alert("Falha ao gerar XLSX: " + (err as Error).message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   async function handleDeleteAdj(id: number) {
     await db.from("job_adjustments").delete().eq("id", id);
     onChange();
@@ -1529,9 +1702,45 @@ function JobDetailModal({
             <p className="text-lg font-bold text-red-700">{brl(cost.total)}</p>
             <p className="text-[10px] text-red-600">Mão de obra {brl(cost.base)} {cost.adj !== 0 && (cost.adj > 0 ? "+" : "")}{cost.adj !== 0 ? brl(cost.adj) : ""}</p>
           </div>
-          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
-            <p className="text-[10px] font-semibold text-blue-700 uppercase tracking-wider">Contrato</p>
-            <p className="text-lg font-bold text-blue-700">{brl(revenue)}</p>
+          <div className={`rounded-lg border p-3 ${revenue > 0 ? "border-blue-200 bg-blue-50" : "border-gray-200 bg-gray-50"}`}>
+            <p className={`text-[10px] font-semibold uppercase tracking-wider ${revenue > 0 ? "text-blue-700" : "text-text-light"}`}>Contrato</p>
+            {contractEditing && canEdit && !isReadOnly ? (
+              <input
+                type="number"
+                step="0.01"
+                value={contractDraft}
+                onChange={(e) => setContractDraft(e.target.value)}
+                onBlur={async () => {
+                  const n = parseFloat(contractDraft.replace(",", "."));
+                  if (Number.isFinite(n) && n !== revenue) {
+                    await db.from("jobs").update({ contract_value: n }).eq("id", job.id);
+                    onChange();
+                  }
+                  setContractEditing(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  if (e.key === "Escape") { setContractEditing(false); setContractDraft(""); }
+                }}
+                autoFocus
+                placeholder="0,00"
+                className="w-full text-lg font-bold text-blue-700 bg-white border-2 border-primary rounded px-1 outline-none"
+              />
+            ) : (
+              <button
+                type="button"
+                disabled={!canEdit || isReadOnly}
+                onClick={() => {
+                  setContractDraft(revenue ? revenue.toString() : "");
+                  setContractEditing(true);
+                }}
+                className={`text-lg font-bold ${revenue > 0 ? "text-blue-700" : "text-text-light"} ${canEdit && !isReadOnly ? "hover:bg-white/40 rounded px-1 -mx-1 transition cursor-text" : ""}`}
+                title={canEdit && !isReadOnly ? "Clique para editar" : ""}
+              >
+                {revenue > 0 ? brl(revenue) : "—"}
+              </button>
+            )}
+            <p className="text-[10px] text-text-light">{canEdit && !isReadOnly && !contractEditing ? "clique para editar" : "valor do contrato"}</p>
           </div>
           <div className={`rounded-lg border p-3 ${folhaValue > 0 ? "border-purple-200 bg-purple-50" : "border-gray-200 bg-gray-50"}`}>
             <p className={`text-[10px] font-semibold uppercase tracking-wider ${folhaValue > 0 ? "text-purple-700" : "text-text-light"}`}>Valor da Folha</p>
@@ -1565,14 +1774,39 @@ function JobDetailModal({
               <h3 className="text-sm font-semibold">👥 Equipe Alocada ({allocations.length})</h3>
               {peopleReadOnly && (
                 <p className="text-[10px] text-text-light mt-0.5">
-                  Lista gerenciada na Escalação{kindFilter === "EMBARQUE" ? " de Embarque" : " de Costado"} — aqui edita-se só o financeiro.
+                  Lista gerenciada na Escalação de Costado — aqui edita-se só o financeiro.
                 </p>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               {canEdit && !isReadOnly && !showRateio && allocations.length > 0 && (
                 <button onClick={() => setShowRateio(true)} className="text-xs px-2 py-1 bg-amber-600 text-white rounded hover:bg-amber-700" title="Distribuir o pagamento de quem faltou entre os que foram">
                   ⚖️ Aplicar Rateio
+                </button>
+              )}
+              {canEdit && !isReadOnly && allocations.length > 0 && (
+                <label
+                  className={`text-xs px-2 py-1 rounded cursor-pointer ${pdfStatus.kind === "parsing" ? "bg-blue-300 text-white" : "bg-blue-600 text-white hover:bg-blue-700"}`}
+                  title="Importa a Relação de Líquidos (PDF) e preenche a coluna Folha"
+                >
+                  {pdfStatus.kind === "parsing" ? "Lendo…" : "📄 Importar PDF (Folha)"}
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    onChange={handlePdfUpload}
+                    disabled={pdfStatus.kind === "parsing"}
+                    className="hidden"
+                  />
+                </label>
+              )}
+              {allocations.length > 0 && (
+                <button
+                  onClick={handleExportExcel}
+                  disabled={exporting}
+                  className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-60"
+                  title="Exporta a planilha de pagamento no formato da contabilidade"
+                >
+                  {exporting ? "Gerando…" : "📥 Exportar Excel"}
                 </button>
               )}
               {canEdit && !isReadOnly && !peopleReadOnly && !showAddAlloc && (
@@ -1582,6 +1816,29 @@ function JobDetailModal({
               )}
             </div>
           </div>
+
+          {pdfStatus.kind === "done" && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 mb-2 text-[11px] space-y-1">
+              <p className="text-emerald-800">
+                ✓ PDF importado: <strong>{pdfStatus.matched}</strong> de <strong>{pdfStatus.total}</strong> registros casados com colaboradores.
+              </p>
+              {pdfStatus.unmatched && pdfStatus.unmatched.length > 0 && (
+                <details className="text-amber-800">
+                  <summary className="cursor-pointer">
+                    ⚠ {pdfStatus.unmatched.length} sem match no PDF (preencher manualmente clicando na coluna Folha)
+                  </summary>
+                  <ul className="mt-1 ml-4 list-disc">
+                    {pdfStatus.unmatched.map((u, i) => (
+                      <li key={i}>{u.name} — <strong>{brl(u.value)}</strong></li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
+          {pdfStatus.kind === "error" && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-2 mb-2 text-[11px] text-red-800">{pdfStatus.msg}</div>
+          )}
 
           {showRateio && (() => {
             // Agrupa alocações ativas por função pra montar o seletor + lista de
@@ -1861,7 +2118,42 @@ function JobDetailModal({
                         </td>
                         <td className="px-3 py-2 text-right font-semibold text-emerald-700">{brl(base + extra)}</td>
                         <td className="px-3 py-2 text-right text-amber-700">{brl(pluxee)}</td>
-                        <td className="px-3 py-2 text-right text-purple-700">{brl(folha)}</td>
+                        <td className="px-3 py-2 text-right">
+                          {editingFolhaId === a.id && canEdit && !isReadOnly ? (
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={folhaDraft}
+                              onChange={(e) => setFolhaDraft(e.target.value)}
+                              onBlur={async () => {
+                                const n = parseFloat(folhaDraft.replace(",", "."));
+                                if (Number.isFinite(n) && n !== folha) {
+                                  await handleSetFolha(a.id, base + extra, n);
+                                }
+                                setEditingFolhaId(null);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                if (e.key === "Escape") { setEditingFolhaId(null); setFolhaDraft(""); }
+                              }}
+                              autoFocus
+                              className="w-24 text-right px-1 py-0.5 border-2 border-primary rounded text-purple-700 font-semibold outline-none"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={!canEdit || isReadOnly}
+                              onClick={() => {
+                                setFolhaDraft(folha ? folha.toString() : "");
+                                setEditingFolhaId(a.id);
+                              }}
+                              className={`text-purple-700 ${canEdit && !isReadOnly ? "hover:bg-purple-50 rounded px-1 -mx-1 cursor-text" : ""}`}
+                              title={canEdit && !isReadOnly ? "Clique para editar" : ""}
+                            >
+                              {brl(folha)}
+                            </button>
+                          )}
+                        </td>
                         {canEdit && !isReadOnly && !peopleReadOnly && (
                           <td className="px-2 py-2">
                             <div className="flex gap-1 justify-end">
