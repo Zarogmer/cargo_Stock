@@ -565,66 +565,98 @@ export default function NaviosPage() {
         );
       }
 
-      // 3) Cria grupo no WhatsApp com os mesmos colaboradores.
+      // 3) WhatsApp: comportamento diverge por tipo de operação.
+      //    EMBARQUE → broadcast pros grupos fixos Equipe 1 + Equipe 2 (não
+      //               cria grupo novo; setor admin não precisa entrar em nada
+      //               porque já são membros dos grupos das equipes).
+      //    COSTADO  → cria grupo do navio com colaboradores selecionados
+      //               (admin sector entra se a caixinha marcou).
       if (createGroup && groupParticipants.size > 0) {
-        // Admin sector members (entram só no grupo, sem escalação).
-        const adminMemberIds = includeAdminSector
-          ? employees
-              .filter(
-                (e) =>
-                  (e.status ?? "ATIVO") === "ATIVO" &&
-                  e.sector === "ADMINISTRATIVO" &&
-                  (e.phone || "").trim().length > 0,
-              )
-              .map((e) => e.id)
-          : [];
-        // União dedup'd (operacionais selecionados + administrativos opcionais).
-        const allMemberIds = Array.from(
-          new Set<number>([...Array.from(groupParticipants), ...adminMemberIds]),
-        );
-        const participantPhones = allMemberIds
-          .map((id) => employees.find((e) => e.id === id)?.phone || "")
-          .filter((p) => p.trim().length > 0);
-
-        if (participantPhones.length === 0) {
-          setGroupWarning(
-            (prev) =>
-              prev ||
-              "Navio criado, mas nenhum dos colaboradores selecionados tem telefone válido pra criar o grupo.",
+        if (isCostado) {
+          // ── Costado: cria grupo no WhatsApp com os mesmos colaboradores ──
+          const adminMemberIds = includeAdminSector
+            ? employees
+                .filter(
+                  (e) =>
+                    (e.status ?? "ATIVO") === "ATIVO" &&
+                    e.sector === "ADMINISTRATIVO" &&
+                    (e.phone || "").trim().length > 0,
+                )
+                .map((e) => e.id)
+            : [];
+          const allMemberIds = Array.from(
+            new Set<number>([...Array.from(groupParticipants), ...adminMemberIds]),
           );
+          const participantPhones = allMemberIds
+            .map((id) => employees.find((e) => e.id === id)?.phone || "")
+            .filter((p) => p.trim().length > 0);
+
+          if (participantPhones.length === 0) {
+            setGroupWarning(
+              (prev) =>
+                prev ||
+                "Navio criado, mas nenhum dos colaboradores selecionados tem telefone válido pra criar o grupo.",
+            );
+          } else {
+            try {
+              const res = await fetch("/api/whatsapp/groups", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  subject: payload.name,
+                  participants: participantPhones,
+                  shipId: newShipId,
+                  employeeIds: allMemberIds,
+                }),
+              });
+              const body = await res.json().catch(() => ({}));
+              if (!res.ok) {
+                setGroupWarning(
+                  `Navio e escala criados, mas o grupo no WhatsApp falhou: ${body.error || `HTTP ${res.status}`}`,
+                );
+                setSaving(false);
+                loadShips();
+                return;
+              }
+              if (body.status === "partial" && body.warning) {
+                setGroupWarning(body.warning);
+                setSaving(false);
+                loadShips();
+                return;
+              }
+            } catch (err) {
+              setGroupWarning(`Navio e escala criados, mas falha ao chamar a API de grupo: ${(err as Error).message}`);
+              setSaving(false);
+              loadShips();
+              return;
+            }
+          }
         } else {
+          // ── Embarque: broadcast pros grupos fixos Equipe 1 + Equipe 2 ────
           try {
             const res = await fetch("/api/whatsapp/groups", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                subject: payload.name,
-                participants: participantPhones,
+                mode: "BROADCAST_TEAMS",
                 shipId: newShipId,
-                // Manda os IDs dos colaboradores selecionados pra o app
-                // conseguir exibir nomes em "Dados do grupo" mesmo quando
-                // o WhatsApp devolve LIDs opacos no lugar dos telefones.
-                // Inclui admin sector quando a opção está marcada.
-                employeeIds: allMemberIds,
+                employeeIds: Array.from(groupParticipants),
               }),
             });
             const body = await res.json().catch(() => ({}));
             if (!res.ok) {
               setGroupWarning(
-                `Navio e escala criados, mas o grupo no WhatsApp falhou: ${body.error || `HTTP ${res.status}`}`,
+                `Navio e escala criados, mas o aviso pros grupos das equipes falhou: ${body.error || `HTTP ${res.status}`}`,
               );
-              setSaving(false);
-              loadShips();
-              return; // keep modal open so user can read the warning
-            }
-            if (body.status === "partial" && body.warning) {
-              setGroupWarning(body.warning);
               setSaving(false);
               loadShips();
               return;
             }
+            if (body.status === "partial" && body.warning) {
+              setGroupWarning(body.warning);
+            }
           } catch (err) {
-            setGroupWarning(`Navio e escala criados, mas falha ao chamar a API de grupo: ${(err as Error).message}`);
+            setGroupWarning(`Navio e escala criados, mas falha ao avisar grupos das equipes: ${(err as Error).message}`);
             setSaving(false);
             loadShips();
             return;
@@ -1399,18 +1431,27 @@ export default function NaviosPage() {
                       className="h-4 w-4 accent-emerald-600"
                     />
                     <span className="text-sm font-medium text-text">
-                      💬 Criar grupo no WhatsApp + escalar colaboradores
+                      {form.operation_type === "EMBARQUE"
+                        ? "💬 Avisar grupos Equipe 1 + Equipe 2 + escalar colaboradores"
+                        : "💬 Criar grupo no WhatsApp + escalar colaboradores"}
                     </span>
                   </label>
 
                   {createGroup && (() => {
                     // Setor Administrativo não aparece pra escalar — eles entram
                     // só pela caixinha "Incluir setor Administrativo no grupo".
+                    // ATIVO + PENDENCIA aparecem na lista de escala (PENDENCIA
+                    // ainda pode trabalhar, só sinaliza que tem documentação
+                    // pra resolver). INATIVO/demitido fica de fora.
                     const eligible = employees.filter(
-                      (e) =>
-                        (e.status ?? "ATIVO") === "ATIVO" &&
-                        (e.phone || "").trim().length > 0 &&
-                        e.sector !== "ADMINISTRATIVO",
+                      (e) => {
+                        const status = e.status ?? "ATIVO";
+                        return (
+                          (status === "ATIVO" || status === "PENDENCIA") &&
+                          (e.phone || "").trim().length > 0 &&
+                          e.sector !== "ADMINISTRATIVO"
+                        );
+                      },
                     );
                     const q = groupSearch.trim().toLowerCase();
                     const filteredEmps = q
@@ -1432,40 +1473,47 @@ export default function NaviosPage() {
                     return (
                       <div className="space-y-3">
                         <p className="text-[11px] text-text-light">
-                          O grupo será criado com o nome do navio
-                          {form.name.trim() && <> (<strong className="text-text">{form.name.trim()}</strong>)</>}.{" "}
                           {isCostadoForm ? (
                             <>
+                              O grupo será criado com o nome do navio
+                              {form.name.trim() && <> (<strong className="text-text">{form.name.trim()}</strong>)</>}.{" "}
                               Cada colaborador recebe um <strong className="text-text">aviso no privado</strong> de que haverá limpeza no costado. A escalação com data e turno é feita depois em{" "}
                               <strong className="text-text">🧹 Escalação de Costado</strong>.
                             </>
                           ) : (
                             <>
-                              Cada colaborador é também escalado em{" "}
+                              A mensagem da operação{form.name.trim() && <> do <strong className="text-text">{form.name.trim()}</strong></>} será enviada pros 2 grupos fixos{" "}
+                              <strong className="text-text">Equipe 1</strong> e <strong className="text-text">Equipe 2</strong> no WhatsApp. Cada colaborador selecionado também é escalado em{" "}
                               <strong className="text-text">⚓ Escalação de Embarque</strong>{" "}
                               — escolha a função de cada um.
                             </>
                           )}
                         </p>
 
-                        <label className="flex items-start gap-2 cursor-pointer bg-white border border-emerald-200 rounded-md px-2 py-2">
-                          <input
-                            type="checkbox"
-                            checked={includeAdminSector}
-                            onChange={(e) => setIncludeAdminSector(e.target.checked)}
-                            className="h-4 w-4 mt-0.5 accent-emerald-600"
-                          />
-                          <div className="text-xs">
-                            <p className="font-medium text-text">
-                              👔 Incluir setor Administrativo no grupo
-                            </p>
-                            <p className="text-text-light mt-0.5">
-                              {adminMembers.length === 0
-                                ? "Nenhum funcionário ATIVO do Administrativo com telefone cadastrado."
-                                : `${adminMembers.length} pessoa(s) do Administrativo serão adicionadas ao grupo — sem escalar, só para receber as mensagens.`}
-                            </p>
-                          </div>
-                        </label>
+                        {/* Setor Administrativo só faz sentido no Costado, onde
+                            criamos um grupo novo. No Embarque a mensagem vai
+                            pros grupos fixos das equipes, que já têm os
+                            administrativos como membros. */}
+                        {isCostadoForm && (
+                          <label className="flex items-start gap-2 cursor-pointer bg-white border border-emerald-200 rounded-md px-2 py-2">
+                            <input
+                              type="checkbox"
+                              checked={includeAdminSector}
+                              onChange={(e) => setIncludeAdminSector(e.target.checked)}
+                              className="h-4 w-4 mt-0.5 accent-emerald-600"
+                            />
+                            <div className="text-xs">
+                              <p className="font-medium text-text">
+                                👔 Incluir setor Administrativo no grupo
+                              </p>
+                              <p className="text-text-light mt-0.5">
+                                {adminMembers.length === 0
+                                  ? "Nenhum funcionário ATIVO do Administrativo com telefone cadastrado."
+                                  : `${adminMembers.length} pessoa(s) do Administrativo serão adicionadas ao grupo — sem escalar, só para receber as mensagens.`}
+                              </p>
+                            </div>
+                          </label>
+                        )}
 
                         {/* Lista de selecionados com select de função (só Embarque — Costado não escala ainda) */}
                         {!isCostadoForm && selectedList.length > 0 && (

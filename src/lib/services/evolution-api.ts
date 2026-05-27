@@ -208,6 +208,31 @@ export async function setWhatsappGroupDescription(groupJid: string, description:
   );
 }
 
+// Promote (or demote) participants in a group. `action` is "promote" to give
+// admin rights, "demote" to remove them. Participants are normalized BR phone
+// numbers — Evolution accepts the same format used when creating the group.
+// Throws if Evolution rejects the call (caller decides whether to swallow).
+export async function updateGroupParticipants(
+  groupJid: string,
+  action: "promote" | "demote" | "add" | "remove",
+  participants: string[],
+): Promise<unknown> {
+  const cfg = readConfig();
+  if (!groupJid.endsWith("@g.us")) throw new Error("JID de grupo inválido.");
+  const normalized = Array.from(new Set(
+    participants
+      .map((p) => normalizeBRNumber(p))
+      .filter((p) => p.length >= 12),
+  ));
+  if (normalized.length === 0) return { skipped: "nenhum participante válido" };
+  const token = await getInstanceToken();
+  return evolutionFetch(
+    `/group/updateParticipant/${encodeURIComponent(cfg.instance)}?groupJid=${encodeURIComponent(groupJid)}`,
+    { method: "POST", body: JSON.stringify({ action, participants: normalized }) },
+    token,
+  );
+}
+
 export async function getInstanceStatus(): Promise<{ state?: string } & Record<string, unknown>> {
   const cfg = readConfig();
   return evolutionFetch(`/instance/connectionState/${encodeURIComponent(cfg.instance)}`);

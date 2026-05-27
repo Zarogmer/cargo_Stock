@@ -31,7 +31,7 @@ export default function ColaboradoresPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [empSearch, setEmpSearch] = useState("");
   const [empTeamFilter, setEmpTeamFilter] = useState("Todos");
-  const [empStatusFilter, setEmpStatusFilter] = useState<"Todos" | "ATIVO" | "INATIVO" | "PENDENCIA">("ATIVO");
+  const [empStatusFilter, setEmpStatusFilter] = useState<"Todos" | "ATIVO" | "INATIVO" | "PENDENCIA">("Todos");
   const [empEscalaFilter, setEmpEscalaFilter] = useState<"Todos" | "DISPONIVEL" | "EMBARCADO" | "COSTADO">("Todos");
   const [empViewMode, setEmpViewMode] = useState<"cards" | "spreadsheet">("cards");
   const [exportingXlsx, setExportingXlsx] = useState(false);

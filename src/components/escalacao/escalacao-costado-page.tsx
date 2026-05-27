@@ -689,7 +689,9 @@ function AddCostadoCrewModal({
   );
 
   const matches = employees
-    .filter((e) => e.status === "ATIVO")
+    // ATIVO e PENDENCIA aparecem (PENDENCIA é só sinal de doc vencida, o
+    // funcionário ainda pode trabalhar). INATIVO/demitido fica fora.
+    .filter((e) => e.status === "ATIVO" || e.status === "PENDENCIA")
     // Admin não escala — só entra em grupo de WhatsApp pela caixinha do form de Navio.
     .filter((e) => e.sector !== "ADMINISTRATIVO")
     .filter((e) => !allocatedIds.has(e.id))

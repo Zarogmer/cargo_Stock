@@ -6,6 +6,7 @@ import {
   sendWhatsappText,
   sendWhatsappTextToGroup,
 } from "@/lib/services/evolution-api";
+import { getTeamGroupJids } from "@/lib/services/team-groups";
 
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
@@ -159,6 +160,10 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // O nome do navio entra no início porque, em Embarque, a mensagem vai pros
+  // grupos fixos das equipes (Equipe 1/Equipe 2) — sem isso, não dá pra
+  // saber qual navio. Em Costado o grupo é do navio (título já tem o nome),
+  // mas mantemos por consistência.
   const groupMessage = isPreview && isCostado
     ? `🚢 *${shipName}*\n🧹 Operação de limpeza no costado em breve — aguardem instruções.`
     : isCostado
@@ -181,41 +186,85 @@ export async function POST(request: NextRequest) {
 
   const results: { target: string; ok: boolean; error?: string }[] = [];
 
-  // ── Group post (only if the ship has a linked group AND the caller asked) ─
+  // ── Group post ──────────────────────────────────────────────────────────
+  // EMBARQUE: broadcast pros 2 grupos fixos (Equipe 1 + Equipe 2). Não usa
+  // ship.whatsapp_group_jid mesmo se estiver setado — Embarque não tem mais
+  // grupo único por navio (mudança feita no fluxo de criação de navio).
+  // COSTADO: continua usando ship.whatsapp_group_jid (grupo do próprio navio).
   if (sendToGroup) {
-    if (ship.whatsapp_group_jid) {
-      try {
-        await sendWhatsappTextToGroup(ship.whatsapp_group_jid, groupMessage);
-        results.push({ target: `grupo:${ship.whatsapp_group_jid}`, ok: true });
-        // Espelha a mensagem no histórico do app — sem isso o usuário vê no
-        // WhatsApp mas não na aba Conversas.
+    if (isCostado) {
+      if (ship.whatsapp_group_jid) {
         try {
-          await prisma.whatsappMessage.create({
-            data: {
-              message_id: `escala-${ship.whatsapp_group_jid}-${Date.now()}`,
-              instance_name: process.env.EVOLUTION_INSTANCE || "default",
-              remote_jid: ship.whatsapp_group_jid,
-              from_me: true,
-              push_name: shipName,
-              message_type: "conversation",
-              text: groupMessage,
-              timestamp_ms: BigInt(Date.now()),
-              sent_by_user_id: session.user.id || null,
-              raw_event: { source: "escalacao-notify", kind: body.kind, mode: body.mode || "FULL" },
-            },
+          await sendWhatsappTextToGroup(ship.whatsapp_group_jid, groupMessage);
+          results.push({ target: `grupo:${ship.whatsapp_group_jid}`, ok: true });
+          try {
+            await prisma.whatsappMessage.create({
+              data: {
+                message_id: `escala-${ship.whatsapp_group_jid}-${Date.now()}`,
+                instance_name: process.env.EVOLUTION_INSTANCE || "default",
+                remote_jid: ship.whatsapp_group_jid,
+                from_me: true,
+                push_name: shipName,
+                message_type: "conversation",
+                text: groupMessage,
+                timestamp_ms: BigInt(Date.now()),
+                sent_by_user_id: session.user.id || null,
+                raw_event: { source: "escalacao-notify", kind: body.kind, mode: body.mode || "FULL" },
+              },
+            });
+          } catch (stubErr) {
+            console.warn("[notify] group stub insert failed:", (stubErr as Error).message);
+          }
+        } catch (err) {
+          results.push({
+            target: `grupo:${ship.whatsapp_group_jid}`,
+            ok: false,
+            error: (err as Error).message,
           });
-        } catch (stubErr) {
-          console.warn("[notify] group stub insert failed:", (stubErr as Error).message);
         }
-      } catch (err) {
-        results.push({
-          target: `grupo:${ship.whatsapp_group_jid}`,
-          ok: false,
-          error: (err as Error).message,
-        });
+      } else {
+        results.push({ target: "grupo", ok: false, error: "Navio não tem grupo do WhatsApp vinculado" });
       }
     } else {
-      results.push({ target: "grupo", ok: false, error: "Navio não tem grupo do WhatsApp vinculado" });
+      // EMBARQUE → broadcast pros 2 grupos fixos.
+      const teamJids = await getTeamGroupJids();
+      const broadcastTargets: { team: "EQUIPE_1" | "EQUIPE_2"; jid: string }[] = [];
+      if (teamJids.EQUIPE_1) broadcastTargets.push({ team: "EQUIPE_1", jid: teamJids.EQUIPE_1 });
+      if (teamJids.EQUIPE_2) broadcastTargets.push({ team: "EQUIPE_2", jid: teamJids.EQUIPE_2 });
+      if (broadcastTargets.length === 0) {
+        results.push({ target: "grupos-equipes", ok: false, error: "Grupos Equipe 1/Equipe 2 não encontrados (sincronize grupos ou configure WHATSAPP_EQUIPE_1_JID/WHATSAPP_EQUIPE_2_JID)" });
+      } else {
+        for (const { team, jid } of broadcastTargets) {
+          try {
+            await sendWhatsappTextToGroup(jid, groupMessage);
+            results.push({ target: `grupo:${team}`, ok: true });
+            try {
+              await prisma.whatsappMessage.create({
+                data: {
+                  message_id: `escala-${jid}-${Date.now()}`,
+                  instance_name: process.env.EVOLUTION_INSTANCE || "default",
+                  remote_jid: jid,
+                  from_me: true,
+                  push_name: team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2",
+                  message_type: "conversation",
+                  text: groupMessage,
+                  timestamp_ms: BigInt(Date.now()),
+                  sent_by_user_id: session.user.id || null,
+                  raw_event: { source: "escalacao-notify", kind: body.kind, mode: body.mode || "FULL", team },
+                },
+              });
+            } catch (stubErr) {
+              console.warn("[notify] group stub insert failed:", (stubErr as Error).message);
+            }
+          } catch (err) {
+            results.push({
+              target: `grupo:${team}`,
+              ok: false,
+              error: (err as Error).message,
+            });
+          }
+        }
+      }
     }
   }
 
