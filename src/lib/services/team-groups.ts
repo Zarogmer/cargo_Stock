@@ -5,11 +5,13 @@
 // Estratégia de resolução:
 //   1. Env vars (`WHATSAPP_EQUIPE_1_JID` / `WHATSAPP_EQUIPE_2_JID`) — override
 //      explícito, útil pra ambientes onde o nome do grupo no WhatsApp é
-//      diferente de "Equipe 1"/"Equipe 2".
-//   2. Lookup no banco — busca stubs de grupo (systemNotice) com push_name
-//      igual a "Equipe 1"/"Equipe 2". Stubs são gerados em /groups (criação)
-//      e /groups/sync (sincronização), então qualquer grupo já visto pelo
-//      app é encontrado aqui.
+//      diferente.
+//   2. Lookup no banco — busca stubs de grupo (systemNotice) cujo push_name
+//      comece com "Equipe 1"/"Equipe1" (ou 2), de forma flexível: aceita
+//      espaço opcional, case insensitive, e sufixos arbitrários (ex.:
+//      "Equipe1 / teste", "Equipe 1 - principal"). Stubs são gerados em
+//      /groups (criação) e /groups/sync (sincronização), então qualquer
+//      grupo já visto pelo app é encontrado aqui.
 //
 // Resolve "preguiçoso" — só chama o DB se o env var não tiver o JID. Cache
 // em memória pra não bater no DB toda vez.
@@ -17,11 +19,6 @@
 import { prisma } from "@/lib/prisma";
 
 export type TeamKey = "EQUIPE_1" | "EQUIPE_2";
-
-const TEAM_SUBJECTS: Record<TeamKey, string> = {
-  EQUIPE_1: "Equipe 1",
-  EQUIPE_2: "Equipe 2",
-};
 
 const TEAM_ENV_VARS: Record<TeamKey, string> = {
   EQUIPE_1: "WHATSAPP_EQUIPE_1_JID",
@@ -40,19 +37,34 @@ function readEnvJid(team: TeamKey): string | null {
   return v;
 }
 
+// Regex pra reconhecer o nome do grupo da equipe N. Aceita variações:
+//   "Equipe 1", "Equipe1", "equipe 1 / teste", "EQUIPE1 - principal"
+// O (?!\d) evita falso positivo em "Equipe 10" virando EQUIPE_1.
+function teamSubjectRegex(team: TeamKey): RegExp {
+  const num = team === "EQUIPE_1" ? "1" : "2";
+  return new RegExp(`^\\s*equipe\\s*${num}(?!\\d)`, "i");
+}
+
 async function lookupJid(team: TeamKey): Promise<string | null> {
-  const subject = TEAM_SUBJECTS[team];
-  const row = await prisma.whatsappMessage.findFirst({
+  const re = teamSubjectRegex(team);
+  // Pré-filtra no banco pelos stubs que começam com "Equipe" (qualquer caixa);
+  // o regex em JS faz o match exato com a fronteira de dígito. Pega o mais
+  // recente — se houver mais de um grupo com o nome, o último sincronizado
+  // ganha (provavelmente é o que o usuário acabou de criar/renomear).
+  const candidates = await prisma.whatsappMessage.findMany({
     where: {
       from_me: true,
       message_type: "systemNotice",
-      push_name: subject,
       remote_jid: { endsWith: "@g.us" },
+      push_name: { startsWith: "Equipe", mode: "insensitive" },
     },
     orderBy: { timestamp_ms: "desc" },
-    select: { remote_jid: true },
+    select: { remote_jid: true, push_name: true },
   });
-  return row?.remote_jid || null;
+  for (const c of candidates) {
+    if (c.push_name && re.test(c.push_name)) return c.remote_jid;
+  }
+  return null;
 }
 
 export async function getTeamGroupJid(team: TeamKey): Promise<string | null> {

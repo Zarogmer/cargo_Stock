@@ -175,7 +175,7 @@ async function broadcastEmbarqueToTeams(args: {
   if (targets.length === 0) {
     return NextResponse.json({
       status: "partial",
-      warning: "Nenhum grupo de equipe encontrado. Configure WHATSAPP_EQUIPE_1_JID/WHATSAPP_EQUIPE_2_JID ou sincronize grupos com nome 'Equipe 1' e 'Equipe 2'.",
+      warning: "Nenhum grupo de equipe encontrado. Crie grupos no WhatsApp começando com 'Equipe 1' / 'Equipe 2' (ex.: 'Equipe1 / teste' funciona) e rode Sincronizar grupos. Alternativamente, configure WHATSAPP_EQUIPE_1_JID/WHATSAPP_EQUIPE_2_JID.",
     });
   }
 
