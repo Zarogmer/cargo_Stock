@@ -1234,33 +1234,10 @@ export default function NaviosPage() {
                 </p>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-text mb-1">Equipe Designada</label>
-                <select
-                  value={form.assigned_team}
-                  onChange={(e) => setForm({ ...form, assigned_team: e.target.value })}
-                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm bg-white"
-                >
-                  <option value="">Sem equipe</option>
-                  <option value="EQUIPE_1">Equipe 1</option>
-                  <option value="EQUIPE_2">Equipe 2</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-text mb-1">Cliente</label>
-                <ComboBox
-                  value={form.client_name}
-                  onChange={(v) => setForm({ ...form, client_name: v })}
-                  options={knownClients}
-                  placeholder="Selecione ou digite um cliente..."
-                  addLabel="Adicionar cliente"
-                />
-                <p className="text-[10px] text-text-light mt-1">
-                  Selecione um cliente da lista ou digite um novo — ele será adicionado ao salvar.
-                </p>
-              </div>
-
+              {/* Tipo da Operação sobe pra cima — define o resto do form.
+                  Em Costado, Equipe Designada some (cria grupo proprio do
+                  navio), e Cliente continua aparecendo. Serviços só aparecem
+                  em Embarque. */}
               <div>
                 <label className="block text-sm font-medium text-text mb-1">Tipo da Operação</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -1279,7 +1256,14 @@ export default function NaviosPage() {
                           type="radio"
                           name="operation_type"
                           checked={checked}
-                          onChange={() => setForm({ ...form, operation_type: t, services: t === "COSTADO" ? [] : form.services })}
+                          onChange={() => setForm({
+                            ...form,
+                            operation_type: t,
+                            services: t === "COSTADO" ? [] : form.services,
+                            // Costado cria grupo próprio do navio — não usa
+                            // assigned_team. Limpa pra não persistir lixo.
+                            assigned_team: t === "COSTADO" ? "" : form.assigned_team,
+                          })}
                           className="h-4 w-4 accent-primary"
                         />
                         <span>{t === "EMBARQUE" ? "⚓ Embarque" : "🧹 Costado"}</span>
@@ -1328,6 +1312,38 @@ export default function NaviosPage() {
                     🧹 <strong>Costado:</strong> sem sub-serviços.
                   </p>
                 )}
+              </div>
+
+              {/* Equipe Designada só faz sentido pra Embarque — define qual
+                  grupo fixo (Equipe 1 / Equipe 2) receberá a mensagem. Em
+                  Costado um grupo novo é criado por navio. */}
+              {form.operation_type === "EMBARQUE" && (
+                <div>
+                  <label className="block text-sm font-medium text-text mb-1">Equipe Designada</label>
+                  <select
+                    value={form.assigned_team}
+                    onChange={(e) => setForm({ ...form, assigned_team: e.target.value })}
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm bg-white"
+                  >
+                    <option value="">Sem equipe</option>
+                    <option value="EQUIPE_1">Equipe 1</option>
+                    <option value="EQUIPE_2">Equipe 2</option>
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-text mb-1">Cliente</label>
+                <ComboBox
+                  value={form.client_name}
+                  onChange={(v) => setForm({ ...form, client_name: v })}
+                  options={knownClients}
+                  placeholder="Selecione ou digite um cliente..."
+                  addLabel="Adicionar cliente"
+                />
+                <p className="text-[10px] text-text-light mt-1">
+                  Selecione um cliente da lista ou digite um novo — ele será adicionado ao salvar.
+                </p>
               </div>
 
               {form.operation_type === "EMBARQUE" && (
