@@ -110,8 +110,15 @@ function buildShipWelcomeMessage(ship: {
   // Chegada/Saída, Produto e Navio (nome em grupos do navio) foram retirados
   // a pedido do RH — a mensagem fica focada no que o funcionário precisa
   // saber pra executar o serviço (situação, local, porões, serviços, equipe).
-  if (ship.port) lines.push(`📍 *Local:* ${ship.port}`);
-  if (ship.holds_count != null) lines.push(`🕳️ *Porões:* ${ship.holds_count}`);
+  //
+  // Local (port) e Porões não entram no Costado — o grupo é específico do
+  // navio e a info de porto é redundante na operação de limpeza (a pedido
+  // do RH, mensagem do Costado fica enxuta: só "NOVA OPERAÇÃO" + Serviço).
+  // Embarque continua mostrando os dois.
+  if (!isCostado) {
+    if (ship.port) lines.push(`📍 *Local:* ${ship.port}`);
+    if (ship.holds_count != null) lines.push(`🕳️ *Porões:* ${ship.holds_count}`);
+  }
 
   if (!isCostado) {
     const subs = ship.services.filter((s) => s !== "COSTADO");
