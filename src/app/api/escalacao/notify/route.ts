@@ -100,6 +100,11 @@ export async function POST(request: NextRequest) {
     where: { id: { in: body.employeeIds } },
     select: { id: true, name: true, phone: true },
   });
+  const phoneByEmployee = new Map<number, string>();
+  for (const e of employees) {
+    const p = (e.phone || "").trim();
+    if (p) phoneByEmployee.set(e.id, p);
+  }
 
   // ── Build the messages ──────────────────────────────────────────────────
   const isCostado = body.kind === "COSTADO";
@@ -137,7 +142,23 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Lista de números (no formato 55DDDxxxxxxxx, sem JID) pra usar como
+  // `mentioned` da Evolution. Só é populada no fluxo de Costado — Embarque
+  // mantém o formato textual antigo (nome + função).
+  const costadoMentions: string[] = [];
   function lineFor(emp: { id: number; name: string }): string {
+    if (isCostado) {
+      // Costado: marca com @ usando o número (renderiza como contato no
+      // WhatsApp + notifica o usuário). Sem função, só @número.
+      // Fallback: se não tem telefone, cai no nome cru.
+      const phone = phoneByEmployee.get(emp.id);
+      if (!phone) return `• ${emp.name}`;
+      const digits = phone.replace(/\D/g, "");
+      const normalized = digits.startsWith("55") ? digits : `55${digits}`;
+      costadoMentions.push(normalized);
+      return `• @${normalized}`;
+    }
+    // Embarque: nome + função (formato original).
     const fn = fnByEmployee.get(emp.id);
     return fn ? `• ${emp.name} — *${fn}*` : `• ${emp.name}`;
   }
@@ -207,7 +228,9 @@ export async function POST(request: NextRequest) {
     if (isCostado) {
       if (ship.whatsapp_group_jid) {
         try {
-          await sendWhatsappTextToGroup(ship.whatsapp_group_jid, groupMessage);
+          // Passa as menções (preenchidas em lineFor) pra Evolution marcar
+          // cada @numero como mention de verdade no WhatsApp.
+          await sendWhatsappTextToGroup(ship.whatsapp_group_jid, groupMessage, costadoMentions);
           results.push({ target: `grupo:${ship.whatsapp_group_jid}`, ok: true });
           try {
             await prisma.whatsappMessage.create({

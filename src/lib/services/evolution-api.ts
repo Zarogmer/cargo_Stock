@@ -146,13 +146,33 @@ export async function sendWhatsappText(to: string, text: string): Promise<unknow
 
 // Sends a text message to a group identified by its full JID (e.g. "12036...@g.us").
 // Same endpoint as sendWhatsappText but the "number" field carries the group JID.
-export async function sendWhatsappTextToGroup(groupJid: string, text: string): Promise<unknown> {
+//
+// `mentions` é opcional — array de telefones (brutos, vamos normalizar) que
+// devem ser marcados (@) na mensagem. O texto da mensagem precisa conter
+// `@<numero>` correspondente; o `mentioned` na payload faz o WhatsApp tratar
+// como menção de verdade (notifica o usuário e renderiza com o nome dele).
+export async function sendWhatsappTextToGroup(
+  groupJid: string,
+  text: string,
+  mentions?: string[],
+): Promise<unknown> {
   const cfg = readConfig();
   if (!groupJid.endsWith("@g.us")) throw new Error("JID de grupo inválido.");
   const token = await getInstanceToken();
+  const payload: Record<string, unknown> = { number: groupJid, text };
+  if (mentions && mentions.length > 0) {
+    const normalized = Array.from(new Set(
+      mentions
+        .map((p) => normalizeBRNumber(p))
+        .filter((p) => p.length >= 12),
+    ));
+    if (normalized.length > 0) {
+      payload.mentioned = normalized;
+    }
+  }
   return evolutionFetch(
     `/message/sendText/${encodeURIComponent(cfg.instance)}`,
-    { method: "POST", body: JSON.stringify({ number: groupJid, text }) },
+    { method: "POST", body: JSON.stringify(payload) },
     token,
   );
 }
