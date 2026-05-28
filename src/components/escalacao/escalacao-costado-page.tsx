@@ -669,10 +669,10 @@ function AddCostadoCrewModal({
   const [perEmpFn, setPerEmpFn] = useState<Map<number, string>>(new Map());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  // Where to send the WhatsApp notification after the shift is saved.
-  // "BOTH" = group post + individual DMs (default), "GROUP" = only group,
-  // "DM" = only DMs.
-  const [notifyTarget, setNotifyTarget] = useState<"BOTH" | "GROUP" | "DM">("BOTH");
+  // Costado sempre avisa SÓ no grupo do navio (a pedido do RH — o picker
+  // anterior foi removido). DMs individuais ficam pro fluxo de Embarque,
+  // onde fazem sentido. Aqui o grupo é específico do navio e todos os
+  // escalados já são membros, então DM redundaria.
 
   useEffect(() => {
     if (open) {
@@ -680,7 +680,6 @@ function AddCostadoCrewModal({
       setSelectedIds(new Set());
       setPerEmpFn(new Map());
       setError("");
-      setNotifyTarget("BOTH");
     }
   }, [open]);
 
@@ -790,7 +789,8 @@ function AddCostadoCrewModal({
           shiftDate: date,
           shiftPeriod: period,
           employeeIds: Array.from(selectedIds),
-          targets: notifyTarget,
+          // Costado avisa só no grupo do navio — DMs ficam pro Embarque.
+          targets: "GROUP",
         }),
       }).catch((err) => console.warn("[escalacao] notify failed:", err));
       onSaved();
@@ -902,39 +902,13 @@ function AddCostadoCrewModal({
           </div>
         </div>
 
-        {/* WhatsApp target picker — controls who gets the notification after save. */}
+        {/* Costado avisa SÓ no grupo do navio (sem DM, sem picker). Pedido
+            do RH: o grupo é específico do navio, todos os escalados são
+            membros, então a DM individual fica redundante. Picker antigo
+            (Grupo+Privado / Só Grupo / Só Privado) foi removido. */}
         <div className="border-t border-border pt-3">
-          <label className="block text-xs uppercase tracking-wider text-text-light font-semibold mb-2">
-            📲 Avisar via WhatsApp
-          </label>
-          <div className="grid grid-cols-3 gap-2">
-            {([
-              { value: "BOTH", label: "Grupo + Privado", hint: "Tudo" },
-              { value: "GROUP", label: "Só no grupo", hint: "Sem DM" },
-              { value: "DM", label: "Só no privado", hint: "Sem grupo" },
-            ] as const).map((opt) => {
-              const active = notifyTarget === opt.value;
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setNotifyTarget(opt.value)}
-                  className={`px-3 py-2 rounded-lg border text-xs font-medium transition text-left ${
-                    active
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-white text-text hover:border-primary/40"
-                  }`}
-                >
-                  <p className="font-semibold leading-tight">{opt.label}</p>
-                  <p className="text-[10px] opacity-70 mt-0.5">{opt.hint}</p>
-                </button>
-              );
-            })}
-          </div>
-          <p className="text-[10px] text-text-light mt-1.5">
-            {notifyTarget === "BOTH" && "Posta no grupo do navio (se vinculado) e manda DM pra cada escalado."}
-            {notifyTarget === "GROUP" && "Só posta no grupo do navio. Ninguém recebe DM."}
-            {notifyTarget === "DM" && "Só manda DM individual. Nada no grupo."}
+          <p className="text-[11px] text-text-light bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+            📲 Avisará apenas o <strong>grupo do navio</strong> no WhatsApp. Sem DM individual.
           </p>
         </div>
 
