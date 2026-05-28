@@ -149,7 +149,7 @@ async function broadcastEmbarqueToTeams(args: {
   employeeIds: number[];
   sentByUserId: string | null;
 }): Promise<NextResponse> {
-  const { shipId, sentByUserId } = args;
+  const { shipId, employeeIds, sentByUserId } = args;
 
   const ship = await prisma.ship.findUnique({
     where: { id: shipId },
@@ -193,6 +193,30 @@ async function broadcastEmbarqueToTeams(args: {
   const { message } = buildShipWelcomeMessage(ship, { includeShipName: false });
   const instance = process.env.EVOLUTION_INSTANCE || "default";
 
+  // Re-adiciona os escalados no grupo da equipe. WhatsApp permite que os
+  // funcionários saiam do grupo manualmente; quando voltam a ser escalados,
+  // precisam estar no grupo de novo pra receber a mensagem. Falha aqui é
+  // não-fatal (mensagem ainda é enviada) e tolerante a "já é membro" — o
+  // Evolution geralmente responde 200 mesmo nesse caso.
+  let addParticipantsWarning: string | null = null;
+  if (employeeIds.length > 0) {
+    const emps = await prisma.employee.findMany({
+      where: { id: { in: employeeIds } },
+      select: { phone: true },
+    });
+    const phones = emps
+      .map((e) => (e.phone || "").trim())
+      .filter((p) => p.length > 0);
+    if (phones.length > 0) {
+      try {
+        await updateGroupParticipants(jid, "add", phones);
+      } catch (addErr) {
+        addParticipantsWarning = `Aviso: falha ao re-adicionar ${phones.length} colaborador(es) no grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}: ${(addErr as Error).message}`;
+        console.warn("[groups] add participants failed:", (addErr as Error).message);
+      }
+    }
+  }
+
   try {
     await sendWhatsappTextToGroup(jid, message);
     try {
@@ -214,9 +238,10 @@ async function broadcastEmbarqueToTeams(args: {
       console.warn("[groups] broadcast stub insert failed:", (stubErr as Error).message);
     }
     return NextResponse.json({
-      status: "ok",
+      status: addParticipantsWarning ? "partial" : "ok",
       broadcast: true,
       target: { team, jid, ok: true },
+      ...(addParticipantsWarning && { warning: addParticipantsWarning }),
     });
   } catch (err) {
     return NextResponse.json({

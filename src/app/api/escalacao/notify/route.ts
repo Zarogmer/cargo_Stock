@@ -180,16 +180,16 @@ export async function POST(request: NextRequest) {
     if (isCostado) {
       return `Olá, ${emp.name}!\n\nVocê foi escalado(a) para o navio *${shipName}* — turno da ${shiftLabel} do dia ${dateLabel}.\n\n~Equipe Cargo Ships`;
     }
-    // Embarque: literalmente "Você foi escalado(a) na Equipe N." e nada mais
-    // (pedido do RH no card #36 do Trello — "apenas" essa frase). Se por algum
-    // motivo o navio não tiver equipe designada, mensagem genérica de embarque.
-    if (assignedTeam === "EQUIPE_1") {
-      return "Você foi escalado(a) na Equipe 1.";
-    }
-    if (assignedTeam === "EQUIPE_2") {
-      return "Você foi escalado(a) na Equipe 2.";
-    }
-    return "Você foi escalado(a) para o embarque.";
+    // Embarque: greeting + "Você foi escalado(a) na Equipe N." + signature.
+    // Card #36 pediu "apenas essa frase" mas o #40 reverteu — usuario achou
+    // muito direto sem o "Olá" e o "~Equipe Cargo Ships". Mantém o corpo
+    // minimalista (sem nome do navio, sem função, sem porto).
+    const teamLine = assignedTeam === "EQUIPE_1"
+      ? "Você foi escalado(a) na Equipe 1."
+      : assignedTeam === "EQUIPE_2"
+        ? "Você foi escalado(a) na Equipe 2."
+        : "Você foi escalado(a) para o embarque.";
+    return `Olá, ${emp.name}!\n\n${teamLine}\n\n~Equipe Cargo Ships`;
   }
 
   const targets: NotifyTargets = body.targets || "BOTH";

@@ -1485,6 +1485,27 @@ export default function NaviosPage() {
                           </p>
                         )}
 
+                        {/* Embarque: badge mostrando qual equipe receberá a
+                            mensagem (card Trello #39). Cores combinam com o
+                            badge da equipe na lista de navios (linha ~977):
+                            Equipe 1 = azul, Equipe 2 = roxo. Sem equipe =
+                            âmbar de alerta. */}
+                        {!isCostadoForm && (
+                          form.assigned_team === "EQUIPE_1" ? (
+                            <div className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-blue-100 text-blue-700 border border-blue-200">
+                              🎯 Equipe 1 será notificada
+                            </div>
+                          ) : form.assigned_team === "EQUIPE_2" ? (
+                            <div className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-purple-100 text-purple-700 border border-purple-200">
+                              🎯 Equipe 2 será notificada
+                            </div>
+                          ) : (
+                            <div className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-amber-100 text-amber-800 border border-amber-300">
+                              ⚠️ Selecione uma Equipe Designada acima — sem equipe, nenhum grupo receberá o aviso
+                            </div>
+                          )
+                        )}
+
                         {/* Setor Administrativo só faz sentido no Costado, onde
                             criamos um grupo novo. No Embarque a mensagem vai
                             pros grupos fixos das equipes, que já têm os
