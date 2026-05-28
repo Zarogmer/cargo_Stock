@@ -390,18 +390,21 @@ export default function NaviosPage() {
     setGroupPerEmpFn(new Map());
     setCostadoShiftDate(new Date().toISOString().slice(0, 10));
     setCostadoShiftPeriod("07-13");
+    const opType = getOperationType(ship.services);
     setForm({
       name: ship.name,
       // <input type="date"> needs YYYY-MM-DD — the DB returns full ISO timestamps.
       arrival_date: ship.arrival_date ? ship.arrival_date.slice(0, 10) : "",
       departure_date: ship.departure_date ? ship.departure_date.slice(0, 10) : "",
-      port: ship.port || "",
+      // Costado eh sempre Santos -- ignora o que tiver no banco (pode ser
+      // legado de antes desta regra).
+      port: opType === "COSTADO" ? "Santos" : (ship.port || ""),
       status: ship.status,
       assigned_team: ship.assigned_team || "",
       cargo_type: ship.cargo_type || "",
       holds_count: ship.holds_count != null ? String(ship.holds_count) : "",
       client_name: ship.client_name || "",
-      operation_type: getOperationType(ship.services),
+      operation_type: opType,
       services: (ship.services || []).filter((s) => s !== "COSTADO"),
       boarding_situation: (ship.boarding_situation || "") as BoardingSituation | "",
       // DB devolve ISO "2026-05-26T13:00:00.000Z". datetime-local quer "2026-05-26T13:00".
@@ -1253,9 +1256,12 @@ export default function NaviosPage() {
                   options={knownPorts}
                   placeholder="Selecione ou digite um porto..."
                   addLabel="Adicionar porto"
+                  disabled={form.operation_type === "COSTADO"}
                 />
                 <p className="text-[10px] text-text-light mt-1">
-                  Selecione um porto da lista ou digite um novo — ele será adicionado ao salvar.
+                  {form.operation_type === "COSTADO"
+                    ? "🔒 Costado é sempre no porto de Santos — não editável."
+                    : "Selecione um porto da lista ou digite um novo — ele será adicionado ao salvar."}
                 </p>
               </div>
 
@@ -1288,6 +1294,11 @@ export default function NaviosPage() {
                             // Costado cria grupo próprio do navio — não usa
                             // assigned_team. Limpa pra não persistir lixo.
                             assigned_team: t === "COSTADO" ? "" : form.assigned_team,
+                            // Costado eh sempre no porto de Santos -- a operacao
+                            // de limpeza de costado da empresa so acontece la.
+                            // Se voltar pra Embarque, mantem o que o usuario
+                            // tiver digitado (pode ser outro porto).
+                            port: t === "COSTADO" ? "Santos" : form.port,
                           })}
                           className="h-4 w-4 accent-primary"
                         />
@@ -1995,12 +2006,14 @@ function ComboBox({
   options,
   placeholder,
   addLabel,
+  disabled,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: string[];
   placeholder?: string;
   addLabel: string;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2034,12 +2047,16 @@ function ComboBox({
       <input
         type="text"
         value={value}
-        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
+        onChange={(e) => { if (disabled) return; onChange(e.target.value); setOpen(true); }}
+        onFocus={() => { if (!disabled) setOpen(true); }}
         placeholder={placeholder}
-        className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+        disabled={disabled}
+        readOnly={disabled}
+        className={`w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm ${
+          disabled ? "bg-gray-100 text-text-light cursor-not-allowed" : ""
+        }`}
       />
-      {open && (filtered.length > 0 || showAdd) && (
+      {!disabled && open && (filtered.length > 0 || showAdd) && (
         <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-56 overflow-y-auto bg-white border border-border rounded-lg shadow-lg">
           {filtered.map((opt) => (
             <button
