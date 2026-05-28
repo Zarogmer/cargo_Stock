@@ -9,7 +9,7 @@ import {
   updateGroupParticipants,
 } from "@/lib/services/evolution-api";
 import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
-import { getTeamGroupJid } from "@/lib/services/team-groups";
+import { clearTeamGroupCache, getTeamGroupJid } from "@/lib/services/team-groups";
 
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
@@ -180,7 +180,12 @@ async function broadcastEmbarqueToTeams(args: {
     });
   }
 
+  // Limpa o cache antes do lookup pra garantir que pegamos o JID mais recente.
+  // Se o usuário renomeou o grupo no WhatsApp e fez sync, o cache pode estar
+  // apontando pra um stub velho. clearTeamGroupCache() é leve (Map.delete).
+  clearTeamGroupCache(team);
   const jid = await getTeamGroupJid(team);
+  console.log(`[groups] embarque lookup: team=${team} jid=${jid}`);
   if (!jid) {
     return NextResponse.json({
       status: "partial",
@@ -198,23 +203,36 @@ async function broadcastEmbarqueToTeams(args: {
   // precisam estar no grupo de novo pra receber a mensagem. Falha aqui é
   // não-fatal (mensagem ainda é enviada) e tolerante a "já é membro" — o
   // Evolution geralmente responde 200 mesmo nesse caso.
+  //
+  // Logging: cada passo é logado pra Railway porque já tivemos relato de
+  // "saí do grupo e não fui re-adicionado" — sem trace, fica impossível
+  // dizer se o problema é (a) código não chamou, (b) Evolution rejeitou,
+  // ou (c) WhatsApp bloqueou o add (acontece quando o número não tem o
+  // bot na agenda dele).
   let addParticipantsWarning: string | null = null;
   if (employeeIds.length > 0) {
     const emps = await prisma.employee.findMany({
       where: { id: { in: employeeIds } },
-      select: { phone: true },
+      select: { id: true, name: true, phone: true },
     });
-    const phones = emps
-      .map((e) => (e.phone || "").trim())
-      .filter((p) => p.length > 0);
+    const validPhones = emps.filter((e) => (e.phone || "").trim().length > 0);
+    const phones = validPhones.map((e) => (e.phone || "").trim());
+    console.log(
+      `[groups] embarque add: team=${team} jid=${jid} candidatos=${employeeIds.length} com_phone=${phones.length} phones=${phones.join(",")}`,
+    );
     if (phones.length > 0) {
       try {
-        await updateGroupParticipants(jid, "add", phones);
+        const addResult = await updateGroupParticipants(jid, "add", phones);
+        console.log(`[groups] embarque add result:`, JSON.stringify(addResult).slice(0, 500));
       } catch (addErr) {
         addParticipantsWarning = `Aviso: falha ao re-adicionar ${phones.length} colaborador(es) no grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}: ${(addErr as Error).message}`;
         console.warn("[groups] add participants failed:", (addErr as Error).message);
       }
+    } else {
+      console.warn("[groups] embarque add: nenhum colaborador com telefone valido — nada pra adicionar");
     }
+  } else {
+    console.warn("[groups] embarque add: employeeIds vazio — pulando add no grupo");
   }
 
   try {
@@ -313,9 +331,25 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    console.log(`[groups] costado create: subject="${subject}" participants=${participants.length} phones=${participants.join(",")}`);
     const created = await createWhatsappGroup(subject, participants);
     // Evolution returns the JID in different shapes depending on version; cover both.
     const jid = (created.id || created.groupJid || "") as string;
+    console.log(`[groups] costado create result: jid=${jid}`);
+
+    // Reforço: depois do create, chama updateGroupParticipants('add', ...) pra
+    // garantir que TODOS os números entraram. Em algumas versões do Evolution
+    // o create silenciosamente skipa números que não estão na agenda do bot,
+    // e o usuário fica sem entender por que alguém ficou de fora. Esse add
+    // extra cobre isso — pra quem já está no grupo, vira no-op.
+    if (jid && participants.length > 0) {
+      try {
+        const addResult = await updateGroupParticipants(jid, "add", participants);
+        console.log(`[groups] costado reinforced add:`, JSON.stringify(addResult).slice(0, 500));
+      } catch (addErr) {
+        console.warn("[groups] costado reinforced add failed:", (addErr as Error).message);
+      }
+    }
 
     // Insert a "systemNotice" stub so the group shows up in the Conversas list
     // immediately — without it the conversation only materializes once someone
