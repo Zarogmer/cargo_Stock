@@ -1432,7 +1432,7 @@ export default function NaviosPage() {
                     />
                     <span className="text-sm font-medium text-text">
                       {form.operation_type === "EMBARQUE"
-                        ? "💬 Avisar grupos Equipe 1 + Equipe 2 + escalar colaboradores"
+                        ? "💬 Avisar grupo da equipe designada + escalar colaboradores"
                         : "💬 Criar grupo no WhatsApp + escalar colaboradores"}
                     </span>
                   </label>
@@ -1482,8 +1482,17 @@ export default function NaviosPage() {
                             </>
                           ) : (
                             <>
-                              A mensagem da operação{form.name.trim() && <> do <strong className="text-text">{form.name.trim()}</strong></>} será enviada pros 2 grupos fixos{" "}
-                              <strong className="text-text">Equipe 1</strong> e <strong className="text-text">Equipe 2</strong> no WhatsApp. Cada colaborador selecionado também é escalado em{" "}
+                              A mensagem da operação será enviada{" "}
+                              <strong className="text-text">
+                                {form.assigned_team === "EQUIPE_1"
+                                  ? "para o grupo da Equipe 1"
+                                  : form.assigned_team === "EQUIPE_2"
+                                    ? "para o grupo da Equipe 2"
+                                    : "para o grupo da equipe designada"}
+                              </strong>
+                              {" "}no WhatsApp{!form.assigned_team && (
+                                <> — <strong className="text-amber-700">selecione uma equipe acima</strong> ou nenhum grupo receberá o aviso</>
+                              )}. Cada colaborador selecionado também é escalado em{" "}
                               <strong className="text-text">⚓ Escalação de Embarque</strong>{" "}
                               — escolha a função de cada um.
                             </>

@@ -9,7 +9,7 @@ import {
   updateGroupParticipants,
 } from "@/lib/services/evolution-api";
 import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
-import { getTeamGroupJids } from "@/lib/services/team-groups";
+import { getTeamGroupJid } from "@/lib/services/team-groups";
 
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
@@ -133,13 +133,14 @@ function buildShipWelcomeMessage(ship: {
   return { description, message };
 }
 
-// Embarque: manda a mensagem inicial pros 2 grupos fixos (Equipe 1 + Equipe 2)
-// em vez de criar um grupo novo por navio. Os grupos já existem no WhatsApp
-// e foram cadastrados antes (a resolução do JID é feita pelo helper
-// team-groups, com fallback automático via push_name).
+// Embarque: manda a mensagem inicial pro grupo fixo da equipe designada do
+// navio (Equipe 1 OU Equipe 2 — não broadcast pros dois). A escolha vem do
+// campo `assigned_team` no cadastro do navio.
 //
 // Comportamento:
 //   • Não cria grupo nenhum.
+//   • Só envia pro grupo da equipe designada. Se assigned_team vazio, retorna
+//     warning e não manda nada (DMs individuais continuam funcionando).
 //   • Não altera Ship.whatsapp_group_jid (não há grupo único por navio).
 //   • Não muda descrição dos grupos das equipes (elas são fixas).
 //   • Persiste a mensagem em `whatsapp_messages` pra aparecer em Conversas.
@@ -167,67 +168,63 @@ async function broadcastEmbarqueToTeams(args: {
   });
   if (!ship) return NextResponse.json({ error: "Navio não encontrado" }, { status: 404 });
 
-  const jids = await getTeamGroupJids();
-  const targets: { team: "EQUIPE_1" | "EQUIPE_2"; jid: string }[] = [];
-  if (jids.EQUIPE_1) targets.push({ team: "EQUIPE_1", jid: jids.EQUIPE_1 });
-  if (jids.EQUIPE_2) targets.push({ team: "EQUIPE_2", jid: jids.EQUIPE_2 });
-
-  if (targets.length === 0) {
+  // Sem equipe designada não tem pra onde mandar. Não é erro fatal — DMs
+  // continuam saindo, só não há broadcast em grupo.
+  const team = ship.assigned_team === "EQUIPE_1" || ship.assigned_team === "EQUIPE_2"
+    ? (ship.assigned_team as "EQUIPE_1" | "EQUIPE_2")
+    : null;
+  if (!team) {
     return NextResponse.json({
       status: "partial",
-      warning: "Nenhum grupo de equipe encontrado. Crie grupos no WhatsApp começando com 'Equipe 1' / 'Equipe 2' (ex.: 'Equipe1 / teste' funciona) e rode Sincronizar grupos. Alternativamente, configure WHATSAPP_EQUIPE_1_JID/WHATSAPP_EQUIPE_2_JID.",
+      warning: "Equipe designada não informada no navio — defina Equipe 1 ou Equipe 2 pra enviar aviso ao grupo.",
     });
   }
 
-  // Inclui o nome do navio na mensagem — em grupo fixo de equipe, o título
-  // do grupo não diz qual navio é, então o nome precisa estar no corpo.
-  const { message } = buildShipWelcomeMessage(ship, { includeShipName: true });
+  const jid = await getTeamGroupJid(team);
+  if (!jid) {
+    return NextResponse.json({
+      status: "partial",
+      warning: `Grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"} não encontrado. Crie um grupo no WhatsApp começando com '${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}' e rode Sincronizar grupos.`,
+    });
+  }
+
+  // Nome do navio NÃO entra na mensagem do grupo — a pedido do RH, mantém
+  // o texto focado no que o funcionário precisa saber pra executar o serviço.
+  const { message } = buildShipWelcomeMessage(ship, { includeShipName: false });
   const instance = process.env.EVOLUTION_INSTANCE || "default";
 
-  const results: { team: string; jid: string; ok: boolean; error?: string }[] = [];
-  for (const { team, jid } of targets) {
+  try {
+    await sendWhatsappTextToGroup(jid, message);
     try {
-      await sendWhatsappTextToGroup(jid, message);
-      results.push({ team, jid, ok: true });
-      try {
-        await prisma.whatsappMessage.create({
-          data: {
-            message_id: `embarque-broadcast-${jid}-${Date.now()}`,
-            instance_name: instance,
-            remote_jid: jid,
-            from_me: true,
-            push_name: team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2",
-            message_type: "conversation",
-            text: message,
-            timestamp_ms: BigInt(Date.now()),
-            sent_by_user_id: sentByUserId,
-            raw_event: { source: "embarque-broadcast", shipId, team },
-          },
-        });
-      } catch (stubErr) {
-        console.warn("[groups] broadcast stub insert failed:", (stubErr as Error).message);
-      }
-    } catch (err) {
-      results.push({ team, jid, ok: false, error: (err as Error).message });
+      await prisma.whatsappMessage.create({
+        data: {
+          message_id: `embarque-broadcast-${jid}-${Date.now()}`,
+          instance_name: instance,
+          remote_jid: jid,
+          from_me: true,
+          push_name: team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2",
+          message_type: "conversation",
+          text: message,
+          timestamp_ms: BigInt(Date.now()),
+          sent_by_user_id: sentByUserId,
+          raw_event: { source: "embarque-broadcast", shipId, team },
+        },
+      });
+    } catch (stubErr) {
+      console.warn("[groups] broadcast stub insert failed:", (stubErr as Error).message);
     }
-  }
-
-  const failed = results.filter((r) => !r.ok);
-  if (failed.length === results.length) {
+    return NextResponse.json({
+      status: "ok",
+      broadcast: true,
+      target: { team, jid, ok: true },
+    });
+  } catch (err) {
     return NextResponse.json({
       status: "partial",
-      warning: `Falha ao enviar pros grupos das equipes: ${failed[0].error}`,
-      results,
+      warning: `Falha ao enviar pro grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}: ${(err as Error).message}`,
+      target: { team, jid, ok: false, error: (err as Error).message },
     });
   }
-  return NextResponse.json({
-    status: failed.length > 0 ? "partial" : "ok",
-    broadcast: true,
-    targets: results,
-    ...(failed.length > 0 && {
-      warning: `${failed.length} grupo(s) falharam: ${failed.map((f) => `${f.team} (${f.error})`).join(", ")}`,
-    }),
-  });
 }
 
 // POST /api/whatsapp/groups
@@ -239,8 +236,10 @@ async function broadcastEmbarqueToTeams(args: {
 //    Usado por Costado: cria grupo do navio e linka em Ship.whatsapp_group_jid.
 //
 // 2) `mode: "BROADCAST_TEAMS"` — não cria grupo nenhum. Manda a mensagem
-//    inicial de operação pros 2 grupos fixos (Equipe 1 e Equipe 2) que
-//    já existem no WhatsApp. Usado por Embarque.
+//    inicial de operação pro grupo fixo da equipe designada do navio
+//    (assigned_team = EQUIPE_1 ou EQUIPE_2). Usado por Embarque.
+//    Nome "BROADCAST_TEAMS" é histórico — antes mandava pros dois grupos,
+//    agora vai só pra um, mas o frontend ainda usa esse identificador.
 //    Body: { mode: "BROADCAST_TEAMS", shipId, employeeIds? }
 //    Não mexe em Ship.whatsapp_group_jid (não há um grupo único por navio).
 export async function POST(request: NextRequest) {

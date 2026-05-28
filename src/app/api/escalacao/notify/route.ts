@@ -6,7 +6,7 @@ import {
   sendWhatsappText,
   sendWhatsappTextToGroup,
 } from "@/lib/services/evolution-api";
-import { getTeamGroupJids } from "@/lib/services/team-groups";
+import { getTeamGroupJid } from "@/lib/services/team-groups";
 
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
@@ -89,6 +89,7 @@ export async function POST(request: NextRequest) {
       id: true,
       name: true,
       whatsapp_group_jid: true,
+      assigned_team: true,
       boarding_situation: true,
       boarding_scheduled_at: true,
     },
@@ -160,24 +161,28 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // O nome do navio entra no início porque, em Embarque, a mensagem vai pros
-  // grupos fixos das equipes (Equipe 1/Equipe 2) — sem isso, não dá pra
-  // saber qual navio. Em Costado o grupo é do navio (título já tem o nome),
-  // mas mantemos por consistência.
+  // Embarque: nome do navio NÃO entra na mensagem do grupo (a pedido do RH,
+  // pra não vazar info do cliente). Costado continua com o nome porque o grupo
+  // é do navio e a mensagem precisa identificar a operação no histórico.
   const groupMessage = isPreview && isCostado
     ? `🚢 *${shipName}*\n🧹 Operação de limpeza no costado em breve — aguardem instruções.`
     : isCostado
       ? `🚢 *${shipName}*\n📅 Escala da ${shiftLabel} — ${dateLabel}\n\n${namesList}`
-      : `🚢 *${shipName}*\n${embarqueHeader()}\n\n${namesList}`;
+      : `${embarqueHeader()}\n\n${namesList}`;
 
-  function dmFor(name: string): string {
+  function dmFor(emp: { id: number; name: string }): string {
     if (isPreview && isCostado) {
-      return `Olá, ${name}!\n\nAviso prévio: o navio *${shipName}* terá limpeza no costado. Aguarde a escalação com data e turno.\n\n~Equipe Cargo Ships`;
+      return `Olá, ${emp.name}!\n\nAviso prévio: o navio *${shipName}* terá limpeza no costado. Aguarde a escalação com data e turno.\n\n~Equipe Cargo Ships`;
     }
     if (isCostado) {
-      return `Olá, ${name}!\n\nVocê foi escalado(a) para o navio *${shipName}* — turno da ${shiftLabel} do dia ${dateLabel}.\n\n~Equipe Cargo Ships`;
+      return `Olá, ${emp.name}!\n\nVocê foi escalado(a) para o navio *${shipName}* — turno da ${shiftLabel} do dia ${dateLabel}.\n\n~Equipe Cargo Ships`;
     }
-    return `Olá, ${name}!\n\nVocê foi escalado(a) para o embarque do navio *${shipName}*.\n\n~Equipe Cargo Ships`;
+    // Embarque: mensagem curta, sem nome do navio. Só identifica que houve
+    // escalação e qual a função do funcionário (se houver). Detalhes da
+    // operação (situação, local, porões) ficam no grupo da equipe.
+    const fn = fnByEmployee.get(emp.id);
+    const fnLine = fn ? `\nFunção: *${fn}*` : "";
+    return `Olá, ${emp.name}!\n\nVocê foi escalado(a) para o embarque do navio.${fnLine}\n\n~Equipe Cargo Ships`;
   }
 
   const targets: NotifyTargets = body.targets || "BOTH";
@@ -226,15 +231,27 @@ export async function POST(request: NextRequest) {
         results.push({ target: "grupo", ok: false, error: "Navio não tem grupo do WhatsApp vinculado" });
       }
     } else {
-      // EMBARQUE → broadcast pros 2 grupos fixos.
-      const teamJids = await getTeamGroupJids();
-      const broadcastTargets: { team: "EQUIPE_1" | "EQUIPE_2"; jid: string }[] = [];
-      if (teamJids.EQUIPE_1) broadcastTargets.push({ team: "EQUIPE_1", jid: teamJids.EQUIPE_1 });
-      if (teamJids.EQUIPE_2) broadcastTargets.push({ team: "EQUIPE_2", jid: teamJids.EQUIPE_2 });
-      if (broadcastTargets.length === 0) {
-        results.push({ target: "grupos-equipes", ok: false, error: "Grupos Equipe 1/Equipe 2 não encontrados (sincronize grupos ou configure WHATSAPP_EQUIPE_1_JID/WHATSAPP_EQUIPE_2_JID)" });
+      // EMBARQUE → manda só pro grupo da equipe designada do navio
+      // (assigned_team). Sem equipe definida, pula o envio em grupo — DMs
+      // ainda saem normalmente.
+      const team = ship.assigned_team === "EQUIPE_1" || ship.assigned_team === "EQUIPE_2"
+        ? (ship.assigned_team as "EQUIPE_1" | "EQUIPE_2")
+        : null;
+      if (!team) {
+        results.push({
+          target: "grupo-equipe",
+          ok: false,
+          error: "Equipe designada não informada no navio — defina Equipe 1 ou Equipe 2 pra avisar o grupo.",
+        });
       } else {
-        for (const { team, jid } of broadcastTargets) {
+        const jid = await getTeamGroupJid(team);
+        if (!jid) {
+          results.push({
+            target: `grupo:${team}`,
+            ok: false,
+            error: `Grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"} não encontrado (sincronize grupos ou configure WHATSAPP_${team}_JID).`,
+          });
+        } else {
           try {
             await sendWhatsappTextToGroup(jid, groupMessage);
             results.push({ target: `grupo:${team}`, ok: true });
@@ -276,7 +293,7 @@ export async function POST(request: NextRequest) {
         continue;
       }
       try {
-        await sendWhatsappText(emp.phone, dmFor(emp.name));
+        await sendWhatsappText(emp.phone, dmFor(emp));
         results.push({ target: `dm:${emp.name}`, ok: true });
       } catch (err) {
         results.push({ target: `dm:${emp.name}`, ok: false, error: (err as Error).message });
