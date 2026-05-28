@@ -1472,32 +1472,18 @@ export default function NaviosPage() {
 
                     return (
                       <div className="space-y-3">
-                        <p className="text-[11px] text-text-light">
-                          {isCostadoForm ? (
-                            <>
-                              O grupo será criado com o nome do navio
-                              {form.name.trim() && <> (<strong className="text-text">{form.name.trim()}</strong>)</>}.{" "}
-                              Cada colaborador recebe um <strong className="text-text">aviso no privado</strong> de que haverá limpeza no costado. A escalação com data e turno é feita depois em{" "}
-                              <strong className="text-text">🧹 Escalação de Costado</strong>.
-                            </>
-                          ) : (
-                            <>
-                              A mensagem da operação será enviada{" "}
-                              <strong className="text-text">
-                                {form.assigned_team === "EQUIPE_1"
-                                  ? "para o grupo da Equipe 1"
-                                  : form.assigned_team === "EQUIPE_2"
-                                    ? "para o grupo da Equipe 2"
-                                    : "para o grupo da equipe designada"}
-                              </strong>
-                              {" "}no WhatsApp{!form.assigned_team && (
-                                <> — <strong className="text-amber-700">selecione uma equipe acima</strong> ou nenhum grupo receberá o aviso</>
-                              )}. Cada colaborador selecionado também é escalado em{" "}
-                              <strong className="text-text">⚓ Escalação de Embarque</strong>{" "}
-                              — escolha a função de cada um.
-                            </>
-                          )}
-                        </p>
+                        {/* Embarque: hint sob a checkbox foi removido a pedido
+                            do RH (card Trello #37). Costado mantém a explicação
+                            porque o fluxo é diferente (cria grupo do navio +
+                            escala só na próxima etapa). */}
+                        {isCostadoForm && (
+                          <p className="text-[11px] text-text-light">
+                            O grupo será criado com o nome do navio
+                            {form.name.trim() && <> (<strong className="text-text">{form.name.trim()}</strong>)</>}.{" "}
+                            Cada colaborador recebe um <strong className="text-text">aviso no privado</strong> de que haverá limpeza no costado. A escalação com data e turno é feita depois em{" "}
+                            <strong className="text-text">🧹 Escalação de Costado</strong>.
+                          </p>
+                        )}
 
                         {/* Setor Administrativo só faz sentido no Costado, onde
                             criamos um grupo novo. No Embarque a mensagem vai

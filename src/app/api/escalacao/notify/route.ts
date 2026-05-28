@@ -107,6 +107,9 @@ export async function POST(request: NextRequest) {
   const dateLabel = body.shiftDate ? formatBRDate(body.shiftDate) : "";
   const shiftLabel = body.shiftPeriod ? (SHIFT_LABEL[body.shiftPeriod] || body.shiftPeriod) : "";
   const shipName = ship.name;
+  // Hoisted pra TypeScript conseguir narrow dentro do closure dmFor — o
+  // null-check de ship é feito acima (linha ~97) mas TS perde no escopo.
+  const assignedTeam = ship.assigned_team;
 
   // Cruza com job_allocations ATIVAS desse navio pra incluir a função no
   // texto do grupo (ex.: "• Fulano — WAP"). Pega só o Job do navio.
@@ -177,12 +180,16 @@ export async function POST(request: NextRequest) {
     if (isCostado) {
       return `Olá, ${emp.name}!\n\nVocê foi escalado(a) para o navio *${shipName}* — turno da ${shiftLabel} do dia ${dateLabel}.\n\n~Equipe Cargo Ships`;
     }
-    // Embarque: mensagem curta, sem nome do navio. Só identifica que houve
-    // escalação e qual a função do funcionário (se houver). Detalhes da
-    // operação (situação, local, porões) ficam no grupo da equipe.
-    const fn = fnByEmployee.get(emp.id);
-    const fnLine = fn ? `\nFunção: *${fn}*` : "";
-    return `Olá, ${emp.name}!\n\nVocê foi escalado(a) para o embarque do navio.${fnLine}\n\n~Equipe Cargo Ships`;
+    // Embarque: literalmente "Você foi escalado(a) na Equipe N." e nada mais
+    // (pedido do RH no card #36 do Trello — "apenas" essa frase). Se por algum
+    // motivo o navio não tiver equipe designada, mensagem genérica de embarque.
+    if (assignedTeam === "EQUIPE_1") {
+      return "Você foi escalado(a) na Equipe 1.";
+    }
+    if (assignedTeam === "EQUIPE_2") {
+      return "Você foi escalado(a) na Equipe 2.";
+    }
+    return "Você foi escalado(a) para o embarque.";
   }
 
   const targets: NotifyTargets = body.targets || "BOTH";
