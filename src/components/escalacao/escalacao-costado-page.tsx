@@ -121,6 +121,21 @@ export function EscalacaoCostadoPage() {
     return empty;
   }, [shipCostadoAllocations, selectedDate]);
 
+  // IDs de funcionarios alocados em job_allocations ATIVAS em QUALQUER OUTRO
+  // job (excluindo o job do navio Costado atual). Regra do RH: ninguem em
+  // duas operacoes ao mesmo tempo. Quem ja esta neste navio em outro periodo
+  // continua sendo gerenciado pelo `existingForPeriod` (allocatedIds).
+  const otherJobOccupiedIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const a of allocations) {
+      if (a.status !== "ATIVO") continue;
+      if (a.employee_id == null) continue;
+      if (shipJob && a.job_id === shipJob.id) continue;
+      ids.add(a.employee_id);
+    }
+    return ids;
+  }, [allocations, shipJob]);
+
   async function ensureJob(): Promise<string> {
     if (shipJob) return shipJob.id;
     if (!currentShip) throw new Error("Nenhum navio selecionado");
@@ -319,6 +334,7 @@ export function EscalacaoCostadoPage() {
         employees={employees}
         functions={functions}
         existingForPeriod={addPeriod ? allocationsByPeriod[addPeriod] : []}
+        otherJobOccupiedIds={otherJobOccupiedIds}
         profileName={profileName}
         onClose={() => setAddPeriod(null)}
         onSaved={() => { setAddPeriod(null); loadData(); }}
@@ -650,7 +666,7 @@ function FragmentRow({
 // ─── Add Crew to Period Modal ───────────────────────────────────────────────
 
 function AddCostadoCrewModal({
-  open, period, date, ship, ensureJob, employees, functions, existingForPeriod, profileName, onClose, onSaved,
+  open, period, date, ship, ensureJob, employees, functions, existingForPeriod, otherJobOccupiedIds, profileName, onClose, onSaved,
 }: {
   open: boolean;
   period: ShiftPeriod | null;
@@ -660,6 +676,7 @@ function AddCostadoCrewModal({
   employees: Employee[];
   functions: JobFunction[];
   existingForPeriod: JobAllocation[];
+  otherJobOccupiedIds: Set<number>;
   profileName: string;
   onClose: () => void;
   onSaved: () => void;
@@ -694,6 +711,9 @@ function AddCostadoCrewModal({
     // Admin não escala — só entra em grupo de WhatsApp pela caixinha do form de Navio.
     .filter((e) => e.sector !== "ADMINISTRATIVO")
     .filter((e) => !allocatedIds.has(e.id))
+    // Esconde quem ja esta em outro navio (qualquer kind). Regra do RH:
+    // ninguem em duas operacoes simultaneamente.
+    .filter((e) => !otherJobOccupiedIds.has(e.id))
     .filter((e) => {
       if (!search.trim()) return true;
       const q = search.toLowerCase();
@@ -870,6 +890,11 @@ function AddCostadoCrewModal({
             className={inputCls}
             autoFocus
           />
+          {otherJobOccupiedIds.size > 0 && (
+            <p className="text-[10px] text-text-light mt-1">
+              ℹ️ {otherJobOccupiedIds.size} colaborador(es) ocultos por já estarem em outra operação ativa.
+            </p>
+          )}
           <div className="mt-2 max-h-56 overflow-y-auto border border-border rounded-lg bg-card">
             {matches.length === 0 ? (
               <div className="px-3 py-3 text-xs text-text-light italic text-center">

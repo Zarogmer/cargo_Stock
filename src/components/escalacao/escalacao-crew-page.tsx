@@ -93,6 +93,21 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
     () => (shipJob ? allocations.filter((a) => a.job_id === shipJob.id && (a.kind || "EMBARQUE") === config.kind) : []),
     [shipJob, allocations, config.kind]
   );
+  // IDs de funcionarios em job_allocations ATIVAS em QUALQUER OUTRO job
+  // (excluindo o job do navio atual). Eles ficam escondidos do seletor --
+  // regra do RH: ninguem em duas operacoes ao mesmo tempo, seja embarque
+  // ou costado. Quem ja esta neste mesmo navio continua sendo gerenciado
+  // pelo `existingAllocs` (que vira `allocatedIds` dentro do modal).
+  const otherJobOccupiedIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const a of allocations) {
+      if (a.status !== "ATIVO") continue;
+      if (a.employee_id == null) continue;
+      if (shipJob && a.job_id === shipJob.id) continue;
+      ids.add(a.employee_id);
+    }
+    return ids;
+  }, [allocations, shipJob]);
 
   if (loading) {
     return (
@@ -138,6 +153,7 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
         profileName={profileName}
         kind={config.kind}
         onChange={loadData}
+        otherJobOccupiedIds={otherJobOccupiedIds}
       />
     </div>
   );
@@ -297,7 +313,7 @@ function ShipSelector({
 // ─── ESCALAÇÃO TAB ──────────────────────────────────────────────────────────
 
 function EscalacaoTab({
-  ship, shipJob, allocations, employees, functions, canEdit, profileName, kind, onChange,
+  ship, shipJob, allocations, employees, functions, canEdit, profileName, kind, onChange, otherJobOccupiedIds,
 }: {
   ship: Ship | null;
   shipJob: Job | null;
@@ -308,6 +324,7 @@ function EscalacaoTab({
   profileName: string;
   kind: AllocationKind;
   onChange: () => void;
+  otherJobOccupiedIds: Set<number>;
 }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editAlloc, setEditAlloc] = useState<JobAllocation | null>(null);
@@ -470,6 +487,7 @@ function EscalacaoTab({
         employees={employees}
         functions={functions}
         existingAllocs={activeAllocs.filter((a) => a.id !== editAlloc?.id)}
+        otherJobOccupiedIds={otherJobOccupiedIds}
         profileName={profileName}
         kind={kind}
         onClose={() => { setShowAdd(false); setEditAlloc(null); }}
@@ -490,7 +508,7 @@ function EscalacaoTab({
 // ─── Crew Form Modal (add/edit member) ──────────────────────────────────────
 
 function CrewFormModal({
-  open, item, ensureJob, shipId, employees, functions, existingAllocs, profileName, kind, onClose, onSaved,
+  open, item, ensureJob, shipId, employees, functions, existingAllocs, otherJobOccupiedIds, profileName, kind, onClose, onSaved,
 }: {
   open: boolean;
   item: JobAllocation | null;
@@ -499,6 +517,7 @@ function CrewFormModal({
   employees: Employee[];
   functions: JobFunction[];
   existingAllocs: JobAllocation[];
+  otherJobOccupiedIds: Set<number>;
   profileName: string;
   kind: AllocationKind;
   onClose: () => void;
@@ -543,6 +562,10 @@ function CrewFormModal({
     // Admin não escala — só entra em grupo de WhatsApp pela caixinha do form de Navio.
     .filter((e) => e.sector !== "ADMINISTRATIVO")
     .filter((e) => !allocatedIds.has(e.id))
+    // Esconde quem ja esta alocado em outro navio (regra do RH: nao da pra
+    // estar em duas operacoes ao mesmo tempo). Se estiver no item em edicao,
+    // mostra mesmo assim (pra nao quebrar o fluxo de edicao).
+    .filter((e) => !otherJobOccupiedIds.has(e.id) || (item != null && e.id === item.employee_id))
     .filter((e) => {
       if (!search.trim()) return true;
       const q = search.toLowerCase();
@@ -735,6 +758,11 @@ function CrewFormModal({
                     className={inputCls}
                     autoFocus
                   />
+                  {otherJobOccupiedIds.size > 0 && (
+                    <p className="text-[10px] text-text-light mt-1">
+                      ℹ️ {otherJobOccupiedIds.size} colaborador(es) ocultos por já estarem em outra operação ativa.
+                    </p>
+                  )}
                   <div className="mt-2 max-h-56 overflow-y-auto border border-border rounded-lg bg-card">
                     {matches.length === 0 ? (
                       <div className="px-3 py-3 text-xs text-text-light italic text-center">

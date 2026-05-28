@@ -187,6 +187,11 @@ export default function NaviosPage() {
 
   const [ships, setShips] = useState<Ship[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  // IDs de funcionarios que ja tem job_allocation ATIVA em qualquer navio.
+  // Usado pra esconder eles da lista de selecao no modal de novo navio --
+  // a regra do RH eh: uma pessoa nao pode estar em duas operacoes ao mesmo
+  // tempo (embarque ou costado).
+  const [occupiedEmployeeIds, setOccupiedEmployeeIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<ShipStatus | "TODOS">("TODOS");
@@ -278,6 +283,25 @@ export default function NaviosPage() {
     }
   }, []);
 
+  // Carrega o conjunto de funcionarios que ja estao em alguma alocacao ATIVA.
+  // Eles ficam ocultos do seletor de "escalar colaboradores" no modal de novo
+  // navio -- nao da pra colocar a mesma pessoa em duas operacoes.
+  const loadOccupied = useCallback(async () => {
+    try {
+      const { data } = await db
+        .from("job_allocations")
+        .select("employee_id")
+        .eq("status", "ATIVO");
+      const ids = new Set<number>();
+      for (const a of (data as Array<{ employee_id: number | null }> | null) || []) {
+        if (a.employee_id != null) ids.add(a.employee_id);
+      }
+      setOccupiedEmployeeIds(ids);
+    } catch (err) {
+      console.error("loadOccupied error:", err);
+    }
+  }, []);
+
   // Loads active job functions so the user can pick a função for each
   // employee in the "criar grupo + escalar" panel of the new-ship modal.
   const loadJobFunctions = useCallback(async () => {
@@ -325,7 +349,8 @@ export default function NaviosPage() {
     loadShips();
     loadEmployees();
     loadJobFunctions();
-  }, [loadShips, loadEmployees, loadJobFunctions, pathname]);
+    loadOccupied();
+  }, [loadShips, loadEmployees, loadJobFunctions, loadOccupied, pathname]);
 
   // ── Filter ─────────────────────────────────────────────────────────────────
 
@@ -1465,7 +1490,12 @@ export default function NaviosPage() {
                         return (
                           (status === "ATIVO" || status === "PENDENCIA") &&
                           (e.phone || "").trim().length > 0 &&
-                          e.sector !== "ADMINISTRATIVO"
+                          e.sector !== "ADMINISTRATIVO" &&
+                          // Esconde quem ja tem job_allocation ATIVA em outro
+                          // navio -- regra do RH: ninguem em duas operacoes.
+                          // editingShip eh ignorado aqui pq nao deixamos editar
+                          // a lista de escalados depois de criar.
+                          !occupiedEmployeeIds.has(e.id)
                         );
                       },
                     );
@@ -1643,11 +1673,16 @@ export default function NaviosPage() {
                           placeholder="🔍 Buscar colaborador..."
                           className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm bg-white"
                         />
+                        {occupiedEmployeeIds.size > 0 && (
+                          <p className="text-[10px] text-text-light px-1">
+                            ℹ️ {occupiedEmployeeIds.size} colaborador(es) ocultos por estarem em outra operação ativa.
+                          </p>
+                        )}
                         <div className="max-h-48 overflow-y-auto border border-border rounded-lg bg-white">
                           {filteredEmps.length === 0 ? (
                             <p className="px-3 py-3 text-xs text-text-light italic text-center">
                               {eligible.length === 0
-                                ? "Nenhum colaborador ATIVO com telefone cadastrado."
+                                ? "Nenhum colaborador disponível (todos ATIVOS já estão em alguma operação ou sem telefone)."
                                 : "Nenhum colaborador corresponde à busca."}
                             </p>
                           ) : (
