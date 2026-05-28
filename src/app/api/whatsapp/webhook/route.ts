@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { whatsappBus } from "@/lib/services/whatsapp-bus";
+import { findGroupInfo, isEvolutionConfigured } from "@/lib/services/evolution-api";
 
 // Evolution API posts events here whenever messages arrive (or are sent),
 // connection state changes, etc. The URL is registered via /webhook/set on
@@ -51,6 +52,63 @@ function extractText(message: Record<string, unknown> | undefined): string | nul
     }
   }
   return null;
+}
+
+// Garante que existe um stub "systemNotice" pro grupo, pra Conversas mostrar
+// o nome real do grupo em vez do nome do último remetente. Roda só quando a
+// mensagem é de grupo (@g.us) e ainda não há stub. Fetch único do subject via
+// Evolution — falha silenciosa (próxima mensagem tenta de novo).
+async function ensureGroupStub(jid: string, instanceName: string): Promise<void> {
+  if (!jid.endsWith("@g.us")) return;
+  const existing = await prisma.whatsappMessage.findFirst({
+    where: {
+      remote_jid: jid,
+      from_me: true,
+      message_type: "systemNotice",
+      push_name: { not: null },
+    },
+    select: { id: true },
+  });
+  if (existing) return;
+  if (!isEvolutionConfigured()) return;
+
+  let subject: string | null = null;
+  try {
+    const info = await findGroupInfo(jid);
+    subject = info?.subject?.trim() || null;
+  } catch (err) {
+    console.warn("[whatsapp-webhook] findGroupInfo failed:", jid, (err as Error).message);
+    return;
+  }
+  if (!subject) return;
+
+  // message_id determinístico — se duas mensagens chegarem ao mesmo tempo e
+  // ambas tentarem criar o stub, o unique constraint resolve.
+  try {
+    await prisma.whatsappMessage.upsert({
+      where: {
+        unique_message: {
+          instance_name: instanceName,
+          message_id: `system-auto-${jid}`,
+          remote_jid: jid,
+        },
+      },
+      update: { push_name: subject },
+      create: {
+        message_id: `system-auto-${jid}`,
+        instance_name: instanceName,
+        remote_jid: jid,
+        from_me: true,
+        push_name: subject,
+        message_type: "systemNotice",
+        text: "✨ Grupo detectado",
+        timestamp_ms: BigInt(Date.now()),
+        raw_event: { source: "webhook-auto-stub", subject },
+      },
+    });
+  } catch (err) {
+    console.warn("[whatsapp-webhook] auto-stub upsert failed:", jid, (err as Error).message);
+  }
 }
 
 function extractMediaInfo(
@@ -145,6 +203,15 @@ export async function POST(req: NextRequest) {
       },
     });
     console.log("[whatsapp-webhook] persisted:", remoteJid, "fromMe:", fromMe, "type:", messageType);
+
+    // Se for grupo, garante que existe um stub systemNotice com o subject real
+    // (pra Conversas mostrar o nome do grupo, não o do último remetente).
+    // Fire-and-forget: não bloqueia o ack do webhook.
+    if (remoteJid.endsWith("@g.us")) {
+      ensureGroupStub(remoteJid, instanceName).catch((err) => {
+        console.warn("[whatsapp-webhook] ensureGroupStub error:", remoteJid, (err as Error).message);
+      });
+    }
 
     // Fan out to any /api/whatsapp/events subscribers so the UI updates in
     // real time. Best-effort: emit failures shouldn't fail the webhook (the
