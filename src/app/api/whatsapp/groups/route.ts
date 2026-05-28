@@ -201,32 +201,65 @@ async function broadcastEmbarqueToTeams(args: {
   // Re-adiciona os escalados no grupo da equipe. WhatsApp permite que os
   // funcionários saiam do grupo manualmente; quando voltam a ser escalados,
   // precisam estar no grupo de novo pra receber a mensagem. Falha aqui é
-  // não-fatal (mensagem ainda é enviada) e tolerante a "já é membro" — o
-  // Evolution geralmente responde 200 mesmo nesse caso.
-  //
-  // Logging: cada passo é logado pra Railway porque já tivemos relato de
-  // "saí do grupo e não fui re-adicionado" — sem trace, fica impossível
-  // dizer se o problema é (a) código não chamou, (b) Evolution rejeitou,
-  // ou (c) WhatsApp bloqueou o add (acontece quando o número não tem o
-  // bot na agenda dele).
+  // não-fatal (mensagem ainda é enviada) — mas surfaceamos o detalhe
+  // por-participante porque "Evolution respondeu 200" não significa que o
+  // usuário foi de fato adicionado: o WhatsApp retorna codes 403 (privacy),
+  // 404 (sem WhatsApp), 408 (precisa invite), 409 (já é membro). Sem ver
+  // esse detalhe, parece sucesso silencioso quando na verdade falhou.
   let addParticipantsWarning: string | null = null;
+  let addDiagnostic: unknown = null;
   if (employeeIds.length > 0) {
     const emps = await prisma.employee.findMany({
       where: { id: { in: employeeIds } },
       select: { id: true, name: true, phone: true },
     });
-    const validPhones = emps.filter((e) => (e.phone || "").trim().length > 0);
-    const phones = validPhones.map((e) => (e.phone || "").trim());
+    const validEmps = emps.filter((e) => (e.phone || "").trim().length > 0);
+    const phones = validEmps.map((e) => (e.phone || "").trim());
     console.log(
       `[groups] embarque add: team=${team} jid=${jid} candidatos=${employeeIds.length} com_phone=${phones.length} phones=${phones.join(",")}`,
     );
     if (phones.length > 0) {
       try {
         const addResult = await updateGroupParticipants(jid, "add", phones);
-        console.log(`[groups] embarque add result:`, JSON.stringify(addResult).slice(0, 500));
+        addDiagnostic = addResult;
+        console.log(`[groups] embarque add result:`, JSON.stringify(addResult).slice(0, 800));
+
+        // Tenta extrair status por-participante da resposta da Evolution.
+        // Formatos comuns: { participants: [{ id, status }] } ou array direto.
+        const partsRaw = (addResult as { participants?: unknown })?.participants ?? addResult;
+        const parts = Array.isArray(partsRaw)
+          ? (partsRaw as Array<{ id?: string; status?: string | number; jid?: string }>)
+          : [];
+        const failures: { id: string; status: string; reason: string }[] = [];
+        for (const p of parts) {
+          const id = p.id || p.jid || "";
+          const status = String(p.status ?? "");
+          if (!id) continue;
+          // 200/success/already-member são OK. Qualquer outro código é falha.
+          if (status === "200" || status === "success" || status === "" || status === "409") continue;
+          let reason = `código ${status}`;
+          if (status === "403") reason = "privacidade do WhatsApp bloqueia convites de não-contatos";
+          else if (status === "404") reason = "número não tem WhatsApp";
+          else if (status === "408") reason = "precisa de link de convite (não aceita add direto)";
+          failures.push({ id, status, reason });
+        }
+        if (failures.length > 0) {
+          const summary = failures
+            .map((f) => {
+              // Tenta achar o nome do funcionário pelo número.
+              const phoneOnly = f.id.replace(/\D/g, "");
+              const matched = validEmps.find((e) =>
+                phoneOnly.endsWith((e.phone || "").replace(/\D/g, "")),
+              );
+              return matched ? `${matched.name} (${f.reason})` : `${f.id} (${f.reason})`;
+            })
+            .join("; ");
+          addParticipantsWarning = `Não consegui adicionar ${failures.length} pessoa(s) no grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}: ${summary}. Eles continuam recebendo DM, mas precisam entrar no grupo manualmente (peça invite link ao admin).`;
+          console.warn("[groups] embarque add failures:", JSON.stringify(failures));
+        }
       } catch (addErr) {
-        addParticipantsWarning = `Aviso: falha ao re-adicionar ${phones.length} colaborador(es) no grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}: ${(addErr as Error).message}`;
-        console.warn("[groups] add participants failed:", (addErr as Error).message);
+        addParticipantsWarning = `Falha ao chamar Evolution pra adicionar ${phones.length} colaborador(es) no grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}: ${(addErr as Error).message}`;
+        console.warn("[groups] add participants exception:", (addErr as Error).message);
       }
     } else {
       console.warn("[groups] embarque add: nenhum colaborador com telefone valido — nada pra adicionar");
@@ -260,6 +293,7 @@ async function broadcastEmbarqueToTeams(args: {
       broadcast: true,
       target: { team, jid, ok: true },
       ...(addParticipantsWarning && { warning: addParticipantsWarning }),
+      ...(addDiagnostic !== null && { addDiagnostic }),
     });
   } catch (err) {
     return NextResponse.json({
