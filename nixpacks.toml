@@ -1,0 +1,5 @@
+# LibreOffice headless e necessario para converter DOCX -> PDF
+# nas rotas /api/documents/* quando format=pdf. Sem ele, o servidor
+# retorna 503 indicando que so a versao Word esta disponivel.
+[phases.setup]
+nixPkgs = ["nodejs_20", "libreoffice"]

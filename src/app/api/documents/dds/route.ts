@@ -4,6 +4,7 @@ import path from "path";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import { auth } from "@/lib/auth";
+import { docxToPdf } from "@/lib/docx-to-pdf";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -210,22 +211,45 @@ export async function POST(request: NextRequest) {
     rendered.file("word/document.xml", newXml);
   }
 
-  const buffer = rendered.generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
+  const docxBuffer = rendered.generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
 
-  // Filename: DDS MV BARROW ISLAND.docx
+  const format = request.nextUrl.searchParams.get("format") === "pdf" ? "pdf" : "docx";
   const safeName = shipName
     .toUpperCase()
     .replace(/[\\/:*?"<>|]+/g, "")
     .trim()
     .replace(/\s+/g, " ");
-  const filename = `DDS ${safeName}.docx`;
+
+  let outBuffer: Buffer = docxBuffer;
+  let mimeType =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  let ext = "docx";
+
+  if (format === "pdf") {
+    try {
+      outBuffer = await docxToPdf(docxBuffer);
+      mimeType = "application/pdf";
+      ext = "pdf";
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return NextResponse.json(
+        {
+          error:
+            "Nao foi possivel gerar o PDF agora. Tente baixar em Word ou fale com o suporte.",
+          detail,
+        },
+        { status: 503 },
+      );
+    }
+  }
+
+  const filename = `DDS ${safeName}.${ext}`;
   const asciiFallback = filename.replace(/[^\x20-\x7E]+/g, "_");
 
-  return new NextResponse(buffer as unknown as BodyInit, {
+  return new NextResponse(outBuffer as unknown as BodyInit, {
     status: 200,
     headers: {
-      "Content-Type":
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "Content-Type": mimeType,
       "Content-Disposition": `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
       "Cache-Control": "no-store",
     },

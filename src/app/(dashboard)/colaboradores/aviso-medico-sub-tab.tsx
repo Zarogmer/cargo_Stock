@@ -44,7 +44,7 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
   const [data, setData] = useState<string>(todayInput);
   const [tipoExame, setTipoExame] = useState<ExamType>("ADMISSIONAL");
 
-  const [generating, setGenerating] = useState(false);
+  const [generating, setGenerating] = useState<"docx" | "pdf" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const sortedEmployees = useMemo(() => {
@@ -69,15 +69,15 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
     // Função stays as "Auxiliar Operacional" — don't overwrite from e.role.
   }
 
-  async function handleGenerate() {
+  async function handleGenerate(format: "docx" | "pdf") {
     setError(null);
     if (!nome.trim()) {
       setError("Selecione um funcionário ou informe o nome.");
       return;
     }
-    setGenerating(true);
+    setGenerating(format);
     try {
-      const res = await fetch("/api/documents/aviso-medico", {
+      const res = await fetch(`/api/documents/aviso-medico?format=${format}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -98,7 +98,7 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
       const a = document.createElement("a");
       a.href = url;
       const safeName = nome.trim().replace(/[\\/:*?"<>|]+/g, "").trim() || "FUNCIONARIO";
-      a.download = `Aviso Medico ${safeName}.docx`;
+      a.download = `Aviso Medico ${safeName}.${format}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -107,7 +107,7 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
       const msg = err instanceof Error ? err.message : "Falha ao gerar aviso.";
       setError(msg);
     } finally {
-      setGenerating(false);
+      setGenerating(null);
     }
   }
 
@@ -215,9 +215,19 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
         </div>
       )}
 
-      <div className="flex justify-end">
-        <Button onClick={handleGenerate} disabled={generating || !nome.trim()}>
-          {generating ? "Gerando..." : "Gerar Aviso Médico (.docx)"}
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="secondary"
+          onClick={() => handleGenerate("docx")}
+          disabled={!!generating || !nome.trim()}
+        >
+          {generating === "docx" ? "Gerando..." : "Gerar Word (.docx)"}
+        </Button>
+        <Button
+          onClick={() => handleGenerate("pdf")}
+          disabled={!!generating || !nome.trim()}
+        >
+          {generating === "pdf" ? "Gerando..." : "Gerar PDF (.pdf)"}
         </Button>
       </div>
     </div>

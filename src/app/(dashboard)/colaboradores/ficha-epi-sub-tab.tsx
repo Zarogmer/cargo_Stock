@@ -24,7 +24,7 @@ export function FichaEpiSubTab({ employees }: { employees: Employee[] }) {
   const [setor, setSetor] = useState("");
   const [data, setData] = useState<string>(todayInput);
 
-  const [generating, setGenerating] = useState(false);
+  const [generating, setGenerating] = useState<"docx" | "pdf" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const regMissing = !!employeeId && !reg.trim();
@@ -53,15 +53,15 @@ export function FichaEpiSubTab({ employees }: { employees: Employee[] }) {
     setSetor((e.sector || "OPERACIONAL").toUpperCase());
   }
 
-  async function handleGenerate() {
+  async function handleGenerate(format: "docx" | "pdf") {
     setError(null);
     if (!nome.trim()) {
       setError("Selecione um funcionário ou informe o nome.");
       return;
     }
-    setGenerating(true);
+    setGenerating(format);
     try {
-      const res = await fetch("/api/documents/ficha-epi", {
+      const res = await fetch(`/api/documents/ficha-epi?format=${format}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -81,7 +81,7 @@ export function FichaEpiSubTab({ employees }: { employees: Employee[] }) {
       const a = document.createElement("a");
       a.href = url;
       const safeName = nome.trim().replace(/[\\/:*?"<>|]+/g, "").trim() || "FUNCIONARIO";
-      a.download = `Ficha EPI ${safeName}.docx`;
+      a.download = `Ficha EPI ${safeName}.${format}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -90,7 +90,7 @@ export function FichaEpiSubTab({ employees }: { employees: Employee[] }) {
       const msg = err instanceof Error ? err.message : "Falha ao gerar ficha.";
       setError(msg);
     } finally {
-      setGenerating(false);
+      setGenerating(null);
     }
   }
 
@@ -201,9 +201,19 @@ export function FichaEpiSubTab({ employees }: { employees: Employee[] }) {
         </div>
       )}
 
-      <div className="flex justify-end">
-        <Button onClick={handleGenerate} disabled={generating || !nome.trim()}>
-          {generating ? "Gerando..." : "Gerar Ficha EPI (.docx)"}
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="secondary"
+          onClick={() => handleGenerate("docx")}
+          disabled={!!generating || !nome.trim()}
+        >
+          {generating === "docx" ? "Gerando..." : "Gerar Word (.docx)"}
+        </Button>
+        <Button
+          onClick={() => handleGenerate("pdf")}
+          disabled={!!generating || !nome.trim()}
+        >
+          {generating === "pdf" ? "Gerando..." : "Gerar PDF (.pdf)"}
         </Button>
       </div>
     </div>

@@ -27,6 +27,7 @@
     "bcryptjs": "^2.4.3",
     "docx": "^9.5.1",
     "docxtemplater": "^3.50.0",
+    "libreoffice-convert": "^1.8.1",
     "lucide-react": "^1.14.0",
     "next": "~15.3.9",
     "next-auth": "^5.0.0-beta.25",

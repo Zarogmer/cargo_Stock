@@ -62,7 +62,7 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
 
   const [picked, setPicked] = useState<SelectedEmployee[]>([]);
   const [search, setSearch] = useState("");
-  const [generating, setGenerating] = useState(false);
+  const [generating, setGenerating] = useState<"docx" | "pdf" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -135,7 +135,7 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
     setPicked((prev) => prev.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
   }
 
-  async function handleGenerate() {
+  async function handleGenerate(format: "docx" | "pdf") {
     setError(null);
     if (!shipName.trim()) {
       setError("Selecione um navio ou informe o nome.");
@@ -145,9 +145,9 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
       setError("Adicione pelo menos um funcionário.");
       return;
     }
-    setGenerating(true);
+    setGenerating(format);
     try {
-      const res = await fetch("/api/documents/dds", {
+      const res = await fetch(`/api/documents/dds?format=${format}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -168,7 +168,7 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `DDS ${shipName.trim().toUpperCase()}.docx`;
+      a.download = `DDS ${shipName.trim().toUpperCase()}.${format}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -177,7 +177,7 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
       const msg = err instanceof Error ? err.message : "Falha ao gerar DDS.";
       setError(msg);
     } finally {
-      setGenerating(false);
+      setGenerating(null);
     }
   }
 
@@ -380,9 +380,19 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
         </div>
       )}
 
-      <div className="flex justify-end">
-        <Button onClick={handleGenerate} disabled={generating || picked.length === 0}>
-          {generating ? "Gerando..." : "Gerar DDS (.docx)"}
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="secondary"
+          onClick={() => handleGenerate("docx")}
+          disabled={!!generating || picked.length === 0}
+        >
+          {generating === "docx" ? "Gerando..." : "Gerar Word (.docx)"}
+        </Button>
+        <Button
+          onClick={() => handleGenerate("pdf")}
+          disabled={!!generating || picked.length === 0}
+        >
+          {generating === "pdf" ? "Gerando..." : "Gerar PDF (.pdf)"}
         </Button>
       </div>
     </div>
