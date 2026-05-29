@@ -232,6 +232,7 @@ export async function POST(request: NextRequest) {
       ext = "pdf";
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
+      console.error("[documents/dds] PDF conversion failed:", detail);
       return NextResponse.json(
         {
           error:
