@@ -559,8 +559,8 @@ function CrewFormModal({
     // ATIVO e PENDENCIA aparecem (PENDENCIA é só sinal de doc vencida, o
     // funcionário ainda pode trabalhar). INATIVO/demitido fica fora.
     .filter((e) => e.status === "ATIVO" || e.status === "PENDENCIA")
-    // Admin não escala — só entra em grupo de WhatsApp pela caixinha do form de Navio.
-    .filter((e) => e.sector !== "ADMINISTRATIVO")
+    // No Embarque o setor Administrativo aparece sim (RH pediu — diferente
+    // do Costado, no qual o admin entra só pela caixinha do form do Navio).
     .filter((e) => !allocatedIds.has(e.id))
     // Esconde quem ja esta alocado em outro navio (regra do RH: nao da pra
     // estar em duas operacoes ao mesmo tempo). Se estiver no item em edicao,

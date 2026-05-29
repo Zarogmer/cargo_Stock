@@ -231,6 +231,25 @@ async function broadcastEmbarqueToTeams(args: {
         addDiagnostic = addResult;
         console.log(`[groups] embarque add result:`, JSON.stringify(addResult).slice(0, 800));
 
+        // Promove a admin do grupo todo mundo do setor ADMINISTRATIVO que
+        // entrou agora — mesma regra do Costado: administrativo sempre vira
+        // admin do grupo. Falha não-fatal (a mensagem ainda é enviada).
+        try {
+          const adminEmps = await prisma.employee.findMany({
+            where: { id: { in: employeeIds }, sector: "ADMINISTRATIVO" },
+            select: { phone: true },
+          });
+          const adminPhones = adminEmps
+            .map((e) => (e.phone || "").trim())
+            .filter((p) => p.length > 0);
+          if (adminPhones.length > 0) {
+            await updateGroupParticipants(jid, "promote", adminPhones);
+            console.log(`[groups] embarque promoted ${adminPhones.length} admin(s)`);
+          }
+        } catch (promoteErr) {
+          console.warn("[groups] embarque promote admins failed:", (promoteErr as Error).message);
+        }
+
         // Tenta extrair status por-participante da resposta da Evolution.
         // Formatos comuns: { participants: [{ id, status }] } ou array direto.
         const partsRaw = (addResult as { participants?: unknown })?.participants ?? addResult;

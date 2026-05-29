@@ -1490,18 +1490,20 @@ export default function NaviosPage() {
                   </label>
 
                   {createGroup && (() => {
-                    // Setor Administrativo não aparece pra escalar — eles entram
-                    // só pela caixinha "Incluir setor Administrativo no grupo".
-                    // ATIVO + PENDENCIA aparecem na lista de escala (PENDENCIA
-                    // ainda pode trabalhar, só sinaliza que tem documentação
-                    // pra resolver). INATIVO/demitido fica de fora.
+                    const isCostadoForm = form.operation_type === "COSTADO";
+                    // No Costado, o setor Administrativo não aparece pra escalar
+                    // — eles entram só pela caixinha "Incluir setor Administrativo
+                    // no grupo". No Embarque, o RH pediu pra deixar Administrativo
+                    // na lista também (alguns vão pra bordo). ATIVO + PENDENCIA
+                    // aparecem (PENDENCIA ainda pode trabalhar, só sinaliza doc
+                    // vencida). INATIVO/demitido fica fora.
                     const eligible = employees.filter(
                       (e) => {
                         const status = e.status ?? "ATIVO";
                         return (
                           (status === "ATIVO" || status === "PENDENCIA") &&
                           (e.phone || "").trim().length > 0 &&
-                          e.sector !== "ADMINISTRATIVO" &&
+                          (!isCostadoForm || e.sector !== "ADMINISTRATIVO") &&
                           // Esconde quem ja tem job_allocation ATIVA em outro
                           // navio -- regra do RH: ninguem em duas operacoes.
                           // editingShip eh ignorado aqui pq nao deixamos editar
@@ -1514,7 +1516,6 @@ export default function NaviosPage() {
                     const filteredEmps = q
                       ? eligible.filter((e) => e.name.toLowerCase().includes(q))
                       : eligible;
-                    const isCostadoForm = form.operation_type === "COSTADO";
                     const selectedList = Array.from(groupParticipants)
                       .map((id) => employees.find((e) => e.id === id))
                       .filter(Boolean) as Employee[];
