@@ -1,5 +1,54 @@
 "use client";
 
+// Polyfill Uint8Array.prototype.toHex / fromHex / setFromHex usado pelo
+// pdfjs-dist v5. Esses métodos só existem em Chromium 140+ (Electron 37+).
+// O app desktop hoje roda Electron 33 (Chromium ~130) e quebra com
+// "a.toHex is not a function" ao importar PDF. No browser comum os métodos
+// já existem nativamente, então a checagem typeof torna o polyfill um
+// no-op fora do desktop. Mantém-se aqui pra não precisar republicar o
+// instalador toda vez que o pdfjs subir uma versão.
+if (typeof window !== "undefined") {
+  const U8 = Uint8Array.prototype as Uint8Array & {
+    toHex?: () => string;
+    setFromHex?: (s: string) => { read: number; written: number };
+  };
+  if (typeof U8.toHex !== "function") {
+    Object.defineProperty(U8, "toHex", {
+      value: function (this: Uint8Array): string {
+        let out = "";
+        for (let i = 0; i < this.length; i++) out += this[i].toString(16).padStart(2, "0");
+        return out;
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+  if (typeof U8.setFromHex !== "function") {
+    Object.defineProperty(U8, "setFromHex", {
+      value: function (this: Uint8Array, s: string): { read: number; written: number } {
+        const len = Math.min(this.length, Math.floor(s.length / 2));
+        for (let i = 0; i < len; i++) this[i] = parseInt(s.substr(i * 2, 2), 16);
+        return { read: len * 2, written: len };
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+  const U8c = Uint8Array as typeof Uint8Array & { fromHex?: (s: string) => Uint8Array };
+  if (typeof U8c.fromHex !== "function") {
+    Object.defineProperty(U8c, "fromHex", {
+      value: function (s: string): Uint8Array {
+        if (s.length % 2 !== 0) throw new SyntaxError("Hex string must have an even length");
+        const bytes = new Uint8Array(s.length / 2);
+        for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(s.substr(i * 2, 2), 16);
+        return bytes;
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+}
+
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
