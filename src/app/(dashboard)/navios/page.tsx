@@ -1568,6 +1568,66 @@ export default function NaviosPage() {
                           )
                         )}
 
+                        {/* Atalho: marca todos os colaboradores da equipe
+                            designada de uma vez. Pula quem já está em outra
+                            operação ativa (cinza/badge). Auto-preenche a
+                            função pelo role do colaborador, igual ao toggle
+                            individual. */}
+                        {!isCostadoForm && form.assigned_team && (() => {
+                          const teamLabel = form.assigned_team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2";
+                          const teamMembers = eligible.filter((e) => e.team === form.assigned_team);
+                          const available = teamMembers.filter((e) => !occupiedEmployeeKind.has(e.id));
+                          const blocked = teamMembers.length - available.length;
+                          const allSelected = available.length > 0 && available.every((e) => groupParticipants.has(e.id));
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (allSelected) {
+                                  setGroupParticipants((prev) => {
+                                    const next = new Set(prev);
+                                    for (const e of available) next.delete(e.id);
+                                    return next;
+                                  });
+                                  setGroupPerEmpFn((m) => {
+                                    const nm = new Map(m);
+                                    for (const e of available) nm.delete(e.id);
+                                    return nm;
+                                  });
+                                  return;
+                                }
+                                setGroupParticipants((prev) => {
+                                  const next = new Set(prev);
+                                  for (const e of available) next.add(e.id);
+                                  return next;
+                                });
+                                setGroupPerEmpFn((m) => {
+                                  const nm = new Map(m);
+                                  for (const e of available) {
+                                    if (nm.has(e.id)) continue;
+                                    const role = (e.role || "").trim().toUpperCase();
+                                    const fn = role
+                                      ? jobFunctions.find((f) => f.name.toUpperCase() === role)
+                                      : null;
+                                    if (fn) nm.set(e.id, String(fn.id));
+                                  }
+                                  return nm;
+                                });
+                              }}
+                              disabled={available.length === 0}
+                              className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium rounded-lg border border-emerald-200 bg-white hover:bg-emerald-50 text-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                            >
+                              <span className="flex items-center gap-1.5">
+                                {allSelected ? "↩️" : "👥"} {allSelected ? `Desmarcar ${teamLabel}` : `Escalar toda a ${teamLabel}`}
+                              </span>
+                              <span className="text-[10px] text-text-light font-normal">
+                                {available.length} disponíve{available.length === 1 ? "l" : "is"}
+                                {blocked > 0 && ` · ${blocked} em outra operação`}
+                              </span>
+                            </button>
+                          );
+                        })()}
+
                         {/* Setor Administrativo só faz sentido no Costado, onde
                             criamos um grupo novo. No Embarque a mensagem vai
                             pros grupos fixos das equipes, que já têm os
