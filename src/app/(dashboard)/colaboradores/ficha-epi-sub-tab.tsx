@@ -27,6 +27,8 @@ export function FichaEpiSubTab({ employees }: { employees: Employee[] }) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const regMissing = !!employeeId && !reg.trim();
+
   // Active employees first, sorted by name.
   const sortedEmployees = useMemo(() => {
     return [...employees]
@@ -46,8 +48,7 @@ export function FichaEpiSubTab({ employees }: { employees: Employee[] }) {
     const e = employees.find((x) => String(x.id) === idStr);
     if (!e) return;
     setNome(e.name.toUpperCase());
-    // Registration: prefer e_social code, fallback to id
-    setReg(e.e_social || String(e.id));
+    setReg(e.e_social || "");
     setFuncao((e.role || "").toUpperCase());
     setSetor((e.sector || "OPERACIONAL").toUpperCase());
   }
@@ -133,15 +134,31 @@ export function FichaEpiSubTab({ employees }: { employees: Employee[] }) {
           </div>
 
           <div>
-            <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Registro</label>
+            <label
+              className={`text-xs font-semibold uppercase tracking-wider ${
+                regMissing ? "text-red-600" : "text-text-light"
+              }`}
+            >
+              Registro
+            </label>
             <input
               type="text"
               value={reg}
               onChange={(e) => setReg(e.target.value)}
               placeholder="ex.: 108"
-              className="mt-1 w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+              className={`mt-1 w-full px-3 py-2 text-sm border rounded-lg bg-card focus:outline-none focus:ring-2 ${
+                regMissing
+                  ? "border-red-400 focus:ring-red-300 bg-red-50"
+                  : "border-border focus:ring-primary/30"
+              }`}
             />
-            <p className="text-[10px] text-text-light mt-1">Vem do e-Social. Edite se necessário.</p>
+            {regMissing ? (
+              <p className="text-[11px] text-red-600 font-medium mt-1">
+                ⚠ E-Social não cadastrado para este colaborador. Cadastre em Colaboradores ou preencha manualmente.
+              </p>
+            ) : (
+              <p className="text-[10px] text-text-light mt-1">Vem do e-Social. Edite se necessário.</p>
+            )}
           </div>
 
           <div>
