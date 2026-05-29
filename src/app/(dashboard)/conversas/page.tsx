@@ -51,6 +51,7 @@ interface GroupInfo {
     jid: string;
     phone: string;
     admin: string | null;
+    push_name: string | null;
     employee: { id: number; name: string; team: string | null; status: string | null } | null;
   }>;
   ship: {
@@ -777,17 +778,23 @@ function GroupInfoModal({ jid, onClose }: { jid: string | null; onClose: () => v
                   Nenhum participante retornado pelo WhatsApp.
                 </p>
               ) : (
-                info.participants.map((p) => (
-                  <div key={p.jid} className="px-3 py-2 flex items-center gap-3">
+                info.participants.map((p) => {
+                  const displayName = p.employee?.name || p.push_name || null;
+                  const avatarSeed = displayName || p.phone || "?";
+                  return (
+                  <div key={p.jid || p.phone} className="px-3 py-2 flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                       <span className="text-xs font-semibold text-primary">
-                        {(p.employee?.name || p.phone || "?").slice(0, 2).toUpperCase()}
+                        {avatarSeed.slice(0, 2).toUpperCase()}
                       </span>
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">
-                        {p.employee?.name || (
+                        {displayName || (
                           <span className="text-text-light italic">Não cadastrado</span>
+                        )}
+                        {!p.employee && p.push_name && (
+                          <span className="ml-1 text-[10px] font-normal text-text-light italic">(WhatsApp)</span>
                         )}
                       </p>
                       <p className="text-[10px] text-text-light font-mono">
@@ -805,7 +812,8 @@ function GroupInfoModal({ jid, onClose }: { jid: string | null; onClose: () => v
                       </span>
                     )}
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
             <p className="text-[10px] text-text-light mt-2">

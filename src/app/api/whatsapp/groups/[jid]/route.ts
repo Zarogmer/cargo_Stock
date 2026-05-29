@@ -76,17 +76,64 @@ export async function GET(
           .filter((n): n is number => typeof n === "number")
       : [];
 
+    // Mapeia LID → telefone real e LID → pushName usando o histórico de
+    // mensagens do grupo. O Baileys recente coloca o telefone do remetente
+    // em `key.participantPn` mesmo quando o `key.participant` é um LID
+    // opaco — então cada mensagem antiga é uma chance de aprender quem é
+    // aquele LID. pushName vira fallback de exibição quando nem o phone
+    // bate com um colaborador.
+    const groupMessages = await prisma.whatsappMessage.findMany({
+      where: { remote_jid: jid, from_me: false },
+      orderBy: { timestamp_ms: "desc" },
+      select: { push_name: true, raw_event: true },
+      take: 1000,
+    });
+    const lidToPhone = new Map<string, string>();
+    const lidToPushName = new Map<string, string>();
+    for (const m of groupMessages) {
+      const raw = m.raw_event as Record<string, unknown> | null;
+      const data = (raw?.data ?? raw) as Record<string, unknown> | null;
+      const key = (data?.key ?? null) as Record<string, unknown> | null;
+      const participant = typeof key?.participant === "string" ? key.participant : "";
+      if (!participant) continue;
+      const partDigits = jidToDigits(participant);
+      if (!partDigits) continue;
+      if (!lidToPhone.has(partDigits)) {
+        const pn = typeof key?.participantPn === "string" ? key.participantPn : "";
+        const pnDigits = pn ? jidToDigits(pn) : "";
+        if (pnDigits) lidToPhone.set(partDigits, pnDigits);
+      }
+      if (!lidToPushName.has(partDigits)) {
+        const name = (m.push_name || "").trim();
+        if (name) lidToPushName.set(partDigits, name);
+      }
+    }
+
     const evolutionParticipants = (info.participants || []).map((p) => {
       const pj = p.id || "";
       const digits = jidToDigits(pj);
-      const emp =
+      // Try direct phone match first, then BR 55-prefix variants, then a LID
+      // → phone resolution learned from the group's message history.
+      let emp =
         byPhone.get(digits) ||
         byPhone.get(digits.startsWith("55") ? digits.slice(2) : `55${digits}`) ||
         null;
+      let resolvedPhone = digits;
+      if (!emp) {
+        const phoneFromLid = lidToPhone.get(digits);
+        if (phoneFromLid) {
+          emp =
+            byPhone.get(phoneFromLid) ||
+            byPhone.get(phoneFromLid.startsWith("55") ? phoneFromLid.slice(2) : `55${phoneFromLid}`) ||
+            null;
+          if (emp) resolvedPhone = phoneFromLid;
+        }
+      }
       return {
         jid: pj,
-        phone: digits,
+        phone: resolvedPhone,
         admin: p.admin || null, // "admin" | "superadmin" | null
+        push_name: lidToPushName.get(digits) || null,
         employee: emp ? {
           id: emp.id,
           name: emp.name,
@@ -117,6 +164,7 @@ export async function GET(
           jid: "",
           phone: (e.phone || "").replace(/\D/g, ""),
           admin: adminByEmpId.get(e.id) || null,
+          push_name: null,
           employee: { id: e.id, name: e.name, team: e.team, status: e.status },
         }));
     } else {
