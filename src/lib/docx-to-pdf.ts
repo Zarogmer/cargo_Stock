@@ -1,33 +1,15 @@
 import { promisify } from "util";
 import { execFile } from "child_process";
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
+import { randomBytes } from "crypto";
 
 const execFileAsync = promisify(execFile);
 
-// libreoffice-convert nao tem types publicados; declarado localmente.
-type LibreConvertFn = (
-  buffer: Buffer,
-  format: string,
-  filter: string | undefined,
-  options: { sofficeBinaryPaths?: string[] },
-  cb: (err: Error | null, result: Buffer) => void,
-) => void;
-
-interface LibreModule {
-  convertWithOptions: LibreConvertFn;
-}
-
-// Cache do path detectado; undefined = nunca tentou; null = tentou e nao achou.
+// Cache do path detectado entre chamadas. undefined = nunca tentou.
 let cachedSofficePath: string | null | undefined;
 
-/**
- * Detecta o binario `soffice` em runtime.
- *
- * O motivo: `libreoffice-convert` tem uma lista fixa de paths no Linux
- * (/usr/bin/soffice, /opt/libreoffice/..., etc.). O LibreOffice instalado
- * via Nix (nixpacks no Railway) vai pra /nix/store/<hash>-libreoffice/...,
- * que nao esta na lista. Por isso precisamos descobrir o path real usando
- * which/where e passar via `sofficeBinaryPaths` na chamada.
- */
 async function findSofficePath(): Promise<string | null> {
   if (cachedSofficePath !== undefined) return cachedSofficePath;
 
@@ -46,7 +28,7 @@ async function findSofficePath(): Promise<string | null> {
         return first;
       }
     } catch {
-      // tenta proximo candidato
+      // tenta o proximo candidato
     }
   }
 
@@ -55,45 +37,78 @@ async function findSofficePath(): Promise<string | null> {
 }
 
 /**
- * Converte um buffer DOCX para PDF usando LibreOffice headless.
- * O servidor precisa do binario `soffice` (em producao o nixpacks.toml
- * instala o pacote `libreoffice`; em dev local Windows, a instalacao
- * do LibreOffice Suite e detectada automaticamente).
+ * Converte um buffer DOCX para PDF chamando o binario `soffice` diretamente.
  *
- * Lanca um erro com mensagem rica em diagnostico se a conversao falhar -
- * a route que chama esta funcao deve traduzir isso em 503 com explicacao
- * para o usuario tentar a versao Word.
+ * NAO usa a lib `libreoffice-convert` porque ela trata qualquer aparicao
+ * da palavra "error" no stderr como falha — e o LibreOffice em Nix sempre
+ * loga "Fontconfig error: ..." mesmo quando a conversao da certo. Aqui a
+ * gente confia no arquivo de saida: se o PDF existe, a conversao funcionou.
+ *
+ * Cada chamada usa um diretorio de profile dedicado (UserInstallation +
+ * HOME) pra permitir conversoes concorrentes sem conflito.
  */
 export async function docxToPdf(docxBuffer: Buffer): Promise<Buffer> {
-  let libre: LibreModule;
-  try {
-    libre = (await import("libreoffice-convert")) as unknown as LibreModule;
-  } catch (err) {
-    throw new Error(
-      `Conversor PDF indisponivel no servidor (libreoffice-convert nao carregou): ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-  }
-
   const sofficePath = await findSofficePath();
-
   if (!sofficePath) {
     throw new Error(
       "Binario LibreOffice (soffice) nao encontrado no servidor. " +
-        "Verifique se o nixpacks.toml inclui o pacote 'libreoffice' e se o build foi refeito.",
+        "Verifique se o nixpacks.toml inclui o pacote 'libreoffice'.",
     );
   }
 
-  const convertAsync = promisify(libre.convertWithOptions);
-  const options = { sofficeBinaryPaths: [sofficePath] };
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "docx2pdf-"));
+  const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "sofficeprofile-"));
+  const inputName = `input-${randomBytes(4).toString("hex")}.docx`;
+  const inputPath = path.join(workDir, inputName);
+  const outputPath = path.join(
+    workDir,
+    inputName.replace(/\.docx$/, ".pdf"),
+  );
+
+  await fs.writeFile(inputPath, docxBuffer);
+
+  const args = [
+    `-env:UserInstallation=file://${profileDir}`,
+    "--headless",
+    "--norestore",
+    "--nologo",
+    "--nofirststartwizard",
+    "--convert-to",
+    "pdf",
+    "--outdir",
+    workDir,
+    inputPath,
+  ];
+
+  type ExecError = {
+    message?: string;
+    stderr?: string;
+    stdout?: string;
+    code?: number;
+  };
+  let execErr: ExecError | null = null;
+  try {
+    await execFileAsync(sofficePath, args, {
+      timeout: 60_000,
+      env: { ...process.env, HOME: profileDir },
+    });
+  } catch (err) {
+    // Pode falhar com warnings ainda assim ter gerado o PDF — checamos abaixo.
+    execErr = err as ExecError;
+  }
 
   try {
-    return await convertAsync(docxBuffer, ".pdf", undefined, options);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    return await fs.readFile(outputPath);
+  } catch {
+    const stderr = (execErr?.stderr ?? "").slice(0, 800);
+    const stdout = (execErr?.stdout ?? "").slice(0, 200);
     throw new Error(
-      `LibreOffice (${sofficePath}) nao conseguiu converter o documento para PDF: ${msg}`,
+      `LibreOffice (${sofficePath}) nao gerou o PDF. ` +
+        `exit_code=${execErr?.code ?? "0"} stderr=${stderr} stdout=${stdout}`,
     );
+  } finally {
+    // Cleanup do tempdir (ignora erros — sao melhores que travar o request)
+    fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
+    fs.rm(profileDir, { recursive: true, force: true }).catch(() => {});
   }
 }

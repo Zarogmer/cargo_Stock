@@ -1,9 +1,23 @@
-# LibreOffice headless e necessario para converter DOCX -> PDF
-# nas rotas /api/documents/* quando format=pdf. Sem ele, o servidor
-# retorna 503 indicando que so a versao Word esta disponivel.
+# Dependencias para converter DOCX -> PDF nas rotas /api/documents/*
+# quando format=pdf. Sem isso, o servidor retorna 503 indicando que
+# so a versao Word esta disponivel.
 #
-# `which` e usado pelo helper src/lib/docx-to-pdf.ts para localizar
-# o binario soffice em runtime (o Nix instala em /nix/store/<hash>,
-# fora dos paths fixos que a lib libreoffice-convert conhece).
+# - libreoffice: motor de conversao headless (soffice)
+# - jre: Java Runtime, necessario para alguns filtros/componentes UNO
+#   do LibreOffice. Sem ele: "javaldx: Could not find a Java Runtime"
+# - fontconfig + dejavu_fonts + liberation_ttf: sem isso o LibreOffice
+#   joga "Fontconfig error: Cannot load default config" e o PDF sai
+#   com glifos quebrados (caixinhas em vez de letras)
+# - which: usado pelo helper docx-to-pdf.ts para localizar `soffice`
+#   em runtime (o Nix instala em /nix/store/<hash>, fora dos paths
+#   padrao que a maioria das libs conhece)
 [phases.setup]
-nixPkgs = ["nodejs_20", "libreoffice", "which"]
+nixPkgs = [
+    "nodejs_20",
+    "libreoffice",
+    "jre",
+    "fontconfig",
+    "dejavu_fonts",
+    "liberation_ttf",
+    "which",
+]
