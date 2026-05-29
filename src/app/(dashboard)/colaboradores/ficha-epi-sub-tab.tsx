@@ -74,7 +74,8 @@ export function FichaEpiSubTab({ employees }: { employees: Employee[] }) {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Erro ${res.status}`);
+        const main = body.error || `Erro ${res.status}`;
+        throw new Error(body.detail ? `${main}\n\nDetalhe tecnico: ${body.detail}` : main);
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -196,7 +197,7 @@ export function FichaEpiSubTab({ employees }: { employees: Employee[] }) {
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700">
+        <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700 whitespace-pre-line">
           ⚠️ {error}
         </div>
       )}
