@@ -217,13 +217,14 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
 
       <div className="flex justify-end gap-2">
         <Button
-          variant="secondary"
+          variant="primary"
           onClick={() => handleGenerate("docx")}
           disabled={!!generating || !nome.trim()}
         >
           {generating === "docx" ? "Gerando..." : "Gerar Word (.docx)"}
         </Button>
         <Button
+          variant="danger"
           onClick={() => handleGenerate("pdf")}
           disabled={!!generating || !nome.trim()}
         >
