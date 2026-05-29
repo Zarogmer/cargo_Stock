@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
 const EMAIL_DOMAIN = "@cargostock.local";
+const STORAGE_KEY = "cargostock:savedLogin";
 
 function usernameToEmail(username: string): string {
   const u = username.trim().toLowerCase();
@@ -16,9 +17,28 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as { username?: string; password?: string };
+      if (saved.username) setUsername(saved.username);
+      if (saved.password) {
+        try {
+          setPassword(atob(saved.password));
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -38,6 +58,19 @@ export default function LoginPage() {
         setError("Usuário ou senha inválidos.");
         setLoading(false);
         return;
+      }
+
+      try {
+        if (rememberMe) {
+          localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({ username, password: btoa(password) })
+          );
+        } else {
+          localStorage.removeItem(STORAGE_KEY);
+        }
+      } catch {
+        // ignore
       }
 
       router.push("/");
@@ -126,6 +159,16 @@ export default function LoginPage() {
               </button>
             </div>
           </div>
+
+          <label className="flex items-center gap-2 text-sm text-gray-700 select-none cursor-pointer">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+            />
+            Lembrar-me neste computador
+          </label>
 
           {error && (
             <div className="bg-red-50 text-red-600 text-sm p-3 rounded-xl">
