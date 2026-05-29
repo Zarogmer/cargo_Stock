@@ -1534,6 +1534,17 @@ function JobDetailModal({
   // Edição inline da Folha (atualiza pluxee_value = total - folha).
   const [editingFolhaId, setEditingFolhaId] = useState<number | null>(null);
   const [folhaDraft, setFolhaDraft] = useState("");
+  // Estados de edicao inline para os outros valores da linha. Sandra
+  // (Financeiro) pediu controle total: clicou no valor, editou, salvou.
+  // Cada par (id-em-edicao, draft) funciona igual ao da Folha.
+  const [editingRateId, setEditingRateId] = useState<number | null>(null);
+  const [rateDraft, setRateDraft] = useState("");
+  const [editingQtyId, setEditingQtyId] = useState<number | null>(null);
+  const [qtyDraft, setQtyDraft] = useState("");
+  const [editingExtraId, setEditingExtraId] = useState<number | null>(null);
+  const [extraDraft, setExtraDraft] = useState("");
+  const [editingPluxeeId, setEditingPluxeeId] = useState<number | null>(null);
+  const [pluxeeDraft, setPluxeeDraft] = useState("");
 
   // Status do import de PDF da Relação de Líquidos.
   const [pdfStatus, setPdfStatus] = useState<{
@@ -1688,6 +1699,43 @@ function JobDetailModal({
   async function handleSetFolha(allocId: number, totalPerson: number, folhaValue: number) {
     const newPluxee = +Math.max(0, totalPerson - folhaValue).toFixed(2);
     await db.from("job_allocations").update({ pluxee_value: newPluxee }).eq("id", allocId);
+    onChange();
+  }
+
+  // Helpers de edicao inline. Cada um faz parse do draft, valida e roda UPDATE.
+  // Numero "0" eh valido em todos -- so rejeitamos NaN/negativo. Reusamos o
+  // padrao replace(",", ".") pra aceitar 1.234,56 ou 1234.56 sem reclamar.
+  function parseDecimal(s: string): number | null {
+    const n = parseFloat(s.replace(/\./g, "").replace(",", "."));
+    return Number.isFinite(n) && n >= 0 ? +n.toFixed(2) : null;
+  }
+  function parseInt0(s: string): number | null {
+    const n = parseInt(s, 10);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+  async function handleSetRate(allocId: number, raw: string, current: number) {
+    const n = parseDecimal(raw);
+    if (n == null || n === current) return;
+    await db.from("job_allocations").update({ rate: n }).eq("id", allocId);
+    onChange();
+  }
+  async function handleSetQty(allocId: number, raw: string, current: number) {
+    const n = parseInt0(raw);
+    if (n == null || n === current) return;
+    await db.from("job_allocations").update({ quantity: n }).eq("id", allocId);
+    onChange();
+  }
+  async function handleSetExtra(allocId: number, raw: string, current: number) {
+    // Aceita negativo aqui (extra pode ser negativo via rateio reverso).
+    const n = parseFloat(raw.replace(/\./g, "").replace(",", "."));
+    if (!Number.isFinite(n) || +n.toFixed(2) === current) return;
+    await db.from("job_allocations").update({ extra_value: +n.toFixed(2) }).eq("id", allocId);
+    onChange();
+  }
+  async function handleSetPluxee(allocId: number, raw: string, current: number) {
+    const n = parseDecimal(raw);
+    if (n == null || n === current) return;
+    await db.from("job_allocations").update({ pluxee_value: n }).eq("id", allocId);
     onChange();
   }
 
@@ -2405,9 +2453,69 @@ function JobDetailModal({
                           )}
                         </td>
                         {showQtyColumn && (
-                          <td className="px-2 py-2 text-center">{a.quantity}</td>
+                          <td className="px-2 py-2 text-center">
+                            {editingQtyId === a.id && canEdit && !isReadOnly ? (
+                              <input
+                                type="number"
+                                step="1"
+                                min="0"
+                                value={qtyDraft}
+                                onChange={(e) => setQtyDraft(e.target.value)}
+                                onBlur={async () => {
+                                  await handleSetQty(a.id, qtyDraft, a.quantity);
+                                  setEditingQtyId(null);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                  if (e.key === "Escape") { setEditingQtyId(null); setQtyDraft(""); }
+                                }}
+                                autoFocus
+                                className="w-16 text-center px-1 py-0.5 border-2 border-primary rounded outline-none"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={!canEdit || isReadOnly}
+                                onClick={() => { setQtyDraft(String(a.quantity)); setEditingQtyId(a.id); }}
+                                className={canEdit && !isReadOnly ? "hover:bg-blue-50 rounded px-1 cursor-text" : ""}
+                                title={canEdit && !isReadOnly ? "Clique para editar" : ""}
+                              >
+                                {a.quantity}
+                              </button>
+                            )}
+                          </td>
                         )}
-                        <td className="px-2 py-2 text-right whitespace-nowrap">{brl(displayRate)}</td>
+                        <td className="px-2 py-2 text-right whitespace-nowrap">
+                          {editingRateId === a.id && canEdit && !isReadOnly ? (
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={rateDraft}
+                              onChange={(e) => setRateDraft(e.target.value)}
+                              onBlur={async () => {
+                                await handleSetRate(a.id, rateDraft, actualRate);
+                                setEditingRateId(null);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                if (e.key === "Escape") { setEditingRateId(null); setRateDraft(""); }
+                              }}
+                              autoFocus
+                              className="w-24 text-right px-1 py-0.5 border-2 border-primary rounded outline-none"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={!canEdit || isReadOnly}
+                              onClick={() => { setRateDraft(actualRate.toString()); setEditingRateId(a.id); }}
+                              className={canEdit && !isReadOnly ? "hover:bg-blue-50 rounded px-1 cursor-text" : ""}
+                              title={canEdit && !isReadOnly ? (isEmbarque ? "Clique para editar (vira valor especial)" : "Clique para editar") : ""}
+                            >
+                              {brl(displayRate)}
+                            </button>
+                          )}
+                        </td>
                         {multiplierLabel && (
                           <td className="px-2 py-2 text-center text-text-light">× {holdsMultiplier}</td>
                         )}
@@ -2424,10 +2532,67 @@ function JobDetailModal({
                                   : undefined
                           }
                         >
-                          {extra === 0 ? "—" : `${extra > 0 ? "+ " : "− "}${brl(Math.abs(extra))}`}
+                          {editingExtraId === a.id && canEdit && !isReadOnly ? (
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={extraDraft}
+                              onChange={(e) => setExtraDraft(e.target.value)}
+                              onBlur={async () => {
+                                await handleSetExtra(a.id, extraDraft, rateioExtra);
+                                setEditingExtraId(null);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                if (e.key === "Escape") { setEditingExtraId(null); setExtraDraft(""); }
+                              }}
+                              autoFocus
+                              className="w-24 text-right px-1 py-0.5 border-2 border-primary rounded outline-none text-amber-700"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={!canEdit || isReadOnly}
+                              onClick={() => { setExtraDraft(rateioExtra.toString()); setEditingExtraId(a.id); }}
+                              className={canEdit && !isReadOnly ? "hover:bg-amber-50 rounded px-1 cursor-text" : ""}
+                              title={canEdit && !isReadOnly ? "Clique para editar o rateio (valor especial fica intacto)" : ""}
+                            >
+                              {extra === 0 ? "—" : `${extra > 0 ? "+ " : "− "}${brl(Math.abs(extra))}`}
+                            </button>
+                          )}
                         </td>
                         <td className="px-2 py-2 text-right font-semibold text-emerald-700 whitespace-nowrap">{brl(base + extra)}</td>
-                        <td className="px-2 py-2 text-right text-amber-700 whitespace-nowrap">{brl(pluxee)}</td>
+                        <td className="px-2 py-2 text-right text-amber-700 whitespace-nowrap">
+                          {editingPluxeeId === a.id && canEdit && !isReadOnly ? (
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={pluxeeDraft}
+                              onChange={(e) => setPluxeeDraft(e.target.value)}
+                              onBlur={async () => {
+                                await handleSetPluxee(a.id, pluxeeDraft, pluxee);
+                                setEditingPluxeeId(null);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                if (e.key === "Escape") { setEditingPluxeeId(null); setPluxeeDraft(""); }
+                              }}
+                              autoFocus
+                              className="w-24 text-right px-1 py-0.5 border-2 border-primary rounded outline-none text-amber-700"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={!canEdit || isReadOnly}
+                              onClick={() => { setPluxeeDraft(pluxee.toString()); setEditingPluxeeId(a.id); }}
+                              className={canEdit && !isReadOnly ? "hover:bg-amber-50 rounded px-1 cursor-text" : ""}
+                              title={canEdit && !isReadOnly ? "Clique para editar" : ""}
+                            >
+                              {brl(pluxee)}
+                            </button>
+                          )}
+                        </td>
                         <td className="px-2 py-2 text-right whitespace-nowrap">
                           {editingFolhaId === a.id && canEdit && !isReadOnly ? (
                             <input

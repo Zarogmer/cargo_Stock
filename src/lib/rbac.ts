@@ -50,7 +50,10 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
-    FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
+    // Financeiro é só leitura pra Executivo — quem edita valores é Financeiro
+    // e Tecnologia. Pedido da Sandra: controle total dela, Executivo vê tudo
+    // sem chance de mexer (sem exceção).
+    FINANCEIRO_MOD: ["view"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
     MENSAGENS: ["view", "create"],
     CONVERSAS: ["view", "create"],
