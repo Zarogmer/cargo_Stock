@@ -93,20 +93,24 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
     () => (shipJob ? allocations.filter((a) => a.job_id === shipJob.id && (a.kind || "EMBARQUE") === config.kind) : []),
     [shipJob, allocations, config.kind]
   );
-  // IDs de funcionarios em job_allocations ATIVAS em QUALQUER OUTRO job
-  // (excluindo o job do navio atual). Eles ficam escondidos do seletor --
-  // regra do RH: ninguem em duas operacoes ao mesmo tempo, seja embarque
-  // ou costado. Quem ja esta neste mesmo navio continua sendo gerenciado
-  // pelo `existingAllocs` (que vira `allocatedIds` dentro do modal).
-  const otherJobOccupiedIds = useMemo(() => {
-    const ids = new Set<number>();
+  // Funcionarios em job_allocations ATIVAS em QUALQUER OUTRO job (excluindo
+  // o job do navio atual) com o tipo de operacao em que estao. Aparecem na
+  // lista do seletor desabilitados, com badge "Costado" ou "Embarcado" --
+  // regra do RH: ninguem em duas operacoes ao mesmo tempo, mas a equipe
+  // quer ver o nome pra saber por que nao da pra escalar. Quem ja esta neste
+  // mesmo navio continua sendo gerenciado pelo `existingAllocs` (que vira
+  // `allocatedIds` dentro do modal).
+  const otherJobOccupiedKind = useMemo(() => {
+    const map = new Map<number, "EMBARQUE" | "COSTADO">();
     for (const a of allocations) {
       if (a.status !== "ATIVO") continue;
       if (a.employee_id == null) continue;
       if (shipJob && a.job_id === shipJob.id) continue;
-      ids.add(a.employee_id);
+      const k: "EMBARQUE" | "COSTADO" = a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE";
+      const prev = map.get(a.employee_id);
+      if (!prev || k === "COSTADO") map.set(a.employee_id, k);
     }
-    return ids;
+    return map;
   }, [allocations, shipJob]);
 
   if (loading) {
@@ -153,7 +157,7 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
         profileName={profileName}
         kind={config.kind}
         onChange={loadData}
-        otherJobOccupiedIds={otherJobOccupiedIds}
+        otherJobOccupiedKind={otherJobOccupiedKind}
       />
     </div>
   );
@@ -313,7 +317,7 @@ function ShipSelector({
 // ─── ESCALAÇÃO TAB ──────────────────────────────────────────────────────────
 
 function EscalacaoTab({
-  ship, shipJob, allocations, employees, functions, canEdit, profileName, kind, onChange, otherJobOccupiedIds,
+  ship, shipJob, allocations, employees, functions, canEdit, profileName, kind, onChange, otherJobOccupiedKind,
 }: {
   ship: Ship | null;
   shipJob: Job | null;
@@ -324,7 +328,7 @@ function EscalacaoTab({
   profileName: string;
   kind: AllocationKind;
   onChange: () => void;
-  otherJobOccupiedIds: Set<number>;
+  otherJobOccupiedKind: Map<number, "EMBARQUE" | "COSTADO">;
 }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editAlloc, setEditAlloc] = useState<JobAllocation | null>(null);
@@ -487,7 +491,7 @@ function EscalacaoTab({
         employees={employees}
         functions={functions}
         existingAllocs={activeAllocs.filter((a) => a.id !== editAlloc?.id)}
-        otherJobOccupiedIds={otherJobOccupiedIds}
+        otherJobOccupiedKind={otherJobOccupiedKind}
         profileName={profileName}
         kind={kind}
         onClose={() => { setShowAdd(false); setEditAlloc(null); }}
@@ -508,7 +512,7 @@ function EscalacaoTab({
 // ─── Crew Form Modal (add/edit member) ──────────────────────────────────────
 
 function CrewFormModal({
-  open, item, ensureJob, shipId, employees, functions, existingAllocs, otherJobOccupiedIds, profileName, kind, onClose, onSaved,
+  open, item, ensureJob, shipId, employees, functions, existingAllocs, otherJobOccupiedKind, profileName, kind, onClose, onSaved,
 }: {
   open: boolean;
   item: JobAllocation | null;
@@ -517,7 +521,7 @@ function CrewFormModal({
   employees: Employee[];
   functions: JobFunction[];
   existingAllocs: JobAllocation[];
-  otherJobOccupiedIds: Set<number>;
+  otherJobOccupiedKind: Map<number, "EMBARQUE" | "COSTADO">;
   profileName: string;
   kind: AllocationKind;
   onClose: () => void;
@@ -562,15 +566,21 @@ function CrewFormModal({
     // No Embarque o setor Administrativo aparece sim (RH pediu — diferente
     // do Costado, no qual o admin entra só pela caixinha do form do Navio).
     .filter((e) => !allocatedIds.has(e.id))
-    // Esconde quem ja esta alocado em outro navio (regra do RH: nao da pra
-    // estar em duas operacoes ao mesmo tempo). Se estiver no item em edicao,
-    // mostra mesmo assim (pra nao quebrar o fluxo de edicao).
-    .filter((e) => !otherJobOccupiedIds.has(e.id) || (item != null && e.id === item.employee_id))
+    // Quem ja esta em outra operacao continua na lista, mas vai aparecer
+    // desabilitado com badge Costado/Embarcado. Excecao: se estiver no item
+    // em edicao, e tratado como livre pra nao quebrar o fluxo de editar.
     .filter((e) => {
       if (!search.trim()) return true;
       const q = search.toLowerCase();
       return e.name.toLowerCase().includes(q) || (e.role || "").toLowerCase().includes(q);
     });
+
+  // Verifica se um candidato esta bloqueado por outra operacao ativa.
+  // Editing item: ignora (permite manter o vinculo no save).
+  function occupiedKindFor(empId: number): "EMBARQUE" | "COSTADO" | null {
+    if (item != null && empId === item.employee_id) return null;
+    return otherJobOccupiedKind.get(empId) || null;
+  }
 
   const selectedEmp = empId ? employees.find((e) => String(e.id) === empId) : null;
 
@@ -758,9 +768,9 @@ function CrewFormModal({
                     className={inputCls}
                     autoFocus
                   />
-                  {otherJobOccupiedIds.size > 0 && (
+                  {otherJobOccupiedKind.size > 0 && (
                     <p className="text-[10px] text-text-light mt-1">
-                      ℹ️ {otherJobOccupiedIds.size} colaborador(es) ocultos por já estarem em outra operação ativa.
+                      ℹ️ Colaboradores em <span className="italic">cinza</span> já estão em outra operação ativa.
                     </p>
                   )}
                   <div className="mt-2 max-h-56 overflow-y-auto border border-border rounded-lg bg-card">
@@ -769,17 +779,35 @@ function CrewFormModal({
                         {search.trim() ? "Nenhum funcionário encontrado" : "Comece a digitar para filtrar..."}
                       </div>
                     ) : (
-                      matches.slice(0, 30).map((e) => (
-                        <button
-                          key={e.id}
-                          type="button"
-                          onClick={() => selectEmployee(e)}
-                          className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b border-border last:border-0 transition"
-                        >
-                          <p className="text-sm font-medium">{e.name}</p>
-                          {e.role && <p className="text-[10px] text-text-light">{e.role}</p>}
-                        </button>
-                      ))
+                      matches.slice(0, 30).map((e) => {
+                        const occKind = occupiedKindFor(e.id);
+                        const isOccupied = !!occKind;
+                        return (
+                          <button
+                            key={e.id}
+                            type="button"
+                            onClick={() => { if (!isOccupied) selectEmployee(e); }}
+                            disabled={isOccupied}
+                            className={`w-full text-left px-3 py-2 border-b border-border last:border-0 transition flex items-center gap-2 ${
+                              isOccupied ? "bg-gray-50 cursor-not-allowed" : "hover:bg-blue-50"
+                            }`}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-sm font-medium ${isOccupied ? "text-text-light" : ""}`}>{e.name}</p>
+                              {e.role && <p className="text-[10px] text-text-light">{e.role}</p>}
+                            </div>
+                            {isOccupied && (
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${
+                                occKind === "COSTADO"
+                                  ? "bg-amber-100 text-amber-800"
+                                  : "bg-blue-100 text-blue-800"
+                              }`}>
+                                {occKind === "COSTADO" ? "Costado" : "Embarcado"}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })
                     )}
                   </div>
                 </>
@@ -850,6 +878,11 @@ function CrewFormModal({
                 className={inputCls}
                 autoFocus
               />
+              {otherJobOccupiedKind.size > 0 && (
+                <p className="text-[10px] text-text-light mt-1">
+                  ℹ️ Colaboradores em <span className="italic">cinza</span> já estão em outra operação ativa.
+                </p>
+              )}
               <div className="mt-2 max-h-56 overflow-y-auto border border-border rounded-lg bg-card">
                 {matches.length === 0 ? (
                   <div className="px-3 py-3 text-xs text-text-light italic text-center">
@@ -858,23 +891,39 @@ function CrewFormModal({
                 ) : (
                   matches.slice(0, 50).map((e) => {
                     const checked = selectedIds.has(e.id);
+                    const occKind = occupiedKindFor(e.id);
+                    const isOccupied = !!occKind;
                     return (
                       <label
                         key={e.id}
-                        className={`flex items-center gap-2 px-3 py-2 border-b border-border last:border-0 cursor-pointer transition ${
-                          checked ? "bg-emerald-50 hover:bg-emerald-100" : "hover:bg-blue-50"
+                        className={`flex items-center gap-2 px-3 py-2 border-b border-border last:border-0 transition ${
+                          isOccupied
+                            ? "bg-gray-50 cursor-not-allowed"
+                            : checked
+                              ? "bg-emerald-50 hover:bg-emerald-100 cursor-pointer"
+                              : "hover:bg-blue-50 cursor-pointer"
                         }`}
                       >
                         <input
                           type="checkbox"
                           checked={checked}
-                          onChange={() => toggleEmployee(e)}
-                          className="w-4 h-4 accent-primary"
+                          disabled={isOccupied}
+                          onChange={() => { if (!isOccupied) toggleEmployee(e); }}
+                          className="w-4 h-4 accent-primary disabled:opacity-50"
                         />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{e.name}</p>
+                          <p className={`text-sm font-medium truncate ${isOccupied ? "text-text-light" : ""}`}>{e.name}</p>
                           {e.role && <p className="text-[10px] text-text-light">{e.role}</p>}
                         </div>
+                        {isOccupied && (
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${
+                            occKind === "COSTADO"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-blue-100 text-blue-800"
+                          }`}>
+                            {occKind === "COSTADO" ? "Costado" : "Embarcado"}
+                          </span>
+                        )}
                       </label>
                     );
                   })

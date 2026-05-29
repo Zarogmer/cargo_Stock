@@ -191,7 +191,7 @@ export default function NaviosPage() {
   // Usado pra esconder eles da lista de selecao no modal de novo navio --
   // a regra do RH eh: uma pessoa nao pode estar em duas operacoes ao mesmo
   // tempo (embarque ou costado).
-  const [occupiedEmployeeIds, setOccupiedEmployeeIds] = useState<Set<number>>(new Set());
+  const [occupiedEmployeeKind, setOccupiedEmployeeKind] = useState<Map<number, "EMBARQUE" | "COSTADO">>(new Map());
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<ShipStatus | "TODOS">("TODOS");
@@ -283,20 +283,28 @@ export default function NaviosPage() {
     }
   }, []);
 
-  // Carrega o conjunto de funcionarios que ja estao em alguma alocacao ATIVA.
-  // Eles ficam ocultos do seletor de "escalar colaboradores" no modal de novo
-  // navio -- nao da pra colocar a mesma pessoa em duas operacoes.
+  // Carrega o conjunto de funcionarios que ja estao em alguma alocacao ATIVA,
+  // anotando o tipo de operacao (EMBARQUE ou COSTADO). No seletor o nome
+  // continua aparecendo, mas em cinza e com badge indicando onde ele esta --
+  // regra do RH: ninguem em duas operacoes ao mesmo tempo, mas o RH quer
+  // SABER quem nao da pra escalar, em vez do nome sumir.
   const loadOccupied = useCallback(async () => {
     try {
       const { data } = await db
         .from("job_allocations")
-        .select("employee_id")
+        .select("employee_id, kind")
         .eq("status", "ATIVO");
-      const ids = new Set<number>();
-      for (const a of (data as Array<{ employee_id: number | null }> | null) || []) {
-        if (a.employee_id != null) ids.add(a.employee_id);
+      const map = new Map<number, "EMBARQUE" | "COSTADO">();
+      for (const a of (data as Array<{ employee_id: number | null; kind: string | null }> | null) || []) {
+        if (a.employee_id == null) continue;
+        const k: "EMBARQUE" | "COSTADO" = a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE";
+        // COSTADO ganha precedencia se ja existir entrada -- alguem em ambos
+        // (raro, mas possivel se houver bug de dados) aparece como Costado
+        // por ser o vinculo mais especifico (turno + data).
+        const prev = map.get(a.employee_id);
+        if (!prev || k === "COSTADO") map.set(a.employee_id, k);
       }
-      setOccupiedEmployeeIds(ids);
+      setOccupiedEmployeeKind(map);
     } catch (err) {
       console.error("loadOccupied error:", err);
     }
@@ -1496,19 +1504,15 @@ export default function NaviosPage() {
                     // no grupo". No Embarque, o RH pediu pra deixar Administrativo
                     // na lista também (alguns vão pra bordo). ATIVO + PENDENCIA
                     // aparecem (PENDENCIA ainda pode trabalhar, só sinaliza doc
-                    // vencida). INATIVO/demitido fica fora.
+                    // vencida). INATIVO/demitido fica fora. Quem ja esta em outra
+                    // operacao continua na lista mas desabilitado (cinza + badge).
                     const eligible = employees.filter(
                       (e) => {
                         const status = e.status ?? "ATIVO";
                         return (
                           (status === "ATIVO" || status === "PENDENCIA") &&
                           (e.phone || "").trim().length > 0 &&
-                          (!isCostadoForm || e.sector !== "ADMINISTRATIVO") &&
-                          // Esconde quem ja tem job_allocation ATIVA em outro
-                          // navio -- regra do RH: ninguem em duas operacoes.
-                          // editingShip eh ignorado aqui pq nao deixamos editar
-                          // a lista de escalados depois de criar.
-                          !occupiedEmployeeIds.has(e.id)
+                          (!isCostadoForm || e.sector !== "ADMINISTRATIVO")
                         );
                       },
                     );
@@ -1685,9 +1689,9 @@ export default function NaviosPage() {
                           placeholder="🔍 Buscar colaborador..."
                           className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm bg-white"
                         />
-                        {occupiedEmployeeIds.size > 0 && (
+                        {occupiedEmployeeKind.size > 0 && (
                           <p className="text-[10px] text-text-light px-1">
-                            ℹ️ {occupiedEmployeeIds.size} colaborador(es) ocultos por estarem em outra operação ativa.
+                            ℹ️ Colaboradores em <span className="text-text-light italic">cinza</span> já estão em outra operação ativa e não podem ser escalados de novo.
                           </p>
                         )}
                         <div className="max-h-48 overflow-y-auto border border-border rounded-lg bg-white">
@@ -1700,17 +1704,25 @@ export default function NaviosPage() {
                           ) : (
                             filteredEmps.map((emp) => {
                               const checked = groupParticipants.has(emp.id);
+                              const occKind = occupiedEmployeeKind.get(emp.id) || null;
+                              const isOccupied = !!occKind;
                               return (
                                 <label
                                   key={emp.id}
-                                  className={`flex items-center gap-2 px-3 py-2 border-b border-border last:border-0 cursor-pointer transition ${
-                                    checked ? "bg-emerald-50 hover:bg-emerald-100" : "hover:bg-gray-50"
+                                  className={`flex items-center gap-2 px-3 py-2 border-b border-border last:border-0 transition ${
+                                    isOccupied
+                                      ? "bg-gray-50 cursor-not-allowed"
+                                      : checked
+                                        ? "bg-emerald-50 hover:bg-emerald-100 cursor-pointer"
+                                        : "hover:bg-gray-50 cursor-pointer"
                                   }`}
                                 >
                                   <input
                                     type="checkbox"
                                     checked={checked}
+                                    disabled={isOccupied}
                                     onChange={() => {
+                                      if (isOccupied) return;
                                       const wasChecked = groupParticipants.has(emp.id);
                                       setGroupParticipants((prev) => {
                                         const next = new Set(prev);
@@ -1737,12 +1749,21 @@ export default function NaviosPage() {
                                         }
                                       }
                                     }}
-                                    className="w-4 h-4 accent-emerald-600"
+                                    className="w-4 h-4 accent-emerald-600 disabled:opacity-50"
                                   />
                                   <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium text-text truncate">{emp.name}</p>
+                                    <p className={`text-sm font-medium truncate ${isOccupied ? "text-text-light" : "text-text"}`}>{emp.name}</p>
                                     <p className="text-[10px] text-text-light">{emp.phone}{emp.role ? ` · ${emp.role}` : ""}</p>
                                   </div>
+                                  {isOccupied && (
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${
+                                      occKind === "COSTADO"
+                                        ? "bg-amber-100 text-amber-800"
+                                        : "bg-blue-100 text-blue-800"
+                                    }`}>
+                                      {occKind === "COSTADO" ? "Costado" : "Embarcado"}
+                                    </span>
+                                  )}
                                 </label>
                               );
                             })
