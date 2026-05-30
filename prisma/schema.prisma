@@ -328,10 +328,31 @@ model JobFunction {
   rates           JobFunctionRate[]
   allocations     JobAllocation[]
   employee_rates  EmployeeFunctionRate[]
+  costado_rate    CostadoFunctionRate?
   created_at      DateTime               @default(now()) @db.Timestamptz()
   updated_at      DateTime               @updatedAt @db.Timestamptz()
 
   @@map("job_functions")
+}
+
+// Valores específicos pra Costado por função. Costado é pago por turno de 6h,
+// não por porão — então o default_rate em JobFunction (que é valor/porão pra
+// Embarque) não serve aqui. Esta tabela guarda valor/hora base + percentual
+// do adicional noturno (turnos 19-01 e 01-07). Adicional noturno legal BR é
+// 20%, mas alguns clientes pagam mais — por isso é configurável por função.
+model CostadoFunctionRate {
+  id              Int      @id @default(autoincrement())
+  function_id     Int      @unique
+  hourly_rate     Decimal  @default(0) @db.Decimal(10, 2)  // R$/hora base (turnos diurnos)
+  night_bonus_pct Decimal  @default(20) @db.Decimal(5, 2)  // % a mais nos turnos noturnos
+  notes           String?
+  updated_by      String?
+  created_at      DateTime @default(now()) @db.Timestamptz()
+  updated_at      DateTime @updatedAt @db.Timestamptz()
+
+  job_functions   JobFunction @relation(fields: [function_id], references: [id], onDelete: Cascade)
+
+  @@map("costado_function_rates")
 }
 
 // Override do default_rate por funcionário. Quando uma alocação é criada,

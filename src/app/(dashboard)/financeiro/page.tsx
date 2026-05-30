@@ -252,9 +252,9 @@ export default function FinanceiroPage() {
   const financeiroTabs = [
     {
       key: "funcoes",
-      label: "💰 Função/Valores/Pagas",
+      label: "💰 Valores",
       content: (
-        <FuncoesTab
+        <ValoresTab
           functions={functions}
           rates={rates}
           allocations={allocations}
@@ -707,8 +707,6 @@ function FuncoesTab({
         e a confirmação final dos valores é feita no <strong>Pagamento de Embarque</strong> (em "Ajustar Valor por Função") antes de fechar.
       </div>
 
-      <CustoPorPoraoPanel functions={functions} />
-
       {loading ? (
         <p className="text-center text-text-light py-12">Carregando...</p>
       ) : filtered.length === 0 ? (
@@ -788,6 +786,10 @@ function FuncoesTab({
         </div>
       )}
 
+      {/* Custo Base por Porão — simulador embaixo da lista pra calcular
+          quanto sai um porão com base nos valores configurados acima. */}
+      <CustoPorPoraoPanel functions={functions} />
+
       <FunctionFormModal
         open={showFnForm}
         item={editFn}
@@ -865,6 +867,451 @@ function FuncoesTab({
         variant={deleteFn && !deleteFn.active ? "primary" : "danger"}
       />
     </div>
+  );
+}
+
+// ─── VALORES TAB ───────────────────────────────────────────────────────────
+// Wrapper que divide a aba "Valores" em duas atividades distintas:
+// Embarque (pago por porão) e Costado (pago por turno de 6h). Cada uma tem
+// seu próprio modelo de remuneração — não dá pra fundir num único valor por
+// função, então cada uma vive numa sub-aba.
+function ValoresTab(props: {
+  functions: JobFunction[];
+  rates: JobFunctionRate[];
+  allocations: JobAllocation[];
+  employees: Employee[];
+  canEdit: boolean;
+  onChange: () => void;
+  loading: boolean;
+}) {
+  const subTabs = [
+    {
+      key: "embarque",
+      label: "🚢 Embarque",
+      content: <FuncoesTab {...props} />,
+    },
+    {
+      key: "costado",
+      label: "⚓ Costado",
+      content: (
+        <CostadoValoresTab
+          functions={props.functions}
+          canEdit={props.canEdit}
+          loading={props.loading}
+        />
+      ),
+    },
+  ];
+
+  return (
+    <div className="space-y-3">
+      <Tabs tabs={subTabs} defaultTab="embarque" />
+    </div>
+  );
+}
+
+// ─── COSTADO VALORES TAB ───────────────────────────────────────────────────
+// Costado é pago por turno de 6h (não por porão), então não dá pra reusar o
+// default_rate da JobFunction. Esta aba edita valores específicos via tabela
+// `costado_function_rates`: valor/hora base + % do adicional noturno.
+//
+// Os 4 turnos de 6h são:
+//   07-13, 13-19  → diurnos (sem adicional)
+//   19-01, 01-07  → noturnos (recebem adicional %)
+//
+// Adicional noturno legal BR = 20%, mas alguns clientes pagam mais — por isso
+// é configurável por função.
+
+type CostadoRateRow = {
+  id?: number;
+  function_id: number;
+  hourly_rate: string | number;
+  night_bonus_pct: string | number;
+};
+
+const COSTADO_DIURNO_PERIODS = ["07-13", "13-19"] as const;
+const COSTADO_NOTURNO_PERIODS = ["19-01", "01-07"] as const;
+const COSTADO_HOURS_PER_SHIFT = 6;
+
+function CostadoValoresTab({
+  functions, canEdit, loading,
+}: {
+  functions: JobFunction[];
+  canEdit: boolean;
+  loading: boolean;
+}) {
+  const [rows, setRows] = useState<Record<number, CostadoRateRow>>({});
+  const [rowsLoading, setRowsLoading] = useState(false);
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [savedToast, setSavedToast] = useState<string | null>(null);
+
+  // Só funções de porão (operacionais) — mensalistas não fazem sentido em turno.
+  const opFns = useMemo(
+    () => functions.filter((f) => f.active && POR_PORAO_UNITS.includes(f.unit)),
+    [functions],
+  );
+
+  const loadRates = useCallback(async () => {
+    setRowsLoading(true);
+    const { data, error } = await db.from("costado_function_rates").select("*");
+    if (error) {
+      console.error("[costado] failed to load rates:", error);
+      setRowsLoading(false);
+      return;
+    }
+    const map: Record<number, CostadoRateRow> = {};
+    for (const r of (data || []) as CostadoRateRow[]) {
+      map[r.function_id] = r;
+    }
+    setRows(map);
+    setRowsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    loadRates();
+  }, [loadRates]);
+
+  function getRow(fnId: number): CostadoRateRow {
+    return rows[fnId] || { function_id: fnId, hourly_rate: 0, night_bonus_pct: 20 };
+  }
+
+  async function saveRow(fnId: number, patch: Partial<CostadoRateRow>) {
+    const existing = rows[fnId];
+    setSavingId(fnId);
+    try {
+      if (existing?.id) {
+        await db.from("costado_function_rates").update({
+          hourly_rate: patch.hourly_rate ?? existing.hourly_rate,
+          night_bonus_pct: patch.night_bonus_pct ?? existing.night_bonus_pct,
+        } as Record<string, unknown>).eq("id", existing.id);
+      } else {
+        await db.from("costado_function_rates").insert({
+          function_id: fnId,
+          hourly_rate: patch.hourly_rate ?? 0,
+          night_bonus_pct: patch.night_bonus_pct ?? 20,
+        } as Record<string, unknown>);
+      }
+      await loadRates();
+      setSavedToast("Valor salvo");
+      setTimeout(() => setSavedToast(null), 1500);
+    } catch (e) {
+      alert(`Erro ao salvar: ${(e as Error).message}`);
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  // Custo Base por Turno: simulador semelhante ao Custo por Porão. Headcounts
+  // persistem em localStorage. Usa default da equipe padrão (4-4-4-1-1-1).
+  const TURNO_HEADCOUNTS_KEY = "financeiro:costado-headcounts";
+  const [turnoHeadcounts, setTurnoHeadcounts] = useState<Record<number, number>>({});
+  const [collapsedSim, setCollapsedSim] = useState(false);
+  useEffect(() => {
+    let saved: Record<string, number> = {};
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(TURNO_HEADCOUNTS_KEY) : null;
+      if (raw) saved = JSON.parse(raw) as Record<string, number>;
+    } catch {
+      saved = {};
+    }
+    const next: Record<number, number> = {};
+    for (const f of opFns) {
+      const fromSaved = saved[String(f.id)];
+      next[f.id] = Number.isFinite(fromSaved) ? Number(fromSaved) : defaultHeadcountForName(f.name);
+    }
+    setTurnoHeadcounts(next);
+  }, [opFns]);
+
+  function updateTurnoQty(fnId: number, qtyRaw: string) {
+    const n = Math.max(0, Math.floor(parseFloat(qtyRaw.replace(",", ".")) || 0));
+    setTurnoHeadcounts((prev) => {
+      const next = { ...prev, [fnId]: n };
+      try {
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(TURNO_HEADCOUNTS_KEY, JSON.stringify(next));
+        }
+      } catch { /* ignore */ }
+      return next;
+    });
+  }
+
+  function resetTurnoDefaults() {
+    const next: Record<number, number> = {};
+    for (const f of opFns) next[f.id] = defaultHeadcountForName(f.name);
+    setTurnoHeadcounts(next);
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(TURNO_HEADCOUNTS_KEY, JSON.stringify(next));
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Helpers de cálculo
+  function diurnoValue(row: CostadoRateRow): number {
+    return Number(row.hourly_rate) * COSTADO_HOURS_PER_SHIFT;
+  }
+  function noturnoValue(row: CostadoRateRow): number {
+    const base = Number(row.hourly_rate) * COSTADO_HOURS_PER_SHIFT;
+    const bonus = base * (Number(row.night_bonus_pct) / 100);
+    return base + bonus;
+  }
+
+  // Totais do simulador (1 turno cheio cada período)
+  const simDiurnoTotal = opFns.reduce((acc, f) => acc + diurnoValue(getRow(f.id)) * (turnoHeadcounts[f.id] ?? 0), 0);
+  const simNoturnoTotal = opFns.reduce((acc, f) => acc + noturnoValue(getRow(f.id)) * (turnoHeadcounts[f.id] ?? 0), 0);
+  const simHeadcount = opFns.reduce((acc, f) => acc + (turnoHeadcounts[f.id] ?? 0), 0);
+  const simDayTotal = simDiurnoTotal * 2 + simNoturnoTotal * 2;
+
+  return (
+    <div className="space-y-3">
+      <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-900">
+        💡 Costado é pago por <strong>turno de 6h</strong> (não por porão). Há 4 turnos por dia:
+        <span className="ml-1 inline-flex flex-wrap gap-1 align-middle">
+          <span className="px-1.5 py-0.5 bg-amber-100 text-amber-900 rounded font-semibold">07–13 ☀️</span>
+          <span className="px-1.5 py-0.5 bg-amber-100 text-amber-900 rounded font-semibold">13–19 ☀️</span>
+          <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-900 rounded font-semibold">19–01 🌙</span>
+          <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-900 rounded font-semibold">01–07 🌙</span>
+        </span>
+        . Turnos noturnos (🌙) recebem o <strong>adicional noturno</strong> configurado por função (legal BR = 20%).
+      </div>
+
+      {loading || rowsLoading ? (
+        <p className="text-center text-text-light py-12">Carregando...</p>
+      ) : opFns.length === 0 ? (
+        <div className="text-center py-12 bg-card rounded-xl border border-border">
+          <p className="text-3xl mb-2">⚓</p>
+          <p className="text-sm text-text-light">Nenhuma função operacional ativa.</p>
+          <p className="text-xs text-text-light/70 mt-1">Cadastre funções com unidade "Porão" na aba Embarque.</p>
+        </div>
+      ) : (
+        <div className="bg-card rounded-xl border border-border overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="border-b border-border bg-gray-50">
+              <tr>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Função</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Valor/Hora</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Adic. Noturno</th>
+                <th className="px-4 py-2.5 text-right text-xs font-semibold text-text-light uppercase tracking-wider">Turno Diurno (6h)</th>
+                <th className="px-4 py-2.5 text-right text-xs font-semibold text-text-light uppercase tracking-wider">Turno Noturno (6h)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {opFns.map((f) => {
+                const row = getRow(f.id);
+                const isSaving = savingId === f.id;
+                return (
+                  <tr key={f.id} className="border-b border-border last:border-0 hover:bg-gray-50">
+                    <td className="px-4 py-2.5 font-medium">{f.name}</td>
+                    <td className="px-4 py-2.5">
+                      <InlineRateEditor
+                        value={Number(row.hourly_rate)}
+                        canEdit={canEdit && !isSaving}
+                        onSave={(v) => saveRow(f.id, { hourly_rate: v })}
+                      />
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <InlinePctEditor
+                        value={Number(row.night_bonus_pct)}
+                        canEdit={canEdit && !isSaving}
+                        onSave={(v) => saveRow(f.id, { night_bonus_pct: v })}
+                      />
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <span className="font-semibold text-amber-700">{brl(diurnoValue(row))}</span>
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <span className="font-semibold text-indigo-700">{brl(noturnoValue(row))}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {savedToast && (
+        <p className="fixed bottom-4 right-4 bg-emerald-600 text-white text-sm px-3 py-2 rounded shadow-lg z-50">
+          ✓ {savedToast}
+        </p>
+      )}
+
+      {/* Simulador: Custo Base por Turno */}
+      {opFns.length > 0 && (
+        <div className="bg-indigo-50/50 border border-indigo-200 rounded-xl">
+          <button
+            type="button"
+            onClick={() => setCollapsedSim((c) => !c)}
+            className="w-full flex items-center justify-between px-4 py-3 hover:bg-indigo-50 transition rounded-xl"
+          >
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className="text-sm font-semibold text-indigo-900">⚓ Custo Base por Turno (Costado)</span>
+              <span className="text-xs text-indigo-800">
+                {simHeadcount} {simHeadcount === 1 ? "pessoa" : "pessoas"} ·{" "}
+                ☀️ <strong>{brl(simDiurnoTotal)}</strong> / 🌙 <strong>{brl(simNoturnoTotal)}</strong>
+              </span>
+            </div>
+            <span className="text-indigo-700 text-xs">{collapsedSim ? "▾ Expandir" : "▴ Recolher"}</span>
+          </button>
+
+          {!collapsedSim && (
+            <div className="px-4 pb-4 space-y-2">
+              <p className="text-[11px] text-indigo-900/80 leading-snug">
+                Equipe padrão por turno: <strong>4 ajudantes</strong> + <strong>4 esfregão</strong> + <strong>4 WAP</strong> + <strong>1 maquinista</strong> + <strong>1 supervisor</strong> + <strong>1 cozinheiro</strong>.
+                Ajuste a quantidade pra simular formações reais (Costado nem sempre escala equipe cheia).
+              </p>
+
+              <div className="bg-white border border-indigo-200 rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-indigo-50/70 border-b border-indigo-200">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-[10px] font-semibold text-indigo-900 uppercase tracking-wider">Função</th>
+                      <th className="px-3 py-2 text-center text-[10px] font-semibold text-indigo-900 uppercase tracking-wider w-20">Qtde</th>
+                      <th className="px-3 py-2 text-right text-[10px] font-semibold text-indigo-900 uppercase tracking-wider">Diurno un.</th>
+                      <th className="px-3 py-2 text-right text-[10px] font-semibold text-indigo-900 uppercase tracking-wider">Subtotal Diurno</th>
+                      <th className="px-3 py-2 text-right text-[10px] font-semibold text-indigo-900 uppercase tracking-wider">Noturno un.</th>
+                      <th className="px-3 py-2 text-right text-[10px] font-semibold text-indigo-900 uppercase tracking-wider">Subtotal Noturno</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {opFns.map((f) => {
+                      const row = getRow(f.id);
+                      const qty = turnoHeadcounts[f.id] ?? 0;
+                      const dRate = diurnoValue(row);
+                      const nRate = noturnoValue(row);
+                      return (
+                        <tr key={f.id} className="border-b border-indigo-100 last:border-0">
+                          <td className="px-3 py-1.5 font-medium text-text">{f.name}</td>
+                          <td className="px-3 py-1.5 text-center">
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={qty}
+                              onChange={(e) => updateTurnoQty(f.id, e.target.value)}
+                              className="w-14 px-1.5 py-0.5 border border-indigo-200 rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                            />
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-text-light text-xs">{brl(dRate)}</td>
+                          <td className="px-3 py-1.5 text-right font-semibold text-amber-700">{brl(dRate * qty)}</td>
+                          <td className="px-3 py-1.5 text-right text-text-light text-xs">{brl(nRate)}</td>
+                          <td className="px-3 py-1.5 text-right font-semibold text-indigo-700">{brl(nRate * qty)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot className="bg-indigo-50 border-t-2 border-indigo-200">
+                    <tr>
+                      <td className="px-3 py-2 text-xs font-semibold text-indigo-900 uppercase tracking-wider">Total por turno</td>
+                      <td className="px-3 py-2 text-center font-semibold text-indigo-900">{simHeadcount}</td>
+                      <td className="px-3 py-2"></td>
+                      <td className="px-3 py-2 text-right font-bold text-amber-800">{brl(simDiurnoTotal)}</td>
+                      <td className="px-3 py-2"></td>
+                      <td className="px-3 py-2 text-right font-bold text-indigo-800">{brl(simNoturnoTotal)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              <div className="bg-white border border-indigo-200 rounded-lg p-3 grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+                {COSTADO_DIURNO_PERIODS.map((p) => (
+                  <div key={p} className="bg-amber-50 border border-amber-200 rounded p-2">
+                    <p className="text-[10px] uppercase tracking-wider text-amber-900 font-semibold">☀️ Turno {p}</p>
+                    <p className="font-bold text-amber-900 mt-0.5">{brl(simDiurnoTotal)}</p>
+                  </div>
+                ))}
+                {COSTADO_NOTURNO_PERIODS.map((p) => (
+                  <div key={p} className="bg-indigo-50 border border-indigo-200 rounded p-2">
+                    <p className="text-[10px] uppercase tracking-wider text-indigo-900 font-semibold">🌙 Turno {p}</p>
+                    <p className="font-bold text-indigo-900 mt-0.5">{brl(simNoturnoTotal)}</p>
+                  </div>
+                ))}
+                <div className="bg-emerald-50 border border-emerald-200 rounded p-2">
+                  <p className="text-[10px] uppercase tracking-wider text-emerald-900 font-semibold">24h (4 turnos)</p>
+                  <p className="font-bold text-emerald-900 mt-0.5">{brl(simDayTotal)}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] text-indigo-800/80 italic">
+                  Quantidades ficam salvas no seu navegador. Valor/hora e % do adicional ficam no banco (persistente).
+                </p>
+                <button
+                  type="button"
+                  onClick={resetTurnoDefaults}
+                  className="text-[10px] font-semibold text-indigo-900 hover:bg-indigo-100 px-2 py-1 rounded transition"
+                >
+                  ↺ Resetar pra equipe padrão
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Inline percentage editor (similar to InlineRateEditor mas com sufixo %).
+function InlinePctEditor({ value, canEdit, onSave }: { value: number; canEdit: boolean; onSave: (n: number) => void | Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  function start() {
+    if (!canEdit) return;
+    setDraft(value.toString());
+    setEditing(true);
+  }
+
+  async function commit() {
+    const n = parseFloat(draft.replace(",", "."));
+    if (Number.isFinite(n) && n !== value && n >= 0 && n <= 200) {
+      setSaving(true);
+      await onSave(n);
+      setSaving(false);
+    }
+    setEditing(false);
+  }
+
+  function cancel() {
+    setDraft("");
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1">
+        <input
+          type="number"
+          step="0.5"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); commit(); }
+            if (e.key === "Escape") cancel();
+          }}
+          autoFocus
+          disabled={saving}
+          className="w-16 px-2 py-1 border-2 border-primary rounded text-sm font-semibold focus:outline-none"
+        />
+        <span className="text-text-light text-sm">%</span>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={start}
+      disabled={!canEdit}
+      className={`font-semibold text-indigo-700 ${canEdit ? "hover:bg-indigo-50 hover:text-indigo-800 cursor-pointer px-2 py-1 -mx-2 -my-1 rounded transition group" : ""}`}
+      title={canEdit ? "Clique para editar" : ""}
+    >
+      {value.toLocaleString("pt-BR")}%
+      {canEdit && <span className="ml-1.5 text-[10px] text-text-light opacity-0 group-hover:opacity-100 transition">✏️</span>}
+    </button>
   );
 }
 
