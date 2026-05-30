@@ -1261,27 +1261,10 @@ export default function NaviosPage() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-text mb-1">Porto / Local</label>
-                <ComboBox
-                  value={form.port}
-                  onChange={(v) => setForm({ ...form, port: v })}
-                  options={knownPorts}
-                  placeholder="Selecione ou digite um porto..."
-                  addLabel="Adicionar porto"
-                  disabled={form.operation_type === "COSTADO"}
-                />
-                <p className="text-[10px] text-text-light mt-1">
-                  {form.operation_type === "COSTADO"
-                    ? "🔒 Costado é sempre no porto de Santos — não editável."
-                    : "Selecione um porto da lista ou digite um novo — ele será adicionado ao salvar."}
-                </p>
-              </div>
-
-              {/* Tipo da Operação sobe pra cima — define o resto do form.
-                  Em Costado, Equipe Designada some (cria grupo proprio do
-                  navio), e Cliente continua aparecendo. Serviços só aparecem
-                  em Embarque. */}
+              {/* Tipo da Operação vem ANTES do Porto — define o resto do
+                  form (porto fica travado em Santos pra Costado, serviços
+                  só aparecem pra Embarque, Equipe Designada some em
+                  Costado etc.). */}
               <div>
                 <label className="block text-sm font-medium text-text mb-1">Tipo da Operação</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -1361,6 +1344,23 @@ export default function NaviosPage() {
                     🧹 <strong>Costado:</strong> sem sub-serviços.
                   </p>
                 )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-text mb-1">Porto / Local</label>
+                <ComboBox
+                  value={form.port}
+                  onChange={(v) => setForm({ ...form, port: v })}
+                  options={knownPorts}
+                  placeholder="Selecione ou digite um porto..."
+                  addLabel="Adicionar porto"
+                  disabled={form.operation_type === "COSTADO"}
+                />
+                <p className="text-[10px] text-text-light mt-1">
+                  {form.operation_type === "COSTADO"
+                    ? "🔒 Costado é sempre no porto de Santos — não editável."
+                    : "Selecione um porto da lista ou digite um novo — ele será adicionado ao salvar."}
+                </p>
               </div>
 
               {/* Equipe Designada só faz sentido pra Embarque — define qual
