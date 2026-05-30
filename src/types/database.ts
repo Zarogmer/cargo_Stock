@@ -225,7 +225,7 @@ export interface ToolRequest {
 
 // ── Sistema Financeiro ────────────────────────────────────────────────────────
 
-export type JobUnit = "MENSALISTA" | "PORAO" | "POR_NAVIO" | "POR_DIA" | "POR_HORA" | "POR_OPERACAO";
+export type JobUnit = "MENSALISTA" | "PORAO" | "POR_NAVIO" | "POR_DIA" | "POR_HORA" | "POR_OPERACAO" | "TURNO";
 export type JobStatus = "ABERTO" | "EM_ANDAMENTO" | "VERIFICADO" | "FECHADO" | "CANCELADO";
 export type AdjustmentType = "ADICIONAL" | "REDUCAO";
 
@@ -248,19 +248,6 @@ export interface JobFunctionRate {
   valid_until: string | null;
   notes: string | null;
   created_at: string;
-}
-
-// Valores de Costado por função. Costado é pago por turno de 6h, então o
-// default_rate de JobFunction (valor/porão pra Embarque) não serve aqui.
-export interface CostadoFunctionRate {
-  id: number;
-  function_id: number;
-  hourly_rate: string | number;       // R$/hora base (diurno)
-  night_bonus_pct: string | number;   // % a mais nos turnos noturnos
-  notes: string | null;
-  updated_by: string | null;
-  created_at: string;
-  updated_at: string;
 }
 
 // Override por funcionário do default_rate da função.

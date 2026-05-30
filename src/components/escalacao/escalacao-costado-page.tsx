@@ -669,7 +669,7 @@ function FragmentRow({
 // ─── Add Crew to Period Modal ───────────────────────────────────────────────
 
 function AddCostadoCrewModal({
-  open, period, date, ship, ensureJob, employees, functions, existingForPeriod, otherJobOccupiedKind, profileName, onClose, onSaved,
+  open, period, date, ship, ensureJob, employees, existingForPeriod, otherJobOccupiedKind, profileName, onClose, onSaved,
 }: {
   open: boolean;
   period: ShiftPeriod | null;
@@ -677,6 +677,7 @@ function AddCostadoCrewModal({
   ship: Ship | null;
   ensureJob: () => Promise<string>;
   employees: Employee[];
+  // functions removido: Costado é valor fixo (função COSTADO única), não tem mais selector por funcionário.
   functions: JobFunction[];
   existingForPeriod: JobAllocation[];
   otherJobOccupiedKind: Map<number, "EMBARQUE" | "COSTADO">;
@@ -686,19 +687,19 @@ function AddCostadoCrewModal({
 }) {
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [perEmpFn, setPerEmpFn] = useState<Map<number, string>>(new Map());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   // Costado sempre avisa SÓ no grupo do navio (a pedido do RH — o picker
   // anterior foi removido). DMs individuais ficam pro fluxo de Embarque,
   // onde fazem sentido. Aqui o grupo é específico do navio e todos os
   // escalados já são membros, então DM redundaria.
+  // Também não tem mais seletor de função por funcionário: Costado é
+  // pago por turno, valor fixo, igual pra todos — todos viram COSTADO.
 
   useEffect(() => {
     if (open) {
       setSearch("");
       setSelectedIds(new Set());
-      setPerEmpFn(new Map());
       setError("");
     }
   }, [open]);
@@ -722,30 +723,17 @@ function AddCostadoCrewModal({
       return e.name.toLowerCase().includes(q) || (e.role || "").toLowerCase().includes(q);
     });
 
-  function findFnIdForRole(role: string | null): string {
-    if (!role) return "";
-    const fn = functions.find((f) => f.name.toUpperCase() === role.toUpperCase());
-    return fn ? String(fn.id) : "";
-  }
-
   function toggleEmployee(emp: Employee) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(emp.id)) {
-        next.delete(emp.id);
-        setPerEmpFn((m) => { const nm = new Map(m); nm.delete(emp.id); return nm; });
-      } else {
-        next.add(emp.id);
-        const guessed = findFnIdForRole(emp.role);
-        if (guessed) setPerEmpFn((m) => { const nm = new Map(m); nm.set(emp.id, guessed); return nm; });
-      }
+      if (next.has(emp.id)) next.delete(emp.id);
+      else next.add(emp.id);
       return next;
     });
   }
 
   function removeFromMulti(id: number) {
     setSelectedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
-    setPerEmpFn((m) => { const nm = new Map(m); nm.delete(id); return nm; });
   }
 
   async function handleSave(e: React.FormEvent) {
@@ -753,57 +741,50 @@ function AddCostadoCrewModal({
     setError("");
     if (!period || !ship) return;
     if (selectedIds.size === 0) { setError("Selecione ao menos um funcionário."); return; }
-    const missingFn = Array.from(selectedIds).filter((id) => !perEmpFn.get(id));
-    if (missingFn.length > 0) {
-      const names = missingFn.map((id) => employees.find((e) => e.id === id)?.name).filter(Boolean).join(", ");
-      setError(`Defina a função para: ${names}`);
-      return;
-    }
     setSaving(true);
     try {
       const jobId = await ensureJob();
       const now = new Date().toISOString();
-      const fnIdsInUse = Array.from(new Set(
-        Array.from(selectedIds).map((id) => parseInt(perEmpFn.get(id)!))
-      ));
-      // Carrega os valores de Costado configurados em Financeiro > Valores > Costado.
-      // O rate gravado na alocação é o valor por turno completo (6h + adicional
-      // noturno quando aplicável). Antes vinha do default_rate da JobFunction,
-      // que era o valor por porão de Embarque — daí saiam valores errados (ex.: R$ 400).
-      const costadoRatesMap = new Map<number, { hourly_rate: number; night_bonus_pct: number }>();
-      if (fnIdsInUse.length > 0) {
-        const { data: cData } = await db
-          .from("costado_function_rates")
-          .select("function_id, hourly_rate, night_bonus_pct")
-          .in("function_id", fnIdsInUse);
-        for (const c of (cData || []) as { function_id: number; hourly_rate: string | number; night_bonus_pct: string | number }[]) {
-          costadoRatesMap.set(c.function_id, {
-            hourly_rate: Number(c.hourly_rate),
-            night_bonus_pct: Number(c.night_bonus_pct),
-          });
+      // Costado é pago por TURNO, valor único (não tem distinção por função
+      // como Embarque tem). Pegamos a função "COSTADO" cadastrada em
+      // Financeiro > Valores e usamos pra todo mundo. O rate sai do
+      // default_rate dela (default R$ 100/turno, editável inline).
+      const { data: costadoFnData } = await db
+        .from("job_functions")
+        .select("id, default_rate")
+        .eq("name", "COSTADO")
+        .limit(1);
+      let costadoFn = (costadoFnData || [])[0] as { id: number; default_rate: string | number } | undefined;
+      // Self-heal: se ninguém ainda abriu a aba Valores, cria a função na hora.
+      if (!costadoFn) {
+        const created = await db.from("job_functions").insert({
+          name: "COSTADO",
+          description: "Limpeza em costado — pago por turno de 6h. Valor fixo, igual pra todos os colaboradores.",
+          default_rate: 100,
+          unit: "TURNO",
+          active: true,
+        } as Record<string, unknown>);
+        if (created.error) {
+          setError(`Não consegui criar a função COSTADO automaticamente: ${created.error.message}`);
+          setSaving(false);
+          return;
+        }
+        const re = await db.from("job_functions").select("id, default_rate").eq("name", "COSTADO").limit(1);
+        costadoFn = (re.data || [])[0] as { id: number; default_rate: string | number };
+        if (!costadoFn) {
+          setError("Função COSTADO foi criada mas não consegui ler — tente de novo.");
+          setSaving(false);
+          return;
         }
       }
-      // Turnos noturnos recebem adicional configurado na função.
-      const NIGHT_PERIODS = new Set(["19-01", "01-07"]);
-      const isNightShift = NIGHT_PERIODS.has(period);
-      const HOURS_PER_TURNO = 6;
+      const ratePerTurno = Number(costadoFn.default_rate);
       for (const id of selectedIds) {
-        const fnId = parseInt(perEmpFn.get(id)!);
-        const costadoCfg = costadoRatesMap.get(fnId);
-        // Sem config em Valores > Costado, grava 0 — o financeiro edita
-        // inline depois. Não cai mais no default_rate (que é de Embarque).
-        const hourly = costadoCfg?.hourly_rate ?? 0;
-        const bonusPct = costadoCfg?.night_bonus_pct ?? 0;
-        const baseTurno = hourly * HOURS_PER_TURNO;
-        const ratePerTurno = isNightShift
-          ? baseTurno * (1 + bonusPct / 100)
-          : baseTurno;
         await db.from("job_allocations").insert({
           job_id: jobId,
-          function_id: fnId,
+          function_id: costadoFn.id, // todo mundo entra como COSTADO
           employee_id: id,
           quantity: 1, // cada linha = 1 turno (data + período)
-          rate: ratePerTurno, // já é o valor por turno completo
+          rate: ratePerTurno, // valor fixo, único pra todos
           pluxee_value: 0,
           status: "ATIVO",
           kind: "COSTADO",
@@ -838,7 +819,6 @@ function AddCostadoCrewModal({
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
-  const activeFunctions = functions.filter((f) => f.active);
   const selectedList = Array.from(selectedIds).map((id) => employees.find((e) => e.id === id)).filter(Boolean) as Employee[];
 
   if (!period) return null;
@@ -864,36 +844,25 @@ function AddCostadoCrewModal({
           {selectedList.length > 0 && (
             <div className="mb-2 p-2 bg-emerald-50 border border-emerald-200 rounded-lg">
               <p className="text-[10px] font-semibold text-emerald-900 uppercase tracking-wider mb-2">
-                {selectedList.length} {selectedList.length === 1 ? "selecionado" : "selecionados"}
+                {selectedList.length} {selectedList.length === 1 ? "selecionado" : "selecionados"} · todos entram como COSTADO (valor fixo por turno)
               </p>
               <div className="space-y-1.5 max-h-44 overflow-y-auto">
-                {selectedList.map((emp) => {
-                  const curFn = perEmpFn.get(emp.id) || "";
-                  const fnMissing = !curFn;
-                  return (
-                    <div key={emp.id} className="flex items-center gap-2 bg-white border border-emerald-100 rounded-md px-2 py-1.5">
-                      <span className="flex-1 min-w-0 text-xs font-medium truncate">{emp.name}</span>
-                      <select
-                        value={curFn}
-                        onChange={(ev) => setPerEmpFn((m) => new Map(m).set(emp.id, ev.target.value))}
-                        className={`text-xs px-2 py-1 border rounded ${fnMissing ? "border-red-300 bg-red-50" : "border-border"}`}
-                      >
-                        <option value="">Função...</option>
-                        {activeFunctions.map((f) => (
-                          <option key={f.id} value={f.id}>{f.name}</option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => removeFromMulti(emp.id)}
-                        className="text-xs text-red-600 hover:bg-red-50 rounded p-1"
-                        title="Remover"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  );
-                })}
+                {selectedList.map((emp) => (
+                  <div key={emp.id} className="flex items-center gap-2 bg-white border border-emerald-100 rounded-md px-2 py-1.5">
+                    <span className="flex-1 min-w-0 text-xs font-medium truncate">{emp.name}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 font-semibold shrink-0">
+                      ⚓ COSTADO
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeFromMulti(emp.id)}
+                      className="text-xs text-red-600 hover:bg-red-50 rounded p-1"
+                      title="Remover"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
           )}

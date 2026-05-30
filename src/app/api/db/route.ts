@@ -24,7 +24,6 @@ const TABLE_MAP: Record<string, string> = {
   job_functions: "jobFunction",
   job_function_rates: "jobFunctionRate",
   employee_function_rates: "employeeFunctionRate",
-  costado_function_rates: "costadoFunctionRate",
   jobs: "job",
   job_allocations: "jobAllocation",
   job_adjustments: "jobAdjustment",

@@ -323,37 +323,22 @@ model JobFunction {
   name            String                 @unique
   description     String?
   default_rate    Decimal                @default(0) @db.Decimal(10, 2)
-  unit            String                 @default("POR_NAVIO") // POR_NAVIO, POR_DIA, POR_HORA, POR_OPERACAO
+  // POR_NAVIO, PORAO, POR_DIA, POR_HORA, POR_OPERACAO = porão de Embarque;
+  // TURNO = turno de 6h de Costado; MENSALISTA = admin.
+  unit            String                 @default("POR_NAVIO")
   active          Boolean                @default(true)
   rates           JobFunctionRate[]
   allocations     JobAllocation[]
   employee_rates  EmployeeFunctionRate[]
-  costado_rate    CostadoFunctionRate?
   created_at      DateTime               @default(now()) @db.Timestamptz()
   updated_at      DateTime               @updatedAt @db.Timestamptz()
 
   @@map("job_functions")
 }
 
-// Valores específicos pra Costado por função. Costado é pago por turno de 6h,
-// não por porão — então o default_rate em JobFunction (que é valor/porão pra
-// Embarque) não serve aqui. Esta tabela guarda valor/hora base + percentual
-// do adicional noturno (turnos 19-01 e 01-07). Adicional noturno legal BR é
-// 20%, mas alguns clientes pagam mais — por isso é configurável por função.
-model CostadoFunctionRate {
-  id              Int      @id @default(autoincrement())
-  function_id     Int      @unique
-  hourly_rate     Decimal  @default(0) @db.Decimal(10, 2)  // R$/hora base (turnos diurnos)
-  night_bonus_pct Decimal  @default(20) @db.Decimal(5, 2)  // % a mais nos turnos noturnos
-  notes           String?
-  updated_by      String?
-  created_at      DateTime @default(now()) @db.Timestamptz()
-  updated_at      DateTime @updatedAt @db.Timestamptz()
-
-  job_functions   JobFunction @relation(fields: [function_id], references: [id], onDelete: Cascade)
-
-  @@map("costado_function_rates")
-}
+// (CostadoFunctionRate foi removido — Costado virou uma função única na
+// JobFunction com unit=TURNO e default_rate=valor por turno. Não há mais
+// distinção por função nem adicional noturno: valor fixo, igual pra todos.)
 
 // Override do default_rate por funcionário. Quando uma alocação é criada,
 // usamos este valor (se houver) em vez do default_rate da função — assim
