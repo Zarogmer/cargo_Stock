@@ -1949,6 +1949,86 @@ function JobDetailModal({
     }
   }, [open, job]);
 
+  // ── Costado: hooks DEVEM vir antes do early return abaixo (React rules) ───
+  // Toda computação que precisa de hook fica aqui em cima. As helpers que não
+  // são hooks (rateForRow, effectiveQty, costadoFn, costadoRate, grand totals)
+  // ficam depois do early return — daí a separação.
+  const [costadoDateFilter, setCostadoDateFilter] = useState<string | "TODAS">("TODAS");
+  useEffect(() => {
+    setCostadoDateFilter("TODAS");
+  }, [job?.id]);
+  const uniqueDates = useMemo(() => {
+    if (kindFilter !== "COSTADO") return [] as string[];
+    const set = new Set<string>();
+    for (const a of allocations) {
+      if (a.shift_date) set.add(a.shift_date.slice(0, 10));
+    }
+    return Array.from(set).sort();
+  }, [allocations, kindFilter]);
+  const dateFilteredAllocations = useMemo(() => {
+    if (kindFilter !== "COSTADO" || costadoDateFilter === "TODAS") return allocations;
+    return allocations.filter((a) => (a.shift_date || "").slice(0, 10) === costadoDateFilter);
+  }, [allocations, kindFilter, costadoDateFilter]);
+  const costadoSummary = useMemo(() => {
+    if (kindFilter !== "COSTADO") return [] as Array<{
+      employeeId: number | null;
+      name: string;
+      role: string | null;
+      turnos: number;
+      diurnos: number;
+      noturnos: number;
+      shifts: Array<{ date: string | null; period: string | null; isNight: boolean }>;
+      total: number;
+      pluxee: number;
+      folha: number;
+    }>;
+    const costadoFnLocal = functions.find((f) => f.name.trim().toUpperCase() === "COSTADO");
+    const costadoRateLocal = costadoFnLocal ? Number(costadoFnLocal.default_rate) : 0;
+    type Row = {
+      employeeId: number | null;
+      name: string;
+      role: string | null;
+      turnos: number;
+      diurnos: number;
+      noturnos: number;
+      shifts: Array<{ date: string | null; period: string | null; isNight: boolean }>;
+      total: number;
+      pluxee: number;
+      folha: number;
+    };
+    const byEmp = new Map<string, Row>();
+    for (const a of allocations) {
+      const key = a.employee_id ? `e${a.employee_id}` : `f${a.function_id}-${a.id}`;
+      const isNight = COSTADO_NIGHT_SHIFT_PERIODS.includes(a.shift_period || "");
+      const qty = Math.max(1, a.quantity);
+      const rowPay = costadoRateLocal * qty;
+      const extra = Number(a.extra_value || 0);
+      const pluxee = Number(a.pluxee_value || 0);
+      if (!byEmp.has(key)) {
+        byEmp.set(key, {
+          employeeId: a.employee_id ?? null,
+          name: a.employees?.name || a.job_functions?.name || "—",
+          role: null,
+          turnos: 0, diurnos: 0, noturnos: 0,
+          shifts: [],
+          total: 0, pluxee: 0, folha: 0,
+        });
+      }
+      const row = byEmp.get(key)!;
+      row.turnos += qty;
+      if (isNight) row.noturnos += qty;
+      else if (a.shift_period) row.diurnos += qty;
+      row.shifts.push({ date: a.shift_date?.slice(0, 10) || null, period: a.shift_period, isNight });
+      row.total += rowPay + extra;
+      row.pluxee += pluxee;
+    }
+    for (const row of byEmp.values()) {
+      row.folha = row.total - row.pluxee;
+      row.shifts.sort((x, y) => (x.date || "").localeCompare(y.date || "") || (x.period || "").localeCompare(y.period || ""));
+    }
+    return Array.from(byEmp.values()).sort((a, b) => b.total - a.total);
+  }, [allocations, kindFilter, functions]);
+
   if (!job) return null;
 
   const cost = calcJobCost(job, allocations.map((a) => ({ ...a, job_id: job.id })), adjustments.map((a) => ({ ...a, job_id: job.id })));
@@ -2402,7 +2482,7 @@ function JobDetailModal({
   // Fechamento fica somente-leitura apenas após o último OK do gerente.
   const isReadOnly = job.status === "FECHADO";
 
-  // ── Costado: valor canônico vem sempre de Valores > COSTADO ──────────────
+  // ── Costado: helpers (não-hook) que dependem de `job` ───────────────────
   // O rate gravado em cada alocação pode ser legado errado (ex.: R$ 400 que
   // sobrou de quando o código usava default_rate de Embarque). Aqui sempre
   // exibimos o valor atual da função COSTADO — assim o financeiro vê o que
@@ -2411,7 +2491,6 @@ function JobDetailModal({
     ? functions.find((f) => f.name.trim().toUpperCase() === "COSTADO")
     : null;
   const costadoRate = costadoFn ? Number(costadoFn.default_rate) : 0;
-  // Helpers que centralizam a regra "cada linha = 1 turno" pra Costado.
   function effectiveQty(a: JobAllocation): number {
     if (kindFilter === "COSTADO") return Math.max(1, a.quantity);
     return a.quantity;
@@ -2420,76 +2499,6 @@ function JobDetailModal({
     if (kindFilter === "COSTADO") return costadoRate;
     return Number(a.rate);
   }
-
-  // ── Filtro por data (só Costado) ─────────────────────────────────────────
-  const [costadoDateFilter, setCostadoDateFilter] = useState<string | "TODAS">("TODAS");
-  // Reset quando trocar de job pra não persistir filtro de outro navio.
-  useEffect(() => {
-    setCostadoDateFilter("TODAS");
-  }, [job.id]);
-  const uniqueDates = useMemo(() => {
-    if (kindFilter !== "COSTADO") return [] as string[];
-    const set = new Set<string>();
-    for (const a of allocations) {
-      if (a.shift_date) set.add(a.shift_date.slice(0, 10));
-    }
-    return Array.from(set).sort();
-  }, [allocations, kindFilter]);
-  const dateFilteredAllocations = useMemo(() => {
-    if (kindFilter !== "COSTADO" || costadoDateFilter === "TODAS") return allocations;
-    return allocations.filter((a) => (a.shift_date || "").slice(0, 10) === costadoDateFilter);
-  }, [allocations, kindFilter, costadoDateFilter]);
-
-  // ── Resumo por pessoa (Costado, sempre considera o navio inteiro) ─────────
-  const costadoSummary = useMemo(() => {
-    if (kindFilter !== "COSTADO") return [];
-    type Row = {
-      employeeId: number | null;
-      name: string;
-      role: string | null;
-      turnos: number;
-      diurnos: number;
-      noturnos: number;
-      shifts: Array<{ date: string | null; period: string | null; isNight: boolean }>;
-      total: number;
-      pluxee: number;
-      folha: number;
-    };
-    const byEmp = new Map<string, Row>();
-    for (const a of allocations) {
-      const key = a.employee_id ? `e${a.employee_id}` : `f${a.function_id}-${a.id}`;
-      const isNight = COSTADO_NIGHT_SHIFT_PERIODS.includes(a.shift_period || "");
-      const qty = effectiveQty(a);
-      const rowPay = costadoRate * qty;
-      const extra = Number(a.extra_value || 0);
-      const pluxee = Number(a.pluxee_value || 0);
-      if (!byEmp.has(key)) {
-        byEmp.set(key, {
-          employeeId: a.employee_id ?? null,
-          name: a.employees?.name || a.job_functions?.name || "—",
-          role: null,
-          turnos: 0, diurnos: 0, noturnos: 0,
-          shifts: [],
-          total: 0, pluxee: 0, folha: 0,
-        });
-      }
-      const row = byEmp.get(key)!;
-      row.turnos += qty;
-      if (isNight) row.noturnos += qty;
-      else if (a.shift_period) row.diurnos += qty;
-      row.shifts.push({ date: a.shift_date?.slice(0, 10) || null, period: a.shift_period, isNight });
-      row.total += rowPay + extra;
-      row.pluxee += pluxee;
-    }
-    for (const row of byEmp.values()) {
-      row.folha = row.total - row.pluxee;
-      row.shifts.sort((x, y) => (x.date || "").localeCompare(y.date || "") || (x.period || "").localeCompare(y.period || ""));
-    }
-    return Array.from(byEmp.values()).sort((a, b) => b.total - a.total);
-  // costadoRate é estável dentro do mesmo render; allocations atualiza junto.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allocations, kindFilter, costadoRate]);
-
   const costadoGrandTotal = costadoSummary.reduce((s, r) => s + r.total, 0);
   const costadoGrandTurnos = costadoSummary.reduce((s, r) => s + r.turnos, 0);
   const costadoGrandFolha = costadoSummary.reduce((s, r) => s + r.folha, 0);
@@ -4406,6 +4415,8 @@ function CostadoTab({
 }) {
   const [detailJob, setDetailJob] = useState<Job | null>(null);
   const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("TODOS");
+  const [deleteJob, setDeleteJob] = useState<Job | null>(null);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
   // Costado jobs = jobs whose ship is marked as Costado OR that have any COSTADO allocation.
   const costadoShipIds = new Set(
@@ -4500,6 +4511,17 @@ function CostadoTab({
                       <p className="text-text-light">Custo Costado</p>
                       <p className="font-semibold text-red-700">{brl(total)}</p>
                     </div>
+                    {canEdit && (
+                      <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => setDeleteJob(j)}
+                          className="p-1.5 text-danger hover:bg-red-50 rounded"
+                          title="Excluir pagamento (apaga alocações também)"
+                        >
+                          <TrashIcon />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -4507,6 +4529,45 @@ function CostadoTab({
           })}
         </div>
       )}
+
+      {deleteErr && (
+        <p className="fixed bottom-4 right-4 bg-red-600 text-white text-sm px-3 py-2 rounded shadow-lg z-50">
+          {deleteErr}
+        </p>
+      )}
+
+      <ConfirmDialog
+        open={!!deleteJob}
+        onClose={() => setDeleteJob(null)}
+        onConfirm={async () => {
+          if (!deleteJob) return;
+          setDeleteErr(null);
+          // Apaga primeiro as filhas (alocações e ajustes), depois o job.
+          // O cascade do Prisma resolve isso quando configurado, mas o
+          // db proxy não faz cascade automático — então faz a ordem na mão.
+          const allocRes = await db.from("job_allocations").delete().eq("job_id", deleteJob.id);
+          if (allocRes.error) {
+            setDeleteErr(`Erro ao apagar alocações: ${allocRes.error.message}`);
+            return;
+          }
+          const adjRes = await db.from("job_adjustments").delete().eq("job_id", deleteJob.id);
+          if (adjRes.error) {
+            setDeleteErr(`Erro ao apagar despesas: ${adjRes.error.message}`);
+            return;
+          }
+          const jobRes = await db.from("jobs").delete().eq("id", deleteJob.id);
+          if (jobRes.error) {
+            setDeleteErr(`Erro ao apagar pagamento: ${jobRes.error.message}`);
+            return;
+          }
+          setDeleteJob(null);
+          onChange();
+        }}
+        title="Excluir pagamento de Costado?"
+        message={`"${deleteJob?.name}" será excluído junto com todas as alocações e despesas. A escala em Escalação › Costado também perde esses registros. Essa ação não pode ser desfeita.`}
+        confirmLabel="Excluir"
+        variant="danger"
+      />
 
       <JobDetailModal
         open={!!detailJob}
