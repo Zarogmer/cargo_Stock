@@ -807,9 +807,14 @@ function FuncoesTab({
                   </td>
                   <td className="px-4 py-2.5 text-right">
                     <div className="flex gap-1 justify-end">
-                      <button onClick={() => setRatesFn(f)} className="p-1.5 text-amber-700 hover:bg-amber-50 rounded" title="Valores especiais por funcionário">
-                        <span className="text-base leading-none">👤</span>
-                      </button>
+                      {/* Valores especiais por funcionário NÃO se aplicam a
+                          COSTADO — Costado é valor fixo único, igual pra todos.
+                          Só funções de Embarque podem ter override por pessoa. */}
+                      {f.name.trim().toUpperCase() !== "COSTADO" && (
+                        <button onClick={() => setRatesFn(f)} className="p-1.5 text-amber-700 hover:bg-amber-50 rounded" title="Valores especiais por funcionário">
+                          <span className="text-base leading-none">👤</span>
+                        </button>
+                      )}
                       {canEdit && (
                         <>
                           <button onClick={() => { setEditFn(f); setShowFnForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded" title="Editar tudo">
@@ -2571,7 +2576,10 @@ function JobDetailModal({
               )}
             </div>
             <div className="flex gap-2 flex-wrap">
-              {canEdit && !isReadOnly && !showRateio && allocations.length > 0 && (
+              {/* Rateio só faz sentido em Embarque (pagamento por porão).
+                  Costado é por turno fixo — quem faltou simplesmente não foi
+                  escalado, não tem o que ratear. */}
+              {canEdit && !isReadOnly && !showRateio && allocations.length > 0 && kindFilter !== "COSTADO" && (
                 <button onClick={() => setShowRateio(true)} className="text-xs px-2 py-1 bg-amber-600 text-white rounded hover:bg-amber-700" title="Distribuir o pagamento de quem faltou entre os que foram">
                   ⚖️ Aplicar Rateio
                 </button>
@@ -2840,7 +2848,8 @@ function JobDetailModal({
                       Função: <strong>{resolvedFn.name}</strong>
                       {" · "}
                       {kindFilter === "EMBARQUE" ? "Valor/Porão" : kindFilter === "COSTADO" ? "Valor/Turno" : "Valor"}: <strong>{brl(resolvedRate)}</strong>
-                      {hasSpecial && (
+                      {/* Costado nao usa valor especial -- valor unico em Valores. */}
+                      {hasSpecial && kindFilter !== "COSTADO" && (
                         <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-300 text-amber-900 font-bold">
                           VALOR ESPECIAL
                         </span>
@@ -3178,17 +3187,14 @@ function JobDetailModal({
                               className="w-24 text-right px-1 py-0.5 border-2 border-primary rounded outline-none"
                             />
                           ) : isCostado ? (
-                            // Costado: rate vem de Valores > COSTADO, não editavel
-                            // por linha. Mostra o valor canônico com tooltip
-                            // explicando onde mudar.
+                            // Costado: rate vem sempre de Valores > COSTADO,
+                            // não editável por linha. Stored rate (mesmo se
+                            // legado errado) é ignorado silenciosamente.
                             <span
                               className="text-text"
-                              title={`Valor da função COSTADO em Valores. ${actualRate !== rowRate ? `Stored: ${brl(actualRate)} (legado)` : ""}`}
+                              title="Valor da função COSTADO definido em Valores"
                             >
                               {brl(displayRate)}
-                              {actualRate !== rowRate && actualRate > 0 && (
-                                <span className="ml-1 text-[9px] text-amber-700" title={`Legado: ${brl(actualRate)} salvo na alocação`}>⚠️</span>
-                              )}
                             </span>
                           ) : (
                             <button
