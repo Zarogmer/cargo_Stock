@@ -309,9 +309,19 @@ export default function FinanceiroPage() {
       ),
     },
     {
-      key: "documentos",
-      label: "📄 Documentos",
-      content: <DocumentosPlaceholder />,
+      key: "controle",
+      label: "🎯 Controle",
+      content: (
+        <ControleTab
+          jobs={jobs}
+          allocations={allocations}
+          adjustments={adjustments}
+          functions={functions}
+          ships={ships}
+          employees={employees}
+          loading={loading}
+        />
+      ),
     },
     {
       key: "resumo",
@@ -4659,41 +4669,883 @@ function CostadoTab({
   );
 }
 
-// ─── PLACEHOLDERS (fase 5) ──────────────────────────────────────────────────
+// ─── CONTROLE TAB ──────────────────────────────────────────────────────────
+// Dashboard de equipe — agrega toda a movimentação financeira por colaborador
+// pra responder: "quem trabalhou, em que navios, quantos porões/turnos, quanto
+// recebeu?". Permite filtrar por mês/ano e por atividade (Embarque/Costado),
+// e tem cards de destaque pra quem mais produziu.
 
-function DocumentosPlaceholder() {
-  // Sub-abas pensadas (não implementadas ainda): Folha de Pagamento, Recibos,
-  // Resumo Mensal, etc. Padrão será o mesmo de RH › Documentos (sub-tabs por ?doc=…).
-  const sketches = [
-    { icon: "💵", label: "Folha de Pagamento", desc: "Planilha consolidada para envio à contabilidade." },
-    { icon: "🧾", label: "Recibos", desc: "Geração de recibo por colaborador." },
-    { icon: "📊", label: "Resumo Mensal", desc: "Relatório financeiro do mês." },
-  ];
+interface EmployeeStats {
+  employee: Employee;
+  embarque: {
+    ships: Set<string>;
+    poroes: number;       // soma de porões (= holds_count por job, contado uma vez por funcionário/job)
+    earnings: number;     // ganho total Embarque (rate × holds + extra)
+    allocations: number;  // nº de alocações registradas
+  };
+  costado: {
+    ships: Set<string>;
+    turnos: number;       // soma de quantity
+    diurnos: number;
+    noturnos: number;
+    earnings: number;
+    allocations: number;
+  };
+  totalEarnings: number;
+  lastActivity: string | null; // ISO date da movimentação mais recente
+  history: Array<{
+    jobId: string;
+    jobName: string;
+    shipName: string | null;
+    kind: "EMBARQUE" | "COSTADO";
+    date: string | null;
+    period?: string | null;
+    poroes?: number;
+    quantity: number;
+    rate: number;
+    earnings: number;
+    functionName: string | null;
+  }>;
+}
+
+function ControleTab({
+  jobs, allocations, functions, ships, employees, loading,
+}: {
+  jobs: Job[];
+  allocations: JobAllocation[];
+  // adjustments existem mas só afetam o custo do job (compras/despesas) —
+  // não o ganho individual dos colaboradores, então não usamos aqui.
+  adjustments: JobAdjustment[];
+  functions: JobFunction[];
+  ships: Ship[];
+  employees: Employee[];
+  loading: boolean;
+}) {
+  // ── Filtros ──────────────────────────────────────────────────────────────
+  // Mês = 0..11; ano = 4 dígitos. "TODOS" no mês quer dizer "ano inteiro".
+  // `now` em useMemo pra não invalidar a lista de anos a cada render.
+  const now = useMemo(() => new Date(), []);
+  const [year, setYear] = useState<number>(now.getFullYear());
+  const [month, setMonth] = useState<number | "TODOS">(now.getMonth());
+  const [activity, setActivity] = useState<"TODAS" | "EMBARQUE" | "COSTADO">("TODAS");
+  const [statusFilter, setStatusFilter] = useState<"ATIVOS" | "TODOS">("ATIVOS");
+  const [paymentFilter, setPaymentFilter] = useState<"TODOS" | "PAGO">("TODOS");
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<"name" | "earnings" | "poroes" | "turnos" | "ships">("earnings");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [detailEmp, setDetailEmp] = useState<Employee | null>(null);
+
+  // ── Períodos disponíveis: anos com pelo menos uma alocação ─────────────
+  const availableYears = useMemo(() => {
+    const set = new Set<number>([now.getFullYear()]);
+    for (const a of allocations) {
+      const d = a.shift_date || jobs.find((j) => j.id === a.job_id)?.start_date;
+      if (d) set.add(new Date(d).getFullYear());
+    }
+    return Array.from(set).sort((a, b) => b - a);
+  }, [allocations, jobs, now]);
+
+  // ── Helper: extrai "mês de referência" de uma alocação ─────────────────
+  function allocMonthKey(a: JobAllocation): { year: number; month: number } | null {
+    // Costado tem shift_date (data exata do turno). Embarque usa start_date do job.
+    const dateStr = a.shift_date || jobs.find((j) => j.id === a.job_id)?.start_date || null;
+    if (!dateStr) return null;
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return null;
+    return { year: d.getFullYear(), month: d.getMonth() };
+  }
+
+  function passesPeriodFilter(a: JobAllocation): boolean {
+    const k = allocMonthKey(a);
+    if (!k) return false;
+    if (k.year !== year) return false;
+    if (month !== "TODOS" && k.month !== month) return false;
+    return true;
+  }
+
+  // ── Agregação por colaborador ────────────────────────────────────────────
+  const stats: EmployeeStats[] = useMemo(() => {
+    const map = new Map<number, EmployeeStats>();
+    // Inicializa com TODOS os colaboradores filtrados — assim quem não trabalhou
+    // ainda aparece no relatório (zerado) quando o usuário pede "Todos".
+    for (const e of employees) {
+      const isActive = (e.status ?? "ATIVO") === "ATIVO";
+      if (statusFilter === "ATIVOS" && !isActive) continue;
+      map.set(e.id, {
+        employee: e,
+        embarque: { ships: new Set(), poroes: 0, earnings: 0, allocations: 0 },
+        costado: { ships: new Set(), turnos: 0, diurnos: 0, noturnos: 0, earnings: 0, allocations: 0 },
+        totalEarnings: 0,
+        lastActivity: null,
+        history: [],
+      });
+    }
+
+    // Pra contar "porões por funcionário por navio" sem duplicar quando alguém
+    // tem várias alocações no mesmo job de embarque (cenário raro mas possível).
+    const embarqueJobSeen = new Map<number, Set<string>>(); // empId -> Set<jobId>
+
+    for (const a of allocations) {
+      if (a.status !== "ATIVO") continue;
+      if (paymentFilter === "PAGO") {
+        const job = jobs.find((j) => j.id === a.job_id);
+        if (job?.status !== "FECHADO") continue;
+      }
+      if (!passesPeriodFilter(a)) continue;
+      if (!a.employee_id) continue;
+      const s = map.get(a.employee_id);
+      if (!s) continue;
+      const job = jobs.find((j) => j.id === a.job_id);
+      const ship = job?.ship_id ? ships.find((sh) => sh.id === job.ship_id) : null;
+      const shipName = ship?.name || job?.name || null;
+      const fn = functions.find((f) => f.id === a.function_id);
+      const kind: "EMBARQUE" | "COSTADO" = a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE";
+      if (activity !== "TODAS" && activity !== kind) continue;
+
+      const rate = Number(a.rate);
+      const extra = Number(a.extra_value || 0);
+
+      if (kind === "EMBARQUE") {
+        const holds = Math.max(1, Number(job?.holds_count || 1));
+        const earnings = rate * holds + extra;
+        const seen = embarqueJobSeen.get(a.employee_id) || new Set<string>();
+        // Soma porões só uma vez por (employee, job) — várias alocações no mesmo
+        // job não duplicam a contagem.
+        const firstTime = !seen.has(a.job_id);
+        if (firstTime) {
+          s.embarque.poroes += holds;
+          seen.add(a.job_id);
+          embarqueJobSeen.set(a.employee_id, seen);
+          if (shipName) s.embarque.ships.add(shipName);
+        }
+        s.embarque.earnings += earnings;
+        s.embarque.allocations += 1;
+        s.history.push({
+          jobId: a.job_id, jobName: job?.name || "—", shipName,
+          kind, date: job?.start_date || null, poroes: firstTime ? holds : 0,
+          quantity: 1, rate, earnings,
+          functionName: fn?.name || null,
+        });
+      } else {
+        const earnings = rate * a.quantity + extra;
+        s.costado.turnos += a.quantity;
+        if (a.shift_period && ["19-01", "01-07"].includes(a.shift_period)) {
+          s.costado.noturnos += a.quantity;
+        } else if (a.shift_period) {
+          s.costado.diurnos += a.quantity;
+        }
+        s.costado.earnings += earnings;
+        s.costado.allocations += 1;
+        if (shipName) s.costado.ships.add(shipName);
+        s.history.push({
+          jobId: a.job_id, jobName: job?.name || "—", shipName,
+          kind, date: a.shift_date, period: a.shift_period,
+          quantity: a.quantity, rate, earnings,
+          functionName: fn?.name || null,
+        });
+      }
+
+      const refDate = a.shift_date || job?.start_date || null;
+      if (refDate && (!s.lastActivity || refDate > s.lastActivity)) {
+        s.lastActivity = refDate;
+      }
+    }
+
+    // Finaliza totais
+    for (const s of map.values()) {
+      s.totalEarnings = s.embarque.earnings + s.costado.earnings;
+      // Ordena history mais recente primeiro
+      s.history.sort((x, y) => (y.date || "").localeCompare(x.date || ""));
+    }
+
+    return Array.from(map.values());
+  // passesPeriodFilter / allocMonthKey usam só year/month/jobs — já cobertos.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employees, allocations, jobs, ships, functions, statusFilter, paymentFilter, activity, year, month]);
+
+  // ── Ordenação & busca ────────────────────────────────────────────────────
+  const visibleStats = useMemo(() => {
+    let list = stats;
+    const q = search.trim().toLowerCase();
+    if (q) {
+      list = list.filter((s) =>
+        s.employee.name.toLowerCase().includes(q) ||
+        (s.employee.role || "").toLowerCase().includes(q) ||
+        (s.employee.team || "").toLowerCase().includes(q)
+      );
+    }
+    const dir = sortDir === "asc" ? 1 : -1;
+    const cmp = (a: EmployeeStats, b: EmployeeStats) => {
+      switch (sortBy) {
+        case "name": return a.employee.name.localeCompare(b.employee.name, "pt-BR") * dir;
+        case "earnings": return (a.totalEarnings - b.totalEarnings) * dir;
+        case "poroes": return (a.embarque.poroes - b.embarque.poroes) * dir;
+        case "turnos": return (a.costado.turnos - b.costado.turnos) * dir;
+        case "ships": return ((a.embarque.ships.size + a.costado.ships.size) - (b.embarque.ships.size + b.costado.ships.size)) * dir;
+        default: return 0;
+      }
+    };
+    return [...list].sort(cmp);
+  }, [stats, search, sortBy, sortDir]);
+
+  // ── KPIs gerais do período filtrado ──────────────────────────────────────
+  const periodKpis = useMemo(() => {
+    const workers = stats.filter((s) => s.totalEarnings > 0 || s.embarque.allocations > 0 || s.costado.allocations > 0);
+    const totalPaid = stats.reduce((sum, s) => sum + s.totalEarnings, 0);
+    const totalPoroes = stats.reduce((sum, s) => sum + s.embarque.poroes, 0);
+    const totalTurnos = stats.reduce((sum, s) => sum + s.costado.turnos, 0);
+    const totalHoras = totalTurnos * 6;
+    const totalShipsEmbarque = new Set<string>();
+    const totalShipsCostado = new Set<string>();
+    for (const s of stats) {
+      s.embarque.ships.forEach((n) => totalShipsEmbarque.add(n));
+      s.costado.ships.forEach((n) => totalShipsCostado.add(n));
+    }
+    return {
+      workers: workers.length,
+      totalPaid,
+      totalPoroes,
+      totalTurnos,
+      totalHoras,
+      shipsEmbarque: totalShipsEmbarque.size,
+      shipsCostado: totalShipsCostado.size,
+    };
+  }, [stats]);
+
+  // ── Top performers (Top 3 em cada categoria, ignorando zeros) ───────────
+  const topPerformers = useMemo(() => {
+    const nonZero = (val: number) => val > 0;
+    const sortedByEarnings = [...stats].filter((s) => nonZero(s.totalEarnings)).sort((a, b) => b.totalEarnings - a.totalEarnings).slice(0, 3);
+    const sortedByPoroes = [...stats].filter((s) => nonZero(s.embarque.poroes)).sort((a, b) => b.embarque.poroes - a.embarque.poroes).slice(0, 3);
+    const sortedByHoras = [...stats].filter((s) => nonZero(s.costado.turnos)).sort((a, b) => b.costado.turnos - a.costado.turnos).slice(0, 3);
+    const sortedByShips = [...stats].filter((s) => (s.embarque.ships.size + s.costado.ships.size) > 0)
+      .sort((a, b) => (b.embarque.ships.size + b.costado.ships.size) - (a.embarque.ships.size + a.costado.ships.size)).slice(0, 3);
+    return { earnings: sortedByEarnings, poroes: sortedByPoroes, horas: sortedByHoras, ships: sortedByShips };
+  }, [stats]);
+
+  // ── Helpers de UI ───────────────────────────────────────────────────────
+  function toggleSort(col: typeof sortBy) {
+    if (sortBy === col) setSortDir((d) => d === "asc" ? "desc" : "asc");
+    else { setSortBy(col); setSortDir("desc"); }
+  }
+
+  function sortIcon(col: typeof sortBy): string {
+    if (sortBy !== col) return "↕";
+    return sortDir === "asc" ? "▲" : "▼";
+  }
+
+  const monthNames = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+  const periodLabel = month === "TODOS" ? `Ano ${year}` : `${monthNames[month]}/${year}`;
+
+  function exportCsv() {
+    // Export simples pro Excel: nome, função, embarque (navios/porões/ganho),
+    // costado (turnos/horas/navios/ganho), total, última atividade.
+    const sep = ";";
+    const header = [
+      "Nome", "Função", "Equipe", "Status",
+      "Embarque - Navios", "Embarque - Porões", "Embarque - Ganho",
+      "Costado - Turnos", "Costado - Horas", "Costado - Diurnos", "Costado - Noturnos", "Costado - Navios", "Costado - Ganho",
+      "Total Ganho", "Última atividade",
+    ].join(sep);
+    const rows = visibleStats.map((s) => [
+      `"${s.employee.name}"`,
+      `"${s.employee.role || ""}"`,
+      `"${s.employee.team || ""}"`,
+      `"${s.employee.status || ""}"`,
+      s.embarque.ships.size,
+      s.embarque.poroes,
+      s.embarque.earnings.toFixed(2).replace(".", ","),
+      s.costado.turnos,
+      s.costado.turnos * 6,
+      s.costado.diurnos,
+      s.costado.noturnos,
+      s.costado.ships.size,
+      s.costado.earnings.toFixed(2).replace(".", ","),
+      s.totalEarnings.toFixed(2).replace(".", ","),
+      s.lastActivity ? new Date(s.lastActivity).toLocaleDateString("pt-BR") : "",
+    ].join(sep));
+    const csv = "﻿" + [header, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `controle-equipe-${periodLabel.replace("/", "-")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="space-y-4">
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-        <div className="flex items-start gap-3">
-          <div className="text-3xl">📄</div>
+      {/* Cabeçalho com filtros ─────────────────────────────────────────── */}
+      <div className="bg-card rounded-xl border border-border p-4 space-y-3">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <h2 className="text-base font-bold text-text">🎯 Controle de Equipe</h2>
+          <p className="text-xs text-text-light">Quem trabalhou, em que navios, quanto produziu e quanto recebeu.</p>
+        </div>
+
+        <div className="flex flex-wrap gap-3 items-end">
+          {/* Mês */}
           <div>
-            <h3 className="font-semibold text-blue-900">Documentos — em desenvolvimento</h3>
-            <p className="text-sm text-blue-800 mt-0.5">
-              Geração de planilhas e relatórios financeiros. Vai seguir o mesmo padrão de
-              {" "}<strong>RH › Documentos</strong> (sub-abas por tipo de documento).
-            </p>
+            <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Mês</label>
+            <select
+              value={month === "TODOS" ? "TODOS" : String(month)}
+              onChange={(e) => setMonth(e.target.value === "TODOS" ? "TODOS" : Number(e.target.value))}
+              className="px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+            >
+              <option value="TODOS">Ano inteiro</option>
+              {monthNames.map((nm, idx) => (
+                <option key={idx} value={idx}>{nm}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Ano */}
+          <div>
+            <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Ano</label>
+            <select
+              value={year}
+              onChange={(e) => setYear(Number(e.target.value))}
+              className="px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+            >
+              {availableYears.map((y) => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Atividade */}
+          <div>
+            <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Atividade</label>
+            <div className="flex gap-1">
+              {(["TODAS", "EMBARQUE", "COSTADO"] as const).map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  onClick={() => setActivity(a)}
+                  className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition ${
+                    activity === a
+                      ? "bg-primary text-white border-primary"
+                      : "border-border text-text-light hover:bg-gray-50"
+                  }`}
+                >
+                  {a === "TODAS" ? "Todas" : a === "EMBARQUE" ? "🚢 Embarque" : "⚓ Costado"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Status */}
+          <div>
+            <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Quem mostrar</label>
+            <div className="flex gap-1">
+              {(["ATIVOS", "TODOS"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setStatusFilter(s)}
+                  className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition ${
+                    statusFilter === s
+                      ? "bg-primary text-white border-primary"
+                      : "border-border text-text-light hover:bg-gray-50"
+                  }`}
+                >
+                  {s === "ATIVOS" ? "Só ativos" : "Todos"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Pago vs Tudo */}
+          <div>
+            <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Pagamentos</label>
+            <div className="flex gap-1">
+              {(["TODOS", "PAGO"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setPaymentFilter(s)}
+                  className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition ${
+                    paymentFilter === s
+                      ? "bg-primary text-white border-primary"
+                      : "border-border text-text-light hover:bg-gray-50"
+                  }`}
+                >
+                  {s === "TODOS" ? "Em aberto + pago" : "🔒 Só pago"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Busca */}
+          <div className="flex-1 min-w-[180px]">
+            <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Buscar</label>
+            <input
+              type="text"
+              placeholder="Nome, função ou equipe..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+            />
+          </div>
+
+          {/* Export */}
+          <div>
+            <button
+              type="button"
+              onClick={exportCsv}
+              disabled={visibleStats.length === 0}
+              className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition"
+            >
+              📥 Exportar CSV
+            </button>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {sketches.map((s) => (
-          <div key={s.label} className="bg-white border border-dashed border-border rounded-xl p-4 text-center opacity-70">
-            <div className="text-3xl mb-2">{s.icon}</div>
-            <p className="font-semibold text-sm">{s.label}</p>
-            <p className="text-xs text-text-light mt-1">{s.desc}</p>
-            <p className="text-[10px] uppercase tracking-wider font-semibold text-amber-700 mt-3">Em breve</p>
-          </div>
-        ))}
+      {/* KPIs do período ─────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+        <KpiCard label={`Trabalharam em ${periodLabel}`} value={periodKpis.workers.toString()} accent="blue" />
+        <KpiCard label="Folha do período" value={brl(periodKpis.totalPaid)} accent="emerald" />
+        <KpiCard label="Porões trabalhados" value={periodKpis.totalPoroes.toString()} accent="amber" />
+        <KpiCard label="Turnos Costado" value={`${periodKpis.totalTurnos} (${periodKpis.totalHoras}h)`} accent="amber" />
+        <KpiCard label="Navios Embarque" value={periodKpis.shipsEmbarque.toString()} accent="blue" />
+        <KpiCard label="Navios Costado" value={periodKpis.shipsCostado.toString()} accent="blue" />
       </div>
+
+      {/* Top Performers ─────────────────────────────────────────────────── */}
+      {(topPerformers.earnings.length > 0 || topPerformers.poroes.length > 0 || topPerformers.horas.length > 0 || topPerformers.ships.length > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          <TopPerformerCard
+            title="🏆 Quem mais ganhou"
+            color="emerald"
+            items={topPerformers.earnings.map((s) => ({
+              employee: s.employee, value: brl(s.totalEarnings), sub: `${s.embarque.ships.size + s.costado.ships.size} navios`,
+            }))}
+            onClick={(emp) => setDetailEmp(emp)}
+          />
+          <TopPerformerCard
+            title="🚢 Top Embarque (porões)"
+            color="blue"
+            items={topPerformers.poroes.map((s) => ({
+              employee: s.employee,
+              value: `${s.embarque.poroes} porão${s.embarque.poroes === 1 ? "" : "ões"}`,
+              sub: `${s.embarque.ships.size} navios · ${brl(s.embarque.earnings)}`,
+            }))}
+            onClick={(emp) => setDetailEmp(emp)}
+          />
+          <TopPerformerCard
+            title="⚓ Top Costado (horas)"
+            color="indigo"
+            items={topPerformers.horas.map((s) => ({
+              employee: s.employee,
+              value: `${s.costado.turnos * 6}h`,
+              sub: `${s.costado.turnos} turnos · ${brl(s.costado.earnings)}`,
+            }))}
+            onClick={(emp) => setDetailEmp(emp)}
+          />
+          <TopPerformerCard
+            title="🚢⚓ Mais navios feitos"
+            color="amber"
+            items={topPerformers.ships.map((s) => ({
+              employee: s.employee,
+              value: `${s.embarque.ships.size + s.costado.ships.size}`,
+              sub: `${s.embarque.ships.size} embarque · ${s.costado.ships.size} costado`,
+            }))}
+            onClick={(emp) => setDetailEmp(emp)}
+          />
+        </div>
+      )}
+
+      {/* Tabela detalhada ───────────────────────────────────────────────── */}
+      {loading ? (
+        <p className="text-center text-text-light py-12">Carregando...</p>
+      ) : visibleStats.length === 0 ? (
+        <div className="text-center py-12 bg-card rounded-xl border border-border">
+          <p className="text-3xl mb-2">🔎</p>
+          <p className="text-sm text-text-light">Nenhum colaborador encontrado pra esse filtro.</p>
+          <p className="text-xs text-text-light mt-1">Tente trocar o mês/ano ou o filtro de status.</p>
+        </div>
+      ) : (
+        <div className="bg-card rounded-xl border border-border overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-border">
+              <tr>
+                <th
+                  className="px-3 py-2 text-left text-[10px] font-semibold text-text-light uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                  onClick={() => toggleSort("name")}
+                >
+                  Colaborador {sortIcon("name")}
+                </th>
+                <th className="px-3 py-2 text-center text-[10px] font-semibold text-blue-800 uppercase tracking-wider bg-blue-50" colSpan={3}>
+                  🚢 Embarque
+                </th>
+                <th className="px-3 py-2 text-center text-[10px] font-semibold text-indigo-800 uppercase tracking-wider bg-indigo-50" colSpan={4}>
+                  ⚓ Costado
+                </th>
+                <th
+                  className="px-3 py-2 text-right text-[10px] font-semibold text-text-light uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                  onClick={() => toggleSort("earnings")}
+                >
+                  Ganho Total {sortIcon("earnings")}
+                </th>
+                <th className="px-3 py-2 text-center text-[10px] font-semibold text-text-light uppercase tracking-wider">Última</th>
+              </tr>
+              <tr className="border-b border-border bg-gray-50/70">
+                <th></th>
+                <th
+                  className="px-2 py-1.5 text-center text-[10px] font-semibold text-blue-800 cursor-pointer hover:bg-blue-100"
+                  onClick={() => toggleSort("ships")}
+                >
+                  Navios {sortIcon("ships")}
+                </th>
+                <th
+                  className="px-2 py-1.5 text-center text-[10px] font-semibold text-blue-800 cursor-pointer hover:bg-blue-100"
+                  onClick={() => toggleSort("poroes")}
+                >
+                  Porões {sortIcon("poroes")}
+                </th>
+                <th className="px-2 py-1.5 text-right text-[10px] font-semibold text-blue-800">Ganho</th>
+                <th
+                  className="px-2 py-1.5 text-center text-[10px] font-semibold text-indigo-800 cursor-pointer hover:bg-indigo-100"
+                  onClick={() => toggleSort("turnos")}
+                >
+                  Turnos {sortIcon("turnos")}
+                </th>
+                <th className="px-2 py-1.5 text-center text-[10px] font-semibold text-indigo-800">☀️/🌙</th>
+                <th className="px-2 py-1.5 text-center text-[10px] font-semibold text-indigo-800">Navios</th>
+                <th className="px-2 py-1.5 text-right text-[10px] font-semibold text-indigo-800">Ganho</th>
+                <th></th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleStats.map((s) => {
+                const hasAnyActivity = s.embarque.allocations + s.costado.allocations > 0;
+                return (
+                  <tr
+                    key={s.employee.id}
+                    className={`border-b border-border last:border-0 hover:bg-blue-50/30 cursor-pointer transition ${hasAnyActivity ? "" : "opacity-50"}`}
+                    onClick={() => setDetailEmp(s.employee)}
+                  >
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                          <span className="text-xs font-bold text-primary">{s.employee.name.charAt(0).toUpperCase()}</span>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold truncate">{s.employee.name}</p>
+                          <p className="text-[10px] text-text-light">
+                            {s.employee.role || <span className="italic">sem função</span>}
+                            {s.employee.team && ` · ${s.employee.team}`}
+                            {s.employee.status && s.employee.status !== "ATIVO" && (
+                              <span className="ml-1 px-1 py-0.5 rounded bg-gray-200 text-gray-700 text-[9px] font-semibold">{s.employee.status}</span>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+
+                    {/* Embarque */}
+                    <td className="px-2 py-2 text-center text-sm">{s.embarque.ships.size || "—"}</td>
+                    <td className="px-2 py-2 text-center text-sm font-semibold text-blue-700">{s.embarque.poroes || "—"}</td>
+                    <td className="px-2 py-2 text-right text-sm font-semibold text-emerald-700">
+                      {s.embarque.earnings > 0 ? brl(s.embarque.earnings) : <span className="text-text-light">—</span>}
+                    </td>
+
+                    {/* Costado */}
+                    <td className="px-2 py-2 text-center text-sm font-semibold text-indigo-700">
+                      {s.costado.turnos || "—"}
+                      {s.costado.turnos > 0 && <span className="block text-[9px] text-text-light font-normal">{s.costado.turnos * 6}h</span>}
+                    </td>
+                    <td className="px-2 py-2 text-center text-xs whitespace-nowrap">
+                      {s.costado.diurnos > 0 || s.costado.noturnos > 0 ? (
+                        <>
+                          <span className="text-amber-700">☀️{s.costado.diurnos}</span>{" "}
+                          <span className="text-indigo-700">🌙{s.costado.noturnos}</span>
+                        </>
+                      ) : <span className="text-text-light">—</span>}
+                    </td>
+                    <td className="px-2 py-2 text-center text-sm">{s.costado.ships.size || "—"}</td>
+                    <td className="px-2 py-2 text-right text-sm font-semibold text-emerald-700">
+                      {s.costado.earnings > 0 ? brl(s.costado.earnings) : <span className="text-text-light">—</span>}
+                    </td>
+
+                    {/* Total */}
+                    <td className="px-3 py-2 text-right text-sm font-bold text-emerald-800">
+                      {s.totalEarnings > 0 ? brl(s.totalEarnings) : <span className="text-text-light font-normal">—</span>}
+                    </td>
+
+                    {/* Última */}
+                    <td className="px-3 py-2 text-center text-[10px] text-text-light whitespace-nowrap">
+                      {s.lastActivity ? new Date(s.lastActivity).toLocaleDateString("pt-BR") : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot className="bg-gray-50 border-t-2 border-border font-semibold text-xs">
+              <tr>
+                <td className="px-3 py-2 text-text-light">
+                  TOTAL · {visibleStats.length} colaborador{visibleStats.length === 1 ? "" : "es"}
+                </td>
+                <td className="px-2 py-2 text-center text-blue-800">{periodKpis.shipsEmbarque}</td>
+                <td className="px-2 py-2 text-center text-blue-800">{periodKpis.totalPoroes}</td>
+                <td className="px-2 py-2 text-right text-emerald-700">{brl(visibleStats.reduce((s, x) => s + x.embarque.earnings, 0))}</td>
+                <td className="px-2 py-2 text-center text-indigo-800">
+                  {periodKpis.totalTurnos}
+                  <span className="block text-[9px] text-text-light font-normal">{periodKpis.totalHoras}h</span>
+                </td>
+                <td className="px-2 py-2 text-center text-text-light">—</td>
+                <td className="px-2 py-2 text-center text-indigo-800">{periodKpis.shipsCostado}</td>
+                <td className="px-2 py-2 text-right text-emerald-700">{brl(visibleStats.reduce((s, x) => s + x.costado.earnings, 0))}</td>
+                <td className="px-3 py-2 text-right text-emerald-800">{brl(periodKpis.totalPaid)}</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
+      <p className="text-[10px] text-text-light italic text-center">
+        Período: <strong>{periodLabel}</strong> · Filtro: <strong>{activity === "TODAS" ? "Todas atividades" : activity === "EMBARQUE" ? "Só Embarque" : "Só Costado"}</strong>
+        {paymentFilter === "PAGO" && <> · Só pagamentos <strong>FECHADO</strong></>}
+        · Clique numa linha pra ver o detalhamento completo.
+      </p>
+
+      {/* Drawer de detalhe por colaborador */}
+      <EmployeeDetailDrawer
+        employee={detailEmp}
+        stat={detailEmp ? stats.find((s) => s.employee.id === detailEmp.id) || null : null}
+        periodLabel={periodLabel}
+        onClose={() => setDetailEmp(null)}
+      />
     </div>
   );
 }
+
+// ─── TOP PERFORMER CARD ────────────────────────────────────────────────────
+function TopPerformerCard({
+  title, color, items, onClick,
+}: {
+  title: string;
+  color: "emerald" | "blue" | "indigo" | "amber";
+  items: Array<{ employee: Employee; value: string; sub: string }>;
+  onClick: (emp: Employee) => void;
+}) {
+  const colorMap = {
+    emerald: { border: "border-emerald-200", bg: "bg-emerald-50/60", text: "text-emerald-800", accent: "bg-emerald-500" },
+    blue: { border: "border-blue-200", bg: "bg-blue-50/60", text: "text-blue-800", accent: "bg-blue-500" },
+    indigo: { border: "border-indigo-200", bg: "bg-indigo-50/60", text: "text-indigo-800", accent: "bg-indigo-500" },
+    amber: { border: "border-amber-200", bg: "bg-amber-50/60", text: "text-amber-800", accent: "bg-amber-500" },
+  };
+  const c = colorMap[color];
+  const medals = ["🥇", "🥈", "🥉"];
+
+  return (
+    <div className={`rounded-xl border ${c.border} ${c.bg} p-3`}>
+      <p className={`text-xs font-bold ${c.text} mb-2`}>{title}</p>
+      {items.length === 0 ? (
+        <p className="text-[11px] text-text-light italic text-center py-4">Sem dados pra esse período</p>
+      ) : (
+        <ul className="space-y-2">
+          {items.map((it, idx) => (
+            <li
+              key={it.employee.id}
+              className="flex items-center gap-2 cursor-pointer hover:bg-white/50 rounded px-1 -mx-1 py-0.5 transition"
+              onClick={() => onClick(it.employee)}
+            >
+              <span className="text-base shrink-0">{medals[idx] || "🏅"}</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold truncate">{it.employee.name}</p>
+                <p className="text-[10px] text-text-light truncate">{it.sub}</p>
+              </div>
+              <span className={`text-xs font-bold ${c.text} shrink-0`}>{it.value}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ─── EMPLOYEE DETAIL DRAWER ────────────────────────────────────────────────
+// Abre quando o usuário clica num colaborador na tabela ou nos top cards.
+// Mostra: resumo do colaborador, breakdown Embarque/Costado, histórico
+// completo de alocações dentro do período filtrado.
+function EmployeeDetailDrawer({
+  employee, stat, periodLabel, onClose,
+}: {
+  employee: Employee | null;
+  stat: EmployeeStats | null;
+  periodLabel: string;
+  onClose: () => void;
+}) {
+  if (!employee || !stat) return null;
+
+  const totalShips = stat.embarque.ships.size + stat.costado.ships.size;
+
+  return (
+    <Modal open={!!employee} onClose={onClose} title={`Detalhamento · ${employee.name}`} maxWidth="max-w-3xl">
+      <div className="space-y-4">
+        {/* Cabeçalho */}
+        <div className="bg-gray-50 border border-border rounded-xl p-4">
+          <div className="flex items-start gap-3">
+            <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+              <span className="text-lg font-bold text-primary">{employee.name.charAt(0).toUpperCase()}</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-base font-bold text-text">{employee.name}</p>
+              <p className="text-xs text-text-light">
+                {employee.role || <span className="italic">sem função</span>}
+                {employee.team && ` · ${employee.team}`}
+                {employee.sector && ` · ${employee.sector}`}
+              </p>
+              <p className="text-[10px] text-text-light mt-1">
+                Status: <strong>{employee.status || "—"}</strong>
+                {employee.phone && <> · Tel: <span className="font-mono">{employee.phone}</span></>}
+                {employee.admission_date && <> · Admissão: {new Date(employee.admission_date).toLocaleDateString("pt-BR")}</>}
+              </p>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Ganho em {periodLabel}</p>
+              <p className="text-xl font-bold text-emerald-700">{brl(stat.totalEarnings)}</p>
+              <p className="text-[10px] text-text-light">{totalShips} navio{totalShips === 1 ? "" : "s"}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Breakdown Embarque vs Costado */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="bg-blue-50/60 border border-blue-200 rounded-xl p-3">
+            <p className="text-xs font-bold text-blue-900 mb-2">🚢 Embarque</p>
+            <div className="space-y-1 text-xs">
+              <p>Navios: <strong>{stat.embarque.ships.size}</strong></p>
+              <p>Porões: <strong>{stat.embarque.poroes}</strong></p>
+              <p>Alocações: <strong>{stat.embarque.allocations}</strong></p>
+              <p className="text-emerald-700 pt-1 border-t border-blue-200 mt-1">
+                Ganho: <strong>{brl(stat.embarque.earnings)}</strong>
+              </p>
+            </div>
+            {stat.embarque.ships.size > 0 && (
+              <div className="mt-2 pt-2 border-t border-blue-200">
+                <p className="text-[10px] uppercase tracking-wider text-blue-800 font-semibold mb-1">Navios feitos</p>
+                <div className="flex flex-wrap gap-1">
+                  {Array.from(stat.embarque.ships).sort().map((n) => (
+                    <span key={n} className="text-[10px] px-1.5 py-0.5 bg-white border border-blue-200 rounded text-blue-900">
+                      {n}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-indigo-50/60 border border-indigo-200 rounded-xl p-3">
+            <p className="text-xs font-bold text-indigo-900 mb-2">⚓ Costado</p>
+            <div className="space-y-1 text-xs">
+              <p>Navios: <strong>{stat.costado.ships.size}</strong></p>
+              <p>Turnos: <strong>{stat.costado.turnos}</strong> ({stat.costado.turnos * 6}h)</p>
+              <p>
+                ☀️ Diurnos: <strong>{stat.costado.diurnos}</strong>{" · "}
+                🌙 Noturnos: <strong>{stat.costado.noturnos}</strong>
+              </p>
+              <p>Alocações: <strong>{stat.costado.allocations}</strong></p>
+              <p className="text-emerald-700 pt-1 border-t border-indigo-200 mt-1">
+                Ganho: <strong>{brl(stat.costado.earnings)}</strong>
+              </p>
+            </div>
+            {stat.costado.ships.size > 0 && (
+              <div className="mt-2 pt-2 border-t border-indigo-200">
+                <p className="text-[10px] uppercase tracking-wider text-indigo-800 font-semibold mb-1">Navios feitos</p>
+                <div className="flex flex-wrap gap-1">
+                  {Array.from(stat.costado.ships).sort().map((n) => (
+                    <span key={n} className="text-[10px] px-1.5 py-0.5 bg-white border border-indigo-200 rounded text-indigo-900">
+                      {n}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Histórico completo */}
+        <div>
+          <h3 className="text-xs font-bold text-text-light uppercase tracking-wider mb-2">📋 Histórico no período</h3>
+          {stat.history.length === 0 ? (
+            <p className="text-xs text-text-light italic text-center py-6 bg-gray-50 rounded-lg border border-border">
+              Sem registros nesse período.
+            </p>
+          ) : (
+            <div className="border border-border rounded-xl overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50 border-b border-border">
+                  <tr>
+                    <th className="px-2 py-1.5 text-left text-[10px] font-semibold text-text-light uppercase">Data</th>
+                    <th className="px-2 py-1.5 text-left text-[10px] font-semibold text-text-light uppercase">Navio</th>
+                    <th className="px-2 py-1.5 text-left text-[10px] font-semibold text-text-light uppercase">Função</th>
+                    <th className="px-2 py-1.5 text-center text-[10px] font-semibold text-text-light uppercase">Tipo</th>
+                    <th className="px-2 py-1.5 text-center text-[10px] font-semibold text-text-light uppercase">Detalhe</th>
+                    <th className="px-2 py-1.5 text-right text-[10px] font-semibold text-text-light uppercase">Ganho</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stat.history.map((h, idx) => (
+                    <tr key={`${h.jobId}-${idx}`} className="border-b border-border last:border-0">
+                      <td className="px-2 py-1.5 text-text-light whitespace-nowrap">
+                        {h.date ? new Date(h.date).toLocaleDateString("pt-BR") : "—"}
+                      </td>
+                      <td className="px-2 py-1.5 font-medium text-text">{h.shipName || h.jobName}</td>
+                      <td className="px-2 py-1.5 text-text-light">{h.functionName || "—"}</td>
+                      <td className="px-2 py-1.5 text-center">
+                        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${
+                          h.kind === "EMBARQUE" ? "bg-blue-100 text-blue-800" : "bg-indigo-100 text-indigo-800"
+                        }`}>
+                          {h.kind === "EMBARQUE" ? "🚢" : "⚓"} {h.kind}
+                        </span>
+                      </td>
+                      <td className="px-2 py-1.5 text-center text-text-light whitespace-nowrap">
+                        {h.kind === "EMBARQUE" ? (
+                          h.poroes ? <>{h.poroes} porõe{h.poroes === 1 ? "m" : "s"}</> : "—"
+                        ) : (
+                          <>
+                            {h.period && (
+                              <span className={`text-[9px] font-semibold ${
+                                ["19-01", "01-07"].includes(h.period) ? "text-indigo-700" : "text-amber-700"
+                              }`}>
+                                {["19-01", "01-07"].includes(h.period) ? "🌙" : "☀️"} {h.period}
+                              </span>
+                            )}
+                            {h.quantity > 1 && <> · {h.quantity}×</>}
+                          </>
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5 text-right font-semibold text-emerald-700 whitespace-nowrap">
+                        {brl(h.earnings)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-gray-50 border-t-2 border-border">
+                  <tr>
+                    <td colSpan={5} className="px-2 py-2 text-right text-[10px] font-bold text-text-light uppercase">Total</td>
+                    <td className="px-2 py-2 text-right text-sm font-bold text-emerald-800">{brl(stat.totalEarnings)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-between items-center pt-2 gap-2">
+          <a href={`/colaboradores`} className="text-xs text-primary hover:underline">
+            Abrir ficha em RH › Colaboradores →
+          </a>
+          <Button variant="secondary" onClick={onClose}>Fechar</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// (Aba "Documentos" foi substituída por "Controle" — ver ControleTab acima.)

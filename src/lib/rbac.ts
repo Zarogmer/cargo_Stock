@@ -213,7 +213,7 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Valores", href: "/financeiro?tab=funcoes" },
       { label: "Pagamento de Embarque", href: "/financeiro?tab=embarque" },
       { label: "Pagamento de Costado", href: "/financeiro?tab=costado" },
-      { label: "Documentos", href: "/financeiro?tab=documentos" },
+      { label: "Controle", href: "/financeiro?tab=controle" },
       { label: "Resumo", href: "/financeiro?tab=resumo" },
     ],
   },
