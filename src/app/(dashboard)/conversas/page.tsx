@@ -105,6 +105,11 @@ function formatFullDateTime(ms: string | number): string {
 
 function previewLine(c: Conversation): string {
   const prefix = c.last_from_me ? "Você: " : "";
+  // Sistemas (groupParticipantUpdate, systemNotice) já vêm com texto humano —
+  // mostra direto, sem o prefixo "Você:" (não é fala de ninguém).
+  if (c.last_message_type === "groupParticipantUpdate" || c.last_message_type === "systemNotice") {
+    return c.last_text || "Evento do grupo";
+  }
   if (c.last_text) return `${prefix}${c.last_text}`;
   const typeLabels: Record<string, string> = {
     imageMessage: "📷 Foto",
@@ -588,6 +593,33 @@ export default function ConversasPage() {
                 ) : (
                   messages.map((m) => {
                     const hasMedia = m.media_mimetype && m.message_type !== "conversation" && m.message_type !== "extendedTextMessage";
+                    // Mensagens de "sistema" (estilo WhatsApp: notificações de
+                    // grupo, sincronização, add/remove de participante) viram
+                    // pílulas centralizadas em cinza — não são bubbles de
+                    // conversa.
+                    const isSystem =
+                      m.message_type === "systemNotice" ||
+                      m.message_type === "groupParticipantUpdate";
+                    if (isSystem) {
+                      return (
+                        <div key={m.id} className="flex justify-center my-1">
+                          <div
+                            className="max-w-[85%] bg-[#fef9c3]/80 border border-[#fde047]/60 rounded-lg px-3 py-1 shadow-sm text-center"
+                            title={formatFullDateTime(m.timestamp_ms)}
+                          >
+                            <p className="text-[12px] text-amber-900 whitespace-pre-wrap break-words">
+                              {m.text || "(evento sem texto)"}
+                            </p>
+                            <p className="text-[9px] text-amber-700/80 mt-0.5">
+                              {formatTime(m.timestamp_ms)}
+                              {m.push_name && m.message_type === "groupParticipantUpdate" && (
+                                <> · por <strong>{m.push_name}</strong></>
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
                     return (
                       <div key={m.id} className={`flex ${m.from_me ? "justify-end" : "justify-start"}`}>
                         <div className={`max-w-[70%] rounded-lg px-3 py-2 shadow-sm ${

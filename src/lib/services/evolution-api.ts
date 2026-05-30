@@ -422,7 +422,10 @@ export async function registerWebhook(): Promise<unknown> {
         webhook: {
           enabled: true,
           url,
-          events: ["MESSAGES_UPSERT"],
+          // MESSAGES_UPSERT é o feed principal de conversas.
+          // GROUP_PARTICIPANTS_UPDATE traz add/remove/promote/demote dos grupos —
+          // virou systemNotice na aba Conversas (estilo WhatsApp).
+          events: ["MESSAGES_UPSERT", "GROUP_PARTICIPANTS_UPDATE"],
           webhookByEvents: false,
           webhookBase64: false,
         },
