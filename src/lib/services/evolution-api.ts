@@ -267,7 +267,19 @@ interface EvolutionGroupInfo {
   desc?: string;
   creation?: number;             // seconds-since-epoch
   owner?: string;
-  participants?: Array<{ id?: string; admin?: string | null }>;
+  // O Evolution recente devolve mais campos pra cada participante. Em grupos
+  // com LIDs, o `id` vem como `xxxxx@lid` (opaco) mas alguns dos demais campos
+  // podem trazer o telefone real (depende da versão). Capturamos todos pra
+  // facilitar a resolução.
+  participants?: Array<{
+    id?: string;
+    admin?: string | null;
+    jid?: string;
+    phoneNumber?: string;
+    lid?: string;
+    pn?: string;
+    [key: string]: unknown;
+  }>;
   [key: string]: unknown;
 }
 

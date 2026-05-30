@@ -52,7 +52,7 @@ interface GroupInfo {
     phone: string;
     admin: string | null;
     push_name: string | null;
-    employee: { id: number; name: string; team: string | null; status: string | null } | null;
+    employee: { id: number; name: string; team: string | null; status: string | null; phone: string | null } | null;
   }>;
   ship: {
     id: string;

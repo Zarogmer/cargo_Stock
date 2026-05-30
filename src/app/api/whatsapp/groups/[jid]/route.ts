@@ -77,16 +77,23 @@ export async function GET(
       : [];
 
     // Mapeia LID → telefone real e LID → pushName usando o histórico de
-    // mensagens do grupo. O Baileys recente coloca o telefone do remetente
-    // em `key.participantPn` mesmo quando o `key.participant` é um LID
-    // opaco — então cada mensagem antiga é uma chance de aprender quem é
-    // aquele LID. pushName vira fallback de exibição quando nem o phone
-    // bate com um colaborador.
+    // mensagens. O Baileys recente coloca o telefone do remetente em
+    // `key.participantPn` mesmo quando `key.participant` é um LID opaco —
+    // então cada mensagem antiga é uma chance de aprender quem é aquele LID.
+    //
+    // Importante: LIDs são GLOBAIS por conta de WhatsApp, então uma mapping
+    // aprendida em qualquer outro grupo também serve aqui. Por isso a busca
+    // varre TODOS os grupos (até 3000 mensagens recentes), não só este.
+    // O pushName, por outro lado, fica restrito a este grupo pra não puxar
+    // apelido de outro contexto.
     const groupMessages = await prisma.whatsappMessage.findMany({
-      where: { remote_jid: jid, from_me: false },
+      where: {
+        remote_jid: { endsWith: "@g.us" },
+        from_me: false,
+      },
       orderBy: { timestamp_ms: "desc" },
-      select: { push_name: true, raw_event: true },
-      take: 1000,
+      select: { push_name: true, raw_event: true, remote_jid: true },
+      take: 3000,
     });
     const lidToPhone = new Map<string, string>();
     const lidToPushName = new Map<string, string>();
@@ -103,35 +110,78 @@ export async function GET(
         const pnDigits = pn ? jidToDigits(pn) : "";
         if (pnDigits) lidToPhone.set(partDigits, pnDigits);
       }
-      if (!lidToPushName.has(partDigits)) {
+      // pushName: só usa mensagens DESTE grupo pra não importar apelido de outro contexto.
+      if (m.remote_jid === jid && !lidToPushName.has(partDigits)) {
         const name = (m.push_name || "").trim();
         if (name) lidToPushName.set(partDigits, name);
       }
     }
 
+    // Helper: tenta achar um Employee a partir de dígitos de telefone, testando
+    // variantes com/sem o prefixo 55 (Brasil).
+    function findEmpByPhoneDigits(d: string): typeof allEmployees[number] | null {
+      if (!d) return null;
+      return (
+        byPhone.get(d) ||
+        byPhone.get(d.startsWith("55") ? d.slice(2) : `55${d}`) ||
+        null
+      );
+    }
+
     const evolutionParticipants = (info.participants || []).map((p) => {
       const pj = p.id || "";
       const digits = jidToDigits(pj);
-      // Try direct phone match first, then BR 55-prefix variants, then a LID
-      // → phone resolution learned from the group's message history.
-      let emp =
-        byPhone.get(digits) ||
-        byPhone.get(digits.startsWith("55") ? digits.slice(2) : `55${digits}`) ||
-        null;
-      let resolvedPhone = digits;
+      const isLikelyLid = pj.endsWith("@lid") || digits.length > 13;
+
+      // Step 1: tentativa direta — funciona quando Evolution devolve `xxx@s.whatsapp.net`.
+      let emp = !isLikelyLid ? findEmpByPhoneDigits(digits) : null;
+
+      // Step 2: campos extras que algumas versões do Evolution incluem (jid,
+      // phoneNumber, pn, lid) — checa cada um caso o `id` venha como LID.
+      const extraCandidates: string[] = [];
+      const pAny = p as Record<string, unknown>;
+      for (const k of ["jid", "phoneNumber", "pn", "lid"]) {
+        const v = pAny[k];
+        if (typeof v === "string" && v.length > 0) {
+          const d = jidToDigits(v);
+          if (d && d.length >= 10 && d.length <= 13) extraCandidates.push(d);
+        }
+      }
+      let resolvedPhoneDigits = "";
+      if (!emp) {
+        for (const d of extraCandidates) {
+          const candidate = findEmpByPhoneDigits(d);
+          if (candidate) { emp = candidate; resolvedPhoneDigits = d; break; }
+          if (!resolvedPhoneDigits) resolvedPhoneDigits = d;
+        }
+      }
+
+      // Step 3: resolução via histórico de mensagens (LID → phone).
       if (!emp) {
         const phoneFromLid = lidToPhone.get(digits);
         if (phoneFromLid) {
-          emp =
-            byPhone.get(phoneFromLid) ||
-            byPhone.get(phoneFromLid.startsWith("55") ? phoneFromLid.slice(2) : `55${phoneFromLid}`) ||
-            null;
-          if (emp) resolvedPhone = phoneFromLid;
+          resolvedPhoneDigits = phoneFromLid;
+          emp = findEmpByPhoneDigits(phoneFromLid);
         }
       }
+
+      // Telefone exibido: prefere o cadastrado em Colaboradores (canônico).
+      // Caso contrário usa o resolvido via LID. Se nada funcionou e o id é
+      // claramente um LID, devolve string vazia pra UI mostrar "—" em vez
+      // dos dígitos opacos do LID.
+      let displayPhone = "";
+      if (emp && emp.phone) {
+        displayPhone = emp.phone.replace(/\D/g, "");
+      } else if (resolvedPhoneDigits) {
+        displayPhone = resolvedPhoneDigits;
+      } else if (!isLikelyLid && digits) {
+        // Id parecia um telefone real mas não bateu com colaborador — mostra mesmo assim.
+        displayPhone = digits;
+      }
+
       return {
         jid: pj,
-        phone: resolvedPhone,
+        phone: displayPhone,
         admin: p.admin || null, // "admin" | "superadmin" | null
         push_name: lidToPushName.get(digits) || null,
         employee: emp ? {
@@ -139,6 +189,7 @@ export async function GET(
           name: emp.name,
           team: emp.team,
           status: emp.status,
+          phone: emp.phone,
         } : null,
       };
     });
@@ -165,7 +216,7 @@ export async function GET(
           phone: (e.phone || "").replace(/\D/g, ""),
           admin: adminByEmpId.get(e.id) || null,
           push_name: null,
-          employee: { id: e.id, name: e.name, team: e.team, status: e.status },
+          employee: { id: e.id, name: e.name, team: e.team, status: e.status, phone: e.phone },
         }));
     } else {
       participants = evolutionParticipants;
