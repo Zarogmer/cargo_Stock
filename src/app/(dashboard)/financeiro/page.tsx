@@ -2402,6 +2402,98 @@ function JobDetailModal({
   // Fechamento fica somente-leitura apenas após o último OK do gerente.
   const isReadOnly = job.status === "FECHADO";
 
+  // ── Costado: valor canônico vem sempre de Valores > COSTADO ──────────────
+  // O rate gravado em cada alocação pode ser legado errado (ex.: R$ 400 que
+  // sobrou de quando o código usava default_rate de Embarque). Aqui sempre
+  // exibimos o valor atual da função COSTADO — assim o financeiro vê o que
+  // VAI pagar com base na configuração de hoje, não no que ficou salvo.
+  const costadoFn = kindFilter === "COSTADO"
+    ? functions.find((f) => f.name.trim().toUpperCase() === "COSTADO")
+    : null;
+  const costadoRate = costadoFn ? Number(costadoFn.default_rate) : 0;
+  // Helpers que centralizam a regra "cada linha = 1 turno" pra Costado.
+  function effectiveQty(a: JobAllocation): number {
+    if (kindFilter === "COSTADO") return Math.max(1, a.quantity);
+    return a.quantity;
+  }
+  function rateForRow(a: JobAllocation): number {
+    if (kindFilter === "COSTADO") return costadoRate;
+    return Number(a.rate);
+  }
+
+  // ── Filtro por data (só Costado) ─────────────────────────────────────────
+  const [costadoDateFilter, setCostadoDateFilter] = useState<string | "TODAS">("TODAS");
+  // Reset quando trocar de job pra não persistir filtro de outro navio.
+  useEffect(() => {
+    setCostadoDateFilter("TODAS");
+  }, [job.id]);
+  const uniqueDates = useMemo(() => {
+    if (kindFilter !== "COSTADO") return [] as string[];
+    const set = new Set<string>();
+    for (const a of allocations) {
+      if (a.shift_date) set.add(a.shift_date.slice(0, 10));
+    }
+    return Array.from(set).sort();
+  }, [allocations, kindFilter]);
+  const dateFilteredAllocations = useMemo(() => {
+    if (kindFilter !== "COSTADO" || costadoDateFilter === "TODAS") return allocations;
+    return allocations.filter((a) => (a.shift_date || "").slice(0, 10) === costadoDateFilter);
+  }, [allocations, kindFilter, costadoDateFilter]);
+
+  // ── Resumo por pessoa (Costado, sempre considera o navio inteiro) ─────────
+  const costadoSummary = useMemo(() => {
+    if (kindFilter !== "COSTADO") return [];
+    type Row = {
+      employeeId: number | null;
+      name: string;
+      role: string | null;
+      turnos: number;
+      diurnos: number;
+      noturnos: number;
+      shifts: Array<{ date: string | null; period: string | null; isNight: boolean }>;
+      total: number;
+      pluxee: number;
+      folha: number;
+    };
+    const byEmp = new Map<string, Row>();
+    for (const a of allocations) {
+      const key = a.employee_id ? `e${a.employee_id}` : `f${a.function_id}-${a.id}`;
+      const isNight = COSTADO_NIGHT_SHIFT_PERIODS.includes(a.shift_period || "");
+      const qty = effectiveQty(a);
+      const rowPay = costadoRate * qty;
+      const extra = Number(a.extra_value || 0);
+      const pluxee = Number(a.pluxee_value || 0);
+      if (!byEmp.has(key)) {
+        byEmp.set(key, {
+          employeeId: a.employee_id ?? null,
+          name: a.employees?.name || a.job_functions?.name || "—",
+          role: null,
+          turnos: 0, diurnos: 0, noturnos: 0,
+          shifts: [],
+          total: 0, pluxee: 0, folha: 0,
+        });
+      }
+      const row = byEmp.get(key)!;
+      row.turnos += qty;
+      if (isNight) row.noturnos += qty;
+      else if (a.shift_period) row.diurnos += qty;
+      row.shifts.push({ date: a.shift_date?.slice(0, 10) || null, period: a.shift_period, isNight });
+      row.total += rowPay + extra;
+      row.pluxee += pluxee;
+    }
+    for (const row of byEmp.values()) {
+      row.folha = row.total - row.pluxee;
+      row.shifts.sort((x, y) => (x.date || "").localeCompare(y.date || "") || (x.period || "").localeCompare(y.period || ""));
+    }
+    return Array.from(byEmp.values()).sort((a, b) => b.total - a.total);
+  // costadoRate é estável dentro do mesmo render; allocations atualiza junto.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allocations, kindFilter, costadoRate]);
+
+  const costadoGrandTotal = costadoSummary.reduce((s, r) => s + r.total, 0);
+  const costadoGrandTurnos = costadoSummary.reduce((s, r) => s + r.turnos, 0);
+  const costadoGrandFolha = costadoSummary.reduce((s, r) => s + r.folha, 0);
+
   return (
     <Modal open={open} onClose={onClose} title={job.name} maxWidth="max-w-6xl">
       <div className="space-y-4">
@@ -2774,12 +2866,148 @@ function JobDetailModal({
               {peopleReadOnly ? "Nenhuma alocação na Escalação para este navio." : "Sem alocações."}
             </p>
           ) : (
-            <div className="bg-card border border-border rounded-lg overflow-x-auto">
+            <>
+              {/* Costado: resumo por pessoa + filtro de data ─────────────── */}
               {kindFilter === "COSTADO" && (
-                <div className="px-3 py-2 bg-cyan-50 border-b border-cyan-200 text-[11px] text-cyan-900">
-                  💡 Pagamento Costado = <strong>Valor/Turno</strong> × <strong>nº de turnos</strong> · cada linha é um turno de 6h escalado em <strong>Escalação › Costado</strong>. Valor/Turno vem de <a href="/financeiro?tab=funcoes" className="underline">Valores › Costado</a> (valor/hora × 6h, + adicional 🌙 quando noturno).
+                <div className="space-y-3 mb-3">
+                  {/* Banner de cálculo */}
+                  <div className="px-3 py-2 bg-cyan-50 border border-cyan-200 rounded-lg text-[11px] text-cyan-900 flex items-center justify-between gap-2 flex-wrap">
+                    <span>
+                      💡 Costado é pago por <strong>turno de 6h</strong>. Valor/Turno = <strong className="text-emerald-700">{brl(costadoRate)}</strong>
+                      {" "}(da função <a href="/financeiro?tab=funcoes" className="underline">COSTADO em Valores</a>) · cada linha = 1 turno.
+                    </span>
+                    {costadoRate === 0 && (
+                      <span className="text-amber-900 bg-amber-100 px-2 py-0.5 rounded font-semibold">
+                        ⚠️ Sem valor configurado — abra <a href="/financeiro?tab=funcoes" className="underline">Valores</a> e ajuste o valor da função COSTADO.
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Cards do navio */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2">
+                      <p className="text-[10px] uppercase tracking-wider text-indigo-900 font-semibold">Total turnos</p>
+                      <p className="text-lg font-bold text-indigo-900 mt-0.5">{costadoGrandTurnos}</p>
+                      <p className="text-[10px] text-indigo-700">{costadoGrandTurnos * HOURS_PER_SHIFT}h trabalhadas</p>
+                    </div>
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                      <p className="text-[10px] uppercase tracking-wider text-emerald-900 font-semibold">Custo total Costado</p>
+                      <p className="text-lg font-bold text-emerald-700 mt-0.5">{brl(costadoGrandTotal)}</p>
+                      <p className="text-[10px] text-emerald-700">{costadoSummary.length} {costadoSummary.length === 1 ? "colaborador" : "colaboradores"}</p>
+                    </div>
+                    <div className="bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
+                      <p className="text-[10px] uppercase tracking-wider text-purple-900 font-semibold">A pagar (Folha)</p>
+                      <p className="text-lg font-bold text-purple-700 mt-0.5">{brl(costadoGrandFolha)}</p>
+                      <p className="text-[10px] text-purple-700">custo − pluxee</p>
+                    </div>
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      <p className="text-[10px] uppercase tracking-wider text-amber-900 font-semibold">Dias com escala</p>
+                      <p className="text-lg font-bold text-amber-900 mt-0.5">{uniqueDates.length}</p>
+                      <p className="text-[10px] text-amber-700">
+                        {uniqueDates.length > 0
+                          ? `${uniqueDates[0].split("-").reverse().join("/")} → ${uniqueDates[uniqueDates.length - 1].split("-").reverse().join("/")}`
+                          : "—"}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Resumo por pessoa (sempre mostra o navio inteiro) */}
+                  <div className="bg-card border border-border rounded-xl overflow-hidden">
+                    <div className="px-3 py-2 bg-gray-50 border-b border-border flex items-center justify-between">
+                      <p className="text-xs font-semibold text-text">👥 Por colaborador <span className="text-text-light font-normal">— navio inteiro</span></p>
+                      <p className="text-[10px] text-text-light">Quanto cada um trabalhou e quanto vai receber.</p>
+                    </div>
+                    <div className="divide-y divide-border">
+                      {costadoSummary.map((row) => {
+                        // Agrupa shifts pra exibir tipo "29/05: ☀️07-13, 🌙19-01 · 30/05: ☀️13-19"
+                        const shiftsByDate = new Map<string, Array<{ period: string; isNight: boolean }>>();
+                        for (const s of row.shifts) {
+                          const d = s.date || "—";
+                          if (!shiftsByDate.has(d)) shiftsByDate.set(d, []);
+                          if (s.period) shiftsByDate.get(d)!.push({ period: s.period, isNight: s.isNight });
+                        }
+                        return (
+                          <div key={row.name + row.employeeId} className="px-3 py-2 flex items-start gap-3">
+                            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center shrink-0">
+                              <span className="text-xs font-bold text-indigo-700">{row.name.charAt(0).toUpperCase()}</span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                                <p className="text-sm font-semibold truncate">{row.name}</p>
+                                <p className="text-sm font-bold text-emerald-700 shrink-0">{brl(row.total)}</p>
+                              </div>
+                              <p className="text-[10px] text-text-light mt-0.5">
+                                <strong className="text-text">{row.turnos}</strong> turno{row.turnos === 1 ? "" : "s"}
+                                {" "}({row.turnos * HOURS_PER_SHIFT}h){" · "}
+                                ☀️ {row.diurnos} diurno{row.diurnos === 1 ? "" : "s"} · 🌙 {row.noturnos} noturno{row.noturnos === 1 ? "" : "s"}
+                                {row.pluxee > 0 && (
+                                  <> · pluxee {brl(row.pluxee)} → folha <strong className="text-purple-700">{brl(row.folha)}</strong></>
+                                )}
+                              </p>
+                              {shiftsByDate.size > 0 && (
+                                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                  {Array.from(shiftsByDate.entries()).map(([date, periods]) => (
+                                    <span key={date} className="inline-flex items-center gap-1 text-[10px] bg-gray-50 border border-border rounded px-1.5 py-0.5">
+                                      <span className="font-mono text-text-light">{date === "—" ? "—" : date.split("-").reverse().join("/")}</span>
+                                      <span className="text-text-light">·</span>
+                                      {periods.map((p, i) => (
+                                        <span
+                                          key={i}
+                                          className={`font-semibold ${p.isNight ? "text-indigo-700" : "text-amber-700"}`}
+                                          title={p.isNight ? "Noturno" : "Diurno"}
+                                        >
+                                          {p.isNight ? "🌙" : "☀️"}{p.period}
+                                        </span>
+                                      ))}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Filtro por data pra inspecionar a tabela detalhada */}
+                  {uniqueDates.length > 1 && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Filtrar tabela:</span>
+                      <button
+                        type="button"
+                        onClick={() => setCostadoDateFilter("TODAS")}
+                        className={`text-xs px-2 py-1 rounded-lg border font-medium transition ${
+                          costadoDateFilter === "TODAS"
+                            ? "bg-primary text-white border-primary"
+                            : "border-border text-text-light hover:bg-gray-50"
+                        }`}
+                      >
+                        Todas ({allocations.length})
+                      </button>
+                      {uniqueDates.map((d) => {
+                        const count = allocations.filter((a) => (a.shift_date || "").slice(0, 10) === d).length;
+                        return (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() => setCostadoDateFilter(d)}
+                            className={`text-xs px-2 py-1 rounded-lg border font-medium transition ${
+                              costadoDateFilter === d
+                                ? "bg-primary text-white border-primary"
+                                : "border-border text-text-light hover:bg-gray-50"
+                            }`}
+                          >
+                            {d.split("-").reverse().join("/")} <span className="text-[10px] opacity-70">({count})</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
+
+            <div className="bg-card border border-border rounded-lg overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-border">
                   <tr>
@@ -2808,7 +3036,7 @@ function JobDetailModal({
                 </thead>
                 <tbody>
                   {(showCostadoShiftColumns
-                    ? [...allocations].sort((x, y) => {
+                    ? [...dateFilteredAllocations].sort((x, y) => {
                         // Costado: agrupa por data + período pra ler a folha mais facil.
                         const xd = x.shift_date || "";
                         const yd = y.shift_date || "";
@@ -2821,17 +3049,23 @@ function JobDetailModal({
                     : allocations
                   ).map((a, idx) => {
                     // No EMBARQUE: Base usa o valor FIXO da função (default_rate);
-                    // diferenças (overrides) entram como Extra. No COSTADO mantemos rate × qty.
+                    // diferenças (overrides) entram como Extra.
+                    // No COSTADO: rate vem sempre da função COSTADO (Valores) —
+                    // o stored rate da alocação pode ser legado errado.
                     const fn = functions.find((f) => f.id === a.function_id);
                     const defaultRate = Number(fn?.default_rate ?? a.rate);
                     const actualRate = Number(a.rate);
                     const isEmbarque = kindFilter === "EMBARQUE";
-                    const displayRate = isEmbarque ? defaultRate : actualRate;
+                    const isCostado = kindFilter === "COSTADO";
+                    const rowRate = rateForRow(a);
+                    const rowQty = effectiveQty(a);
+                    const displayRate = isEmbarque ? defaultRate : rowRate;
                     const base = isEmbarque
                       ? defaultRate * holdsMultiplier
+                      : isCostado ? rowRate * rowQty
                       : actualRate * a.quantity * holdsMultiplier;
                     // Costado: marca turnos noturnos visualmente.
-                    const isCostadoNight = kindFilter === "COSTADO"
+                    const isCostadoNight = isCostado
                       && COSTADO_NIGHT_SHIFT_PERIODS.includes(a.shift_period || "");
                     const specialDelta = isEmbarque ? (actualRate - defaultRate) * holdsMultiplier : 0;
                     const rateioExtra = Number(a.extra_value || 0);
@@ -2906,11 +3140,11 @@ function JobDetailModal({
                               <button
                                 type="button"
                                 disabled={!canEdit || isReadOnly}
-                                onClick={() => { setQtyDraft(String(a.quantity)); setEditingQtyId(a.id); }}
+                                onClick={() => { setQtyDraft(String(rowQty)); setEditingQtyId(a.id); }}
                                 className={canEdit && !isReadOnly ? "hover:bg-blue-50 rounded px-1 cursor-text" : ""}
-                                title={canEdit && !isReadOnly ? "Clique para editar" : ""}
+                                title={canEdit && !isReadOnly ? "Clique para editar" : (isCostado && a.quantity === 0 ? "Legado: quantity=0, exibido como 1 turno" : "")}
                               >
-                                {a.quantity}
+                                {rowQty}
                               </button>
                             )}
                           </td>
@@ -2934,6 +3168,19 @@ function JobDetailModal({
                               autoFocus
                               className="w-24 text-right px-1 py-0.5 border-2 border-primary rounded outline-none"
                             />
+                          ) : isCostado ? (
+                            // Costado: rate vem de Valores > COSTADO, não editavel
+                            // por linha. Mostra o valor canônico com tooltip
+                            // explicando onde mudar.
+                            <span
+                              className="text-text"
+                              title={`Valor da função COSTADO em Valores. ${actualRate !== rowRate ? `Stored: ${brl(actualRate)} (legado)` : ""}`}
+                            >
+                              {brl(displayRate)}
+                              {actualRate !== rowRate && actualRate > 0 && (
+                                <span className="ml-1 text-[9px] text-amber-700" title={`Legado: ${brl(actualRate)} salvo na alocação`}>⚠️</span>
+                              )}
+                            </span>
                           ) : (
                             <button
                               type="button"
@@ -3078,15 +3325,20 @@ function JobDetailModal({
                 <tfoot className="bg-gray-50 border-t-2 border-border font-semibold">
                   {(() => {
                     const isEmbarque = kindFilter === "EMBARQUE";
-                    const baseTotal = allocations.reduce((s, a) => {
+                    const isCostado = kindFilter === "COSTADO";
+                    // O total acompanha o filtro de data (quando ativo) -- o
+                    // resumo do navio inteiro fica nos cards acima.
+                    const totalAllocs = isCostado ? dateFilteredAllocations : allocations;
+                    const baseTotal = totalAllocs.reduce((s, a) => {
                       if (isEmbarque) {
                         const fn = functions.find((f) => f.id === a.function_id);
                         const defaultRate = Number(fn?.default_rate ?? a.rate);
                         return s + defaultRate * holdsMultiplier;
                       }
+                      if (isCostado) return s + costadoRate * effectiveQty(a);
                       return s + Number(a.rate) * a.quantity * holdsMultiplier;
                     }, 0);
-                    const extraTotal = allocations.reduce((s, a) => {
+                    const extraTotal = totalAllocs.reduce((s, a) => {
                       const rateio = Number(a.extra_value || 0);
                       if (isEmbarque) {
                         const fn = functions.find((f) => f.id === a.function_id);
@@ -3096,7 +3348,7 @@ function JobDetailModal({
                       }
                       return s + rateio;
                     }, 0);
-                    const pluxeeTotal = allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
+                    const pluxeeTotal = totalAllocs.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
                     // colSpan = "#" + nome + (data+periodo?) + (qty?) + rate = 3 base, +1 cada coluna opcional
                     const labelColSpan = 3
                       + (showCostadoShiftColumns ? 2 : 0)  // Data + Período
@@ -3119,6 +3371,7 @@ function JobDetailModal({
                 </tfoot>
               </table>
             </div>
+            </>
           )}
         </div>
 
@@ -4170,13 +4423,26 @@ function CostadoTab({
     return j.status === statusFilter;
   });
 
+  // Para os cards de Costado, o rate canônico é o default_rate da função
+  // COSTADO (configurada em Valores). O rate stored na alocação pode ser
+  // legado errado (ex.: R$ 400 vindo do default_rate da role de Embarque).
+  const costadoFnDef = functions.find((f) => f.name.trim().toUpperCase() === "COSTADO");
+  const costadoRateDef = costadoFnDef ? Number(costadoFnDef.default_rate) : 0;
+  function effectiveCostadoQty(a: JobAllocation): number {
+    return Math.max(1, a.quantity);
+  }
   // For job cards, compute Costado-only cost (filter allocs to kind=COSTADO).
   function costadoCost(job: Job) {
     const allocs = allocations.filter((a) => a.job_id === job.id && a.kind === "COSTADO");
     const adjs = adjustments.filter((a) => a.job_id === job.id);
-    const base = allocs.reduce((s, a) => s + calcAllocBase(a, job.holds_count), 0);
+    const base = allocs.reduce((s, a) => s + costadoRateDef * effectiveCostadoQty(a) + Number(a.extra_value || 0), 0);
     const adj = adjs.reduce((s, a) => s + (a.type === "ADICIONAL" ? Number(a.amount) : -Number(a.amount)), 0);
     return base + adj;
+  }
+  function costadoTotalShifts(job: Job): number {
+    return allocations
+      .filter((a) => a.job_id === job.id && a.kind === "COSTADO")
+      .reduce((s, a) => s + effectiveCostadoQty(a), 0);
   }
 
   return (
@@ -4212,7 +4478,7 @@ function CostadoTab({
           {filtered.map((j) => {
             const total = costadoCost(j);
             const allocs = allocations.filter((a) => a.job_id === j.id && a.kind === "COSTADO");
-            const shifts = allocs.reduce((s, a) => s + a.quantity, 0);
+            const shifts = costadoTotalShifts(j);
             const hours = shifts * HOURS_PER_SHIFT;
             return (
               <div key={j.id} className="bg-card rounded-xl border border-border p-4 hover:shadow-md transition cursor-pointer" onClick={() => setDetailJob(j)}>
@@ -4376,6 +4642,11 @@ function ControleTab({
     // tem várias alocações no mesmo job de embarque (cenário raro mas possível).
     const embarqueJobSeen = new Map<number, Set<string>>(); // empId -> Set<jobId>
 
+    // Costado: rate canônico vem da função COSTADO em Valores (não do stored
+    // rate da alocação, que pode ser legado errado).
+    const ctrlCostadoFn = functions.find((f) => f.name.trim().toUpperCase() === "COSTADO");
+    const ctrlCostadoRate = ctrlCostadoFn ? Number(ctrlCostadoFn.default_rate) : 0;
+
     for (const a of allocations) {
       if (a.status !== "ATIVO") continue;
       if (paymentFilter === "PAGO") {
@@ -4393,7 +4664,7 @@ function ControleTab({
       const kind: "EMBARQUE" | "COSTADO" = a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE";
       if (activity !== "TODAS" && activity !== kind) continue;
 
-      const rate = Number(a.rate);
+      const rate = kind === "COSTADO" ? ctrlCostadoRate : Number(a.rate);
       const extra = Number(a.extra_value || 0);
 
       if (kind === "EMBARQUE") {
@@ -4418,12 +4689,14 @@ function ControleTab({
           functionName: fn?.name || null,
         });
       } else {
-        const earnings = rate * a.quantity + extra;
-        s.costado.turnos += a.quantity;
+        // Costado: cada linha é 1 turno escalado (quantity=0 é legado, vira 1).
+        const qty = Math.max(1, a.quantity);
+        const earnings = rate * qty + extra;
+        s.costado.turnos += qty;
         if (a.shift_period && ["19-01", "01-07"].includes(a.shift_period)) {
-          s.costado.noturnos += a.quantity;
+          s.costado.noturnos += qty;
         } else if (a.shift_period) {
-          s.costado.diurnos += a.quantity;
+          s.costado.diurnos += qty;
         }
         s.costado.earnings += earnings;
         s.costado.allocations += 1;
@@ -4431,7 +4704,7 @@ function ControleTab({
         s.history.push({
           jobId: a.job_id, jobName: job?.name || "—", shipName,
           kind, date: a.shift_date, period: a.shift_period,
-          quantity: a.quantity, rate, earnings,
+          quantity: qty, rate, earnings,
           functionName: fn?.name || null,
         });
       }
