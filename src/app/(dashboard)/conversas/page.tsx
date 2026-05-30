@@ -681,30 +681,74 @@ function GroupInfoModal({ jid, onClose }: { jid: string | null; onClose: () => v
   const [info, setInfo] = useState<GroupInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Inline "+ Cadastrar" form: key = phone digits of the participant being edited.
+  const [addingPhone, setAddingPhone] = useState<string | null>(null);
+  const [addingName, setAddingName] = useState("");
+  const [addingSaving, setAddingSaving] = useState(false);
+  const [addingErr, setAddingErr] = useState<string | null>(null);
+
+  const loadInfo = useCallback(async () => {
+    if (!jid) return;
+    setLoading(true); setErr(null);
+    try {
+      const res = await fetch(`/api/whatsapp/groups/${encodeURIComponent(jid)}`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setInfo(body as GroupInfo);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [jid]);
 
   useEffect(() => {
-    if (!jid) return;
-    setLoading(true); setErr(null); setInfo(null);
-    (async () => {
-      try {
-        const res = await fetch(`/api/whatsapp/groups/${encodeURIComponent(jid)}`);
-        const body = await res.json();
-        if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-        setInfo(body as GroupInfo);
-      } catch (e) {
-        setErr((e as Error).message);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [jid]);
+    if (!jid) { setInfo(null); return; }
+    setInfo(null);
+    setAddingPhone(null); setAddingName(""); setAddingErr(null);
+    loadInfo();
+  }, [jid, loadInfo]);
+
+  function startAdd(phone: string, suggestedName: string) {
+    setAddingPhone(phone);
+    setAddingName(suggestedName);
+    setAddingErr(null);
+  }
+
+  function cancelAdd() {
+    setAddingPhone(null);
+    setAddingName("");
+    setAddingErr(null);
+  }
+
+  async function saveAdd() {
+    const name = addingName.trim();
+    const digits = (addingPhone || "").replace(/\D/g, "");
+    if (!name) { setAddingErr("Informe o nome"); return; }
+    if (!digits) { setAddingErr("Telefone inválido"); return; }
+    setAddingSaving(true); setAddingErr(null);
+    try {
+      const { error } = await db.from("employees").insert({
+        name,
+        phone: digits,
+        status: "ATIVO",
+      } as Record<string, unknown>);
+      if (error) throw new Error(error.message);
+      cancelAdd();
+      await loadInfo();
+    } catch (e) {
+      setAddingErr((e as Error).message);
+    } finally {
+      setAddingSaving(false);
+    }
+  }
 
   const formatCreation = (ms: number | null) =>
     ms ? new Date(ms).toLocaleString("pt-BR", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
   return (
     <Modal open={!!jid} onClose={onClose} title="Informações do grupo" maxWidth="max-w-2xl">
-      {loading && <p className="text-sm text-text-light">Carregando informações...</p>}
+      {loading && !info && <p className="text-sm text-text-light">Carregando informações...</p>}
       {err && (
         <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
           {err}
@@ -714,8 +758,24 @@ function GroupInfoModal({ jid, onClose }: { jid: string | null; onClose: () => v
         <div className="space-y-4">
           {/* Header card */}
           <div className="bg-gray-50 border border-border rounded-xl p-4">
-            <p className="text-xs uppercase tracking-wider text-text-light font-semibold">Nome do grupo</p>
-            <p className="font-semibold text-text mt-0.5">{info.subject || "(sem nome)"}</p>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-wider text-text-light font-semibold">Nome do grupo</p>
+                <p className="font-semibold text-text mt-0.5 truncate">{info.subject || "(sem nome)"}</p>
+              </div>
+              <button
+                type="button"
+                onClick={loadInfo}
+                disabled={loading}
+                title="Atualizar"
+                className="shrink-0 inline-flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-border bg-white hover:bg-gray-100 transition disabled:opacity-50"
+              >
+                <svg className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v6h6M20 20v-6h-6M4 10a8 8 0 0114.93-3M20 14a8 8 0 01-14.93 3" />
+                </svg>
+                {loading ? "Atualizando..." : "Atualizar"}
+              </button>
+            </div>
             {info.description && (
               <>
                 <p className="text-xs uppercase tracking-wider text-text-light font-semibold mt-3">Descrição</p>
@@ -781,35 +841,92 @@ function GroupInfoModal({ jid, onClose }: { jid: string | null; onClose: () => v
                 info.participants.map((p) => {
                   const displayName = p.employee?.name || p.push_name || null;
                   const avatarSeed = displayName || p.phone || "?";
+                  const isAdding = addingPhone === p.phone && !!p.phone;
+                  const canRegister = !p.employee && !!p.phone;
                   return (
-                  <div key={p.jid || p.phone} className="px-3 py-2 flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                      <span className="text-xs font-semibold text-primary">
-                        {avatarSeed.slice(0, 2).toUpperCase()}
-                      </span>
+                  <div key={p.jid || p.phone} className="px-3 py-2 flex flex-col gap-2">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                        <span className="text-xs font-semibold text-primary">
+                          {avatarSeed.slice(0, 2).toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {displayName || (
+                            <span className="text-text-light italic">Não cadastrado</span>
+                          )}
+                          {!p.employee && p.push_name && (
+                            <span className="ml-1 text-[10px] font-normal text-text-light italic">(WhatsApp)</span>
+                          )}
+                        </p>
+                        <p className="text-[10px] text-text-light font-mono">
+                          {formatPhone(p.phone) || p.phone}
+                          {p.employee?.team && ` · ${p.employee.team}`}
+                        </p>
+                      </div>
+                      {p.admin && (
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${
+                          p.admin === "superadmin"
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-blue-100 text-blue-800"
+                        }`}>
+                          {p.admin === "superadmin" ? "Dono" : "Admin"}
+                        </span>
+                      )}
+                      {canRegister && !isAdding && (
+                        <button
+                          type="button"
+                          onClick={() => startAdd(p.phone, p.push_name || "")}
+                          className="shrink-0 text-[10px] font-semibold px-2 py-1 rounded-lg border border-primary/30 text-primary hover:bg-primary/10 transition"
+                        >
+                          + Cadastrar
+                        </button>
+                      )}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">
-                        {displayName || (
-                          <span className="text-text-light italic">Não cadastrado</span>
+                    {isAdding && (
+                      <div className="ml-11 flex flex-col gap-1.5 bg-primary/5 border border-primary/20 rounded-lg p-2">
+                        <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">
+                          Novo colaborador · {formatPhone(p.phone) || p.phone}
+                        </p>
+                        <input
+                          autoFocus
+                          type="text"
+                          value={addingName}
+                          onChange={(e) => setAddingName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { e.preventDefault(); saveAdd(); }
+                            if (e.key === "Escape") { e.preventDefault(); cancelAdd(); }
+                          }}
+                          placeholder="Nome completo"
+                          className="text-sm px-2 py-1 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/40"
+                          disabled={addingSaving}
+                        />
+                        {addingErr && (
+                          <p className="text-[10px] text-red-700">{addingErr}</p>
                         )}
-                        {!p.employee && p.push_name && (
-                          <span className="ml-1 text-[10px] font-normal text-text-light italic">(WhatsApp)</span>
-                        )}
-                      </p>
-                      <p className="text-[10px] text-text-light font-mono">
-                        {formatPhone(p.phone) || p.phone}
-                        {p.employee?.team && ` · ${p.employee.team}`}
-                      </p>
-                    </div>
-                    {p.admin && (
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${
-                        p.admin === "superadmin"
-                          ? "bg-amber-100 text-amber-800"
-                          : "bg-blue-100 text-blue-800"
-                      }`}>
-                        {p.admin === "superadmin" ? "Dono" : "Admin"}
-                      </span>
+                        <div className="flex items-center gap-2 justify-end">
+                          <button
+                            type="button"
+                            onClick={cancelAdd}
+                            disabled={addingSaving}
+                            className="text-[10px] font-semibold px-2 py-1 rounded-md text-text-light hover:bg-gray-100 transition disabled:opacity-50"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={saveAdd}
+                            disabled={addingSaving || !addingName.trim()}
+                            className="text-[10px] font-semibold px-2 py-1 rounded-md bg-primary text-white hover:bg-primary/90 transition disabled:opacity-50"
+                          >
+                            {addingSaving ? "Salvando..." : "Salvar"}
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-text-light">
+                          Salvo como ATIVO. Edite outros campos depois em <strong>Colaboradores</strong>.
+                        </p>
+                      </div>
                     )}
                   </div>
                   );
@@ -819,6 +936,7 @@ function GroupInfoModal({ jid, onClose }: { jid: string | null; onClose: () => v
             <p className="text-[10px] text-text-light mt-2">
               Os nomes são casados pelo telefone com a aba <strong>Colaboradores</strong>. Quem aparece como
               &quot;Não cadastrado&quot; ainda não tem registro no sistema (ou o telefone está em outro formato).
+              Após cadastrar ou atualizar números, use <strong>Atualizar</strong> para recarregar.
             </p>
           </div>
 
