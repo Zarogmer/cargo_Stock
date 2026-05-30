@@ -1140,6 +1140,10 @@ export default function NaviosPage() {
               )}
             </div>
 
+            {/* Equipe Designada só aparece pra Embarque. Em Costado cada navio
+                tem grupo próprio criado na escalação, então essa seção não
+                faz sentido (o grupo de equipe não é usado). */}
+            {getOperationType(selectedShip.services) === "EMBARQUE" && (
             <div className="border-t border-border pt-3">
               <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-2">
                 Equipe Designada
@@ -1209,6 +1213,7 @@ export default function NaviosPage() {
                 <p className="text-xs text-text-light italic">Selecione Equipe 1 ou Equipe 2 para ver os colaboradores.</p>
               )}
             </div>
+            )}
           </div>
         )}
       </div>
