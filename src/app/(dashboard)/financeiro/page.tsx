@@ -636,6 +636,8 @@ function FuncoesTab({
   const [historyFn, setHistoryFn] = useState<JobFunction | null>(null);
   const [deleteFn, setDeleteFn] = useState<JobFunction | null>(null);
   const [ratesFn, setRatesFn] = useState<JobFunction | null>(null);
+  // Função cujo elenco de colaboradores está aberto no modal de listagem.
+  const [viewEmpsFn, setViewEmpsFn] = useState<JobFunction | null>(null);
   const [search, setSearch] = useState("");
 
   // Count distinct allocations (records), not the sum of worked days. With the
@@ -741,9 +743,19 @@ function FuncoesTab({
                   <td className="px-4 py-2.5 text-text-light text-xs">
                     {(() => {
                       const n = employeeCount(f.name);
-                      return n === 0
-                        ? <span className="text-text-light/60">— nenhum cadastrado</span>
-                        : <span><strong className="text-text">{n}</strong> {n === 1 ? "colaborador" : "colaboradores"}</span>;
+                      if (n === 0) return <span className="text-text-light/60">— nenhum cadastrado</span>;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => setViewEmpsFn(f)}
+                          className="inline-flex items-center gap-1 px-2 py-1 -mx-2 -my-1 rounded hover:bg-blue-50 hover:text-primary transition cursor-pointer"
+                          title="Ver lista de colaboradores"
+                        >
+                          <strong className="text-text">{n}</strong>
+                          <span>{n === 1 ? "colaborador" : "colaboradores"}</span>
+                          <span className="text-[10px] opacity-60">▸</span>
+                        </button>
+                      );
                     })()}
                   </td>
                   <td className="px-4 py-2.5 text-right">
@@ -798,6 +810,12 @@ function FuncoesTab({
         canEdit={canEdit}
         onClose={() => setRatesFn(null)}
         onChange={onChange}
+      />
+
+      <EmployeesByFunctionModal
+        fn={viewEmpsFn}
+        employees={employees}
+        onClose={() => setViewEmpsFn(null)}
       />
 
       <ConfirmDialog
@@ -1054,6 +1072,132 @@ function RateHistoryModal({
               ))}
             </div>
           )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ─── EMPLOYEES BY FUNCTION MODAL ───────────────────────────────────────────
+// Lista, em modo somente-leitura, os colaboradores cujo role bate com a
+// função selecionada. Permite filtrar por status e busca por nome, e tem
+// atalho pra abrir a aba Colaboradores filtrada pela função.
+function EmployeesByFunctionModal({
+  fn, employees, onClose,
+}: {
+  fn: JobFunction | null;
+  employees: Employee[];
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"ATIVO" | "TODOS">("ATIVO");
+
+  // Lista de colaboradores cuja `role` bate com o nome da função (case-insensitive).
+  const list = useMemo(() => {
+    if (!fn) return [];
+    const target = fn.name.trim().toUpperCase();
+    return employees
+      .filter((e) => (e.role || "").trim().toUpperCase() === target)
+      .filter((e) => (statusFilter === "ATIVO" ? (e.status ?? "ATIVO") === "ATIVO" : true))
+      .filter((e) => {
+        if (!search.trim()) return true;
+        return e.name.toLowerCase().includes(search.toLowerCase());
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, [fn, employees, search, statusFilter]);
+
+  function statusBadge(status: Employee["status"]) {
+    const s = status ?? "ATIVO";
+    const cls =
+      s === "ATIVO" ? "bg-emerald-100 text-emerald-700"
+      : s === "INATIVO" ? "bg-gray-100 text-gray-600"
+      : "bg-amber-100 text-amber-700"; // PENDENCIA
+    return (
+      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${cls}`}>
+        {s}
+      </span>
+    );
+  }
+
+  return (
+    <Modal
+      open={!!fn}
+      onClose={onClose}
+      title={fn ? `Colaboradores · ${fn.name}` : ""}
+      maxWidth="max-w-2xl"
+    >
+      {fn && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              placeholder="Buscar por nome..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="flex-1 min-w-[180px] px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+            />
+            <div className="flex gap-1 text-xs">
+              {(["ATIVO", "TODOS"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setStatusFilter(s)}
+                  className={`px-2.5 py-1.5 rounded-lg border transition font-medium ${
+                    statusFilter === s
+                      ? "bg-primary text-white border-primary"
+                      : "border-border text-text-light hover:bg-gray-50"
+                  }`}
+                >
+                  {s === "ATIVO" ? "Só ativos" : "Todos"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="text-xs text-text-light">
+            {list.length === 0 ? "Nenhum colaborador" : `${list.length} ${list.length === 1 ? "colaborador" : "colaboradores"}`}
+            {" "}cuja função (role) é <strong className="text-text">{fn.name}</strong>.
+          </div>
+
+          <div className="border border-border rounded-xl divide-y divide-border max-h-[55vh] overflow-y-auto">
+            {list.length === 0 ? (
+              <p className="px-3 py-6 text-xs text-text-light italic text-center">
+                Nenhum colaborador com essa função.
+                {statusFilter === "ATIVO" && " Tente trocar pra \"Todos\" pra ver inativos."}
+              </p>
+            ) : (
+              list.map((e) => (
+                <div key={e.id} className="px-3 py-2 flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                    <span className="text-xs font-semibold text-primary">
+                      {e.name.charAt(0).toUpperCase()}
+                    </span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate flex items-center gap-2">
+                      {e.name}
+                      {statusBadge(e.status)}
+                    </p>
+                    <p className="text-[10px] text-text-light">
+                      {e.team || <span className="italic">sem equipe</span>}
+                      {e.phone && <> · <span className="font-mono">{e.phone}</span></>}
+                      {e.sector && <> · {e.sector}</>}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="flex items-center justify-between pt-1">
+            <a
+              href="/colaboradores"
+              className="text-xs text-primary hover:underline"
+            >
+              Abrir aba Colaboradores →
+            </a>
+            <Button variant="secondary" onClick={onClose}>Fechar</Button>
+          </div>
         </div>
       )}
     </Modal>
