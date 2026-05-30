@@ -442,6 +442,184 @@ function InlineRateEditor({ value, canEdit, onSave }: { value: number; canEdit: 
   );
 }
 
+// ─── Custo Base por Porão ──────────────────────────────────────────────────
+// Calcula quanto sai um porão considerando a equipe padrão:
+// 4 ajudantes + 4 esfregão + 4 wap + 1 maquinista + 1 supervisor + 1 cozinheiro.
+// Headcounts são editáveis pra simular variações (nem sempre escala completa),
+// e ficam persistidos no localStorage. Mensalistas (analista RH etc.) não
+// entram na conta — porão é só Embarque por produção.
+
+const POR_PORAO_UNITS: ReadonlyArray<JobUnit> = ["PORAO", "POR_NAVIO", "POR_OPERACAO"];
+
+const DEFAULT_HEADCOUNTS_BY_NAME: Record<string, number> = {
+  AJUDANTE: 4,
+  ESFREGAO: 4,
+  "ESFREGÃO": 4,
+  WAP: 4,
+  MAQUINISTA: 1,
+  SUPERVISOR: 1,
+  COZINHEIRO: 1,
+};
+
+const HEADCOUNTS_STORAGE_KEY = "financeiro:porao-headcounts";
+
+function defaultHeadcountForName(name: string): number {
+  const key = name.trim().toUpperCase();
+  return DEFAULT_HEADCOUNTS_BY_NAME[key] ?? 0;
+}
+
+function CustoPorPoraoPanel({ functions }: { functions: JobFunction[] }) {
+  // Só funções de porão e ativas entram aqui.
+  const poraoFns = useMemo(
+    () => functions.filter((f) => f.active && POR_PORAO_UNITS.includes(f.unit)),
+    [functions],
+  );
+
+  // headcounts[fnId] = qty selecionada. Inicializa a partir do localStorage,
+  // com fallback nos defaults da equipe padrão.
+  const [headcounts, setHeadcounts] = useState<Record<number, number>>({});
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Seed inicial: mistura defaults com valores salvos. Roda toda vez que a
+  // lista de funções muda (após criar/excluir função nova).
+  useEffect(() => {
+    let saved: Record<string, number> = {};
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(HEADCOUNTS_STORAGE_KEY) : null;
+      if (raw) saved = JSON.parse(raw) as Record<string, number>;
+    } catch {
+      saved = {};
+    }
+    const next: Record<number, number> = {};
+    for (const f of poraoFns) {
+      const fromSaved = saved[String(f.id)];
+      next[f.id] = Number.isFinite(fromSaved) ? Number(fromSaved) : defaultHeadcountForName(f.name);
+    }
+    setHeadcounts(next);
+  }, [poraoFns]);
+
+  function updateQty(fnId: number, qtyRaw: string) {
+    const n = Math.max(0, Math.floor(parseFloat(qtyRaw.replace(",", ".")) || 0));
+    setHeadcounts((prev) => {
+      const next = { ...prev, [fnId]: n };
+      try {
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(HEADCOUNTS_STORAGE_KEY, JSON.stringify(next));
+        }
+      } catch {
+        // localStorage cheio / privado — silencioso.
+      }
+      return next;
+    });
+  }
+
+  function resetDefaults() {
+    const next: Record<number, number> = {};
+    for (const f of poraoFns) next[f.id] = defaultHeadcountForName(f.name);
+    setHeadcounts(next);
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(HEADCOUNTS_STORAGE_KEY, JSON.stringify(next));
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const totalHeadcount = poraoFns.reduce((acc, f) => acc + (headcounts[f.id] ?? 0), 0);
+  const totalCost = poraoFns.reduce(
+    (acc, f) => acc + Number(f.default_rate) * (headcounts[f.id] ?? 0),
+    0,
+  );
+
+  if (poraoFns.length === 0) return null;
+
+  return (
+    <div className="bg-amber-50/50 border border-amber-200 rounded-xl">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-amber-50 transition rounded-xl"
+      >
+        <div className="flex items-baseline gap-2">
+          <span className="text-sm font-semibold text-amber-900">💰 Custo Base por Porão</span>
+          <span className="text-xs text-amber-800">
+            {totalHeadcount} {totalHeadcount === 1 ? "pessoa" : "pessoas"} · <strong>{brl(totalCost)}</strong> / porão
+          </span>
+        </div>
+        <span className="text-amber-700 text-xs">{collapsed ? "▾ Expandir" : "▴ Recolher"}</span>
+      </button>
+
+      {!collapsed && (
+        <div className="px-4 pb-4 space-y-2">
+          <p className="text-[11px] text-amber-900/80 leading-snug">
+            Equipe padrão por porão: <strong>4 ajudantes</strong> + <strong>4 esfregão</strong> + <strong>4 WAP</strong> + <strong>1 maquinista</strong> + <strong>1 supervisor</strong> + <strong>1 cozinheiro</strong>.
+            Ajuste a quantidade pra simular outras formações. Mensalistas (analista RH etc.) não entram.
+          </p>
+
+          <div className="bg-white border border-amber-200 rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-amber-50/70 border-b border-amber-200">
+                <tr>
+                  <th className="px-3 py-2 text-left text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Função</th>
+                  <th className="px-3 py-2 text-center text-[10px] font-semibold text-amber-900 uppercase tracking-wider w-20">Qtde</th>
+                  <th className="px-3 py-2 text-right text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Valor un.</th>
+                  <th className="px-3 py-2 text-right text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Subtotal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {poraoFns.map((f) => {
+                  const qty = headcounts[f.id] ?? 0;
+                  const rate = Number(f.default_rate);
+                  const sub = qty * rate;
+                  return (
+                    <tr key={f.id} className="border-b border-amber-100 last:border-0">
+                      <td className="px-3 py-1.5 font-medium text-text">{f.name}</td>
+                      <td className="px-3 py-1.5 text-center">
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={qty}
+                          onChange={(e) => updateQty(f.id, e.target.value)}
+                          className="w-14 px-1.5 py-0.5 border border-amber-200 rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+                        />
+                      </td>
+                      <td className="px-3 py-1.5 text-right text-text-light text-xs">{brl(rate)}</td>
+                      <td className="px-3 py-1.5 text-right font-semibold text-emerald-700">{brl(sub)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot className="bg-amber-50 border-t-2 border-amber-200">
+                <tr>
+                  <td className="px-3 py-2 text-xs font-semibold text-amber-900 uppercase tracking-wider">Total por porão</td>
+                  <td className="px-3 py-2 text-center font-semibold text-amber-900">{totalHeadcount}</td>
+                  <td className="px-3 py-2"></td>
+                  <td className="px-3 py-2 text-right font-bold text-emerald-800">{brl(totalCost)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] text-amber-800/80 italic">
+              Quantidades ficam salvas no seu navegador. Use como base — nem todo navio escala equipe cheia.
+            </p>
+            <button
+              type="button"
+              onClick={resetDefaults}
+              className="text-[10px] font-semibold text-amber-900 hover:bg-amber-100 px-2 py-1 rounded transition"
+            >
+              ↺ Resetar pra equipe padrão
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FuncoesTab({
   functions, rates, allocations, employees, canEdit, onChange, loading,
 }: {
@@ -526,6 +704,8 @@ function FuncoesTab({
         💡 Esses são os <strong>valores médios padrão</strong> por função. De navio para navio podem ser ajustados,
         e a confirmação final dos valores é feita no <strong>Pagamento de Embarque</strong> (em "Ajustar Valor por Função") antes de fechar.
       </div>
+
+      <CustoPorPoraoPanel functions={functions} />
 
       {loading ? (
         <p className="text-center text-text-light py-12">Carregando...</p>
