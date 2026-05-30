@@ -763,33 +763,47 @@ function AddCostadoCrewModal({
     try {
       const jobId = await ensureJob();
       const now = new Date().toISOString();
-      // Carrega overrides de valor por funcionário (cadastrados em
-      // Financeiro > Funções e Valores > 👤 Valores especiais).
       const fnIdsInUse = Array.from(new Set(
         Array.from(selectedIds).map((id) => parseInt(perEmpFn.get(id)!))
       ));
-      const overridesMap = new Map<string, number>();
+      // Carrega os valores de Costado configurados em Financeiro > Valores > Costado.
+      // O rate gravado na alocação é o valor por turno completo (6h + adicional
+      // noturno quando aplicável). Antes vinha do default_rate da JobFunction,
+      // que era o valor por porão de Embarque — daí saiam valores errados (ex.: R$ 400).
+      const costadoRatesMap = new Map<number, { hourly_rate: number; night_bonus_pct: number }>();
       if (fnIdsInUse.length > 0) {
-        const { data: ovData } = await db
-          .from("employee_function_rates")
-          .select("employee_id, function_id, rate")
+        const { data: cData } = await db
+          .from("costado_function_rates")
+          .select("function_id, hourly_rate, night_bonus_pct")
           .in("function_id", fnIdsInUse);
-        for (const o of (ovData || []) as { employee_id: number; function_id: number; rate: string | number }[]) {
-          overridesMap.set(`${o.employee_id}-${o.function_id}`, Number(o.rate));
+        for (const c of (cData || []) as { function_id: number; hourly_rate: string | number; night_bonus_pct: string | number }[]) {
+          costadoRatesMap.set(c.function_id, {
+            hourly_rate: Number(c.hourly_rate),
+            night_bonus_pct: Number(c.night_bonus_pct),
+          });
         }
       }
+      // Turnos noturnos recebem adicional configurado na função.
+      const NIGHT_PERIODS = new Set(["19-01", "01-07"]);
+      const isNightShift = NIGHT_PERIODS.has(period);
+      const HOURS_PER_TURNO = 6;
       for (const id of selectedIds) {
         const fnId = parseInt(perEmpFn.get(id)!);
-        const fn = functions.find((f) => f.id === fnId);
-        const rate = Number(
-          overridesMap.get(`${id}-${fnId}`) ?? fn?.default_rate ?? 0,
-        );
+        const costadoCfg = costadoRatesMap.get(fnId);
+        // Sem config em Valores > Costado, grava 0 — o financeiro edita
+        // inline depois. Não cai mais no default_rate (que é de Embarque).
+        const hourly = costadoCfg?.hourly_rate ?? 0;
+        const bonusPct = costadoCfg?.night_bonus_pct ?? 0;
+        const baseTurno = hourly * HOURS_PER_TURNO;
+        const ratePerTurno = isNightShift
+          ? baseTurno * (1 + bonusPct / 100)
+          : baseTurno;
         await db.from("job_allocations").insert({
           job_id: jobId,
           function_id: fnId,
           employee_id: id,
-          quantity: 0,
-          rate,
+          quantity: 1, // cada linha = 1 turno (data + período)
+          rate: ratePerTurno, // já é o valor por turno completo
           pluxee_value: 0,
           status: "ATIVO",
           kind: "COSTADO",

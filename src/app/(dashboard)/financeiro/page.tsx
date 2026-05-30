@@ -148,8 +148,13 @@ function categoryLabel(cat: string | null | undefined): string {
 
 // Pagamentos:
 //   EMBARQUE: rate (valor/porão) × holds_count, por funcionário (qty não importa).
-//   COSTADO:  rate (valor/hora) × 6 × quantidade (cada quantidade = 1 turno de 6h).
+//   COSTADO:  rate (valor/turno) × quantidade — cada linha = 1 turno (data + período).
+//             O valor/turno já inclui adicional noturno quando aplicável; o cálculo
+//             é feito na Escalação de Costado a partir de costado_function_rates
+//             (hourly_rate × 6h × (1 + bonus se noturno)).
 const HOURS_PER_SHIFT = 6;
+// Períodos noturnos recebem o adicional configurado em costado_function_rates.
+const COSTADO_NIGHT_SHIFT_PERIODS: ReadonlyArray<string> = ["19-01", "01-07"];
 function calcAllocBase(a: JobAllocation, holdsCount: number | null): number {
   const k = a.kind || "EMBARQUE";
   const qty = a.quantity;
@@ -160,7 +165,7 @@ function calcAllocBase(a: JobAllocation, holdsCount: number | null): number {
     return rate * holds + extra;
   }
   if (k === "COSTADO") {
-    return rate * HOURS_PER_SHIFT * qty + extra;
+    return rate * qty + extra;
   }
   return rate * qty + extra;
 }
@@ -2269,19 +2274,24 @@ function JobDetailModal({
   onClose: () => void;
   onChange: () => void;
 }) {
-  // Embarque: rate (valor/porão) × holds, por funcionário. Costado: rate (valor/hora) × 6 × qty.
+  // Embarque: rate (valor/porão) × holds, por funcionário (qty não importa).
+  // Costado: rate (valor/turno) × qty — cada linha = 1 turno (data + período).
+  // O valor/turno já inclui adicional noturno quando aplicável; a Escalação de
+  // Costado calcula isso a partir de costado_function_rates.
   // Costado é gerenciado exclusivamente pela Escalação de Costado. Embarque permite
   // adicionar/remover funcionários direto daqui também (além da Escalação).
   const peopleReadOnly = kindFilter === "COSTADO";
   const holdsMultiplier =
     kindFilter === "EMBARQUE" ? Math.max(1, Number(job?.holds_count || 1))
-    : kindFilter === "COSTADO" ? HOURS_PER_SHIFT
-    : 1;
-  const rateLabel = kindFilter === "EMBARQUE" ? "Valor/Porão" : kindFilter === "COSTADO" ? "Valor/Hora" : "Valor Diário";
-  const multiplierLabel = kindFilter === "EMBARQUE" ? "Porões" : kindFilter === "COSTADO" ? "Horas" : null;
+    : 1; // Costado: rate já é valor/turno, base = rate × qty.
+  const rateLabel = kindFilter === "EMBARQUE" ? "Valor/Porão" : kindFilter === "COSTADO" ? "Valor/Turno" : "Valor Diário";
+  // Costado não tem mais coluna de multiplicador — rate já é por turno.
+  const multiplierLabel = kindFilter === "EMBARQUE" ? "Porões" : null;
   // Embarque é pago por porão (uma operação só) — não há "qty" relevante por linha.
   const showQtyColumn = kindFilter !== "EMBARQUE";
   const qtyLabel = kindFilter === "COSTADO" ? "Turnos" : "Qtd";
+  // Costado mostra colunas Data e Período por linha (cada linha = 1 turno).
+  const showCostadoShiftColumns = kindFilter === "COSTADO";
   const [showAddAlloc, setShowAddAlloc] = useState(false);
   const [allocEmp, setAllocEmp] = useState("");
   const [allocFn, setAllocFn] = useState("");
@@ -3127,7 +3137,7 @@ function JobDetailModal({
                     <p>
                       Função: <strong>{resolvedFn.name}</strong>
                       {" · "}
-                      {kindFilter === "EMBARQUE" ? "Valor/Porão" : kindFilter === "COSTADO" ? "Valor/Hora" : "Valor"}: <strong>{brl(resolvedRate)}</strong>
+                      {kindFilter === "EMBARQUE" ? "Valor/Porão" : kindFilter === "COSTADO" ? "Valor/Turno" : "Valor"}: <strong>{brl(resolvedRate)}</strong>
                       {hasSpecial && (
                         <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-300 text-amber-900 font-bold">
                           VALOR ESPECIAL
@@ -3166,7 +3176,7 @@ function JobDetailModal({
             <div className="bg-card border border-border rounded-lg overflow-x-auto">
               {kindFilter === "COSTADO" && (
                 <div className="px-3 py-2 bg-cyan-50 border-b border-cyan-200 text-[11px] text-cyan-900">
-                  💡 Pagamento Costado = <strong>Valor/Hora</strong> × <strong>{HOURS_PER_SHIFT}h por turno</strong> × <strong>nº de turnos</strong>
+                  💡 Pagamento Costado = <strong>Valor/Turno</strong> × <strong>nº de turnos</strong> · cada linha é um turno de 6h escalado em <strong>Escalação › Costado</strong>. Valor/Turno vem de <a href="/financeiro?tab=funcoes" className="underline">Valores › Costado</a> (valor/hora × 6h, + adicional 🌙 quando noturno).
                 </div>
               )}
               <table className="w-full text-sm">
@@ -3174,6 +3184,12 @@ function JobDetailModal({
                   <tr>
                     <th className="px-2 py-2 text-left text-xs font-semibold text-text-light w-8">#</th>
                     <th className="px-2 py-2 text-left text-xs font-semibold text-text-light min-w-[14rem]">Funcionário / Função</th>
+                    {showCostadoShiftColumns && (
+                      <>
+                        <th className="px-2 py-2 text-center text-xs font-semibold text-text-light whitespace-nowrap">Data</th>
+                        <th className="px-2 py-2 text-center text-xs font-semibold text-text-light whitespace-nowrap">Período</th>
+                      </>
+                    )}
                     {showQtyColumn && (
                       <th className="px-2 py-2 text-center text-xs font-semibold text-text-light">{qtyLabel}</th>
                     )}
@@ -3190,7 +3206,19 @@ function JobDetailModal({
                   </tr>
                 </thead>
                 <tbody>
-                  {allocations.map((a, idx) => {
+                  {(showCostadoShiftColumns
+                    ? [...allocations].sort((x, y) => {
+                        // Costado: agrupa por data + período pra ler a folha mais facil.
+                        const xd = x.shift_date || "";
+                        const yd = y.shift_date || "";
+                        if (xd !== yd) return xd.localeCompare(yd);
+                        const xp = x.shift_period || "";
+                        const yp = y.shift_period || "";
+                        if (xp !== yp) return xp.localeCompare(yp);
+                        return (x.employees?.name || "").localeCompare(y.employees?.name || "");
+                      })
+                    : allocations
+                  ).map((a, idx) => {
                     // No EMBARQUE: Base usa o valor FIXO da função (default_rate);
                     // diferenças (overrides) entram como Extra. No COSTADO mantemos rate × qty.
                     const fn = functions.find((f) => f.id === a.function_id);
@@ -3201,6 +3229,9 @@ function JobDetailModal({
                     const base = isEmbarque
                       ? defaultRate * holdsMultiplier
                       : actualRate * a.quantity * holdsMultiplier;
+                    // Costado: marca turnos noturnos visualmente.
+                    const isCostadoNight = kindFilter === "COSTADO"
+                      && COSTADO_NIGHT_SHIFT_PERIODS.includes(a.shift_period || "");
                     const specialDelta = isEmbarque ? (actualRate - defaultRate) * holdsMultiplier : 0;
                     const rateioExtra = Number(a.extra_value || 0);
                     const extra = specialDelta + rateioExtra;
@@ -3223,6 +3254,33 @@ function JobDetailModal({
                             </p>
                           )}
                         </td>
+                        {showCostadoShiftColumns && (
+                          <>
+                            <td className="px-2 py-2 text-center text-xs whitespace-nowrap">
+                              {a.shift_date ? (
+                                <span className="font-mono text-text">{formatJobDate(a.shift_date)}</span>
+                              ) : (
+                                <span className="text-text-light">—</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-2 text-center whitespace-nowrap">
+                              {a.shift_period ? (
+                                <span
+                                  className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                                    isCostadoNight
+                                      ? "bg-indigo-100 text-indigo-800"
+                                      : "bg-amber-100 text-amber-800"
+                                  }`}
+                                  title={isCostadoNight ? "Turno noturno — recebe adicional" : "Turno diurno"}
+                                >
+                                  {isCostadoNight ? "🌙" : "☀️"} {a.shift_period}
+                                </span>
+                              ) : (
+                                <span className="text-text-light text-xs">—</span>
+                              )}
+                            </td>
+                          </>
+                        )}
                         {showQtyColumn && (
                           <td className="px-2 py-2 text-center">
                             {editingQtyId === a.id && canEdit && !isReadOnly ? (
@@ -3438,8 +3496,11 @@ function JobDetailModal({
                       return s + rateio;
                     }, 0);
                     const pluxeeTotal = allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
-                    // colSpan = "#" + nome + (qty?) + rate = 3 ou 4, mais +1 se houver coluna multiplicador
-                    const labelColSpan = (showQtyColumn ? 4 : 3) + (multiplierLabel ? 1 : 0);
+                    // colSpan = "#" + nome + (data+periodo?) + (qty?) + rate = 3 base, +1 cada coluna opcional
+                    const labelColSpan = 3
+                      + (showCostadoShiftColumns ? 2 : 0)  // Data + Período
+                      + (showQtyColumn ? 1 : 0)            // Turnos/Qtd
+                      + (multiplierLabel ? 1 : 0);          // Porões (só Embarque)
                     return (
                       <tr>
                         <td colSpan={labelColSpan} className="px-2 py-2 text-text-light text-right">TOTAL</td>
