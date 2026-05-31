@@ -12,7 +12,7 @@ import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 
 type ShipStatus = "AGENDADO" | "EM_OPERACAO" | "CONCLUIDO" | "CANCELADO";
 
-type BoardingSituation = "VISTORIA" | "IMEDIATO" | "AGENDADO";
+type BoardingSituation = "VISTORIA" | "IMEDIATO" | "AGENDADO" | "PERSONALIZADO";
 
 interface Ship {
   id: string;
@@ -29,6 +29,7 @@ interface Ship {
   services: string[];
   boarding_situation: BoardingSituation | null;
   boarding_scheduled_at: string | null;
+  boarding_custom_text: string | null;
   created_at: string;
   created_by: string;
 }
@@ -114,6 +115,8 @@ const EMPTY_FORM = {
   boarding_situation: "" as BoardingSituation | "",
   // Usado só quando boarding_situation=AGENDADO. Formato datetime-local: "YYYY-MM-DDTHH:mm".
   boarding_scheduled_at: "",
+  // Usado só quando boarding_situation=PERSONALIZADO. Texto livre da situação.
+  boarding_custom_text: "",
   notes: "",
 };
 
@@ -121,6 +124,7 @@ const BOARDING_SITUATION_LABELS: Record<BoardingSituation, string> = {
   VISTORIA: "Navio passando por vistoria",
   IMEDIATO: "Embarque imediato",
   AGENDADO: "Embarque agendado (com horário)",
+  PERSONALIZADO: "Personalizado (escrever texto)",
 };
 
 const CARGO_OPTIONS = ["CARVÃO", "CIMENTO", "UREIA", "SOJA", "MILHO", "AÇÚCAR"];
@@ -218,6 +222,12 @@ export default function NaviosPage() {
   // Costado-only: shift date + period for the bulk-allocated rows
   const [costadoShiftDate, setCostadoShiftDate] = useState("");
   const [costadoShiftPeriod, setCostadoShiftPeriod] = useState("07-13");
+
+  // Modelos de "Situação personalizada" salvos (compartilhados pela equipe —
+  // tabela boarding_situation_templates). O usuário escreve um texto uma vez,
+  // salva como modelo e reaproveita em outros navios depois.
+  const [situationTemplates, setSituationTemplates] = useState<{ id: number; text: string }[]>([]);
+  const [savingTemplate, setSavingTemplate] = useState(false);
 
   // Ship detail / crew panel
   const [selectedShip, setSelectedShip] = useState<Ship | null>(null);
@@ -324,6 +334,48 @@ export default function NaviosPage() {
     }
   }, []);
 
+  // Carrega os modelos de situação personalizada salvos pela equipe.
+  const loadSituationTemplates = useCallback(async () => {
+    try {
+      const { data } = await db
+        .from("boarding_situation_templates")
+        .select("id, text")
+        .order("created_at", { ascending: false });
+      setSituationTemplates((data as { id: number; text: string }[]) || []);
+    } catch (err) {
+      console.error("loadSituationTemplates error:", err);
+    }
+  }, []);
+
+  // Salva o texto atual da situação personalizada como modelo reutilizável.
+  // Ignora vazio e duplicatas exatas pra não poluir a lista.
+  const handleSaveTemplate = useCallback(async () => {
+    const text = form.boarding_custom_text.trim();
+    if (!text || savingTemplate) return;
+    if (situationTemplates.some((t) => t.text.trim() === text)) return;
+    setSavingTemplate(true);
+    try {
+      await db.from("boarding_situation_templates").insert({
+        text,
+        created_by: profile?.full_name || "sistema",
+      });
+      await loadSituationTemplates();
+    } catch (err) {
+      console.error("save template error:", err);
+    } finally {
+      setSavingTemplate(false);
+    }
+  }, [form.boarding_custom_text, savingTemplate, situationTemplates, profile?.full_name, loadSituationTemplates]);
+
+  const handleDeleteTemplate = useCallback(async (id: number) => {
+    try {
+      await db.from("boarding_situation_templates").delete().eq("id", id);
+      setSituationTemplates((prev) => prev.filter((t) => t.id !== id));
+    } catch (err) {
+      console.error("delete template error:", err);
+    }
+  }, []);
+
   // Get team members for a ship based on assigned_team
   const getShipTeamMembers = useCallback((ship: Ship) => {
     if (!ship.assigned_team) return [];
@@ -358,7 +410,8 @@ export default function NaviosPage() {
     loadEmployees();
     loadJobFunctions();
     loadOccupied();
-  }, [loadShips, loadEmployees, loadJobFunctions, loadOccupied, pathname]);
+    loadSituationTemplates();
+  }, [loadShips, loadEmployees, loadJobFunctions, loadOccupied, loadSituationTemplates, pathname]);
 
   // ── Filter ─────────────────────────────────────────────────────────────────
 
@@ -417,6 +470,7 @@ export default function NaviosPage() {
       boarding_situation: (ship.boarding_situation || "") as BoardingSituation | "",
       // DB devolve ISO "2026-05-26T13:00:00.000Z". datetime-local quer "2026-05-26T13:00".
       boarding_scheduled_at: ship.boarding_scheduled_at ? ship.boarding_scheduled_at.slice(0, 16) : "",
+      boarding_custom_text: ship.boarding_custom_text || "",
       notes: ship.notes || "",
     });
     setFormError("");
@@ -447,6 +501,11 @@ export default function NaviosPage() {
       boardingSituation === "AGENDADO" && form.boarding_scheduled_at
         ? new Date(form.boarding_scheduled_at).toISOString()
         : null;
+    // Texto livre só vale pra situação PERSONALIZADO; nos demais casos some.
+    const boardingCustomText =
+      boardingSituation === "PERSONALIZADO" && form.boarding_custom_text.trim()
+        ? form.boarding_custom_text.trim()
+        : null;
     const payload = {
       name: form.name.trim(),
       arrival_date: form.arrival_date || null,
@@ -460,6 +519,7 @@ export default function NaviosPage() {
       services: isCostado ? ["COSTADO"] : form.services.filter((s) => s !== "COSTADO"),
       boarding_situation: boardingSituation,
       boarding_scheduled_at: boardingScheduledAt,
+      boarding_custom_text: boardingCustomText,
       notes: form.notes.trim() || null,
       created_by: profile?.full_name || "sistema",
     };
@@ -1399,7 +1459,7 @@ export default function NaviosPage() {
                 <div>
                   <label className="block text-sm font-medium text-text mb-1">Situação do Embarque</label>
                   <div className="grid grid-cols-1 gap-2">
-                    {(["VISTORIA", "IMEDIATO", "AGENDADO"] as BoardingSituation[]).map((s) => {
+                    {(["VISTORIA", "IMEDIATO", "AGENDADO", "PERSONALIZADO"] as BoardingSituation[]).map((s) => {
                       const checked = form.boarding_situation === s;
                       return (
                         <label
@@ -1434,6 +1494,69 @@ export default function NaviosPage() {
                       <p className="text-[10px] text-text-light mt-1">
                         Aparecerá na mensagem do grupo (ex.: &quot;estar no galpão dia 26/05 às 13h&quot;).
                       </p>
+                    </div>
+                  )}
+                  {form.boarding_situation === "PERSONALIZADO" && (
+                    <div className="mt-3 space-y-2">
+                      <label className="block text-sm font-medium text-text mb-1">Texto da situação</label>
+                      <textarea
+                        value={form.boarding_custom_text}
+                        onChange={(e) => setForm({ ...form, boarding_custom_text: e.target.value })}
+                        placeholder="Ex.: Embarque liberado pela Receita — apresentar-se ao agente no portão 3."
+                        rows={3}
+                        className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm resize-none"
+                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleSaveTemplate}
+                          disabled={!form.boarding_custom_text.trim() || savingTemplate}
+                          className="text-xs px-3 py-1.5 bg-primary/10 text-primary rounded-lg hover:bg-primary/20 font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          💾 {savingTemplate ? "Salvando..." : "Salvar como modelo"}
+                        </button>
+                        <span className="text-[10px] text-text-light">
+                          Escreva o texto livre — ele aparece na linha de Situação da mensagem do grupo.
+                        </span>
+                      </div>
+
+                      {situationTemplates.length > 0 && (
+                        <div className="border border-border rounded-lg p-2 bg-gray-50">
+                          <p className="text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1.5">
+                            Modelos salvos — clique para usar
+                          </p>
+                          <div className="space-y-1">
+                            {situationTemplates.map((t) => {
+                              const active = form.boarding_custom_text.trim() === t.text.trim();
+                              return (
+                                <div
+                                  key={t.id}
+                                  className={`flex items-start gap-2 rounded-md border px-2 py-1.5 bg-white transition ${
+                                    active ? "border-primary" : "border-border"
+                                  }`}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => setForm({ ...form, boarding_custom_text: t.text })}
+                                    className="flex-1 min-w-0 text-left text-xs text-text hover:text-primary"
+                                    title="Usar este modelo"
+                                  >
+                                    {t.text}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteTemplate(t.id)}
+                                    className="text-xs text-red-500 hover:bg-red-50 rounded p-0.5 shrink-0"
+                                    title="Excluir modelo"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                   <p className="text-[10px] text-text-light mt-1">

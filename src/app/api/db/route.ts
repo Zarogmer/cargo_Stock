@@ -28,6 +28,7 @@ const TABLE_MAP: Record<string, string> = {
   job_allocations: "jobAllocation",
   job_adjustments: "jobAdjustment",
   costado_period_status: "costadoPeriodStatus",
+  boarding_situation_templates: "boardingSituationTemplate",
   // Also support "profiles" alias -> reads from users table
   profiles: "user",
   // WhatsApp

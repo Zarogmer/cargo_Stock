@@ -300,12 +300,15 @@ model Ship {
   client_name    String?       // cliente que contratou o serviço (texto livre)
   services       String[]      @default([]) // serviços executados: LAVAGEM_PORAO, PINTURA, RASPAGEM, COSTADO
   // Situação do embarque, usada pra adaptar a copy do grupo do WhatsApp.
-  //   VISTORIA  = "Navio passando por vistoria" (sem horário)
-  //   IMEDIATO  = "Embarque imediato" (sem horário)
-  //   AGENDADO  = "Embarque agendado" — usa boarding_scheduled_at pro horário
+  //   VISTORIA      = "Navio passando por vistoria" (sem horário)
+  //   IMEDIATO      = "Embarque imediato" (sem horário)
+  //   AGENDADO      = "Embarque agendado" — usa boarding_scheduled_at pro horário
+  //   PERSONALIZADO = texto livre do usuário — usa boarding_custom_text
   // Null = não informado (copy genérica, comportamento legado).
   boarding_situation    String?
   boarding_scheduled_at DateTime? @db.Timestamptz()
+  // Texto livre da situação quando boarding_situation = "PERSONALIZADO".
+  boarding_custom_text  String?
   whatsapp_group_jid String?   // JID do grupo do WhatsApp deste navio (ex.: "12036...@g.us") — alvo da mensagem automática de escalação
   created_by     String
   created_at     DateTime      @default(now()) @db.Timestamptz()
@@ -314,6 +317,18 @@ model Ship {
   jobs           Job[]
 
   @@map("ships")
+}
+
+// ── Modelos de "Situação do Embarque" salvos pelo usuário ───────────────────
+// Textos livres que o RH escreve uma vez na situação PERSONALIZADO e reaproveita
+// em outros navios depois. Compartilhados por toda a equipe (não são por usuário).
+model BoardingSituationTemplate {
+  id         Int      @id @default(autoincrement())
+  text       String
+  created_by String
+  created_at DateTime @default(now()) @db.Timestamptz()
+
+  @@map("boarding_situation_templates")
 }
 
 // ── Sistema Financeiro: Funções, Trabalhos, Alocações ───────────────────────

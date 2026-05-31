@@ -51,6 +51,7 @@ function formatScheduledBr(d: Date | null | undefined): string | null {
 function situationLine(
   situation: string | null | undefined,
   scheduledAt: Date | null | undefined,
+  customText: string | null | undefined,
 ): string | null {
   switch (situation) {
     case "VISTORIA":
@@ -62,6 +63,10 @@ function situationLine(
       return when
         ? `🗓️ *Situação:* Embarque agendado — estar no galpão dia ${when}.`
         : "🗓️ *Situação:* Embarque agendado — aguardar horário definido pela supervisão.";
+    }
+    case "PERSONALIZADO": {
+      const t = (customText || "").trim();
+      return t ? `📌 *Situação:* ${t}` : null;
     }
     default:
       return null;
@@ -88,6 +93,7 @@ function buildShipWelcomeMessage(ship: {
   assigned_team: string | null;
   boarding_situation: string | null;
   boarding_scheduled_at: Date | null;
+  boarding_custom_text: string | null;
 }, opts: { includeShipName?: boolean } = {}): { description: string; message: string } {
   const isCostado = ship.services.includes("COSTADO");
   const opType = isCostado ? "COSTADO" : "EMBARQUE";
@@ -103,7 +109,7 @@ function buildShipWelcomeMessage(ship: {
 
   // Situação só faz sentido pra EMBARQUE — Costado tem fluxo próprio (Escalação > Costado).
   if (!isCostado) {
-    const sit = situationLine(ship.boarding_situation, ship.boarding_scheduled_at);
+    const sit = situationLine(ship.boarding_situation, ship.boarding_scheduled_at, ship.boarding_custom_text);
     if (sit) lines.push(sit);
   }
 
@@ -171,6 +177,7 @@ async function broadcastEmbarqueToTeams(args: {
       assigned_team: true,
       boarding_situation: true,
       boarding_scheduled_at: true,
+      boarding_custom_text: true,
     },
   });
   if (!ship) return NextResponse.json({ error: "Navio não encontrado" }, { status: 404 });
@@ -497,6 +504,7 @@ export async function POST(request: NextRequest) {
             assigned_team: true,
             boarding_situation: true,
             boarding_scheduled_at: true,
+            boarding_custom_text: true,
           },
         });
         if (ship) {
