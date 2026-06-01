@@ -11,9 +11,9 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDate, formatDateTime, formatPhone, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, type NrCode, type NrDates, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
+import { formatPhone, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, type NrCode } from "@/lib/utils";
 import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
-import type { Employee, Epi, Uniform, EpiMovement, UniformMovement, EpiMovementType } from "@/types/database";
+import type { Employee } from "@/types/database";
 import { DocumentosTab } from "./documentos-tab";
 
 export default function ColaboradoresPage() {
@@ -49,27 +49,6 @@ export default function ColaboradoresPage() {
   const [editEmp, setEditEmp] = useState<Employee | null>(null);
   const [deleteEmp, setDeleteEmp] = useState<Employee | null>(null);
 
-  // --- EPIs ---
-  const [epis, setEpis] = useState<Epi[]>([]);
-  const [epiSearch, setEpiSearch] = useState("");
-  const [epiForm, setEpiForm] = useState(false);
-  const [editEpi, setEditEpi] = useState<Epi | null>(null);
-  const [deleteEpi, setDeleteEpi] = useState<Epi | null>(null);
-  const [movEpi, setMovEpi] = useState<{ epi: Epi; type: EpiMovementType } | null>(null);
-
-  // --- UNIFORMS ---
-  const [uniforms, setUniforms] = useState<Uniform[]>([]);
-  const [uniSearch, setUniSearch] = useState("");
-  const [uniForm, setUniForm] = useState(false);
-  const [editUni, setEditUni] = useState<Uniform | null>(null);
-  const [deleteUni, setDeleteUni] = useState<Uniform | null>(null);
-  const [movUni, setMovUni] = useState<{ uniform: Uniform; type: EpiMovementType } | null>(null);
-
-  // --- HISTORY ---
-  const [history, setHistory] = useState<Array<Record<string, unknown>>>([]);
-  const [histSearch, setHistSearch] = useState("");
-  const [histType, setHistType] = useState("Todos");
-
   // --- EMPLOYEE DETAIL ---
   const [selectedEmp, setSelectedEmp] = useState<Employee | null>(null);
   const [empItems, setEmpItems] = useState<{ name: string; qty: number; source: string }[]>([]);
@@ -95,30 +74,17 @@ export default function ColaboradoresPage() {
         console.warn("[colaboradores] auto-release failed:", (err as Error).message);
       }
 
-      const [empRes, epiRes, uniRes, epiMovRes, uniMovRes, allocRes] = await Promise.all([
+      const [empRes, allocRes] = await Promise.all([
         db.from("employees").select("*").order("name"),
-        db.from("epis").select("*").order("name"),
-        db.from("uniforms").select("*").order("name"),
-        db.from("epi_movements").select("*, epis(name)").order("created_at", { ascending: false }).limit(50),
-        db.from("uniform_movements").select("*, uniforms(name)").order("created_at", { ascending: false }).limit(50),
         db.from("job_allocations").select("employee_id, kind, status").eq("status", "ATIVO"),
       ]);
 
-      // Log all errors
-      const errors: string[] = [];
-      if (empRes.error) errors.push(`employees: ${empRes.error.code} ${empRes.error.message}`);
-      if (epiRes.error) errors.push(`epis: ${epiRes.error.code} ${epiRes.error.message}`);
-      if (uniRes.error) errors.push(`uniforms: ${uniRes.error.code} ${uniRes.error.message}`);
-      if (epiMovRes.error) errors.push(`epi_movements: ${epiMovRes.error.code} ${epiMovRes.error.message}`);
-      if (uniMovRes.error) errors.push(`uniform_movements: ${uniMovRes.error.code} ${uniMovRes.error.message}`);
-      if (errors.length > 0) {
-        console.error("DB errors:", errors);
-        setDbError(errors.join(" | "));
+      if (empRes.error) {
+        console.error("DB error:", empRes.error);
+        setDbError(`employees: ${empRes.error.code} ${empRes.error.message}`);
       }
 
       setEmployees(empRes.data || []);
-      setEpis(epiRes.data || []);
-      setUniforms(uniRes.data || []);
 
       // Build escalação status map. EMBARQUE wins over COSTADO if both exist.
       const statusMap = new Map<number, "EMBARQUE" | "COSTADO">();
@@ -131,18 +97,6 @@ export default function ColaboradoresPage() {
         }
       });
       setEscalaStatus(statusMap);
-
-      const combined: Array<Record<string, unknown>> = [];
-      (epiMovRes.data || []).forEach((m: Record<string, unknown>) => {
-        const epi = m.epis as Record<string, unknown> | null;
-        combined.push({ ...m, item_name: epi?.name || "—", source: "EPI" });
-      });
-      (uniMovRes.data || []).forEach((m: Record<string, unknown>) => {
-        const uni = m.uniforms as Record<string, unknown> | null;
-        combined.push({ ...m, item_name: uni?.name || "—", source: "Uniforme" });
-      });
-      combined.sort((a, b) => new Date(b.created_at as string).getTime() - new Date(a.created_at as string).getTime());
-      setHistory(combined);
     } catch (err) {
       console.error("loadAll error:", err);
     } finally {
@@ -250,66 +204,6 @@ export default function ColaboradoresPage() {
     setSaving(false); setEmpForm(false); setEditEmp(null); loadAll();
   }
 
-  async function saveEpi(data: Partial<Epi>) {
-    setSaving(true);
-    const actor = profile?.full_name || "Sistema";
-    const payload = { ...data, updated_by: actor } as any;
-    if (editEpi) {
-      await db.from("epis").update(payload).eq("id", editEpi.id);
-    } else {
-      await db.from("epis").insert(payload);
-    }
-    setSaving(false); setEpiForm(false); setEditEpi(null); loadAll();
-  }
-
-  async function saveUniform(data: Partial<Uniform>) {
-    setSaving(true);
-    const actor = profile?.full_name || "Sistema";
-    const payload = { ...data, updated_by: actor } as any;
-    if (editUni) {
-      await db.from("uniforms").update(payload).eq("id", editUni.id);
-    } else {
-      await db.from("uniforms").insert(payload);
-    }
-    setSaving(false); setUniForm(false); setEditUni(null); loadAll();
-  }
-
-  async function handleEpiMovement(empName: string, qty: number, notes: string) {
-    if (!movEpi) return;
-    setSaving(true);
-    const actor = profile?.full_name || "Sistema";
-    const delta = movEpi.type === "ENTREGA" ? -qty : qty;
-
-    const { error: moveErr } = await db.from("epi_movements").insert({
-      epi_id: movEpi.epi.id, employee_name: empName, movement_type: movEpi.type,
-      quantity: qty, movement_date: new Date().toISOString().split("T")[0], notes, created_by: actor,
-    } as any);
-    if (moveErr) { alert(`Erro ao registrar movimentação: ${moveErr.message}`); setSaving(false); return; }
-
-    const { error: updateErr } = await db.from("epis").update({ stock_qty: movEpi.epi.stock_qty + delta, updated_by: actor } as any).eq("id", movEpi.epi.id);
-    if (updateErr) { alert(`Erro ao atualizar estoque: ${updateErr.message}`); setSaving(false); return; }
-
-    setSaving(false); setMovEpi(null); loadAll();
-  }
-
-  async function handleUniMovement(empName: string, qty: number, notes: string) {
-    if (!movUni) return;
-    setSaving(true);
-    const actor = profile?.full_name || "Sistema";
-    const delta = movUni.type === "ENTREGA" ? -qty : qty;
-
-    const { error: moveErr } = await db.from("uniform_movements").insert({
-      uniform_id: movUni.uniform.id, employee_name: empName, movement_type: movUni.type,
-      quantity: qty, movement_date: new Date().toISOString().split("T")[0], notes, created_by: actor,
-    } as any);
-    if (moveErr) { alert(`Erro ao registrar movimentação: ${moveErr.message}`); setSaving(false); return; }
-
-    const { error: updateErr } = await db.from("uniforms").update({ stock_qty: movUni.uniform.stock_qty + delta, updated_by: actor } as any).eq("id", movUni.uniform.id);
-    if (updateErr) { alert(`Erro ao atualizar estoque: ${updateErr.message}`); setSaving(false); return; }
-
-    setSaving(false); setMovUni(null); loadAll();
-  }
-
   // --- COLUMNS ---
   const teamLabels: Record<string, string> = { EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3", COSTADO: "Costado" };
   const teamColors: Record<string, string> = { EQUIPE_1: "bg-blue-100 text-blue-700", EQUIPE_2: "bg-purple-100 text-purple-700", EQUIPE_3: "bg-teal-100 text-teal-700", COSTADO: "bg-amber-100 text-amber-700" };
@@ -371,40 +265,6 @@ export default function ColaboradoresPage() {
       </div>
     )},
   ];
-
-  const epiColumns = [
-    { key: "name", label: "EPI", render: (e: Epi) => <span className="font-medium">{e.name}</span> },
-    { key: "size", label: "Tam.", render: (e: Epi) => e.size || "—" },
-    { key: "stock_qty", label: "Qtd", render: (e: Epi) => <span className="font-semibold">{e.stock_qty}</span> },
-    { key: "actions", label: "", className: "w-36", render: (e: Epi) => (
-      <div className="flex gap-1">
-        <button onClick={(ev) => { ev.stopPropagation(); setMovEpi({ epi: e, type: "ENTREGA" }); }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded text-xs" title="Entregar">📤</button>
-        <button onClick={(ev) => { ev.stopPropagation(); setMovEpi({ epi: e, type: "DEVOLUCAO" }); }} className="p-1.5 text-green-600 hover:bg-green-50 rounded text-xs" title="Devolver">📥</button>
-        {canEdit && <button onClick={(ev) => { ev.stopPropagation(); setEditEpi(e); setEpiForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded"><EditIcon /></button>}
-        {canDelete && <button onClick={(ev) => { ev.stopPropagation(); setDeleteEpi(e); }} className="p-1.5 text-danger hover:bg-red-50 rounded"><TrashIcon /></button>}
-      </div>
-    )},
-  ];
-
-  const uniColumns = [
-    { key: "name", label: "Uniforme", render: (u: Uniform) => <span className="font-medium">{u.name}</span> },
-    { key: "size", label: "Tam.", render: (u: Uniform) => u.size || "—" },
-    { key: "stock_qty", label: "Qtd", render: (u: Uniform) => <span className="font-semibold">{u.stock_qty}</span> },
-    { key: "actions", label: "", className: "w-36", render: (u: Uniform) => (
-      <div className="flex gap-1">
-        <button onClick={(ev) => { ev.stopPropagation(); setMovUni({ uniform: u, type: "ENTREGA" }); }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded text-xs" title="Entregar">📤</button>
-        <button onClick={(ev) => { ev.stopPropagation(); setMovUni({ uniform: u, type: "DEVOLUCAO" }); }} className="p-1.5 text-green-600 hover:bg-green-50 rounded text-xs" title="Devolver">📥</button>
-        {canEdit && <button onClick={(ev) => { ev.stopPropagation(); setEditUni(u); setUniForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded"><EditIcon /></button>}
-        {canDelete && <button onClick={(ev) => { ev.stopPropagation(); setDeleteUni(u); }} className="p-1.5 text-danger hover:bg-red-50 rounded"><TrashIcon /></button>}
-      </div>
-    )},
-  ];
-
-  const filteredHistory = history.filter((h) => {
-    const nameMatch = matchSearch(h.employee_name as string || "", histSearch) || matchSearch(h.item_name as string || "", histSearch);
-    const typeMatch = histType === "Todos" || h.source === histType;
-    return nameMatch && typeMatch;
-  });
 
   const tabs = [
     {
@@ -547,20 +407,6 @@ export default function ColaboradoresPage() {
       {/* Employee Form */}
       <EmployeeFormModal open={empForm} onClose={() => { setEmpForm(false); setEditEmp(null); }} onSave={saveEmployee} item={editEmp} saving={saving} />
       <ConfirmDialog open={!!deleteEmp} onClose={() => setDeleteEmp(null)} onConfirm={async () => { setSaving(true); await db.from("employees").delete().eq("id", deleteEmp!.id); setSaving(false); setDeleteEmp(null); loadAll(); }} title="Excluir Colaborador" message={`Excluir "${deleteEmp?.name}"?`} loading={saving} />
-
-      {/* EPI Form */}
-      <EpiFormModal open={epiForm} onClose={() => { setEpiForm(false); setEditEpi(null); }} onSave={saveEpi} item={editEpi} saving={saving} />
-      <ConfirmDialog open={!!deleteEpi} onClose={() => setDeleteEpi(null)} onConfirm={async () => { setSaving(true); await db.from("epis").delete().eq("id", deleteEpi!.id); setSaving(false); setDeleteEpi(null); loadAll(); }} title="Excluir EPI" message={`Excluir "${deleteEpi?.name}"?`} loading={saving} />
-
-      {/* Uniform Form */}
-      <UniformFormModal open={uniForm} onClose={() => { setUniForm(false); setEditUni(null); }} onSave={saveUniform} item={editUni} saving={saving} />
-      <ConfirmDialog open={!!deleteUni} onClose={() => setDeleteUni(null)} onConfirm={async () => { setSaving(true); await db.from("uniforms").delete().eq("id", deleteUni!.id); setSaving(false); setDeleteUni(null); loadAll(); }} title="Excluir Uniforme" message={`Excluir "${deleteUni?.name}"?`} loading={saving} />
-
-      {/* EPI Movement */}
-      <MovementModal open={!!movEpi} onClose={() => setMovEpi(null)} onConfirm={handleEpiMovement} title={movEpi?.type === "ENTREGA" ? `Entregar: ${movEpi?.epi.name}` : `Devolver: ${movEpi?.epi.name}`} saving={saving} employees={employees} />
-
-      {/* Uniform Movement */}
-      <MovementModal open={!!movUni} onClose={() => setMovUni(null)} onConfirm={handleUniMovement} title={movUni?.type === "ENTREGA" ? `Entregar: ${movUni?.uniform.name}` : `Devolver: ${movUni?.uniform.name}`} saving={saving} employees={employees} />
 
       {/* Employee Detail */}
       <Modal open={!!selectedEmp} onClose={() => setSelectedEmp(null)} title={selectedEmp?.name || ""}>
@@ -1155,81 +1001,6 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>
         </div>
-      </form>
-    </Modal>
-  );
-}
-
-function EpiFormModal({ open, onClose, onSave, item, saving }: { open: boolean; onClose: () => void; onSave: (d: Partial<Epi>) => void; item: Epi | null; saving: boolean }) {
-  const [name, setName] = useState("");
-  const [size, setSize] = useState("");
-  const [stockQty, setStockQty] = useState(0);
-
-  useEffect(() => {
-    if (item) { setName(item.name); setSize(item.size || ""); setStockQty(item.stock_qty); }
-    else { setName(""); setSize(""); setStockQty(0); }
-  }, [item, open]);
-
-  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
-
-  return (
-    <Modal open={open} onClose={onClose} title={item ? "Editar EPI" : "Novo EPI"}>
-      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, size: size || null, stock_qty: stockQty }); }} className="space-y-4">
-        <div><label className="block text-sm font-medium mb-1">Nome *</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} /></div>
-        <div className="grid grid-cols-2 gap-4">
-          <div><label className="block text-sm font-medium mb-1">Tamanho</label><input type="text" value={size} onChange={(e) => setSize(e.target.value)} className={inputCls} /></div>
-          <div><label className="block text-sm font-medium mb-1">Quantidade</label><input type="number" value={stockQty} onChange={(e) => setStockQty(Number(e.target.value))} min={0} className={inputCls} /></div>
-        </div>
-        <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button></div>
-      </form>
-    </Modal>
-  );
-}
-
-function UniformFormModal({ open, onClose, onSave, item, saving }: { open: boolean; onClose: () => void; onSave: (d: Partial<Uniform>) => void; item: Uniform | null; saving: boolean }) {
-  const [name, setName] = useState("");
-  const [size, setSize] = useState("");
-  const [stockQty, setStockQty] = useState(0);
-
-  useEffect(() => {
-    if (item) { setName(item.name); setSize(item.size || ""); setStockQty(item.stock_qty); }
-    else { setName(""); setSize(""); setStockQty(0); }
-  }, [item, open]);
-
-  return (
-    <Modal open={open} onClose={onClose} title={item ? "Editar Uniforme" : "Novo Uniforme"}>
-      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, size: size || null, stock_qty: stockQty }); }} className="space-y-4">
-        <div><label className="block text-sm font-medium mb-1">Nome *</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} required className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
-        <div className="grid grid-cols-2 gap-4">
-          <div><label className="block text-sm font-medium mb-1">Tamanho</label><input type="text" value={size} onChange={(e) => setSize(e.target.value)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
-          <div><label className="block text-sm font-medium mb-1">Quantidade</label><input type="number" value={stockQty} onChange={(e) => setStockQty(Number(e.target.value))} min={0} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
-        </div>
-        <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button></div>
-      </form>
-    </Modal>
-  );
-}
-
-function MovementModal({ open, onClose, onConfirm, title, saving, employees }: { open: boolean; onClose: () => void; onConfirm: (emp: string, qty: number, notes: string) => void; title: string; saving: boolean; employees: Employee[] }) {
-  const [empName, setEmpName] = useState("");
-  const [qty, setQty] = useState(1);
-  const [notes, setNotes] = useState("");
-
-  useEffect(() => { setEmpName(""); setQty(1); setNotes(""); }, [open]);
-
-  return (
-    <Modal open={open} onClose={onClose} title={title}>
-      <form onSubmit={(e) => { e.preventDefault(); onConfirm(empName, qty, notes); }} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium mb-1">Colaborador *</label>
-          <select value={empName} onChange={(e) => setEmpName(e.target.value)} required className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none">
-            <option value="">Selecione...</option>
-            {employees.map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
-          </select>
-        </div>
-        <div><label className="block text-sm font-medium mb-1">Quantidade</label><input type="number" value={qty} onChange={(e) => setQty(Number(e.target.value))} min={1} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
-        <div><label className="block text-sm font-medium mb-1">Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" /></div>
-        <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Registrando..." : "Confirmar"}</Button></div>
       </form>
     </Modal>
   );
