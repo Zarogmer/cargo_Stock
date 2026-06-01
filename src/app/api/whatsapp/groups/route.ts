@@ -10,6 +10,7 @@ import {
 } from "@/lib/services/evolution-api";
 import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 import { clearTeamGroupCache, getTeamGroupJid } from "@/lib/services/team-groups";
+import { BOARDING_SAFETY_REMINDER } from "@/lib/services/whatsapp-copy";
 
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
@@ -142,7 +143,9 @@ function buildShipWelcomeMessage(ship: {
   }
 
   const description = lines.join("\n");
-  const message = `${description}\n\n_Aguardem instruções da supervisão. Bom trabalho! 🚀_`;
+  // O aviso de EPI/ISPS Code vai no FIM da mensagem do chat (não na descrição
+  // do grupo, que fica só com a info da operação).
+  const message = `${description}\n\n${BOARDING_SAFETY_REMINDER}\n\n_Aguardem instruções da supervisão. Bom trabalho! 🚀_`;
   return { description, message };
 }
 

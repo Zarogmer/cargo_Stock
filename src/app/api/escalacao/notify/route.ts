@@ -7,6 +7,7 @@ import {
   sendWhatsappTextToGroup,
 } from "@/lib/services/evolution-api";
 import { getTeamGroupJid } from "@/lib/services/team-groups";
+import { BOARDING_SAFETY_REMINDER } from "@/lib/services/whatsapp-copy";
 
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
@@ -188,18 +189,21 @@ export async function POST(request: NextRequest) {
   // Embarque: nome do navio NÃO entra na mensagem do grupo (a pedido do RH,
   // pra não vazar info do cliente). Costado continua com o nome porque o grupo
   // é do navio e a mensagem precisa identificar a operação no histórico.
-  const groupMessage = isPreview && isCostado
+  let groupMessage = isPreview && isCostado
     ? `🚢 *${shipName}*\n🧹 Operação de limpeza no costado em breve — aguardem instruções.`
     : isCostado
       ? `🚢 *${shipName}*\n📅 Escala da ${shiftLabel} — ${dateLabel}\n\n${namesList}`
       : `${embarqueHeader()}\n\n${namesList}`;
+  // Aviso de EPI/ISPS Code no fim — só na escalação real (a prévia ainda não
+  // pede que ninguém se prepare pra ir).
+  if (!isPreview) groupMessage += `\n\n${BOARDING_SAFETY_REMINDER}`;
 
   function dmFor(emp: { id: number; name: string }): string {
     if (isPreview && isCostado) {
       return `Olá, ${emp.name}!\n\nAviso prévio: o navio *${shipName}* terá limpeza no costado. Aguarde a escalação com data e turno.\n\n~Equipe Cargo Ships`;
     }
     if (isCostado) {
-      return `Olá, ${emp.name}!\n\nVocê foi escalado(a) para o navio *${shipName}* — turno da ${shiftLabel} do dia ${dateLabel}.\n\n~Equipe Cargo Ships`;
+      return `Olá, ${emp.name}!\n\nVocê foi escalado(a) para o navio *${shipName}* — turno da ${shiftLabel} do dia ${dateLabel}.\n\n${BOARDING_SAFETY_REMINDER}\n\n~Equipe Cargo Ships`;
     }
     // Embarque: greeting + "Você foi escalado(a) na Equipe N." + signature.
     // Card #36 pediu "apenas essa frase" mas o #40 reverteu — usuario achou
@@ -210,7 +214,7 @@ export async function POST(request: NextRequest) {
       : assignedTeam === "EQUIPE_2"
         ? "Você foi escalado(a) na Equipe 2."
         : "Você foi escalado(a) para o embarque.";
-    return `Olá, ${emp.name}!\n\n${teamLine}\n\n~Equipe Cargo Ships`;
+    return `Olá, ${emp.name}!\n\n${teamLine}\n\n${BOARDING_SAFETY_REMINDER}\n\n~Equipe Cargo Ships`;
   }
 
   const targets: NotifyTargets = body.targets || "BOTH";
