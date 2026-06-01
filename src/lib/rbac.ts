@@ -4,6 +4,7 @@ import type { Role } from "@/types/database";
 export type Module =
   | "DASHBOARD"
   | "EMBARQUE"
+  | "ALMOXARIFADO"
   | "ESTOQUE"
   | "EPI"
   | "FERRAMENTAS"
@@ -32,6 +33,7 @@ export type Permission =
 const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   GESTOR: {
     DASHBOARD: ["view"],
+    ALMOXARIFADO: ["view"],
     EMBARQUE: ["view", "embarcar"],
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
@@ -44,6 +46,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   },
   EXECUTIVO: {
     DASHBOARD: ["view"],
+    ALMOXARIFADO: ["view"],
     EMBARQUE: ["view"],
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
@@ -60,6 +63,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   },
   MANUTENCAO: {
     DASHBOARD: ["view"],
+    ALMOXARIFADO: ["view"],
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
@@ -69,6 +73,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   },
   FINANCEIRO: {
     DASHBOARD: ["view"],
+    ALMOXARIFADO: ["view"],
     EMBARQUE: ["view"],
     ESTOQUE: ["view"],
     EPI: ["view"],
@@ -82,7 +87,13 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   },
   RH: {
     DASHBOARD: ["view"],
+    ALMOXARIFADO: ["view"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
+    // Almoxarifado unificado: RH passa a gerenciar também Estoque, Ferramentas
+    // e Maquinário (antes só via EPI/Uniforme).
+    ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
+    FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
+    MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view"],
     MENSAGENS: ["view", "create"],
@@ -90,6 +101,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   },
   TECNOLOGIA: {
     DASHBOARD: ["view"],
+    ALMOXARIFADO: ["view"],
     EMBARQUE: ["view", "embarcar"],
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
@@ -160,7 +172,20 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Estoque para Embarque", href: "/escalacao/estoque" },
     ],
   },
-  { label: "Estoque", href: "/estoque", icon: "estoque", module: "ESTOQUE" },
+  {
+    label: "Almoxarifado",
+    href: "/almoxarifado",
+    icon: "estoque",
+    module: "ALMOXARIFADO",
+    children: [
+      { label: "Estoque", href: "/almoxarifado?tab=estoque" },
+      { label: "EPI", href: "/almoxarifado?tab=epi" },
+      { label: "Uniforme", href: "/almoxarifado?tab=uniforme" },
+      { label: "Ferramentas", href: "/almoxarifado?tab=ferramentas" },
+      { label: "Maquinário", href: "/almoxarifado?tab=maquinario" },
+      { label: "Histórico", href: "/almoxarifado?tab=historico" },
+    ],
+  },
   {
     label: "Rh",
     href: "/colaboradores",
@@ -168,9 +193,6 @@ export const NAV_ITEMS: NavItem[] = [
     module: "EPI",
     children: [
       { label: "Colaboradores", href: "/colaboradores?tab=colaboradores" },
-      { label: "EPI", href: "/colaboradores?tab=epi" },
-      { label: "Uniforme", href: "/colaboradores?tab=uniforme" },
-      { label: "Histórico", href: "/colaboradores?tab=historico" },
       {
         label: "Documentos",
         href: "/colaboradores?tab=documentos",
@@ -180,17 +202,6 @@ export const NAV_ITEMS: NavItem[] = [
           { label: "Aviso Médico", href: "/colaboradores?tab=documentos&doc=aviso-medico" },
         ],
       },
-    ],
-  },
-  {
-    label: "Equipamentos",
-    href: "/equipamentos",
-    icon: "equipamentos",
-    module: "FERRAMENTAS",
-    children: [
-      { label: "Ferramentas", href: "/equipamentos?tab=ferramentas" },
-      { label: "Maquinário", href: "/equipamentos?tab=maquinario" },
-      { label: "Histórico", href: "/equipamentos?tab=historico" },
     ],
   },
   {

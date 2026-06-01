@@ -341,10 +341,10 @@ export default function DashboardPage() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard label="Itens no Estoque" value={stats.totalStock} icon="🛒" tone="blue" href="/estoque" />
+        <StatCard label="Itens no Estoque" value={stats.totalStock} icon="🛒" tone="blue" href="/almoxarifado?tab=estoque" />
         <StatCard label="RH" value={stats.totalEmployees} icon="👷" tone="emerald" href="/colaboradores" />
-        <StatCard label="Equipamentos" value={stats.totalTools} icon="🔧" tone="amber" href="/equipamentos" />
-        <StatCard label="EPIs" value={stats.totalEpis} icon="⛑️" tone="violet" href="/colaboradores?tab=epi" />
+        <StatCard label="Equipamentos" value={stats.totalTools} icon="🔧" tone="amber" href="/almoxarifado?tab=ferramentas" />
+        <StatCard label="EPIs" value={stats.totalEpis} icon="⛑️" tone="violet" href="/almoxarifado?tab=epi" />
       </div>
 
       {/* Training renewal alerts (ASO + NRs + Meio Ambiente) */}

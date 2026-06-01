@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
@@ -21,6 +21,16 @@ export default function ColaboradoresPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") || "colaboradores";
+
+  // EPI/Uniforme/Histórico migraram para o Almoxarifado — redireciona quem
+  // chegar por um link/bookmark antigo de /colaboradores?tab=...
+  const router = useRouter();
+  const tabParam = searchParams.get("tab");
+  useEffect(() => {
+    if (tabParam === "epi" || tabParam === "uniforme" || tabParam === "historico") {
+      router.replace(`/almoxarifado?tab=${tabParam}`);
+    }
+  }, [tabParam, router]);
 
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, "EPI", "create");
@@ -492,57 +502,6 @@ export default function ColaboradoresPage() {
           </div>
         );
       })(),
-    },
-    {
-      key: "epi", label: "EPI",
-      content: (
-        <DataTable columns={epiColumns} data={epis.filter((e) => matchSearch(e.name, epiSearch))}
-          loading={loading} keyExtractor={(e) => e.id} searchValue={epiSearch} onSearchChange={setEpiSearch}
-          searchPlaceholder="Buscar EPI..."
-          actions={canCreate ? <Button size="sm" onClick={() => { setEditEpi(null); setEpiForm(true); }}><PlusIcon className="w-4 h-4" />Adicionar</Button> : undefined}
-        />
-      ),
-    },
-    {
-      key: "uniforme", label: "Uniforme",
-      content: (
-        <DataTable columns={uniColumns} data={uniforms.filter((u) => matchSearch(u.name, uniSearch))}
-          loading={loading} keyExtractor={(u) => u.id} searchValue={uniSearch} onSearchChange={setUniSearch}
-          searchPlaceholder="Buscar uniforme..."
-          actions={canCreate ? <Button size="sm" onClick={() => { setEditUni(null); setUniForm(true); }}><PlusIcon className="w-4 h-4" />Adicionar</Button> : undefined}
-        />
-      ),
-    },
-    {
-      key: "historico", label: "Histórico",
-      content: (
-        <div className="space-y-3">
-          <div className="flex gap-2">
-            {["Todos", "EPI", "Uniforme"].map((t) => (
-              <button key={t} onClick={() => setHistType(t)}
-                className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${histType === t ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}>
-                {t}
-              </button>
-            ))}
-          </div>
-          <DataTable
-            columns={[
-              { key: "source", label: "Tipo", render: (h: Record<string, unknown>) => <span className={`text-xs px-2 py-0.5 rounded-full ${h.source === "EPI" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>{h.source as string}</span> },
-              { key: "item_name", label: "Item", render: (h: Record<string, unknown>) => <span className="font-medium">{h.item_name as string}</span> },
-              { key: "employee_name", label: "Colaborador", render: (h: Record<string, unknown>) => h.employee_name as string },
-              { key: "movement_type", label: "Mov.", render: (h: Record<string, unknown>) => MOVEMENT_TYPE_LABELS[h.movement_type as string] || h.movement_type as string },
-              { key: "quantity", label: "Qtd", hideOnMobile: true, render: (h: Record<string, unknown>) => String(h.quantity) },
-              { key: "created_at", label: "Data", hideOnMobile: true, render: (h: Record<string, unknown>) => <span className="text-xs text-text-light">{formatDateTime(h.created_at as string)}</span> },
-            ]}
-            data={filteredHistory}
-            loading={loading}
-            keyExtractor={(h) => `${h.source}-${h.id}`}
-            searchValue={histSearch}
-            onSearchChange={setHistSearch}
-            searchPlaceholder="Buscar por colaborador ou item..."
-          />
-        </div>
-      ),
     },
     {
       key: "documentos", label: "Documentos",
