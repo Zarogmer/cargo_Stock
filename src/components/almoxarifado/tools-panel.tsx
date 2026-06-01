@@ -139,6 +139,8 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
     <>
       <DataTable columns={columns} data={filtered} loading={loading}
         keyExtractor={(t) => t.id} searchValue={search} onSearchChange={setSearch}
+        mobileCards
+        onRowClick={canEdit ? (t) => { setEditTool(t); setShowForm(true); } : undefined}
         searchPlaceholder={`Buscar ${singular.toLowerCase()}...`}
         actions={canCreate ? <Button size="sm" onClick={() => { setEditTool(null); setShowForm(true); }}><PlusIcon className="w-4 h-4" />Adicionar</Button> : undefined}
       />

@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDate, formatDateTime, matchSearch } from "@/lib/utils";
+import { formatDate, formatDateTime, matchSearch, parseDecimalBR, formatQty } from "@/lib/utils";
 import type { StockItem } from "@/types/database";
 
 const STOCK_CATEGORIES = [
@@ -139,7 +139,7 @@ export function EstoquePanel() {
 
     await db
       .from("stock_items")
-      .update({ quantity: baixaItem.quantity - qty, updated_by: actor } as Record<string, unknown>)
+      .update({ quantity: Math.round((baixaItem.quantity - qty) * 1000) / 1000, updated_by: actor } as Record<string, unknown>)
       .eq("id", baixaItem.id);
 
     setSaving(false);
@@ -173,7 +173,7 @@ export function EstoquePanel() {
       key: "default_quantity",
       label: "Padrão",
       render: (i: StockItem) => (
-        <span className="text-text-light">{i.default_quantity || "—"}</span>
+        <span className="text-text-light">{i.default_quantity ? formatQty(i.default_quantity) : "—"}</span>
       ),
     },
     {
@@ -185,7 +185,7 @@ export function EstoquePanel() {
         const isEmpty = i.quantity <= 0;
         return (
           <span className={`font-semibold ${isEmpty ? "text-danger" : isLow ? "text-amber-500" : "text-success"}`}>
-            {i.quantity}
+            {formatQty(i.quantity)}
           </span>
         );
       },
@@ -293,6 +293,8 @@ export function EstoquePanel() {
         loading={loading}
         keyExtractor={(i) => i.id}
         emptyMessage="Nenhum item encontrado"
+        mobileCards
+        onRowClick={canEdit ? (i) => { setEditItem(i); setShowForm(true); } : undefined}
         searchValue={search}
         onSearchChange={setSearch}
         searchPlaceholder="Buscar por nome ou local..."
@@ -343,8 +345,9 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
   const [name, setName] = useState("");
   const [category, setCategory] = useState("SUPRIMENTOS");
   const [location, setLocation] = useState("");
-  const [quantity, setQuantity] = useState(0);
-  const [defaultQuantity, setDefaultQuantity] = useState(0);
+  // Strings para aceitar vírgula (ex.: "1,5"); convertidas no submit.
+  const [quantity, setQuantity] = useState("");
+  const [defaultQuantity, setDefaultQuantity] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
 
   useEffect(() => {
@@ -352,15 +355,15 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
       setName(item.name);
       setCategory(item.category);
       setLocation(item.location || "");
-      setQuantity(item.quantity);
-      setDefaultQuantity(item.default_quantity || 0);
+      setQuantity(formatQty(item.quantity));
+      setDefaultQuantity(item.default_quantity ? formatQty(item.default_quantity) : "");
       setExpiryDate(item.expiry_date || "");
     } else {
       setName("");
       setCategory("SUPRIMENTOS");
       setLocation("");
-      setQuantity(0);
-      setDefaultQuantity(0);
+      setQuantity("");
+      setDefaultQuantity("");
       setExpiryDate("");
     }
   }, [item, open]);
@@ -371,8 +374,8 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
       name,
       category: category as StockItem["category"],
       location: location || null,
-      quantity,
-      default_quantity: defaultQuantity,
+      quantity: parseDecimalBR(quantity),
+      default_quantity: parseDecimalBR(defaultQuantity),
       expiry_date: expiryDate || null,
       min_quantity: 0,
     });
@@ -402,11 +405,11 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-text mb-1">Qtd Padrão</label>
-            <input type="number" value={defaultQuantity} onChange={(e) => setDefaultQuantity(Number(e.target.value))} min={0} placeholder="Ex: 10" className={inputCls} />
+            <input type="text" inputMode="decimal" value={defaultQuantity} onChange={(e) => setDefaultQuantity(e.target.value)} placeholder="Ex: 10 ou 1,5" className={inputCls} />
           </div>
           <div>
             <label className="block text-sm font-medium text-text mb-1">Qtd Atual</label>
-            <input type="number" value={quantity} onChange={(e) => setQuantity(Number(e.target.value))} min={0} className={inputCls} />
+            <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 1,5" className={inputCls} />
           </div>
           <div>
             <label className="block text-sm font-medium text-text mb-1">Validade</label>
@@ -429,14 +432,14 @@ function BaixaModal({ open, onClose, onConfirm, item, saving }: {
   item: StockItem | null;
   saving: boolean;
 }) {
-  const [qty, setQty] = useState(1);
+  const [qty, setQty] = useState("");
   const [notes, setNotes] = useState("");
 
-  useEffect(() => { setQty(1); setNotes(""); }, [open]);
+  useEffect(() => { setQty(""); setNotes(""); }, [open]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    onConfirm(qty, notes);
+    onConfirm(parseDecimalBR(qty), notes);
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
@@ -445,11 +448,11 @@ function BaixaModal({ open, onClose, onConfirm, item, saving }: {
     <Modal open={open} onClose={onClose} title="Baixar Estoque">
       <form onSubmit={handleSubmit} className="space-y-4">
         <p className="text-sm text-text-light">
-          Item: <strong>{item?.name}</strong> (disponível: {item?.quantity})
+          Item: <strong>{item?.name}</strong> (disponível: {formatQty(item?.quantity)})
         </p>
         <div>
           <label className="block text-sm font-medium text-text mb-1">Quantidade *</label>
-          <input type="number" value={qty} onChange={(e) => setQty(Number(e.target.value))} min={1} max={item?.quantity || 1} required className={inputCls} />
+          <input type="text" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="Ex: 1,5" required className={inputCls} />
         </div>
         <div>
           <label className="block text-sm font-medium text-text mb-1">Observações</label>

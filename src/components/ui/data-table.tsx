@@ -21,6 +21,10 @@ interface DataTableProps<T> {
   onRowClick?: (item: T) => void;
   actions?: React.ReactNode;
   keyExtractor: (item: T) => string | number;
+  // Quando true, abaixo de `md` a tabela vira uma lista de cards empilhados
+  // (título + pares rótulo:valor + ações), bem mais legível no celular.
+  // Opt-in pra não alterar telas que dependem do layout de tabela.
+  mobileCards?: boolean;
 }
 
 export function DataTable<T>({
@@ -34,7 +38,15 @@ export function DataTable<T>({
   onRowClick,
   actions,
   keyExtractor,
+  mobileCards = false,
 }: DataTableProps<T>) {
+  // Divide as colunas para o layout de cards: a 1ª vira título, a coluna de
+  // ações (key "actions" ou rótulo vazio) vai pro rodapé, o resto são pares.
+  const actionsCol = columns.find((c) => c.key === "actions" || c.label.trim() === "");
+  const titleCol = columns.find((c) => c !== actionsCol) ?? columns[0];
+  const bodyCols = columns.filter((c) => c !== actionsCol && c !== titleCol);
+  const cell = (col: Column<T>, item: T) =>
+    col.render ? col.render(item) : String((item as Record<string, unknown>)[col.key] ?? "");
   return (
     <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
       {/* Toolbar */}
@@ -58,8 +70,42 @@ export function DataTable<T>({
         </div>
       )}
 
+      {/* Mobile cards (opt-in via `mobileCards`) */}
+      {mobileCards && (
+        <div className="md:hidden divide-y divide-border">
+          {loading ? (
+            <div className="px-4 py-12 text-center text-text-light text-sm">Carregando...</div>
+          ) : data.length === 0 ? (
+            <div className="px-4 py-12 text-center text-text-light text-sm">{emptyMessage}</div>
+          ) : (
+            data.map((item) => (
+              <div
+                key={keyExtractor(item)}
+                onClick={() => onRowClick?.(item)}
+                className={`p-4 ${onRowClick ? "cursor-pointer active:bg-gray-50" : ""}`}
+              >
+                <div className="font-medium text-text">{cell(titleCol, item)}</div>
+                {bodyCols.length > 0 && (
+                  <dl className="mt-2 space-y-1">
+                    {bodyCols.map((col) => (
+                      <div key={col.key} className="flex items-baseline justify-between gap-3 text-xs">
+                        <dt className="text-text-light shrink-0">{col.label}</dt>
+                        <dd className="text-right text-text min-w-0 break-words">{cell(col, item)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+                {actionsCol && (
+                  <div className="mt-3 flex justify-end">{actionsCol.render?.(item)}</div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
       {/* Table */}
-      <div className="overflow-x-auto">
+      <div className={`overflow-x-auto ${mobileCards ? "hidden md:block" : ""}`}>
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-border">
             <tr>

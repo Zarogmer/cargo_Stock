@@ -76,8 +76,8 @@ export function HistoricoPanel() {
   });
 
   const columns = [
-    { key: "source", label: "Tipo", render: (h: HistRow) => <span className={`text-xs px-2 py-0.5 rounded-full ${SOURCE_COLORS[h.source]}`}>{h.source}</span> },
     { key: "item_name", label: "Item", render: (h: HistRow) => <span className="font-medium">{h.item_name}</span> },
+    { key: "source", label: "Tipo", render: (h: HistRow) => <span className={`text-xs px-2 py-0.5 rounded-full ${SOURCE_COLORS[h.source]}`}>{h.source}</span> },
     { key: "employee_name", label: "Responsável", render: (h: HistRow) => h.employee_name || "—" },
     { key: "movement_type", label: "Mov.", render: (h: HistRow) => MOVEMENT_TYPE_LABELS[h.movement_type] || h.movement_type },
     { key: "quantity", label: "Qtd", hideOnMobile: true, render: (h: HistRow) => (h.quantity != null ? String(h.quantity) : "—") },
@@ -99,6 +99,7 @@ export function HistoricoPanel() {
         data={filtered}
         loading={loading}
         keyExtractor={(h) => `${h.source}-${h.id}`}
+        mobileCards
         searchValue={search}
         onSearchChange={setSearch}
         searchPlaceholder="Buscar por responsável ou item..."

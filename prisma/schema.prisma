@@ -86,8 +86,9 @@ model StockItem {
   name             String
   category         StockCategory   @default(OUTROS)
   location         String?
-  quantity         Int             @default(0)
-  default_quantity Int             @default(0)
+  // Float (não Int) pra aceitar quantidades quebradas: 1,5 kg, 1,67, etc.
+  quantity         Float           @default(0)
+  default_quantity Float           @default(0)
   team             String?
   expiry_date      DateTime?       @db.Date
   min_quantity     Int             @default(0)
@@ -103,7 +104,7 @@ model StockMovement {
   id            Int          @id @default(autoincrement())
   stock_item_id Int
   movement_type MovementType
-  quantity      Int
+  quantity      Float
   movement_date DateTime     @default(now()) @db.Date
   notes         String?
   created_by    String

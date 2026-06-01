@@ -104,6 +104,8 @@ export function SimpleInventoryPanel({ kind }: { kind: "EPI" | "UNIFORME" }) {
     <>
       <DataTable columns={columns} data={items.filter((i) => matchSearch(i.name, search))}
         loading={loading} keyExtractor={(i) => i.id} searchValue={search} onSearchChange={setSearch}
+        mobileCards
+        onRowClick={canEdit ? (i) => { setEdit(i); setForm(true); } : undefined}
         searchPlaceholder={cfg.searchPlaceholder}
         actions={canCreate ? <Button size="sm" onClick={() => { setEdit(null); setForm(true); }}><PlusIcon className="w-4 h-4" />Adicionar</Button> : undefined}
       />

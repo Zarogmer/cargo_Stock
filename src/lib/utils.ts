@@ -23,6 +23,31 @@ export function formatCurrency(value: number): string {
   });
 }
 
+// Converte um texto digitado em pt-BR (vírgula como separador decimal) para
+// número. Ex.: "1,5" -> 1.5, "1,500" -> 1.5, "1.234,5" -> 1234.5, "2" -> 2.
+// Se não houver vírgula, assume que o ponto (se houver) é o separador decimal
+// ("1.5" -> 1.5). Vazio/ inválido -> 0.
+export function parseDecimalBR(value: string | number | null | undefined): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (value == null) return 0;
+  let s = String(value).trim();
+  if (s === "") return 0;
+  if (s.includes(",")) {
+    // pt-BR: pontos são milhar, vírgula é decimal.
+    s = s.replace(/\./g, "").replace(",", ".");
+  }
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+// Formata uma quantidade numérica para exibição em pt-BR, sem zeros à direita.
+// Ex.: 1.5 -> "1,5", 3 -> "3", 1.67 -> "1,67", 1500 -> "1.500".
+export function formatQty(value: number | string | null | undefined): string {
+  const n = typeof value === "number" ? value : parseDecimalBR(value);
+  if (!Number.isFinite(n)) return "0";
+  return n.toLocaleString("pt-BR", { maximumFractionDigits: 3 });
+}
+
 export function normalize(str: string): string {
   return str
     .normalize("NFD")
