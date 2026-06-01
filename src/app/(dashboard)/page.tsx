@@ -19,8 +19,11 @@ interface StockChartItem {
 interface DashboardStats {
   totalStock: number;
   totalEmployees: number;
-  totalTools: number;
+  totalFerramentas: number;
+  totalMaquinario: number;
   totalEpis: number;
+  totalUniforms: number;
+  totalConversations: number;
 }
 
 interface RecentMovement {
@@ -66,7 +69,7 @@ export default function DashboardPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
 
-  const [stats, setStats] = useState<DashboardStats>({ totalStock: 0, totalEmployees: 0, totalTools: 0, totalEpis: 0 });
+  const [stats, setStats] = useState<DashboardStats>({ totalStock: 0, totalEmployees: 0, totalFerramentas: 0, totalMaquinario: 0, totalEpis: 0, totalUniforms: 0, totalConversations: 0 });
   const [movements, setMovements] = useState<RecentMovement[]>([]);
   const [dollar, setDollar] = useState<DollarQuote | null>(null);
   const [stockItems, setStockItems] = useState<StockChartItem[]>([]);
@@ -79,19 +82,31 @@ export default function DashboardPage() {
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     try {
-      const [stockRes, stockFullRes, employeesRes, toolsRes, episRes] = await Promise.all([
+      const [stockRes, stockFullRes, employeesRes, ferramentasRes, maquinarioRes, episRes, uniformsRes, convData] = await Promise.all([
         db.from("stock_items").select("id", { count: "exact", head: true }),
         db.from("stock_items").select("name, quantity, default_quantity, category, team"),
         db.from("employees").select("id", { count: "exact", head: true }),
-        db.from("tools").select("id", { count: "exact", head: true }),
+        db.from("tools").select("id", { count: "exact", head: true }).eq("asset_type", "FERRAMENTA"),
+        db.from("tools").select("id", { count: "exact", head: true }).eq("asset_type", "MAQUINARIO"),
         db.from("epis").select("id", { count: "exact", head: true }),
+        db.from("uniforms").select("id", { count: "exact", head: true }),
+        // Conversas tem endpoint próprio (não passa pelo /api/db). Best-effort:
+        // perfis sem acesso recebem 403, então caímos pra lista vazia sem
+        // quebrar o carregamento do dashboard.
+        fetch("/api/whatsapp/conversations")
+          .then((r) => (r.ok ? r.json() : { conversations: [] }))
+          .catch(() => ({ conversations: [] })),
       ]);
 
+      const conversations = (convData as { conversations?: unknown[] } | null)?.conversations;
       setStats({
         totalStock: stockRes.count || 0,
         totalEmployees: employeesRes.count || 0,
-        totalTools: toolsRes.count || 0,
+        totalFerramentas: ferramentasRes.count || 0,
+        totalMaquinario: maquinarioRes.count || 0,
         totalEpis: episRes.count || 0,
+        totalUniforms: uniformsRes.count || 0,
+        totalConversations: Array.isArray(conversations) ? conversations.length : 0,
       });
 
       setStockItems((stockFullRes.data || []) as StockChartItem[]);
@@ -343,8 +358,11 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard label="Itens no Estoque" value={stats.totalStock} icon="🛒" tone="blue" href="/almoxarifado?tab=estoque" />
         <StatCard label="RH" value={stats.totalEmployees} icon="👷" tone="emerald" href="/colaboradores" />
-        <StatCard label="Equipamentos" value={stats.totalTools} icon="🔧" tone="amber" href="/almoxarifado?tab=ferramentas" />
+        <StatCard label="Ferramentas" value={stats.totalFerramentas} icon="🔧" tone="amber" href="/almoxarifado?tab=ferramentas" />
+        <StatCard label="Maquinário" value={stats.totalMaquinario} icon="⚙️" tone="teal" href="/almoxarifado?tab=maquinario" />
         <StatCard label="EPIs" value={stats.totalEpis} icon="⛑️" tone="violet" href="/almoxarifado?tab=epi" />
+        <StatCard label="Uniformes" value={stats.totalUniforms} icon="👕" tone="rose" href="/almoxarifado?tab=uniforme" />
+        <StatCard label="Conversas" value={stats.totalConversations} icon="💬" tone="cyan" href="/conversas" />
       </div>
 
       {/* Training renewal alerts (ASO + NRs + Meio Ambiente) */}
@@ -599,13 +617,16 @@ export default function DashboardPage() {
 
 // --- Helper Components ---
 
-type StatTone = "blue" | "emerald" | "amber" | "violet";
+type StatTone = "blue" | "emerald" | "amber" | "violet" | "rose" | "teal" | "cyan";
 
 const STAT_TONE: Record<StatTone, { chip: string; accent: string }> = {
   blue:    { chip: "bg-blue-50 text-blue-600",       accent: "bg-blue-500" },
   emerald: { chip: "bg-emerald-50 text-emerald-600", accent: "bg-emerald-500" },
   amber:   { chip: "bg-amber-50 text-amber-600",     accent: "bg-amber-500" },
   violet:  { chip: "bg-violet-50 text-violet-600",   accent: "bg-violet-500" },
+  rose:    { chip: "bg-rose-50 text-rose-600",       accent: "bg-rose-500" },
+  teal:    { chip: "bg-teal-50 text-teal-600",       accent: "bg-teal-500" },
+  cyan:    { chip: "bg-cyan-50 text-cyan-600",       accent: "bg-cyan-500" },
 };
 
 function StatCard({
