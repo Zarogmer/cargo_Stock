@@ -11,16 +11,18 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { TOOL_STATUS_LABELS, buildCodeMap } from "@/lib/utils";
-import type { Tool, ToolStatus, AssetType } from "@/types/database";
+import type { Tool, ToolStatus, AssetType, ToolMovementType } from "@/types/database";
 
-// Painel de Maquinário (tabela `tools`, asset_type=MAQUINARIO) — inventário
-// simples: nome, código, status de condição (Disponível / Manutenção) e obs.
-//
-// O controle de empréstimo por equipe (entregar/devolver, antes via botões
-// E1/E2/Man) foi removido daqui a pedido — fica igual às outras abas do
-// Almoxarifado e o empréstimo é tratado em outro lugar. O status só guarda a
-// condição da máquina; os estados de equipe (EQUIPE_1/2) não são mais oferecidos.
-const CONDITION_STATUSES: ToolStatus[] = ["DISPONIVEL", "MANUTENCAO"];
+// Painel de Maquinário (tabela `tools`, asset_type=MAQUINARIO). Mesmo conjunto
+// de ações do EPI/Uniforme — Entregar (📤) / Devolver (📥) / Editar / Excluir —
+// mas a entrega é feita para uma EQUIPE (não um colaborador): a máquina vai pra
+// Equipe 1 ou 2 e a devolução volta pra Disponível. Cada ação grava em
+// tool_movements (histórico no painel Histórico).
+type Team = "EQUIPE_1" | "EQUIPE_2";
+const TEAMS: { value: Team; label: string }[] = [
+  { value: "EQUIPE_1", label: "Equipe 1" },
+  { value: "EQUIPE_2", label: "Equipe 2" },
+];
 
 export function ToolsPanel({ assetType }: { assetType: AssetType }) {
   const { profile } = useAuth();
@@ -40,6 +42,7 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
   const [showForm, setShowForm] = useState(false);
   const [editTool, setEditTool] = useState<Tool | null>(null);
   const [deleteTool, setDeleteTool] = useState<Tool | null>(null);
+  const [action, setAction] = useState<{ tool: Tool; mode: "ENTREGAR" | "DEVOLVER" } | null>(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -67,6 +70,34 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
     setSaving(false); setShowForm(false); setEditTool(null); loadAll();
   }
 
+  // Entrega para equipe (status -> EQUIPE_X) ou devolução (status -> DISPONIVEL).
+  async function handleAction(team: Team | null, notes: string) {
+    if (!action) return;
+    const { tool, mode } = action;
+    const isEntrega = mode === "ENTREGAR";
+    if (isEntrega && !team) return;
+    setSaving(true);
+    const actor = profile?.full_name || "Sistema";
+
+    const newStatus: ToolStatus = isEntrega ? team! : "DISPONIVEL";
+    const movementType: ToolMovementType = isEntrega ? team! : "DEVOLUCAO";
+    const teamLabel = TEAMS.find((t) => t.value === team)?.label || "";
+
+    await db.from("tool_movements").insert({
+      tool_id: tool.id,
+      employee_name: isEntrega ? teamLabel : actor,
+      movement_type: movementType,
+      movement_date: new Date().toISOString().split("T")[0],
+      notes, created_by: actor,
+    } as Record<string, unknown>);
+
+    const toolUpdate: Record<string, unknown> = { status: newStatus, updated_by: actor };
+    if (notes) toolUpdate.notes = notes;
+    await db.from("tools").update(toolUpdate).eq("id", tool.id);
+
+    setSaving(false); setAction(null); loadAll();
+  }
+
   // Código derivado do nome (prefixo de iniciais + sequência), por item.
   const codeMap = useMemo(() => buildCodeMap(tools, (t) => t.id, (t) => t.name), [tools]);
 
@@ -92,9 +123,11 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
       ) : <span className="text-text-light">—</span>,
     },
     {
-      key: "actions", label: "", className: "w-24",
+      key: "actions", label: "", className: "w-40",
       render: (t: Tool) => (
         <div className="flex items-center gap-1">
+          <button onClick={(e) => { e.stopPropagation(); setAction({ tool: t, mode: "ENTREGAR" }); }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded text-xs" title="Entregar">📤</button>
+          <button onClick={(e) => { e.stopPropagation(); setAction({ tool: t, mode: "DEVOLVER" }); }} className="p-1.5 text-green-600 hover:bg-green-50 rounded text-xs" title="Devolver">📥</button>
           {canEdit && <button onClick={(e) => { e.stopPropagation(); setEditTool(t); setShowForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded" title="Editar"><EditIcon /></button>}
           {canDelete && <button onClick={(e) => { e.stopPropagation(); setDeleteTool(t); }} className="p-1.5 text-danger hover:bg-red-50 rounded" title="Excluir"><TrashIcon /></button>}
         </div>
@@ -122,6 +155,9 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
       <ConfirmDialog open={!!deleteTool} onClose={() => setDeleteTool(null)}
         onConfirm={async () => { setSaving(true); await db.from("tools").delete().eq("id", deleteTool!.id); setSaving(false); setDeleteTool(null); loadAll(); }}
         title={`Excluir ${singular}`} message={`Excluir "${deleteTool?.name}"?`} loading={saving} />
+
+      <TeamActionModal open={!!action} mode={action?.mode || "ENTREGAR"} toolName={action?.tool.name || ""}
+        onClose={() => setAction(null)} onConfirm={handleAction} saving={saving} />
     </>
   );
 }
@@ -145,11 +181,40 @@ function ToolFormModal({ open, onClose, onSave, item, singular, saving }: {
         <div>
           <label className="block text-sm font-medium mb-1">Status</label>
           <select value={status} onChange={(e) => setStatus(e.target.value as ToolStatus)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none">
-            {CONDITION_STATUSES.map((k) => <option key={k} value={k}>{TOOL_STATUS_LABELS[k]}</option>)}
+            {Object.entries(TOOL_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </div>
         <div><label className="block text-sm font-medium mb-1">Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" /></div>
         <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button></div>
+      </form>
+    </Modal>
+  );
+}
+
+// Modal de Entregar/Devolver. Na entrega, escolhe a equipe (não há colaborador).
+function TeamActionModal({ open, mode, toolName, onClose, onConfirm, saving }: {
+  open: boolean; mode: "ENTREGAR" | "DEVOLVER"; toolName: string;
+  onClose: () => void; onConfirm: (team: Team | null, notes: string) => void; saving: boolean;
+}) {
+  const [team, setTeam] = useState<Team>("EQUIPE_1");
+  const [notes, setNotes] = useState("");
+  const isEntrega = mode === "ENTREGAR";
+
+  useEffect(() => { setTeam("EQUIPE_1"); setNotes(""); }, [open]);
+
+  return (
+    <Modal open={open} onClose={onClose} title={`${isEntrega ? "Entregar" : "Devolver"}: ${toolName}`}>
+      <form onSubmit={(e) => { e.preventDefault(); onConfirm(isEntrega ? team : null, notes); }} className="space-y-4">
+        {isEntrega && (
+          <div>
+            <label className="block text-sm font-medium mb-1">Equipe *</label>
+            <select value={team} onChange={(e) => setTeam(e.target.value as Team)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none">
+              {TEAMS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+          </div>
+        )}
+        <div><label className="block text-sm font-medium mb-1">Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Opcional..." className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" /></div>
+        <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Registrando..." : "Confirmar"}</Button></div>
       </form>
     </Modal>
   );
