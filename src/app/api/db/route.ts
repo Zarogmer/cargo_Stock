@@ -33,6 +33,8 @@ const TABLE_MAP: Record<string, string> = {
   profiles: "user",
   // WhatsApp
   whatsapp_messages: "whatsappMessage",
+  // Marketing
+  marketing_clients: "marketingClient",
 };
 
 interface QuerySpec {
