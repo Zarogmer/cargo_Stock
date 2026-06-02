@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Modal } from "@/components/ui/modal";
@@ -82,22 +82,43 @@ function displayName(c: Conversation): string {
   return formatPhone(jidToNumber(c.remote_jid)) || c.remote_jid;
 }
 
+// Tudo no fuso do Brasil — o usuário raciocina em horário de Brasília,
+// independente do fuso do navegador/servidor.
+const BR_TZ = "America/Sao_Paulo";
+
+// "YYYY-MM-DD" do dia no fuso BR — usado pra agrupar mensagens por dia.
+function brDayKey(ms: string | number): string {
+  return new Date(Number(ms)).toLocaleDateString("en-CA", { timeZone: BR_TZ });
+}
+
+// Rótulo do separador de dia, estilo WhatsApp: "Hoje", "Ontem" ou data por extenso.
+function dayLabel(ms: string | number): string {
+  const key = brDayKey(ms);
+  if (key === brDayKey(Date.now())) return "Hoje";
+  if (key === brDayKey(Date.now() - 86400000)) return "Ontem";
+  return new Date(Number(ms)).toLocaleDateString("pt-BR", {
+    timeZone: BR_TZ, day: "2-digit", month: "long", year: "numeric",
+  });
+}
+
+// Hora (HH:mm) no fuso BR — usada em cada bolha de mensagem.
+function formatMsgTime(ms: string | number): string {
+  return new Date(Number(ms)).toLocaleTimeString("pt-BR", {
+    timeZone: BR_TZ, hour: "2-digit", minute: "2-digit",
+  });
+}
+
+// Rótulo curto pra lista de conversas (hora se hoje, "Ontem", senão data).
 function formatTime(ms: string | number): string {
-  const date = new Date(Number(ms));
-  const now = new Date();
-  const sameDay = date.toDateString() === now.toDateString();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday = date.toDateString() === yesterday.toDateString();
-  if (sameDay) {
-    return date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-  }
-  if (isYesterday) return "Ontem";
-  return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+  const key = brDayKey(ms);
+  if (key === brDayKey(Date.now())) return formatMsgTime(ms);
+  if (key === brDayKey(Date.now() - 86400000)) return "Ontem";
+  return new Date(Number(ms)).toLocaleDateString("pt-BR", { timeZone: BR_TZ, day: "2-digit", month: "2-digit" });
 }
 
 function formatFullDateTime(ms: string | number): string {
   return new Date(Number(ms)).toLocaleString("pt-BR", {
+    timeZone: BR_TZ,
     day: "2-digit", month: "2-digit", year: "2-digit",
     hour: "2-digit", minute: "2-digit",
   });
@@ -293,7 +314,7 @@ export default function ConversasPage() {
   const loadMessages = useCallback(async (jid: string) => {
     setLoadingMsgs(true);
     try {
-      const res = await fetch(`/api/whatsapp/conversations/${encodeURIComponent(jid)}/messages`);
+      const res = await fetch(`/api/whatsapp/conversations/${encodeURIComponent(jid)}/messages?limit=500`);
       const body = await res.json();
       if (res.ok) setMessages(body.messages || []);
     } catch {
@@ -599,7 +620,19 @@ export default function ConversasPage() {
                 ) : messages.length === 0 ? (
                   <p className="text-sm text-text-light text-center">Sem mensagens nessa conversa ainda.</p>
                 ) : (
-                  messages.map((m) => {
+                  messages.map((m, idx) => {
+                    // Separador de dia (Hoje / Ontem / data) quando vira o dia
+                    // no fuso BR — estilo WhatsApp.
+                    const prev = idx > 0 ? messages[idx - 1] : null;
+                    const showDay = !prev || brDayKey(prev.timestamp_ms) !== brDayKey(m.timestamp_ms);
+                    const daySep = showDay ? (
+                      <div className="flex justify-center my-2">
+                        <span className="bg-white/90 text-[11px] text-gray-600 px-3 py-1 rounded-full shadow-sm uppercase tracking-wide">
+                          {dayLabel(m.timestamp_ms)}
+                        </span>
+                      </div>
+                    ) : null;
+
                     const hasMedia = m.media_mimetype && m.message_type !== "conversation" && m.message_type !== "extendedTextMessage";
                     // Mensagens de "sistema" (estilo WhatsApp: notificações de
                     // grupo, sincronização, add/remove de participante) viram
@@ -608,28 +641,25 @@ export default function ConversasPage() {
                     const isSystem =
                       m.message_type === "systemNotice" ||
                       m.message_type === "groupParticipantUpdate";
-                    if (isSystem) {
-                      return (
-                        <div key={m.id} className="flex justify-center my-1">
-                          <div
-                            className="max-w-[85%] bg-[#fef9c3]/80 border border-[#fde047]/60 rounded-lg px-3 py-1 shadow-sm text-center"
-                            title={formatFullDateTime(m.timestamp_ms)}
-                          >
-                            <p className="text-[12px] text-amber-900 whitespace-pre-wrap break-words">
-                              {m.text || "(evento sem texto)"}
-                            </p>
-                            <p className="text-[9px] text-amber-700/80 mt-0.5">
-                              {formatTime(m.timestamp_ms)}
-                              {m.push_name && m.message_type === "groupParticipantUpdate" && (
-                                <> · por <strong>{m.push_name}</strong></>
-                              )}
-                            </p>
-                          </div>
+                    const bubble = isSystem ? (
+                      <div className="flex justify-center my-1">
+                        <div
+                          className="max-w-[85%] bg-[#fef9c3]/80 border border-[#fde047]/60 rounded-lg px-3 py-1 shadow-sm text-center"
+                          title={formatFullDateTime(m.timestamp_ms)}
+                        >
+                          <p className="text-[12px] text-amber-900 whitespace-pre-wrap break-words">
+                            {m.text || "(evento sem texto)"}
+                          </p>
+                          <p className="text-[9px] text-amber-700/80 mt-0.5">
+                            {formatMsgTime(m.timestamp_ms)}
+                            {m.push_name && m.message_type === "groupParticipantUpdate" && (
+                              <> · por <strong>{m.push_name}</strong></>
+                            )}
+                          </p>
                         </div>
-                      );
-                    }
-                    return (
-                      <div key={m.id} className={`flex ${m.from_me ? "justify-end" : "justify-start"}`}>
+                      </div>
+                    ) : (
+                      <div className={`flex ${m.from_me ? "justify-end" : "justify-start"}`}>
                         <div className={`max-w-[70%] rounded-lg px-3 py-2 shadow-sm ${
                           m.from_me ? "bg-[#d9fdd3] text-gray-900" : "bg-white text-gray-900"
                         }`}>
@@ -642,10 +672,17 @@ export default function ConversasPage() {
                             <p className="text-sm whitespace-pre-wrap break-words">{m.text || "(vazio)"}</p>
                           )}
                           <p className="text-[10px] text-gray-500 text-right mt-1" title={formatFullDateTime(m.timestamp_ms)}>
-                            {formatTime(m.timestamp_ms)}
+                            {formatMsgTime(m.timestamp_ms)}
                           </p>
                         </div>
                       </div>
+                    );
+
+                    return (
+                      <Fragment key={m.id}>
+                        {daySep}
+                        {bubble}
+                      </Fragment>
                     );
                   })
                 )}
