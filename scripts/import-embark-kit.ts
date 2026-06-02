@@ -1,15 +1,15 @@
 /**
  * Monta o "kit de embarque" por equipe (tabela embark_kit_items) a partir do
- * Check List.xlsx, ligando cada item ao material do Estoque (stock_items,
- * team=GALPAO). A Equipe 2 é cópia da Equipe 1 (a planilha veio sem qtd na 2).
- *
- * Casamento: matcher por nome normalizado (>= 0.85) + OVERRIDES p/ os itens
- * com nome torto/grudado que o usuário confirmou. Itens sem par são ignorados
- * (não deduzem nada). Cria a tabela via SQL aditivo (não roda db push).
+ * Check List.xlsx. Cada item do Check List é garantido no Estoque (stock_items,
+ * team=GALPAO): ou casa com um material existente, ou é CRIADO como item novo
+ * (categoria/location "Embarque"). A Equipe 2 é cópia da Equipe 1.
  *
  *   npx tsx scripts/import-embark-kit.ts            # dry-run
- *   npx tsx scripts/import-embark-kit.ts --commit   # cria tabela + grava (PROD)
- *   npx tsx scripts/import-embark-kit.ts --commit --force  # apaga kit e regrava
+ *   npx tsx scripts/import-embark-kit.ts --commit   # cria itens + kit (PROD)
+ *   npx tsx scripts/import-embark-kit.ts --commit --force  # regrava o kit
+ *
+ * Idempotente: itens criados são reusados pelo nome em re-runs; o kit é
+ * recriado do zero quando --force.
  */
 import { PrismaClient } from "@prisma/client";
 import * as XLSX from "xlsx";
@@ -19,8 +19,8 @@ const prisma = new PrismaClient();
 const FILE = "C:/Users/Guilherme/CARGO SHIPS CLEANING LTDA/SERVIDOR - Documentos/CARGO - PLANILHAS/Check List.xlsx";
 const TEAMS = ["EQUIPE_1", "EQUIPE_2"];
 
-// Check List (nome) -> Estoque (nome exato). Itens que o matcher não pega
-// sozinho (nome torto/grudado), confirmados pelo usuário.
+// Check List (nome) -> Estoque (nome exato) p/ os nomes tortos que o matcher
+// não pega sozinho (confirmados pelo usuário).
 const OVERRIDES: Record<string, string> = {
   "Rádio Transm.": "RADIO TANSMISSOR",
   "Raspadeira": "ERASPADEIRA CUMPRIDA",
@@ -44,8 +44,7 @@ function expand(n: string) {
     [" PIGUIMENTADA ", " PIGMENTADA "], [" PIGUIM ", " PIGMENTADA "],
     [" EXTEN ", " EXTENSAO "], [" QUIMI ", " QUIMICA "], [" QUIM ", " QUIMICA "],
     [" COTOV ", " COTOVELO "], [" TRANSM ", " TRANSMISSOR "],
-    [" DESENGRIPANTE ", " DESINGRIPANTE "], [" EMEN ", " EMENDA "],
-    [" CONC ", " CONEXAO "],
+    [" DESENGRIPANTE ", " DESINGRIPANTE "], [" EMEN ", " EMENDA "], [" CONC ", " CONEXAO "],
   ];
   for (const [a, b] of map) s = s.split(a).join(b);
   return s.trim().replace(/\s+/g, " ");
@@ -80,41 +79,45 @@ function parseEq1(): { name: string; qty: number }[] {
   return out;
 }
 
+// Nome do item novo no Estoque (MAIÚSCULO, espaços normalizados).
+function estoqueName(clName: string) { return clName.toUpperCase().replace(/\s+/g, " ").trim(); }
+
 async function main() {
   const commit = process.argv.includes("--commit");
   const force = process.argv.includes("--force");
 
   const cl = parseEq1();
-  const est = (await prisma.stockItem.findMany({ where: { team: "GALPAO" }, select: { id: true, name: true } }))
+  let est = (await prisma.stockItem.findMany({ where: { team: "GALPAO" }, select: { id: true, name: true } }))
     .map((e) => ({ ...e, n: expand(norm(e.name)) }));
   const byNorm = new Map(est.map((e) => [norm(e.name), e]));
 
-  const kit: { name: string; estName: string; estId: number; qty: number }[] = [];
-  const skipped: { name: string; qty: number }[] = [];
-
+  type R = { clName: string; qty: number; estId: number | null; estName: string | null; create: boolean };
+  const resolved: R[] = [];
   for (const item of cl) {
     const ovr = OVERRIDES[item.name];
     if (ovr) {
       const e = byNorm.get(norm(ovr));
-      if (e) { kit.push({ name: item.name, estName: e.name, estId: e.id, qty: item.qty }); continue; }
-      skipped.push({ name: `${item.name} (override "${ovr}" não achado!)`, qty: item.qty }); continue;
+      resolved.push({ clName: item.name, qty: item.qty, estId: e?.id ?? null, estName: e?.name ?? null, create: !e });
+      continue;
     }
     const cn = expand(norm(item.name));
     let best: typeof est[number] | null = null, bs = 0;
     for (const e of est) { const sc = score(cn, e.n); if (sc > bs) { bs = sc; best = e; } }
-    if (best && bs >= 0.85) kit.push({ name: item.name, estName: best.name, estId: best.id, qty: item.qty });
-    else skipped.push(item);
+    if (best && bs >= 0.85) resolved.push({ clName: item.name, qty: item.qty, estId: best.id, estName: best.name, create: false });
+    else resolved.push({ clName: item.name, qty: item.qty, estId: null, estName: estoqueName(item.name), create: true });
   }
 
-  console.log(`\nKit Equipe 1: ${kit.length} casados | ${skipped.length} ignorados (sem par)`);
-  console.log("\n== KIT (vai deduzir do Estoque) ==");
-  kit.forEach((k) => console.log(`  [${String(k.qty).padStart(3)}] ${k.name.padEnd(22)} -> ${k.estName} (#${k.estId})`));
-  console.log("\n== IGNORADOS (não deduz) ==");
-  skipped.forEach((s) => console.log(`  [${String(s.qty).padStart(3)}] ${s.name}`));
+  const matched = resolved.filter((r) => !r.create);
+  const toCreate = resolved.filter((r) => r.create);
+  console.log(`\nCheck List: ${cl.length} itens | já no Estoque ${matched.length} | criar ${toCreate.length}`);
+  console.log("\n== JÁ NO ESTOQUE (casados) ==");
+  matched.forEach((r) => console.log(`  [${String(r.qty).padStart(3)}] ${r.clName.padEnd(22)} -> ${r.estName}`));
+  console.log("\n== CRIAR NO ESTOQUE (novos, categoria Embarque) ==");
+  toCreate.forEach((r) => console.log(`  [${String(r.qty).padStart(3)}] ${r.clName.padEnd(22)} -> ${r.estName}`));
 
-  if (!commit) { console.log("\n— DRY RUN — use --commit pra criar a tabela e gravar.\n"); return; }
+  if (!commit) { console.log("\n— DRY RUN — use --commit pra criar os itens e o kit.\n"); return; }
 
-  // Cria a tabela só se não existir (aditivo, não destrutivo).
+  // Tabela do kit (aditivo).
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "embark_kit_items" (
       "id" SERIAL PRIMARY KEY,
@@ -127,19 +130,63 @@ async function main() {
     );`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "embark_kit_items_team_idx" ON "embark_kit_items"("team");`);
 
-  const existing = await prisma.embarkKitItem.count();
-  if (existing > 0 && !force) {
-    console.log(`\n⚠️  Já existem ${existing} itens no kit. Use --force pra apagar e regravar. Abortado.`);
+  // Cria (ou reusa) cada item novo no Estoque.
+  let created = 0;
+  for (const r of toCreate) {
+    const existing = byNorm.get(norm(r.estName!));
+    if (existing) { r.estId = existing.id; continue; }
+    const row = await prisma.stockItem.create({
+      data: {
+        name: r.estName!, category: "OUTROS", location: "Embarque",
+        quantity: r.qty, default_quantity: r.qty, min_quantity: 0,
+        team: "GALPAO", updated_by: "Importação Check List",
+      },
+      select: { id: true, name: true },
+    });
+    byNorm.set(norm(row.name), { ...row, n: expand(norm(row.name)) });
+    r.estId = row.id; created++;
+  }
+  console.log(`\n✅ Itens criados no Estoque: ${created} (reusados ${toCreate.length - created}).`);
+
+  // Monta o kit (qtd > 0), deduplicado por (equipe, item).
+  const kitItems = resolved.filter((r) => r.estId && r.qty > 0);
+  const existingKit = await prisma.embarkKitItem.count();
+  if (existingKit > 0 && !force) {
+    console.log(`\n⚠️  Já existem ${existingKit} itens de kit. Use --force pra regravar. (Itens do Estoque acima já foram criados.)`);
     return;
   }
-  if (existing > 0 && force) {
+  if (existingKit > 0) {
     const del = await prisma.embarkKitItem.deleteMany({});
-    console.log(`\n🗑️  Removidos ${del.count} itens de kit antigos.`);
+    console.log(`🗑️  Removidos ${del.count} itens de kit antigos.`);
   }
-
-  const rows = TEAMS.flatMap((team) => kit.map((k) => ({ team, stock_item_id: k.estId, quantity: k.qty })));
-  const res = await prisma.embarkKitItem.createMany({ data: rows });
-  console.log(`\n✅ Kit gravado: ${res.count} linhas (${kit.length} itens × ${TEAMS.length} equipes).\n`);
+  const seen = new Set<string>();
+  const rows: { team: string; stock_item_id: number; quantity: number }[] = [];
+  for (const team of TEAMS) {
+    for (const r of kitItems) {
+      const key = `${team}:${r.estId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({ team, stock_item_id: r.estId!, quantity: r.qty });
+    }
+  }
+  const res = await prisma.embarkKitItem.createMany({ data: rows, skipDuplicates: true });
+  console.log(`✅ Kit gravado: ${res.count} linhas (${kitItems.length} itens × ${TEAMS.length} equipes).\n`);
 }
 
-main().catch((e) => { console.error("ERRO:", e); process.exit(1); }).finally(() => prisma.$disconnect());
+// O Postgres da Railway anda instável (cai e volta). Como tudo aqui é
+// idempotente (--force regrava o kit; itens novos são reusados pelo nome),
+// repetimos main() inteiro até conectar, reaproveitando a mesma conexão.
+async function runWithRetry() {
+  const maxAttempts = 40;
+  for (let i = 1; i <= maxAttempts; i++) {
+    try { await main(); return; }
+    catch (e: any) {
+      const msg = String(e?.message || e);
+      const transient = /can't reach|reach database|ECONNREFUSED|ETIMEDOUT|Closed|connection|pool/i.test(msg);
+      if (!transient || i === maxAttempts) throw e;
+      console.log(`tentativa ${i}/${maxAttempts} — DB indisponível, aguardando 10s...`);
+      await new Promise((r) => setTimeout(r, 10000));
+    }
+  }
+}
+runWithRetry().catch((e) => { console.error("ERRO:", e); process.exit(1); }).finally(() => prisma.$disconnect());
