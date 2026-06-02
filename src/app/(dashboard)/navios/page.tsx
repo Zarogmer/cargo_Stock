@@ -1455,115 +1455,9 @@ export default function NaviosPage() {
                 </p>
               </div>
 
-              {form.operation_type === "EMBARQUE" && (
-                <div>
-                  <label className="block text-sm font-medium text-text mb-1">Situação do Embarque</label>
-                  <div className="grid grid-cols-1 gap-2">
-                    {(["VISTORIA", "IMEDIATO", "AGENDADO", "PERSONALIZADO"] as BoardingSituation[]).map((s) => {
-                      const checked = form.boarding_situation === s;
-                      return (
-                        <label
-                          key={s}
-                          className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border cursor-pointer transition ${
-                            checked
-                              ? "border-primary bg-primary/5 text-primary font-semibold"
-                              : "border-border hover:bg-gray-50 text-text"
-                          }`}
-                        >
-                          <input
-                            type="radio"
-                            name="boarding_situation"
-                            checked={checked}
-                            onChange={() => setForm({ ...form, boarding_situation: s })}
-                            className="h-4 w-4 accent-primary"
-                          />
-                          <span>{BOARDING_SITUATION_LABELS[s]}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                  {form.boarding_situation === "AGENDADO" && (
-                    <div className="mt-3">
-                      <label className="block text-sm font-medium text-text mb-1">Data e horário no galpão</label>
-                      <input
-                        type="datetime-local"
-                        value={form.boarding_scheduled_at}
-                        onChange={(e) => setForm({ ...form, boarding_scheduled_at: e.target.value })}
-                        className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                      />
-                      <p className="text-[10px] text-text-light mt-1">
-                        Aparecerá na mensagem do grupo (ex.: &quot;estar no galpão dia 26/05 às 13h&quot;).
-                      </p>
-                    </div>
-                  )}
-                  {form.boarding_situation === "PERSONALIZADO" && (
-                    <div className="mt-3 space-y-2">
-                      <label className="block text-sm font-medium text-text mb-1">Texto da situação</label>
-                      <textarea
-                        value={form.boarding_custom_text}
-                        onChange={(e) => setForm({ ...form, boarding_custom_text: e.target.value })}
-                        placeholder="Ex.: Embarque liberado pela Receita — apresentar-se ao agente no portão 3."
-                        rows={3}
-                        className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm resize-none"
-                      />
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={handleSaveTemplate}
-                          disabled={!form.boarding_custom_text.trim() || savingTemplate}
-                          className="text-xs px-3 py-1.5 bg-primary/10 text-primary rounded-lg hover:bg-primary/20 font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          💾 {savingTemplate ? "Salvando..." : "Salvar como modelo"}
-                        </button>
-                        <span className="text-[10px] text-text-light">
-                          Escreva o texto livre — ele aparece na linha de Situação da mensagem do grupo.
-                        </span>
-                      </div>
-
-                      {situationTemplates.length > 0 && (
-                        <div className="border border-border rounded-lg p-2 bg-gray-50">
-                          <p className="text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1.5">
-                            Modelos salvos — clique para usar
-                          </p>
-                          <div className="space-y-1">
-                            {situationTemplates.map((t) => {
-                              const active = form.boarding_custom_text.trim() === t.text.trim();
-                              return (
-                                <div
-                                  key={t.id}
-                                  className={`flex items-start gap-2 rounded-md border px-2 py-1.5 bg-white transition ${
-                                    active ? "border-primary" : "border-border"
-                                  }`}
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={() => setForm({ ...form, boarding_custom_text: t.text })}
-                                    className="flex-1 min-w-0 text-left text-xs text-text hover:text-primary"
-                                    title="Usar este modelo"
-                                  >
-                                    {t.text}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteTemplate(t.id)}
-                                    className="text-xs text-red-500 hover:bg-red-50 rounded p-0.5 shrink-0"
-                                    title="Excluir modelo"
-                                  >
-                                    ✕
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <p className="text-[10px] text-text-light mt-1">
-                    Escolha a situação — o texto enviado ao grupo do WhatsApp se adapta automaticamente.
-                  </p>
-                </div>
-              )}
+              {/* "Situação do Embarque" foi movida para dentro da caixa "Avisar
+                  grupo" (mais abaixo) — só é necessária quando se vai mandar a
+                  mensagem do WhatsApp. */}
 
               {form.operation_type === "EMBARQUE" && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1624,6 +1518,116 @@ export default function NaviosPage() {
                         : "💬 Criar grupo no WhatsApp + escalar colaboradores"}
                     </span>
                   </label>
+
+                  {createGroup && form.operation_type === "EMBARQUE" && (
+                    <div>
+                      <label className="block text-sm font-medium text-text mb-1">Situação do Embarque</label>
+                      <div className="grid grid-cols-1 gap-2">
+                        {(["VISTORIA", "IMEDIATO", "AGENDADO", "PERSONALIZADO"] as BoardingSituation[]).map((s) => {
+                          const checked = form.boarding_situation === s;
+                          return (
+                            <label
+                              key={s}
+                              className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border cursor-pointer transition ${
+                                checked
+                                  ? "border-primary bg-primary/5 text-primary font-semibold"
+                                  : "border-border hover:bg-white text-text"
+                              }`}
+                            >
+                              <input
+                                type="radio"
+                                name="boarding_situation"
+                                checked={checked}
+                                onChange={() => setForm({ ...form, boarding_situation: s })}
+                                className="h-4 w-4 accent-primary"
+                              />
+                              <span>{BOARDING_SITUATION_LABELS[s]}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {form.boarding_situation === "AGENDADO" && (
+                        <div className="mt-3">
+                          <label className="block text-sm font-medium text-text mb-1">Data e horário no galpão</label>
+                          <input
+                            type="datetime-local"
+                            value={form.boarding_scheduled_at}
+                            onChange={(e) => setForm({ ...form, boarding_scheduled_at: e.target.value })}
+                            className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                          />
+                          <p className="text-[10px] text-text-light mt-1">
+                            Aparecerá na mensagem do grupo (ex.: &quot;estar no galpão dia 26/05 às 13h&quot;).
+                          </p>
+                        </div>
+                      )}
+                      {form.boarding_situation === "PERSONALIZADO" && (
+                        <div className="mt-3 space-y-2">
+                          <label className="block text-sm font-medium text-text mb-1">Texto da situação</label>
+                          <textarea
+                            value={form.boarding_custom_text}
+                            onChange={(e) => setForm({ ...form, boarding_custom_text: e.target.value })}
+                            placeholder="Ex.: Embarque liberado pela Receita — apresentar-se ao agente no portão 3."
+                            rows={3}
+                            className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm resize-none"
+                          />
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={handleSaveTemplate}
+                              disabled={!form.boarding_custom_text.trim() || savingTemplate}
+                              className="text-xs px-3 py-1.5 bg-primary/10 text-primary rounded-lg hover:bg-primary/20 font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              💾 {savingTemplate ? "Salvando..." : "Salvar como modelo"}
+                            </button>
+                            <span className="text-[10px] text-text-light">
+                              Escreva o texto livre — ele aparece na linha de Situação da mensagem do grupo.
+                            </span>
+                          </div>
+
+                          {situationTemplates.length > 0 && (
+                            <div className="border border-border rounded-lg p-2 bg-white">
+                              <p className="text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1.5">
+                                Modelos salvos — clique para usar
+                              </p>
+                              <div className="space-y-1">
+                                {situationTemplates.map((t) => {
+                                  const active = form.boarding_custom_text.trim() === t.text.trim();
+                                  return (
+                                    <div
+                                      key={t.id}
+                                      className={`flex items-start gap-2 rounded-md border px-2 py-1.5 bg-white transition ${
+                                        active ? "border-primary" : "border-border"
+                                      }`}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => setForm({ ...form, boarding_custom_text: t.text })}
+                                        className="flex-1 min-w-0 text-left text-xs text-text hover:text-primary"
+                                        title="Usar este modelo"
+                                      >
+                                        {t.text}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteTemplate(t.id)}
+                                        className="text-xs text-red-500 hover:bg-red-50 rounded p-0.5 shrink-0"
+                                        title="Excluir modelo"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-[10px] text-text-light mt-1">
+                        Escolha a situação — o texto enviado ao grupo do WhatsApp se adapta automaticamente.
+                      </p>
+                    </div>
+                  )}
 
                   {createGroup && (() => {
                     const isCostadoForm = form.operation_type === "COSTADO";
