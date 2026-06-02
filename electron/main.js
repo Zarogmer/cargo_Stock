@@ -6,6 +6,7 @@ const APP_URL = "https://cargostock-production.up.railway.app";
 
 let mainWindow;
 let tray;
+let isQuitting = false;
 
 function createWindow() {
   const iconPath = path.join(__dirname, "..", "public", "icons", "icon-512.png");
@@ -48,6 +49,15 @@ function createWindow() {
     }
   });
 
+  // Fechar a janela (botao X) apenas esconde o app na bandeja do sistema;
+  // ele continua rodando. So encerra de verdade pelo menu "Sair" da bandeja.
+  mainWindow.on("close", (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -75,6 +85,7 @@ function createTray() {
     {
       label: "Sair",
       click: () => {
+        isQuitting = true;
         app.quit();
       },
     },
@@ -109,8 +120,12 @@ app.whenReady().then(() => {
   });
 });
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+// Qualquer pedido real de encerramento (ex.: menu "Sair", desligar o Windows)
+// marca a flag para a janela poder fechar de fato em vez de so esconder.
+app.on("before-quit", () => {
+  isQuitting = true;
 });
+
+// Nao encerra o app ao fechar a janela: ele permanece na bandeja do sistema.
+// O encerramento acontece somente pelo menu "Sair" da bandeja.
+app.on("window-all-closed", () => {});
