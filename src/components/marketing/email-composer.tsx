@@ -43,8 +43,6 @@ export function EmailComposer() {
   const [clientName, setClientName] = useState(() => searchParams.get("nome") || "");
   const [subject, setSubject] = useState(DEFAULT_SUBJECT);
   const [body, setBody] = useState(() => buildDefaultBody(searchParams.get("nome") || ""));
-  const [copied, setCopied] = useState(false);
-  const [feedback, setFeedback] = useState<string | null>(null);
 
   // Aceita vários destinatários separados por vírgula ou ponto-e-vírgula e
   // devolve uma string limpa separada por vírgula (padrão dos clientes de email).
@@ -56,9 +54,9 @@ export function EmailComposer() {
       .join(",");
   }
 
-  // Abre o compose do Outlook Web com tudo já preenchido. O usuário confere e
-  // clica em Enviar — o email sai da conta Outlook que ele estiver logado.
-  function openOutlookWeb() {
+  // Abre o compose do Outlook na web com tudo já preenchido. O usuário confere e
+  // clica em Enviar — o email sai da conta Outlook em que ele estiver logado.
+  function enviar() {
     const url =
       "https://outlook.office.com/mail/deeplink/compose" +
       `?to=${encodeURIComponent(recipientList())}` +
@@ -67,34 +65,9 @@ export function EmailComposer() {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  // Abre o app de email padrão do computador (no Windows com Outlook instalado,
-  // é o próprio Outlook). Endereços vão crus; só assunto e corpo são encodados.
-  // O Outlook desktop renderiza as quebras de linha de forma mais confiável com
-  // CRLF (%0D%0A) do que só com LF — por isso normalizamos o corpo antes.
-  function openMailto() {
-    const crlfBody = body.replace(/\r?\n/g, "\r\n");
-    const url =
-      `mailto:${recipientList()}` +
-      `?subject=${encodeURIComponent(subject)}` +
-      `&body=${encodeURIComponent(crlfBody)}`;
-    window.location.href = url;
-  }
-
-  async function copyBody() {
-    try {
-      await navigator.clipboard.writeText(body);
-      setCopied(true);
-      setFeedback(null);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setFeedback("Não foi possível copiar automaticamente. Selecione o texto e copie manualmente.");
-    }
-  }
-
   function restoreTemplate() {
     setSubject(DEFAULT_SUBJECT);
     setBody(buildDefaultBody(clientName));
-    setFeedback(null);
   }
 
   const inputClass =
@@ -159,27 +132,13 @@ export function EmailComposer() {
         </div>
 
         {/* Ações */}
-        <div className="flex flex-wrap gap-2 pt-1">
+        <div className="flex flex-wrap items-center gap-2 pt-1">
           <button
-            onClick={openMailto}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark transition text-sm font-medium shadow-sm"
+            onClick={enviar}
+            className="flex items-center gap-2 px-5 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark transition text-sm font-medium shadow-sm"
           >
-            <span aria-hidden>📧</span>
-            Abrir no Outlook
-          </button>
-          <button
-            onClick={openOutlookWeb}
-            className="flex items-center gap-2 px-4 py-2 bg-card border border-border text-text rounded-lg hover:bg-gray-50 transition text-sm font-medium shadow-sm"
-          >
-            <span aria-hidden>🌐</span>
-            Abrir no navegador (web)
-          </button>
-          <button
-            onClick={copyBody}
-            className="flex items-center gap-2 px-4 py-2 bg-card border border-border text-text rounded-lg hover:bg-gray-50 transition text-sm font-medium shadow-sm"
-          >
-            <span aria-hidden>{copied ? "✅" : "📋"}</span>
-            {copied ? "Copiado!" : "Copiar texto"}
+            <span aria-hidden>✉️</span>
+            Enviar
           </button>
           <button
             onClick={restoreTemplate}
@@ -188,23 +147,15 @@ export function EmailComposer() {
             Restaurar modelo
           </button>
         </div>
-
-        {feedback && <p className="text-xs text-amber-600">{feedback}</p>}
       </div>
 
       {/* Dica */}
-      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-800 space-y-2">
-        <div>
-          <p className="font-medium mb-1">Como funciona</p>
-          <p>
-            O botão abre o Outlook com o email já preenchido (destinatário, assunto e texto).
-            Confira e clique em <strong>Enviar</strong> — o email sai da sua conta normal do Outlook.
-            Nada é enviado automaticamente pelo sistema.
-          </p>
-        </div>
-        <p className="text-xs text-blue-700">
-          Se ao clicar abrir o navegador em vez do programa Outlook, defina o Outlook como app de
-          email padrão do Windows: <strong>Configurações → Aplicativos → Aplicativos padrão → Email</strong>.
+      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-800">
+        <p className="font-medium mb-1">Como funciona</p>
+        <p>
+          O botão <strong>Enviar</strong> abre o Outlook no navegador já com o email preenchido
+          (destinatário, assunto e texto). Confira e clique em <strong>Enviar</strong> no Outlook —
+          o email sai da sua conta normal. Nada é enviado automaticamente pelo sistema.
         </p>
       </div>
     </div>
