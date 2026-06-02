@@ -10,6 +10,7 @@ export type Module =
   | "FERRAMENTAS"
   | "MAQUINARIO"
   | "NAVIOS"
+  | "MARKETING"
   | "FINANCEIRO_MOD"
   | "SOLICITACOES"
   | "WHATSAPP"
@@ -40,6 +41,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
+    MARKETING: ["view"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
     MENSAGENS: ["view", "create"],
     CONVERSAS: ["view", "create"],
@@ -53,6 +55,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
+    MARKETING: ["view"],
     // Financeiro é só leitura pra Executivo — quem edita valores é Financeiro
     // e Tecnologia. Pedido da Sandra: controle total dela, Executivo vê tudo
     // sem chance de mexer (sem exceção).
@@ -108,6 +111,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
+    MARKETING: ["view"],
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
     WHATSAPP: ["view", "edit"],
@@ -161,6 +165,7 @@ export interface NavSubItem {
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/", icon: "dashboard", module: "DASHBOARD" },
   { label: "Navios", href: "/navios", icon: "navios", module: "NAVIOS" },
+  { label: "Marketing", href: "/marketing", icon: "marketing", module: "MARKETING" },
   {
     label: "Escalação",
     href: "/escalacao",

@@ -21,6 +21,7 @@ import {
   MessageCircle,
   Send,
   MessagesSquare,
+  Megaphone,
 } from "lucide-react";
 
 interface IconProps {
@@ -103,6 +104,10 @@ export function ChevronDownIcon({ className = "w-4 h-4" }: IconProps) {
   return <ChevronDown className={className} />;
 }
 
+export function MarketingIcon({ className = "w-5 h-5" }: IconProps) {
+  return <Megaphone className={className} />;
+}
+
 const ICON_MAP: Record<string, React.FC<IconProps>> = {
   dashboard: DashboardIcon,
   embarque: EmbarqueIcon,
@@ -115,6 +120,7 @@ const ICON_MAP: Record<string, React.FC<IconProps>> = {
   whatsapp: WhatsappIcon,
   mensagens: MensagensIcon,
   conversas: ConversasIcon,
+  marketing: MarketingIcon,
 };
 
 export function NavIcon({ name, className }: { name: string; className?: string }) {
