@@ -119,7 +119,7 @@ export function EscalacaoEstoquePage() {
       <div className="flex items-center justify-center h-64">
         <div className="flex flex-col items-center gap-2">
           <span className="text-4xl animate-bounce">📦</span>
-          <span className="text-sm text-text-light animate-pulse">Carregando estoque...</span>
+          <span className="text-sm text-text-light animate-pulse">Carregando rancho...</span>
         </div>
       </div>
     );
@@ -128,7 +128,7 @@ export function EscalacaoEstoquePage() {
   if (ships.length === 0) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-bold text-text">Estoque para Embarque 📦</h1>
+        <h1 className="text-2xl font-bold text-text">Rancho para Embarque 📦</h1>
         <div className="bg-card rounded-xl shadow-sm border border-border p-8 text-center text-text-light">
           <span className="text-4xl block mb-3">🚢</span>
           <p className="font-medium text-text mb-1">Nenhum navio agendado ou em operação</p>
@@ -140,7 +140,7 @@ export function EscalacaoEstoquePage() {
 
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-bold text-text">Estoque para Embarque 📦</h1>
+      <h1 className="text-2xl font-bold text-text">Rancho para Embarque 📦</h1>
 
       <ShipSelector
         ships={ships}
@@ -151,7 +151,7 @@ export function EscalacaoEstoquePage() {
       <div className="space-y-4">
         <div className="flex flex-wrap gap-2 items-end justify-between">
           <div className="flex gap-2 items-center">
-            <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Equipe (estoque):</span>
+            <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Equipe (rancho):</span>
             <select
               value={selectedTeam}
               onChange={(e) => setSelectedTeam(e.target.value as any)}
@@ -187,7 +187,7 @@ export function EscalacaoEstoquePage() {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Item</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Categoria</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Padrão</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Em Estoque</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Em Rancho</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Status</th>
                 </tr>
               </thead>
@@ -233,7 +233,7 @@ export function EscalacaoEstoquePage() {
         onClose={() => setConfirmEmbark(false)}
         onConfirm={handleEmbarcar}
         title="Confirmar Embarque"
-        message={`Embarcar ${selectedTeam} no navio "${currentShip?.name}"? As quantidades padrão serão retiradas do estoque desta equipe.`}
+        message={`Embarcar ${selectedTeam} no navio "${currentShip?.name}"? As quantidades padrão serão retiradas do rancho desta equipe.`}
         confirmLabel="⚓ Confirmar Embarque"
         variant="warning"
         loading={embarking}

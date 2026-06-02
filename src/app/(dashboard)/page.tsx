@@ -433,7 +433,7 @@ export default function DashboardPage() {
         <CollapsibleSection
           storageKey="embarque-readiness"
           title="Prontidão para embarque"
-          subtitle="Comparativo de estoque entre equipes"
+          subtitle="Comparativo de rancho entre equipes"
         >
           <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-border">
             <div className="p-6">
@@ -813,7 +813,7 @@ function EmbarqueChart({ items }: { items: StockChartItem[] }) {
   if (withDefault.length === 0) {
     return (
       <p className="text-sm text-text-light py-6">
-        Defina a &quot;Qtd Padrão&quot; nos itens do estoque para acompanhar a prontidão.
+        Defina a &quot;Qtd Padrão&quot; nos itens do rancho para acompanhar a prontidão.
       </p>
     );
   }
@@ -888,7 +888,7 @@ function EmbarqueChart({ items }: { items: StockChartItem[] }) {
               <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-2 text-base">
                 ✓
               </div>
-              <p className="text-sm font-medium text-emerald-700">Estoque completo</p>
+              <p className="text-sm font-medium text-emerald-700">Rancho completo</p>
               <p className="text-xs text-text-light mt-0.5">Pronto para embarcar</p>
             </div>
           </div>

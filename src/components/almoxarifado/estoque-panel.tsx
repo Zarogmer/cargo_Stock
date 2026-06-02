@@ -19,8 +19,10 @@ const STOCK_CATEGORIES = [
   { value: "FEIRA", label: "Feira" },
 ];
 
-// Painel de suprimentos (stock_items) — corpo da antiga página /estoque, agora
-// renderizado como a aba "Estoque" do Almoxarifado.
+// Painel de Rancho (comida/suprimentos por equipe, stock_items filtrados por
+// EQUIPE_1/2/3) — corpo da antiga página /estoque, hoje renderizado como a aba
+// "Rancho" do Almoxarifado. (O nome do componente segue EstoquePanel por
+// histórico; a aba "Estoque" agora é o MateriaisPanel.)
 export function EstoquePanel() {
   const { profile } = useAuth();
   const pathname = usePathname();
@@ -439,7 +441,7 @@ function BaixaModal({ open, onClose, onConfirm, item, saving }: {
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
 
   return (
-    <Modal open={open} onClose={onClose} title="Baixar Estoque">
+    <Modal open={open} onClose={onClose} title="Baixar Rancho">
       <form onSubmit={handleSubmit} className="space-y-4">
         <p className="text-sm text-text-light">
           Item: <strong>{item?.name}</strong> (disponível: {formatQty(item?.quantity)})
