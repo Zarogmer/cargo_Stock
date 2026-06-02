@@ -274,7 +274,15 @@ export default function ConversasPage() {
     try {
       const res = await fetch("/api/whatsapp/conversations");
       const body = await res.json();
-      if (res.ok) setConversations(body.conversations || []);
+      if (res.ok) {
+        setConversations(body.conversations || []);
+        // Marca como visto: o card "Conversas" do dashboard conta só as
+        // mensagens recebidas depois deste instante. Atualiza a cada load
+        // (mount + polling + SSE) enquanto a aba está aberta.
+        if (typeof window !== "undefined") {
+          localStorage.setItem("conversas_last_seen", new Date().toISOString());
+        }
+      }
     } catch {
       // silent — keep previous list
     } finally {

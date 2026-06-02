@@ -83,32 +83,37 @@ export default function DashboardPage() {
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     try {
-      const [stockRes, stockFullRes, employeesRes, ferramentasRes, maquinarioRes, episRes, uniformsRes, solicitacoesRes, convData] = await Promise.all([
+      // "Visto por último" da aba Conversas (localStorage, por dispositivo). O
+      // card de Conversas conta as mensagens recebidas depois desse instante.
+      const convLastSeen = typeof window !== "undefined" ? localStorage.getItem("conversas_last_seen") : null;
+
+      const [stockRes, stockFullRes, employeesRes, ferramentasRes, maquinarioRes, episRes, uniformsRes, solicitacoesRes, unreadRes] = await Promise.all([
         db.from("stock_items").select("id", { count: "exact", head: true }),
         db.from("stock_items").select("name, quantity, default_quantity, category, team"),
         db.from("employees").select("id", { count: "exact", head: true }),
         db.from("tools").select("id", { count: "exact", head: true }).eq("asset_type", "FERRAMENTA"),
         db.from("tools").select("id", { count: "exact", head: true }).eq("asset_type", "MAQUINARIO"),
         db.from("epis").select("id", { count: "exact", head: true }),
-        db.from("uniforms").select("id", { count: "exact", head: true }),
+        // Uniformes: soma das quantidades em estoque (total de peças), não o nº de tipos.
+        db.from("uniforms").select("stock_qty"),
         db.from("tool_requests").select("id", { count: "exact", head: true }).eq("status", "PENDENTE"),
-        // Conversas tem endpoint próprio (não passa pelo /api/db). Best-effort:
-        // perfis sem acesso recebem 403, então caímos pra lista vazia sem
-        // quebrar o carregamento do dashboard.
-        fetch("/api/whatsapp/conversations")
-          .then((r) => (r.ok ? r.json() : { conversations: [] }))
-          .catch(() => ({ conversations: [] })),
+        // Conversas: mensagens recebidas (from_me=false) ainda não vistas na aba
+        // Conversas (created_at > último acesso). Sem acesso prévio → 0.
+        convLastSeen
+          ? db.from("whatsapp_messages").select("id", { count: "exact", head: true }).eq("from_me", false).gt("created_at", convLastSeen)
+          : Promise.resolve({ count: 0 }),
       ]);
 
-      const conversations = (convData as { conversations?: unknown[] } | null)?.conversations;
+      const totalUniforms = ((uniformsRes.data as Array<{ stock_qty: number | null }> | null) || [])
+        .reduce((sum, u) => sum + (Number(u.stock_qty) || 0), 0);
       setStats({
         totalStock: stockRes.count || 0,
         totalEmployees: employeesRes.count || 0,
         totalFerramentas: ferramentasRes.count || 0,
         totalMaquinario: maquinarioRes.count || 0,
         totalEpis: episRes.count || 0,
-        totalUniforms: uniformsRes.count || 0,
-        totalConversations: Array.isArray(conversations) ? conversations.length : 0,
+        totalUniforms,
+        totalConversations: unreadRes.count || 0,
         totalSolicitacoes: solicitacoesRes.count || 0,
       });
 
