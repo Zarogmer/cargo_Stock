@@ -566,12 +566,44 @@ model ToolRequest {
   requested_by   String
   responded_by   String?
   response_notes String?
+  // Foto opcional do produto (data URL base64 comprimida no cliente). Guardada
+  // inline no banco porque a infra é só Railway/Postgres, sem storage externo.
+  image_url      String?
   created_at     DateTime @default(now()) @db.Timestamptz()
   updated_at     DateTime @default(now()) @db.Timestamptz()
 
   @@index([status])
   @@index([created_at(sort: Desc)])
   @@map("tool_requests")
+}
+
+// ── Purchase Orders (Controle de Compras) ────────────────────────────────────
+// Registro das compras efetivamente realizadas, inspirado na planilha oficial
+// "PLANILHA DE COMPRAS - CARGO". Uma compra pode (opcionalmente) ter origem numa
+// solicitação aprovada (request_id) ou ser lançada direto (compras avulsas como
+// rancho, água, combustível, etc.).
+
+model PurchaseOrder {
+  id             String    @id @default(uuid()) @db.Uuid
+  description    String // DESCRIÇÃO
+  department     String? // DEPARTAMENTO: MANUTENÇÃO, ESCRITÓRIO, OPERAÇÃO, RANCHO, EPI, OUTROS
+  supplier       String? // FORNECEDOR
+  purchase_date  DateTime? @db.Date // DATA DA COMPRA
+  unit_value     Float     @default(0) // VALOR unit. (R$)
+  quantity       Float     @default(1) // QUANTIDADE
+  total_value    Float     @default(0) // VALOR total (R$) = unit_value * quantity
+  payment_method String? // FORMA DE PAGAMENTO
+  notes          String? // OBSERVAÇÃO
+  image_url      String? // foto do produto (herdada da solicitação ou anexada)
+  request_id     String?   @db.Uuid // solicitação de origem, se houver
+  created_by     String
+  created_at     DateTime  @default(now()) @db.Timestamptz()
+  updated_at     DateTime  @default(now()) @db.Timestamptz()
+
+  @@index([purchase_date(sort: Desc)])
+  @@index([department])
+  @@index([request_id])
+  @@map("purchase_orders")
 }
 
 // ── Suppliers (Fornecedores) ─────────────────────────────────────────────────

@@ -21,6 +21,7 @@ const TABLE_MAP: Record<string, string> = {
   tool_requests: "toolRequest",
   product_links: "productLink",
   suppliers: "supplier",
+  purchase_orders: "purchaseOrder",
   // Sistema financeiro
   job_functions: "jobFunction",
   job_function_rates: "jobFunctionRate",
@@ -266,7 +267,7 @@ export async function POST(request: NextRequest) {
         // Auto-set updated_at for tables that have it
         const TABLES_WITH_UPDATED_AT = [
           "stock_items", "users", "employees", "epis", "uniforms",
-          "tools", "tool_requests", "product_links",
+          "tools", "tool_requests", "product_links", "purchase_orders",
         ];
         if (TABLES_WITH_UPDATED_AT.includes(spec.table)) {
           updateData.updated_at = new Date();

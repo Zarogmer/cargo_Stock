@@ -10,7 +10,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, formatCurrency, formatQty, parseDecimalBR } from "@/lib/utils";
 
 interface ToolRequest {
   id: string;
@@ -21,6 +21,25 @@ interface ToolRequest {
   requested_by: string;
   responded_by: string | null;
   response_notes: string | null;
+  image_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PurchaseOrder {
+  id: string;
+  description: string;
+  department: string | null;
+  supplier: string | null;
+  purchase_date: string | null;
+  unit_value: number;
+  quantity: number;
+  total_value: number;
+  payment_method: string | null;
+  notes: string | null;
+  image_url: string | null;
+  request_id: string | null;
+  created_by: string;
   created_at: string;
   updated_at: string;
 }
@@ -61,6 +80,88 @@ const PRODUCT_CATEGORIES = [
   "Outros",
 ];
 
+// Departamentos da planilha oficial de compras (coluna "SELECIONE DEPTO.").
+const PURCHASE_DEPARTMENTS = [
+  "MANUTENÇÃO",
+  "ESCRITÓRIO",
+  "OPERAÇÃO",
+  "RANCHO",
+  "EPI",
+  "OUTROS",
+];
+
+const PAYMENT_METHODS = [
+  "FATURADO",
+  "CARTÃO DE CRÉDITO",
+  "CARTÃO DE DÉBITO",
+  "PIX",
+  "DINHEIRO",
+  "BOLETO",
+  "TRANSFERÊNCIA",
+];
+
+const DEPARTMENT_BADGE: Record<string, string> = {
+  "MANUTENÇÃO": "bg-orange-100 text-orange-700",
+  "ESCRITÓRIO": "bg-purple-100 text-purple-700",
+  "OPERAÇÃO": "bg-blue-100 text-blue-700",
+  "RANCHO": "bg-green-100 text-green-700",
+  "EPI": "bg-amber-100 text-amber-700",
+  "OUTROS": "bg-gray-100 text-gray-700",
+};
+
+// Comprime/redimensiona uma imagem escolhida pelo usuário para um data URL
+// (base64) pequeno antes de guardar no banco — a infra é só Railway/Postgres,
+// sem storage externo, então a foto vai inline. Máx. ~1024px, JPEG qualidade 0.72.
+function fileToCompressedDataUrl(file: File, maxSize = 1024, quality = 0.72): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Falha ao ler o arquivo"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Arquivo de imagem inválido"));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxSize || height > maxSize) {
+          const ratio = Math.min(maxSize / width, maxSize / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return reject(new Error("Canvas indisponível"));
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Converte um valor de data do banco (ISO ou Date) para dd/mm/aaaa sem sofrer
+// o deslocamento de fuso (datas @db.Date voltam como meia-noite UTC).
+function formatPurchaseDate(value: string | null): string {
+  if (!value) return "—";
+  const iso = String(value).slice(0, 10);
+  const [y, m, d] = iso.split("-");
+  if (!y || !m || !d) return "—";
+  return `${d}/${m}/${y}`;
+}
+
+// "YYYY-MM" -> "Junho de 2026"
+const MONTH_NAMES = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+function formatMonthLabel(ym: string): string {
+  const [y, m] = ym.split("-");
+  const idx = Number(m) - 1;
+  if (idx < 0 || idx > 11) return ym;
+  return `${MONTH_NAMES[idx]} de ${y}`;
+}
+
 export default function SolicitacoesPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
@@ -71,6 +172,7 @@ export default function SolicitacoesPage() {
   const [requests, setRequests] = useState<ToolRequest[]>([]);
   const [productLinks, setProductLinks] = useState<ProductLink[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [purchases, setPurchases] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -79,6 +181,19 @@ export default function SolicitacoesPage() {
   const [editLink, setEditLink] = useState<ProductLink | null>(null);
   const [deleteRequest, setDeleteRequest] = useState<ToolRequest | null>(null);
   const [deleteLink, setDeleteLink] = useState<ProductLink | null>(null);
+
+  // Imagem em tela cheia (lightbox)
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+
+  // Controle de Compras
+  const [showPurchaseForm, setShowPurchaseForm] = useState(false);
+  const [editPurchase, setEditPurchase] = useState<PurchaseOrder | null>(null);
+  const [purchaseFromRequest, setPurchaseFromRequest] = useState<ToolRequest | null>(null);
+  const [deletePurchase, setDeletePurchase] = useState<PurchaseOrder | null>(null);
+  const now = new Date();
+  const [purchaseMonth, setPurchaseMonth] = useState(
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+  );
 
   // Fornecedores
   const [showSupplierForm, setShowSupplierForm] = useState(false);
@@ -89,6 +204,7 @@ export default function SolicitacoesPage() {
   const canApproveRequests = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
   const canManageLinks = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
   const canDeleteRequests = hasPermission(role, "SOLICITACOES", "delete");
+  const canManagePurchases = hasPermission(role, "SOLICITACOES", "create");
 
   const [dbError, setDbError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -97,16 +213,18 @@ export default function SolicitacoesPage() {
     setLoading(true);
     setDbError(null);
     try {
-      const [reqRes, linksRes, suppRes] = await Promise.all([
+      const [reqRes, linksRes, suppRes, purchRes] = await Promise.all([
         db.from("tool_requests").select("*").order("created_at", { ascending: false }),
         db.from("product_links").select("*").order("category").order("name"),
         db.from("suppliers").select("*").order("name"),
+        db.from("purchase_orders").select("*").order("purchase_date", { ascending: false }).order("created_at", { ascending: false }),
       ]);
 
       const errors: string[] = [];
       if (reqRes.error) errors.push(`tool_requests: ${reqRes.error.code} ${reqRes.error.message}`);
       if (linksRes.error) errors.push(`product_links: ${linksRes.error.code} ${linksRes.error.message}`);
       if (suppRes.error) errors.push(`suppliers: ${suppRes.error.code} ${suppRes.error.message}`);
+      if (purchRes.error) errors.push(`purchase_orders: ${purchRes.error.code} ${purchRes.error.message}`);
       if (errors.length > 0) {
         console.error("DB errors:", errors);
         setDbError(errors.join(" | "));
@@ -115,6 +233,7 @@ export default function SolicitacoesPage() {
       setRequests((reqRes.data as ToolRequest[]) || []);
       setProductLinks((linksRes.data as ProductLink[]) || []);
       setSuppliers((suppRes.data as Supplier[]) || []);
+      setPurchases((purchRes.data as PurchaseOrder[]) || []);
     } catch (err) {
       console.error("loadAll error:", err);
       setDbError(String(err));
@@ -125,7 +244,7 @@ export default function SolicitacoesPage() {
 
   useEffect(() => { loadAll(); }, [loadAll, pathname]);
 
-  async function handleCreateRequest(toolName: string, quantity: number, reason: string) {
+  async function handleCreateRequest(toolName: string, quantity: number, reason: string, imageUrl: string | null) {
     setSaving(true);
     setSaveError(null);
     try {
@@ -135,6 +254,7 @@ export default function SolicitacoesPage() {
         reason,
         status: "PENDENTE",
         requested_by: profile?.full_name || "Sistema",
+        image_url: imageUrl,
       } as any);
       if (error) throw error;
       setShowRequestForm(false);
@@ -163,18 +283,61 @@ export default function SolicitacoesPage() {
     }
   }
 
-  async function handleMarkPurchased(reqId: string) {
+  // Abre o formulário de compra já preenchido a partir de uma solicitação aprovada.
+  function openPurchaseFromRequest(req: ToolRequest) {
+    setEditPurchase(null);
+    setPurchaseFromRequest(req);
+    setShowPurchaseForm(true);
+  }
+
+  async function handleSavePurchase(data: Partial<PurchaseOrder>, fromRequestId: string | null) {
+    setSaving(true);
+    setSaveError(null);
     try {
-      const { error } = await db.from("tool_requests").update({
-        status: "COMPRADO",
-        responded_by: profile?.full_name || "Sistema",
-        updated_at: new Date().toISOString(),
-      } as any).eq("id", reqId);
-      if (error) throw error;
+      const actor = profile?.full_name || "Sistema";
+      if (editPurchase) {
+        const { error } = await db.from("purchase_orders").update(data as any).eq("id", editPurchase.id);
+        if (error) throw error;
+      } else {
+        const { error } = await db.from("purchase_orders").insert({
+          ...data,
+          request_id: fromRequestId,
+          created_by: actor,
+        } as any);
+        if (error) throw error;
+        // Compra originada de uma solicitação aprovada -> marca como Comprada.
+        if (fromRequestId) {
+          await db.from("tool_requests").update({
+            status: "COMPRADO",
+            responded_by: actor,
+          } as any).eq("id", fromRequestId);
+        }
+      }
+      setShowPurchaseForm(false);
+      setEditPurchase(null);
+      setPurchaseFromRequest(null);
       loadAll();
-    } catch (err) {
-      console.error("Erro ao marcar como comprado:", err);
-      setSaveError(`Erro ao marcar como comprado: ${(err as any)?.message || String(err)}`);
+    } catch (err: any) {
+      console.error("Erro ao salvar compra:", err);
+      setSaveError(`Erro ao salvar compra: ${err?.message || String(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeletePurchase() {
+    if (!deletePurchase) return;
+    setSaving(true);
+    try {
+      const { error } = await db.from("purchase_orders").delete().eq("id", deletePurchase.id);
+      if (error) throw error;
+      setDeletePurchase(null);
+      loadAll();
+    } catch (err: any) {
+      console.error("Erro ao excluir compra:", err);
+      setSaveError(`Erro ao excluir compra: ${err?.message || String(err)}`);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -287,6 +450,18 @@ export default function SolicitacoesPage() {
 
   const pendingCount = requests.filter((r) => r.status === "PENDENTE").length;
 
+  // --- Controle de Compras: dados derivados ---
+  const purchasesForMonth = purchases.filter(
+    (p) => (p.purchase_date || "").slice(0, 7) === purchaseMonth
+  );
+  const monthTotal = purchasesForMonth.reduce((sum, p) => sum + (p.total_value || 0), 0);
+  const monthCount = purchasesForMonth.length;
+  // Solicitações aprovadas que ainda não viraram compra (aguardando registro).
+  const linkedRequestIds = new Set(purchases.map((p) => p.request_id).filter(Boolean));
+  const approvedAwaitingPurchase = requests.filter(
+    (r) => r.status === "APROVADO" && !linkedRequestIds.has(r.id)
+  );
+
   // Group product links by category
   const linksByCategory = productLinks.reduce<Record<string, ProductLink[]>>((acc, link) => {
     if (!acc[link.category]) acc[link.category] = [];
@@ -325,6 +500,17 @@ export default function SolicitacoesPage() {
                 return (
                   <div key={req.id} className="bg-card border border-border rounded-xl p-4 hover:shadow-sm transition">
                     <div className="flex items-start justify-between gap-3">
+                      {req.image_url && (
+                        <button
+                          type="button"
+                          onClick={() => setLightboxImage(req.image_url)}
+                          className="shrink-0 w-16 h-16 rounded-lg overflow-hidden border border-border bg-gray-50 hover:ring-2 hover:ring-primary transition"
+                          title="Ver imagem"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={req.image_url} alt={req.tool_name} className="w-full h-full object-cover" />
+                        </button>
+                      )}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-semibold text-text">{req.tool_name}</span>
@@ -367,12 +553,12 @@ export default function SolicitacoesPage() {
                             </button>
                           </>
                         )}
-                        {canApproveRequests && req.status === "APROVADO" && (
+                        {canManagePurchases && req.status === "APROVADO" && (
                           <button
-                            onClick={() => handleMarkPurchased(req.id)}
+                            onClick={() => openPurchaseFromRequest(req)}
                             className="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 font-medium transition"
                           >
-                            Marcar Comprado
+                            Registrar Compra
                           </button>
                         )}
                         {canDeleteRequests && (
@@ -390,6 +576,183 @@ export default function SolicitacoesPage() {
                 );
               })}
             </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "compras",
+      label: "Controle de Compras",
+      content: (
+        <div className="space-y-5">
+          <div className="flex flex-wrap justify-between items-center gap-3">
+            <p className="text-sm text-text-light">Registro das compras realizadas, por mês — inspirado na planilha oficial de compras</p>
+            {canManagePurchases && (
+              <Button size="sm" onClick={() => { setEditPurchase(null); setPurchaseFromRequest(null); setShowPurchaseForm(true); }}>
+                <PlusIcon className="w-4 h-4" />Nova Compra
+              </Button>
+            )}
+          </div>
+
+          {/* Seletor de mês + total */}
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-sm">
+              <span className="text-text-light">Mês:</span>
+              <input
+                type="month"
+                value={purchaseMonth}
+                onChange={(e) => setPurchaseMonth(e.target.value)}
+                className="px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+              />
+            </label>
+            <div className="flex-1" />
+            <div className="bg-primary/5 border border-primary/20 rounded-xl px-4 py-2.5 text-right">
+              <p className="text-[11px] uppercase tracking-wide text-text-light">Total de {formatMonthLabel(purchaseMonth)}</p>
+              <p className="text-lg font-bold text-primary">{formatCurrency(monthTotal)}</p>
+              <p className="text-[11px] text-text-light">{monthCount} {monthCount === 1 ? "compra" : "compras"}</p>
+            </div>
+          </div>
+
+          {/* Solicitações aprovadas aguardando registro de compra */}
+          {approvedAwaitingPurchase.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <p className="text-sm font-semibold text-amber-800 mb-2">
+                Solicitações aprovadas aguardando registro ({approvedAwaitingPurchase.length})
+              </p>
+              <div className="space-y-2">
+                {approvedAwaitingPurchase.map((req) => (
+                  <div key={req.id} className="flex items-center justify-between gap-3 bg-white rounded-lg border border-amber-100 px-3 py-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {req.image_url && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={req.image_url} alt="" className="w-8 h-8 rounded object-cover border border-border shrink-0" />
+                      )}
+                      <span className="text-sm font-medium truncate">{req.tool_name}</span>
+                      <span className="text-xs text-text-light shrink-0">x{req.quantity}</span>
+                    </div>
+                    {canManagePurchases && (
+                      <button
+                        onClick={() => openPurchaseFromRequest(req)}
+                        className="px-3 py-1.5 text-xs bg-primary text-white rounded-lg hover:bg-primary-dark font-medium transition shrink-0"
+                      >
+                        Registrar compra
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Lista de compras do mês */}
+          {purchasesForMonth.length === 0 ? (
+            <div className="text-center py-12 text-text-light">
+              <span className="text-4xl block mb-3">🧾</span>
+              <p className="font-medium">Nenhuma compra em {formatMonthLabel(purchaseMonth)}</p>
+              <p className="text-xs mt-1">Clique em &quot;Nova Compra&quot; para registrar</p>
+            </div>
+          ) : (
+            <>
+              {/* Tabela (desktop) */}
+              <div className="hidden md:block overflow-x-auto border border-border rounded-xl">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 text-text-light text-xs uppercase tracking-wide">
+                    <tr>
+                      <th className="text-left font-medium px-3 py-2.5">Descrição</th>
+                      <th className="text-left font-medium px-3 py-2.5">Depto.</th>
+                      <th className="text-left font-medium px-3 py-2.5">Fornecedor</th>
+                      <th className="text-left font-medium px-3 py-2.5">Data</th>
+                      <th className="text-right font-medium px-3 py-2.5">Unit.</th>
+                      <th className="text-right font-medium px-3 py-2.5">Qtd</th>
+                      <th className="text-right font-medium px-3 py-2.5">Total</th>
+                      <th className="text-left font-medium px-3 py-2.5">Pagamento</th>
+                      {canManagePurchases && <th className="px-3 py-2.5"></th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {purchasesForMonth.map((p) => (
+                      <tr key={p.id} className="hover:bg-gray-50/60">
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            {p.image_url && (
+                              <button type="button" onClick={() => setLightboxImage(p.image_url)} className="shrink-0">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={p.image_url} alt="" className="w-9 h-9 rounded object-cover border border-border" />
+                              </button>
+                            )}
+                            <div className="min-w-0">
+                              <p className="font-medium text-text truncate max-w-[220px]">{p.description}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {p.department ? (
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${DEPARTMENT_BADGE[p.department] || "bg-gray-100 text-gray-700"}`}>{p.department}</span>
+                          ) : "—"}
+                        </td>
+                        <td className="px-3 py-2.5">{p.supplier || "—"}</td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">{formatPurchaseDate(p.purchase_date)}</td>
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap">{formatCurrency(p.unit_value || 0)}</td>
+                        <td className="px-3 py-2.5 text-right">{formatQty(p.quantity)}</td>
+                        <td className="px-3 py-2.5 text-right font-semibold whitespace-nowrap">{formatCurrency(p.total_value || 0)}</td>
+                        <td className="px-3 py-2.5">{p.payment_method || "—"}</td>
+                        {canManagePurchases && (
+                          <td className="px-3 py-2.5">
+                            <div className="flex gap-0.5 justify-end">
+                              <button onClick={() => { setEditPurchase(p); setPurchaseFromRequest(null); setShowPurchaseForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded" title="Editar"><EditIcon /></button>
+                              <button onClick={() => setDeletePurchase(p)} className="p-1.5 text-danger hover:bg-red-50 rounded" title="Excluir"><TrashIcon /></button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-gray-50 font-semibold">
+                      <td className="px-3 py-2.5" colSpan={6}>Total</td>
+                      <td className="px-3 py-2.5 text-right text-primary whitespace-nowrap">{formatCurrency(monthTotal)}</td>
+                      <td className="px-3 py-2.5" colSpan={canManagePurchases ? 2 : 1}></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              {/* Cards (mobile) */}
+              <div className="md:hidden space-y-3">
+                {purchasesForMonth.map((p) => (
+                  <div key={p.id} className="bg-card border border-border rounded-xl p-3">
+                    <div className="flex items-start gap-3">
+                      {p.image_url && (
+                        <button type="button" onClick={() => setLightboxImage(p.image_url)} className="shrink-0">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={p.image_url} alt="" className="w-12 h-12 rounded-lg object-cover border border-border" />
+                        </button>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-medium text-text truncate">{p.description}</p>
+                          <span className="font-semibold text-primary whitespace-nowrap">{formatCurrency(p.total_value || 0)}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-xs text-text-light items-center">
+                          {p.department && <span className={`px-1.5 py-0.5 rounded-full font-medium ${DEPARTMENT_BADGE[p.department] || "bg-gray-100 text-gray-700"}`}>{p.department}</span>}
+                          {p.supplier && <span>{p.supplier}</span>}
+                          <span>{formatPurchaseDate(p.purchase_date)}</span>
+                          <span>{formatQty(p.quantity)} × {formatCurrency(p.unit_value || 0)}</span>
+                          {p.payment_method && <span>{p.payment_method}</span>}
+                        </div>
+                        {p.notes && <p className="text-xs text-text-light mt-1">{p.notes}</p>}
+                      </div>
+                    </div>
+                    {canManagePurchases && (
+                      <div className="flex gap-1 justify-end mt-2 pt-2 border-t border-border">
+                        <button onClick={() => { setEditPurchase(p); setPurchaseFromRequest(null); setShowPurchaseForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded"><EditIcon /></button>
+                        <button onClick={() => setDeletePurchase(p)} className="p-1.5 text-danger hover:bg-red-50 rounded"><TrashIcon /></button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
       ),
@@ -634,6 +997,45 @@ export default function SolicitacoesPage() {
         message={`Excluir "${deleteSupplier?.name}"?`}
         loading={saving}
       />
+
+      {/* Purchase Form Modal */}
+      <PurchaseFormModal
+        open={showPurchaseForm}
+        onClose={() => { setShowPurchaseForm(false); setEditPurchase(null); setPurchaseFromRequest(null); }}
+        onSave={handleSavePurchase}
+        item={editPurchase}
+        fromRequest={purchaseFromRequest}
+        suppliers={suppliers}
+        saving={saving}
+      />
+
+      {/* Delete Purchase Confirm */}
+      <ConfirmDialog
+        open={!!deletePurchase}
+        onClose={() => setDeletePurchase(null)}
+        onConfirm={handleDeletePurchase}
+        title="Excluir Compra"
+        message={`Excluir a compra "${deletePurchase?.description}"?`}
+        loading={saving}
+      />
+
+      {/* Image Lightbox */}
+      {lightboxImage && (
+        <div
+          className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4"
+          onClick={() => setLightboxImage(null)}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={lightboxImage} alt="Imagem do produto" className="max-w-full max-h-[90vh] rounded-lg shadow-2xl" />
+          <button
+            onClick={() => setLightboxImage(null)}
+            className="absolute top-4 right-4 text-white/80 hover:text-white text-3xl font-light leading-none"
+            title="Fechar"
+          >
+            ×
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -653,18 +1055,73 @@ function getCategoryIcon(category: string): string {
   return icons[category] || "📦";
 }
 
+// Seletor de imagem reutilizável (solicitação e compra). Comprime no cliente
+// e devolve um data URL (base64), ou null quando removida.
+function ImagePicker({ value, onChange, label = "Imagem do produto (opcional)" }: {
+  value: string | null; onChange: (dataUrl: string | null) => void; label?: string;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [processing, setProcessing] = useState(false);
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // permite re-selecionar o mesmo arquivo
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { setError("Selecione um arquivo de imagem"); return; }
+    setError(null);
+    setProcessing(true);
+    try {
+      const dataUrl = await fileToCompressedDataUrl(file);
+      onChange(dataUrl);
+    } catch (err: any) {
+      setError(err?.message || "Falha ao processar imagem");
+    } finally {
+      setProcessing(false);
+    }
+  }
+
+  return (
+    <div>
+      <label className="block text-sm font-medium mb-1">{label}</label>
+      {value ? (
+        <div className="flex items-center gap-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={value} alt="Pré-visualização" className="w-20 h-20 rounded-lg object-cover border border-border" />
+          <div className="flex flex-col gap-1.5">
+            <label className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 rounded-lg cursor-pointer transition text-center">
+              Trocar
+              <input type="file" accept="image/*" onChange={handleFile} className="hidden" />
+            </label>
+            <button type="button" onClick={() => onChange(null)} className="px-3 py-1.5 text-xs font-medium text-danger hover:bg-red-50 rounded-lg transition">
+              Remover
+            </button>
+          </div>
+        </div>
+      ) : (
+        <label className="flex flex-col items-center justify-center gap-1 w-full py-6 border-2 border-dashed border-border rounded-lg cursor-pointer hover:border-primary/50 hover:bg-gray-50 transition text-text-light">
+          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+          <span className="text-xs font-medium">{processing ? "Processando..." : "Adicionar foto"}</span>
+          <input type="file" accept="image/*" onChange={handleFile} className="hidden" disabled={processing} />
+        </label>
+      )}
+      {error && <p className="text-xs text-danger mt-1">{error}</p>}
+    </div>
+  );
+}
+
 function RequestFormModal({ open, onClose, onSave, saving }: {
-  open: boolean; onClose: () => void; onSave: (toolName: string, qty: number, reason: string) => void; saving: boolean;
+  open: boolean; onClose: () => void; onSave: (toolName: string, qty: number, reason: string, imageUrl: string | null) => void; saving: boolean;
 }) {
   const [toolName, setToolName] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [reason, setReason] = useState("");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
 
-  useEffect(() => { setToolName(""); setQuantity(1); setReason(""); }, [open]);
+  useEffect(() => { setToolName(""); setQuantity(1); setReason(""); setImageUrl(null); }, [open]);
 
   return (
     <Modal open={open} onClose={onClose} title="Nova Solicitação">
-      <form onSubmit={(e) => { e.preventDefault(); onSave(toolName, quantity, reason); }} className="space-y-4">
+      <form onSubmit={(e) => { e.preventDefault(); onSave(toolName, quantity, reason, imageUrl); }} className="space-y-4">
         <div>
           <label className="block text-sm font-medium mb-1">Produto / Equipamento *</label>
           <input type="text" value={toolName} onChange={(e) => setToolName(e.target.value)} required
@@ -682,9 +1139,163 @@ function RequestFormModal({ open, onClose, onSave, saving }: {
             placeholder="Para que será utilizado..."
             className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" />
         </div>
+        <ImagePicker value={imageUrl} onChange={setImageUrl} />
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={saving}>{saving ? "Enviando..." : "Enviar Solicitação"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// Converte número do banco para o texto do input em pt-BR (vírgula decimal).
+function numToInput(n: number | null | undefined): string {
+  if (n == null || n === 0) return "";
+  return String(n).replace(".", ",");
+}
+
+function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers, saving }: {
+  open: boolean; onClose: () => void;
+  onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null) => void;
+  item: PurchaseOrder | null;
+  fromRequest: ToolRequest | null;
+  suppliers: Supplier[];
+  saving: boolean;
+}) {
+  const [description, setDescription] = useState("");
+  const [department, setDepartment] = useState("");
+  const [supplier, setSupplier] = useState("");
+  const [purchaseDate, setPurchaseDate] = useState("");
+  const [unitValue, setUnitValue] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("");
+  const [notes, setNotes] = useState("");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const today = new Date();
+    const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    if (item) {
+      setDescription(item.description || "");
+      setDepartment(item.department || "");
+      setSupplier(item.supplier || "");
+      setPurchaseDate((item.purchase_date || "").slice(0, 10) || todayISO);
+      setUnitValue(numToInput(item.unit_value));
+      setQuantity(numToInput(item.quantity) || "1");
+      setPaymentMethod(item.payment_method || "");
+      setNotes(item.notes || "");
+      setImageUrl(item.image_url || null);
+    } else if (fromRequest) {
+      setDescription(fromRequest.tool_name || "");
+      setDepartment("");
+      setSupplier("");
+      setPurchaseDate(todayISO);
+      setUnitValue("");
+      setQuantity(numToInput(fromRequest.quantity) || "1");
+      setPaymentMethod("");
+      setNotes("");
+      setImageUrl(fromRequest.image_url || null);
+    } else {
+      setDescription(""); setDepartment(""); setSupplier(""); setPurchaseDate(todayISO);
+      setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setImageUrl(null);
+    }
+  }, [item, fromRequest, open]);
+
+  const unit = parseDecimalBR(unitValue);
+  const qty = parseDecimalBR(quantity);
+  const total = unit * qty;
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    onSave({
+      description,
+      department: department || null,
+      supplier: supplier || null,
+      purchase_date: purchaseDate || null,
+      unit_value: unit,
+      quantity: qty || 1,
+      total_value: total,
+      payment_method: paymentMethod || null,
+      notes: notes || null,
+      image_url: imageUrl,
+    }, fromRequest?.id || null);
+  }
+
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+  const title = item ? "Editar Compra" : fromRequest ? "Registrar Compra" : "Nova Compra";
+
+  return (
+    <Modal open={open} onClose={onClose} title={title} maxWidth="max-w-xl">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {fromRequest && !item && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-800">
+            Compra a partir da solicitação de <strong>{fromRequest.requested_by}</strong>. Ao salvar, a solicitação é marcada como <strong>Comprada</strong>.
+          </div>
+        )}
+        <div>
+          <label className="block text-sm font-medium mb-1">Descrição *</label>
+          <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} required
+            placeholder="Ex: Fita silver tape, Água 1,5 L..." className={inputCls} />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Departamento</label>
+            <select value={department} onChange={(e) => setDepartment(e.target.value)} className={inputCls}>
+              <option value="">Selecionar...</option>
+              {PURCHASE_DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Fornecedor</label>
+            <input type="text" list="purchase-suppliers" value={supplier} onChange={(e) => setSupplier(e.target.value)}
+              placeholder="Ex: POTENCYA" className={inputCls} />
+            <datalist id="purchase-suppliers">
+              {suppliers.map((s) => <option key={s.id} value={s.name} />)}
+            </datalist>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Data da compra</label>
+            <input type="date" value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Forma de pagamento</label>
+            <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className={inputCls}>
+              <option value="">Selecionar...</option>
+              {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Valor unit. (R$)</label>
+            <input type="text" inputMode="decimal" value={unitValue} onChange={(e) => setUnitValue(e.target.value)}
+              placeholder="0,00" className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Quantidade</label>
+            <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)}
+              placeholder="1" className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Valor total</label>
+            <div className="w-full px-3 py-2.5 border border-border rounded-lg text-sm bg-gray-50 font-semibold text-primary">
+              {formatCurrency(total)}
+            </div>
+          </div>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Observação</label>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+            placeholder="Ex: Crédito de 354,22, frete incluso..." className={`${inputCls} resize-none`} />
+        </div>
+        <ImagePicker value={imageUrl} onChange={setImageUrl} />
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar Compra"}</Button>
         </div>
       </form>
     </Modal>

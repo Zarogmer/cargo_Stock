@@ -228,6 +228,7 @@ export const NAV_ITEMS: NavItem[] = [
     module: "SOLICITACOES",
     children: [
       { label: "Solicitações", href: "/solicitacoes?tab=solicitacoes" },
+      { label: "Controle de Compras", href: "/solicitacoes?tab=compras" },
       { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos", roles: ["TECNOLOGIA"] },
       { label: "Fornecedores", href: "/solicitacoes?tab=fornecedores" },
     ],
