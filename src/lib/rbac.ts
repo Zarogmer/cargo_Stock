@@ -183,7 +183,7 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       { label: "Escalação de Costado", href: "/escalacao/costado" },
       { label: "Escalação de Embarque", href: "/escalacao/embarque" },
-      { label: "Rancho para Embarque", href: "/escalacao/estoque" },
+      { label: "Embarque", href: "/escalacao/estoque" },
     ],
   },
   {

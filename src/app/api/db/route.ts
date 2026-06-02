@@ -7,6 +7,7 @@ const TABLE_MAP: Record<string, string> = {
   users: "user",
   stock_items: "stockItem",
   stock_movements: "stockMovement",
+  embark_kit_items: "embarkKitItem",
   employees: "employee",
   epis: "epi",
   epi_movements: "epiMovement",

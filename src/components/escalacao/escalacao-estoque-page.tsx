@@ -20,6 +20,15 @@ interface Ship {
   assigned_team: string | null;
 }
 
+// Item do kit de embarque (embark_kit_items) + o material do Estoque ligado.
+interface KitItem {
+  id: number;
+  team: string;
+  stock_item_id: number;
+  quantity: number; // quanto a equipe leva
+  stock_items: { id: number; name: string; quantity: number; location: string | null } | null;
+}
+
 export function EscalacaoEstoquePage() {
   const { profile } = useAuth();
   const pathname = usePathname();
@@ -30,6 +39,7 @@ export function EscalacaoEstoquePage() {
   const [selectedShip, setSelectedShip] = useState<string>("");
   const [selectedTeam, setSelectedTeam] = useState<"EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3">("EQUIPE_1");
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
+  const [kitItems, setKitItems] = useState<KitItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmEmbark, setConfirmEmbark] = useState(false);
   const [embarking, setEmbarking] = useState(false);
@@ -37,12 +47,14 @@ export function EscalacaoEstoquePage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [shipsRes, stockRes] = await Promise.all([
+      const [shipsRes, stockRes, kitRes] = await Promise.all([
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
         db.from("stock_items").select("*").order("name"),
+        db.from("embark_kit_items").select("*, stock_items(id, name, quantity, location)"),
       ]);
       setShips((shipsRes.data as Ship[]) || []);
       setStockItems(stockRes.data || []);
+      setKitItems((kitRes.data as KitItem[]) || []);
     } catch (err) {
       console.error("Load error:", err);
     } finally {
@@ -83,6 +95,19 @@ export function EscalacaoEstoquePage() {
   const readyCount = itemsWithStatus.filter((i) => i.ready).length;
   const missingCount = itemsWithStatus.filter((i) => !i.ready).length;
 
+  // Materiais do kit de embarque desta equipe (deduzidos do Estoque/GALPAO).
+  const teamKit = kitItems
+    .filter((k) => k.team === selectedTeam)
+    .map((k) => {
+      const estName = k.stock_items?.name || `#${k.stock_item_id}`;
+      const emEstoque = k.stock_items?.quantity ?? 0;
+      const ready = emEstoque >= k.quantity;
+      return { ...k, estName, emEstoque, need: k.quantity, ready, falta: Math.max(0, k.quantity - emEstoque), location: k.stock_items?.location || "—" };
+    })
+    .sort((a, b) => a.estName.localeCompare(b.estName, "pt-BR"));
+  const matReady = teamKit.filter((k) => k.ready).length;
+  const matMissing = teamKit.length - matReady;
+
   async function handleEmbarcar() {
     if (!currentShip) return;
     setEmbarking(true);
@@ -105,6 +130,24 @@ export function EscalacaoEstoquePage() {
       } as any).eq("id", item.id);
     }
 
+    // Materiais (kit) -> baixa do Estoque de materiais (GALPAO).
+    for (const k of teamKit) {
+      if (k.need <= 0 || k.emEstoque <= 0) continue;
+      const toConsume = Math.min(k.emEstoque, k.need);
+      await db.from("stock_movements").insert({
+        stock_item_id: k.stock_item_id,
+        movement_type: "BAIXA",
+        quantity: toConsume,
+        movement_date: new Date().toISOString().split("T")[0],
+        notes: `Embarque (materiais): ${currentShip.name} (${selectedTeam})`,
+        created_by: actor,
+      } as any);
+      await db.from("stock_items").update({
+        quantity: k.emEstoque - toConsume,
+        updated_by: actor,
+      } as any).eq("id", k.stock_item_id);
+    }
+
     if (currentShip.status === "AGENDADO") {
       await db.from("ships").update({ status: "EM_OPERACAO" } as any).eq("id", selectedShip);
     }
@@ -119,7 +162,7 @@ export function EscalacaoEstoquePage() {
       <div className="flex items-center justify-center h-64">
         <div className="flex flex-col items-center gap-2">
           <span className="text-4xl animate-bounce">📦</span>
-          <span className="text-sm text-text-light animate-pulse">Carregando rancho...</span>
+          <span className="text-sm text-text-light animate-pulse">Carregando embarque...</span>
         </div>
       </div>
     );
@@ -128,7 +171,7 @@ export function EscalacaoEstoquePage() {
   if (ships.length === 0) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-bold text-text">Rancho para Embarque 📦</h1>
+        <h1 className="text-2xl font-bold text-text">Embarque 📦</h1>
         <div className="bg-card rounded-xl shadow-sm border border-border p-8 text-center text-text-light">
           <span className="text-4xl block mb-3">🚢</span>
           <p className="font-medium text-text mb-1">Nenhum navio agendado ou em operação</p>
@@ -140,7 +183,7 @@ export function EscalacaoEstoquePage() {
 
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-bold text-text">Rancho para Embarque 📦</h1>
+      <h1 className="text-2xl font-bold text-text">Embarque 📦</h1>
 
       <ShipSelector
         ships={ships}
@@ -148,37 +191,86 @@ export function EscalacaoEstoquePage() {
         onSelect={setSelectedShip}
       />
 
-      <div className="space-y-4">
-        <div className="flex flex-wrap gap-2 items-end justify-between">
-          <div className="flex gap-2 items-center">
-            <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Equipe (rancho):</span>
-            <select
-              value={selectedTeam}
-              onChange={(e) => setSelectedTeam(e.target.value as any)}
-              className="px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
-            >
-              <option value="EQUIPE_1">Equipe 1</option>
-              <option value="EQUIPE_2">Equipe 2</option>
-              <option value="EQUIPE_3">Equipe 3</option>
-            </select>
-          </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className={`text-sm font-bold px-3 py-1.5 rounded-full ${
-              allReady ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
-            }`}>
-              {pct}% pronto
-            </span>
-            <span className="text-xs text-text-light">
-              {readyCount} prontos · {missingCount} com falta · {totalCurrent}/{totalDefault} itens
-            </span>
-            {canEmbarcar && teamItems.length > 0 && (
-              <Button size="sm" variant="warning" onClick={() => setConfirmEmbark(true)}>
-                ⚓ Embarcar
-              </Button>
-            )}
+      <div className="flex flex-wrap gap-2 items-center justify-between">
+        <div className="flex gap-2 items-center">
+          <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Equipe:</span>
+          <select
+            value={selectedTeam}
+            onChange={(e) => setSelectedTeam(e.target.value as any)}
+            className="px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+          >
+            <option value="EQUIPE_1">Equipe 1</option>
+            <option value="EQUIPE_2">Equipe 2</option>
+            <option value="EQUIPE_3">Equipe 3</option>
+          </select>
+        </div>
+        {canEmbarcar && (teamItems.length > 0 || teamKit.length > 0) && (
+          <Button size="sm" variant="warning" onClick={() => setConfirmEmbark(true)}>
+            ⚓ Embarcar
+          </Button>
+        )}
+      </div>
+
+      {/* Materiais — baixados do Estoque (GALPAO) ao embarcar */}
+      <section className="space-y-2">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h2 className="text-sm font-bold text-text uppercase tracking-wider">🧰 Materiais (do Estoque)</h2>
+          <span className="text-xs text-text-light">{matReady} ok · {matMissing} com falta · {teamKit.length} itens</span>
+        </div>
+        <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-border">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Item</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Categoria</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Leva</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Em Estoque</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {teamKit.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-10 text-center text-text-light">
+                      <span className="text-3xl block mb-2">🧰</span>
+                      Sem kit de materiais para esta equipe
+                    </td>
+                  </tr>
+                ) : (
+                  teamKit.map((k) => (
+                    <tr key={k.id} className={`hover:bg-gray-50 ${!k.ready ? "bg-red-50/40" : ""}`}>
+                      <td className="px-4 py-3 font-medium">{k.estName}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">{k.location}</span>
+                      </td>
+                      <td className="px-4 py-3 text-center text-text-light">{k.need}</td>
+                      <td className={`px-4 py-3 text-center font-bold ${!k.ready ? "text-danger" : "text-success"}`}>{k.emEstoque}</td>
+                      <td className="px-4 py-3 text-center">
+                        {k.ready ? (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">✓ Ok</span>
+                        ) : (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">Falta {k.falta}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
+      </section>
 
+      {/* Comida — baixada do Rancho (estoque por equipe) ao embarcar */}
+      <section className="space-y-2">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h2 className="text-sm font-bold text-text uppercase tracking-wider">🛒 Comida (Rancho)</h2>
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${allReady ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{pct}% pronto</span>
+            <span className="text-xs text-text-light">{readyCount} prontos · {missingCount} com falta</span>
+          </div>
+        </div>
         <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -194,8 +286,8 @@ export function EscalacaoEstoquePage() {
               <tbody className="divide-y divide-border">
                 {itemsWithStatus.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-4 py-12 text-center text-text-light">
-                      <span className="text-3xl block mb-2">📦</span>
+                    <td colSpan={5} className="px-4 py-10 text-center text-text-light">
+                      <span className="text-3xl block mb-2">🛒</span>
                       Nenhum item com quantidade padrão definida
                     </td>
                   </tr>
@@ -226,14 +318,14 @@ export function EscalacaoEstoquePage() {
             </table>
           </div>
         </div>
-      </div>
+      </section>
 
       <ConfirmDialog
         open={confirmEmbark}
         onClose={() => setConfirmEmbark(false)}
         onConfirm={handleEmbarcar}
         title="Confirmar Embarque"
-        message={`Embarcar ${selectedTeam} no navio "${currentShip?.name}"? As quantidades padrão serão retiradas do rancho desta equipe.`}
+        message={`Embarcar ${selectedTeam} no navio "${currentShip?.name}"? Os materiais do kit serão baixados do Estoque e a comida do Rancho desta equipe.`}
         confirmLabel="⚓ Confirmar Embarque"
         variant="warning"
         loading={embarking}
