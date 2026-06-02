@@ -17,9 +17,9 @@ interface StockChartItem {
 }
 
 interface DashboardStats {
-  totalStock: number;
+  totalMateriais: number; // Estoque (materiais do galpão, team=GALPAO)
+  totalRancho: number;    // Rancho (comida por equipe, EQUIPE_1/2/3)
   totalEmployees: number;
-  totalFerramentas: number;
   totalMaquinario: number;
   totalEpis: number;
   totalUniforms: number;
@@ -70,7 +70,7 @@ export default function DashboardPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
 
-  const [stats, setStats] = useState<DashboardStats>({ totalStock: 0, totalEmployees: 0, totalFerramentas: 0, totalMaquinario: 0, totalEpis: 0, totalUniforms: 0, totalConversations: 0, totalSolicitacoes: 0 });
+  const [stats, setStats] = useState<DashboardStats>({ totalMateriais: 0, totalRancho: 0, totalEmployees: 0, totalMaquinario: 0, totalEpis: 0, totalUniforms: 0, totalConversations: 0, totalSolicitacoes: 0 });
   const [movements, setMovements] = useState<RecentMovement[]>([]);
   const [dollar, setDollar] = useState<DollarQuote | null>(null);
   const [stockItems, setStockItems] = useState<StockChartItem[]>([]);
@@ -87,11 +87,14 @@ export default function DashboardPage() {
       // card de Conversas conta as mensagens recebidas depois desse instante.
       const convLastSeen = typeof window !== "undefined" ? localStorage.getItem("conversas_last_seen") : null;
 
-      const [stockRes, stockFullRes, employeesRes, ferramentasRes, maquinarioRes, episRes, uniformsRes, solicitacoesRes, unreadRes] = await Promise.all([
-        db.from("stock_items").select("id", { count: "exact", head: true }),
-        db.from("stock_items").select("name, quantity, default_quantity, category, team"),
+      // "Estoque" = materiais do galpão (team=GALPAO). "Rancho" = comida por
+      // equipe (EQUIPE_1/2/3). Ambos vivem em stock_items, separados pelo team.
+      const FOOD_TEAMS = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_3"];
+      const [materiaisRes, ranchoRes, stockFullRes, employeesRes, maquinarioRes, episRes, uniformsRes, solicitacoesRes, unreadRes] = await Promise.all([
+        db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "GALPAO"),
+        db.from("stock_items").select("id", { count: "exact", head: true }).in("team", FOOD_TEAMS),
+        db.from("stock_items").select("name, quantity, default_quantity, category, team").in("team", FOOD_TEAMS),
         db.from("employees").select("id", { count: "exact", head: true }),
-        db.from("tools").select("id", { count: "exact", head: true }).eq("asset_type", "FERRAMENTA"),
         db.from("tools").select("id", { count: "exact", head: true }).eq("asset_type", "MAQUINARIO"),
         db.from("epis").select("id", { count: "exact", head: true }),
         // Uniformes: soma das quantidades em estoque (total de peças), não o nº de tipos.
@@ -107,9 +110,9 @@ export default function DashboardPage() {
       const totalUniforms = ((uniformsRes.data as Array<{ stock_qty: number | null }> | null) || [])
         .reduce((sum, u) => sum + (Number(u.stock_qty) || 0), 0);
       setStats({
-        totalStock: stockRes.count || 0,
+        totalMateriais: materiaisRes.count || 0,
+        totalRancho: ranchoRes.count || 0,
         totalEmployees: employeesRes.count || 0,
-        totalFerramentas: ferramentasRes.count || 0,
         totalMaquinario: maquinarioRes.count || 0,
         totalEpis: episRes.count || 0,
         totalUniforms,
@@ -364,9 +367,9 @@ export default function DashboardPage() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard label="Estoque" value={stats.totalStock} icon="🛒" tone="blue" href="/almoxarifado?tab=estoque" />
+        <StatCard label="Estoque" value={stats.totalMateriais} icon="🧰" tone="blue" href="/almoxarifado?tab=estoque" />
+        <StatCard label="Rancho" value={stats.totalRancho} icon="🛒" tone="amber" href="/almoxarifado?tab=rancho" />
         <StatCard label="RH" value={stats.totalEmployees} icon="👷" tone="emerald" href="/colaboradores" />
-        <StatCard label="Ferramentas" value={stats.totalFerramentas} icon="🔧" tone="amber" href="/almoxarifado?tab=ferramentas" />
         <StatCard label="Maquinário" value={stats.totalMaquinario} icon="⚙️" tone="teal" href="/almoxarifado?tab=maquinario" />
         <StatCard label="EPIs" value={stats.totalEpis} icon="⛑️" tone="violet" href="/almoxarifado?tab=epi" />
         <StatCard label="Uniformes" value={stats.totalUniforms} icon="👕" tone="rose" href="/almoxarifado?tab=uniforme" />

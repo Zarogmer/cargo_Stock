@@ -1,0 +1,435 @@
+"use client";
+
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { usePathname } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
+import { db } from "@/lib/db";
+import { hasPermission } from "@/lib/rbac";
+import { DataTable } from "@/components/ui/data-table";
+import { Button } from "@/components/ui/button";
+import { Modal } from "@/components/ui/modal";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
+import { formatDateTime, matchSearch, parseDecimalBR, formatQty, buildCodeMap } from "@/lib/utils";
+import type { StockItem } from "@/types/database";
+
+// Materiais do galpão (almoxarifado). Reaproveita a tabela `stock_items` com a
+// sentinela team="GALPAO" pra separar do Rancho (comida, EQUIPE_1/2/3) e do
+// Estoque para Embarque — ambos filtram por equipe e ignoram GALPAO. O grupo da
+// planilha (Elétrica, Hidrojato, Cozinha...) fica em `location`; `category` é
+// sempre OUTROS (enum fixo, não usado aqui).
+const TEAM = "GALPAO";
+
+// Grupos conhecidos (vindos da planilha). O select aceita texto livre via
+// datalist, então novos grupos podem ser criados na hora.
+const KNOWN_GROUPS = [
+  "Elétrica",
+  "EPI e Químicos",
+  "Hidrojato",
+  "Pistola e Caneta",
+  "Rodas",
+  "Líquidos",
+  "Ferramentas",
+  "Mangueiras e Conexões",
+  "Varões",
+  "Cozinha",
+  "Outros",
+];
+
+export function MateriaisPanel() {
+  const { profile } = useAuth();
+  const pathname = usePathname();
+  const [items, setItems] = useState<StockItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dbError, setDbError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [filterGroup, setFilterGroup] = useState("TODOS");
+  const [editItem, setEditItem] = useState<StockItem | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [showBaixa, setShowBaixa] = useState(false);
+  const [baixaItem, setBaixaItem] = useState<StockItem | null>(null);
+  const [deleteItem, setDeleteItem] = useState<StockItem | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const role = profile?.role || "RH";
+  const canCreate = hasPermission(role, "ESTOQUE", "create");
+  const canEdit = hasPermission(role, "ESTOQUE", "edit");
+  const canDelete = hasPermission(role, "ESTOQUE", "delete");
+  const canBaixar = hasPermission(role, "ESTOQUE", "baixar");
+
+  const loadItems = useCallback(async () => {
+    setLoading(true);
+    setDbError(null);
+    try {
+      const { data, error } = await db
+        .from("stock_items")
+        .select("*")
+        .eq("team", TEAM)
+        .order("name", { ascending: true });
+      if (error) {
+        console.error("DB stock_items (materiais) error:", error);
+        setDbError(`${error.code}: ${error.message} — ${error.hint || ""}`);
+      }
+      setItems(data || []);
+    } catch (err) {
+      console.error("Erro ao carregar materiais:", err);
+      setDbError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadItems();
+  }, [loadItems, pathname]);
+
+  // Código derivado do nome (prefixo de iniciais + sequência), por item.
+  const codeMap = useMemo(() => buildCodeMap(items, (i) => i.id, (i) => i.name), [items]);
+
+  // Categorias (grupos) presentes nos dados, pra montar os filtros.
+  const groups = useMemo(() => {
+    const set = new Set<string>();
+    for (const i of items) set.add(i.location || "Outros");
+    return [...set].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [items]);
+
+  const filteredItems = items.filter((i) => {
+    const matchesSearch =
+      matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search);
+    const matchesGroup = filterGroup === "TODOS" || (i.location || "Outros") === filterGroup;
+    return matchesSearch && matchesGroup;
+  });
+
+  async function handleSave(formData: { name: string; location: string; quantity: number; default_quantity: number }) {
+    setSaving(true);
+    const actor = profile?.full_name || "Sistema";
+    const payload = {
+      name: formData.name,
+      location: formData.location,
+      quantity: formData.quantity,
+      default_quantity: formData.default_quantity,
+      category: "OUTROS",
+      team: TEAM,
+      min_quantity: 0,
+      updated_by: actor,
+    } as Record<string, unknown>;
+
+    if (editItem) {
+      await db.from("stock_items").update(payload).eq("id", editItem.id);
+    } else {
+      await db.from("stock_items").insert(payload);
+    }
+
+    setSaving(false);
+    setShowForm(false);
+    setEditItem(null);
+    loadItems();
+  }
+
+  async function handleDelete() {
+    if (!deleteItem) return;
+    setSaving(true);
+    await db.from("stock_items").delete().eq("id", deleteItem.id);
+    setSaving(false);
+    setDeleteItem(null);
+    loadItems();
+  }
+
+  async function handleBaixa(qty: number, notes: string) {
+    if (!baixaItem) return;
+    setSaving(true);
+    const actor = profile?.full_name || "Sistema";
+
+    await db.from("stock_movements").insert({
+      stock_item_id: baixaItem.id,
+      movement_type: "BAIXA",
+      quantity: qty,
+      movement_date: new Date().toISOString().split("T")[0],
+      notes,
+      created_by: actor,
+    } as Record<string, unknown>);
+
+    await db
+      .from("stock_items")
+      .update({ quantity: Math.round((baixaItem.quantity - qty) * 1000) / 1000, updated_by: actor } as Record<string, unknown>)
+      .eq("id", baixaItem.id);
+
+    setSaving(false);
+    setShowBaixa(false);
+    setBaixaItem(null);
+    loadItems();
+  }
+
+  const columns = [
+    {
+      key: "name",
+      label: "Nome",
+      render: (i: StockItem) => <span className="font-medium">{i.name}</span>,
+    },
+    {
+      key: "code",
+      label: "Código",
+      render: (i: StockItem) => <span className="font-mono text-xs text-text-light">{codeMap.get(i.id) || "—"}</span>,
+    },
+    {
+      key: "location",
+      label: "Categoria",
+      render: (i: StockItem) => (
+        <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+          {i.location || "Outros"}
+        </span>
+      ),
+    },
+    {
+      key: "quantity",
+      label: "Qtd",
+      render: (i: StockItem) => {
+        const def = i.default_quantity || 0;
+        const isLow = def > 0 && i.quantity < def * 0.5;
+        const isEmpty = i.quantity <= 0;
+        return (
+          <span className={`font-semibold ${isEmpty ? "text-danger" : isLow ? "text-amber-500" : "text-success"}`}>
+            {formatQty(i.quantity)}
+          </span>
+        );
+      },
+    },
+    {
+      key: "updated_at",
+      label: "Atualizado",
+      hideOnMobile: true,
+      render: (i: StockItem) => (
+        <span className="text-text-light text-xs">{formatDateTime(i.updated_at)}</span>
+      ),
+    },
+    {
+      key: "actions",
+      label: "",
+      className: "w-24",
+      render: (i: StockItem) => (
+        <div className="flex items-center gap-1">
+          {canBaixar && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setBaixaItem(i); setShowBaixa(true); }}
+              className="p-1.5 text-amber-600 hover:bg-amber-50 rounded"
+              title="Baixar"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+              </svg>
+            </button>
+          )}
+          {canEdit && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setEditItem(i); setShowForm(true); }}
+              className="p-1.5 text-primary hover:bg-blue-50 rounded"
+              title="Editar"
+            >
+              <EditIcon />
+            </button>
+          )}
+          {canDelete && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setDeleteItem(i); }}
+              className="p-1.5 text-danger hover:bg-red-50 rounded"
+              title="Excluir"
+            >
+              <TrashIcon />
+            </button>
+          )}
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {dbError && (
+        <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-sm text-red-700 font-mono break-all">
+          ⚠️ Erro ao carregar dados: {dbError}
+        </div>
+      )}
+
+      {/* Category (group) filter */}
+      <div className="flex flex-wrap gap-2">
+        {["TODOS", ...groups].map((g) => (
+          <button
+            key={g}
+            onClick={() => setFilterGroup(g)}
+            className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${filterGroup === g ? "bg-primary text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+          >
+            {g === "TODOS" ? "Todos" : g}
+          </button>
+        ))}
+      </div>
+
+      <DataTable
+        columns={columns}
+        data={filteredItems}
+        loading={loading}
+        keyExtractor={(i) => i.id}
+        emptyMessage="Nenhum material encontrado"
+        mobileCards
+        onRowClick={canEdit ? (i) => { setEditItem(i); setShowForm(true); } : undefined}
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Buscar por nome ou código..."
+        actions={canCreate ? (
+          <Button onClick={() => { setEditItem(null); setShowForm(true); }} size="sm">
+            <PlusIcon className="w-4 h-4" />
+            Adicionar
+          </Button>
+        ) : undefined}
+      />
+
+      <MaterialFormModal
+        open={showForm}
+        onClose={() => { setShowForm(false); setEditItem(null); }}
+        onSave={handleSave}
+        item={editItem}
+        groups={groups.length > 0 ? groups : KNOWN_GROUPS}
+        saving={saving}
+      />
+
+      <BaixaModal
+        open={showBaixa}
+        onClose={() => { setShowBaixa(false); setBaixaItem(null); }}
+        onConfirm={handleBaixa}
+        item={baixaItem}
+        saving={saving}
+      />
+
+      <ConfirmDialog
+        open={!!deleteItem}
+        onClose={() => setDeleteItem(null)}
+        onConfirm={handleDelete}
+        title="Excluir Material"
+        message={`Tem certeza que deseja excluir "${deleteItem?.name}"?`}
+        confirmLabel="Excluir"
+        loading={saving}
+      />
+    </div>
+  );
+}
+
+function MaterialFormModal({ open, onClose, onSave, item, groups, saving }: {
+  open: boolean;
+  onClose: () => void;
+  onSave: (data: { name: string; location: string; quantity: number; default_quantity: number }) => void;
+  item: StockItem | null;
+  groups: string[];
+  saving: boolean;
+}) {
+  const [name, setName] = useState("");
+  const [group, setGroup] = useState("");
+  // Strings para aceitar vírgula (ex.: "1,5"); convertidas no submit.
+  const [quantity, setQuantity] = useState("");
+  const [defaultQuantity, setDefaultQuantity] = useState("");
+
+  useEffect(() => {
+    if (item) {
+      setName(item.name);
+      setGroup(item.location || "");
+      setQuantity(formatQty(item.quantity));
+      setDefaultQuantity(item.default_quantity ? formatQty(item.default_quantity) : "");
+    } else {
+      setName("");
+      setGroup("");
+      setQuantity("");
+      setDefaultQuantity("");
+    }
+  }, [item, open]);
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    onSave({
+      name,
+      location: group.trim() || "Outros",
+      quantity: parseDecimalBR(quantity),
+      default_quantity: parseDecimalBR(defaultQuantity),
+    });
+  }
+
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
+
+  return (
+    <Modal open={open} onClose={onClose} title={item ? "Editar Material" : "Novo Material"}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Nome *</label>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Categoria</label>
+          <input
+            type="text"
+            list="material-groups"
+            value={group}
+            onChange={(e) => setGroup(e.target.value)}
+            placeholder="Ex: Elétrica, Hidrojato, Cozinha..."
+            className={inputCls}
+          />
+          <datalist id="material-groups">
+            {groups.map((g) => <option key={g} value={g} />)}
+          </datalist>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Qtd Padrão</label>
+            <input type="text" inputMode="decimal" value={defaultQuantity} onChange={(e) => setDefaultQuantity(e.target.value)} placeholder="Ex: 10" className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Qtd Atual</label>
+            <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 8" className={inputCls} />
+          </div>
+        </div>
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function BaixaModal({ open, onClose, onConfirm, item, saving }: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: (qty: number, notes: string) => void;
+  item: StockItem | null;
+  saving: boolean;
+}) {
+  const [qty, setQty] = useState("");
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => { setQty(""); setNotes(""); }, [open]);
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    onConfirm(parseDecimalBR(qty), notes);
+  }
+
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
+
+  return (
+    <Modal open={open} onClose={onClose} title="Baixar Material">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <p className="text-sm text-text-light">
+          Item: <strong>{item?.name}</strong> (disponível: {formatQty(item?.quantity)})
+        </p>
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Quantidade *</label>
+          <input type="text" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="Ex: 2" required className={inputCls} />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Observações</label>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
+        </div>
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button variant="warning" type="submit" disabled={saving}>{saving ? "Registrando..." : "Confirmar Baixa"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}

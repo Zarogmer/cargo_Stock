@@ -192,10 +192,13 @@ export const NAV_ITEMS: NavItem[] = [
     icon: "estoque",
     module: "ALMOXARIFADO",
     children: [
+      // "Estoque" = materiais do galpão (inventário com quantidade). "Rancho" =
+      // comida por equipe (antiga aba "Estoque"). A antiga aba "Ferramentas"
+      // (empréstimo) foi substituída pelo Estoque; o empréstimo segue em Maquinário.
       { label: "Estoque", href: "/almoxarifado?tab=estoque" },
+      { label: "Rancho", href: "/almoxarifado?tab=rancho" },
       { label: "EPI", href: "/almoxarifado?tab=epi" },
       { label: "Uniforme", href: "/almoxarifado?tab=uniforme" },
-      { label: "Ferramentas", href: "/almoxarifado?tab=ferramentas" },
       { label: "Maquinário", href: "/almoxarifado?tab=maquinario" },
       { label: "Histórico", href: "/almoxarifado?tab=historico" },
     ],

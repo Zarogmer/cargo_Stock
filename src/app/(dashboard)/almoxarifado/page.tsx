@@ -3,22 +3,31 @@
 import { useSearchParams } from "next/navigation";
 import { Tabs } from "@/components/ui/tabs";
 import { EstoquePanel } from "@/components/almoxarifado/estoque-panel";
+import { MateriaisPanel } from "@/components/almoxarifado/materiais-panel";
 import { SimpleInventoryPanel } from "@/components/almoxarifado/inventory-simple-panel";
 import { ToolsPanel } from "@/components/almoxarifado/tools-panel";
 import { HistoricoPanel } from "@/components/almoxarifado/historico-panel";
 
-// Almoxarifado: centraliza Estoque (suprimentos), EPI, Uniforme, Ferramentas e
-// Maquinário em abas únicas. A troca de aba é dirigida pelo submenu da sidebar
-// via ?tab= (mesmo padrão das outras telas, com hideHeader).
+// Almoxarifado: centraliza Estoque (materiais do galpão), Rancho (comida por
+// equipe), EPI, Uniforme, Maquinário em abas únicas. A troca de aba é dirigida
+// pelo submenu da sidebar via ?tab= (mesmo padrão das outras telas, com
+// hideHeader).
+//
+// Histórico de nomes (jun/2026): a antiga aba "Estoque" (comida) virou "Rancho"
+// e a antiga aba "Ferramentas" (controle de empréstimo) deu lugar à nova aba
+// "Estoque" — inventário de materiais com quantidade. O maquinário continua com
+// o controle de empréstimo (tabela `tools`).
 export default function AlmoxarifadoPage() {
   const searchParams = useSearchParams();
-  const initialTab = searchParams.get("tab") || "estoque";
+  // Aceita ?tab=ferramentas (link antigo) como atalho pro novo Estoque.
+  const rawTab = searchParams.get("tab") || "estoque";
+  const initialTab = rawTab === "ferramentas" ? "estoque" : rawTab;
 
   const tabs = [
-    { key: "estoque", label: "Estoque", content: <EstoquePanel /> },
+    { key: "estoque", label: "Estoque", content: <MateriaisPanel /> },
+    { key: "rancho", label: "Rancho", content: <EstoquePanel /> },
     { key: "epi", label: "EPI", content: <SimpleInventoryPanel kind="EPI" /> },
     { key: "uniforme", label: "Uniforme", content: <SimpleInventoryPanel kind="UNIFORME" /> },
-    { key: "ferramentas", label: "Ferramentas", content: <ToolsPanel assetType="FERRAMENTA" /> },
     { key: "maquinario", label: "Maquinário", content: <ToolsPanel assetType="MAQUINARIO" /> },
     { key: "historico", label: "Histórico", content: <HistoricoPanel /> },
   ];
