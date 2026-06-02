@@ -10,12 +10,18 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { TOOL_STATUS_LABELS, MOVEMENT_TYPE_LABELS, buildCodeMap } from "@/lib/utils";
-import type { Tool, ToolStatus, AssetType, ToolMovementType } from "@/types/database";
+import { TOOL_STATUS_LABELS, buildCodeMap } from "@/lib/utils";
+import type { Tool, ToolStatus, AssetType } from "@/types/database";
 
-// Painel de Ferramentas ou Maquinário (tabela `tools` filtrada por asset_type).
-// Corpo da antiga página /equipamentos, parametrizado pra servir as duas abas
-// do Almoxarifado. O histórico de movimentações fica no painel Histórico.
+// Painel de Maquinário (tabela `tools`, asset_type=MAQUINARIO) — inventário
+// simples: nome, código, status de condição (Disponível / Manutenção) e obs.
+//
+// O controle de empréstimo por equipe (entregar/devolver, antes via botões
+// E1/E2/Man) foi removido daqui a pedido — fica igual às outras abas do
+// Almoxarifado e o empréstimo é tratado em outro lugar. O status só guarda a
+// condição da máquina; os estados de equipe (EQUIPE_1/2) não são mais oferecidos.
+const CONDITION_STATUSES: ToolStatus[] = ["DISPONIVEL", "MANUTENCAO"];
+
 export function ToolsPanel({ assetType }: { assetType: AssetType }) {
   const { profile } = useAuth();
   const pathname = usePathname();
@@ -34,7 +40,6 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
   const [showForm, setShowForm] = useState(false);
   const [editTool, setEditTool] = useState<Tool | null>(null);
   const [deleteTool, setDeleteTool] = useState<Tool | null>(null);
-  const [actionTool, setActionTool] = useState<{ tool: Tool; action: ToolMovementType } | null>(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -62,29 +67,6 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
     setSaving(false); setShowForm(false); setEditTool(null); loadAll();
   }
 
-  async function handleAction(notes: string) {
-    if (!actionTool) return;
-    setSaving(true);
-    const actor = profile?.full_name || "Sistema";
-    const { tool, action } = actionTool;
-
-    let newStatus: ToolStatus = tool.status;
-    if (action === "EQUIPE_1") newStatus = "EQUIPE_1";
-    else if (action === "EQUIPE_2") newStatus = "EQUIPE_2";
-    else if (action === "DEVOLUCAO") newStatus = "DISPONIVEL";
-    else if (action === "MANUTENCAO") newStatus = "MANUTENCAO";
-
-    await db.from("tool_movements").insert({
-      tool_id: tool.id, employee_name: actor, movement_type: action,
-      movement_date: new Date().toISOString().split("T")[0], notes, created_by: actor,
-    } as Record<string, unknown>);
-    const toolUpdate: Record<string, unknown> = { status: newStatus, updated_by: actor };
-    if (notes) toolUpdate.notes = notes;
-    await db.from("tools").update(toolUpdate).eq("id", tool.id);
-
-    setSaving(false); setActionTool(null); loadAll();
-  }
-
   // Código derivado do nome (prefixo de iniciais + sequência), por item.
   const codeMap = useMemo(() => buildCodeMap(tools, (t) => t.id, (t) => t.name), [tools]);
 
@@ -110,27 +92,11 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
       ) : <span className="text-text-light">—</span>,
     },
     {
-      key: "actions", label: "",
+      key: "actions", label: "", className: "w-24",
       render: (t: Tool) => (
         <div className="flex items-center gap-1">
-          {t.status === "DISPONIVEL" && (
-            <>
-              <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "EQUIPE_1" }); }} className="px-2 py-1 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100 whitespace-nowrap">E1</button>
-              <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "EQUIPE_2" }); }} className="px-2 py-1 text-xs bg-purple-50 text-purple-700 rounded hover:bg-purple-100 whitespace-nowrap">E2</button>
-              <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "MANUTENCAO" }); }} className="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded hover:bg-amber-100 whitespace-nowrap">Man</button>
-            </>
-          )}
-          {(t.status === "EQUIPE_1" || t.status === "EQUIPE_2") && (
-            <>
-              <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "DEVOLUCAO" }); }} className="px-2 py-1 text-xs bg-green-50 text-green-700 rounded hover:bg-green-100 whitespace-nowrap">Dev</button>
-              <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "MANUTENCAO" }); }} className="px-2 py-1 text-xs bg-amber-50 text-amber-700 rounded hover:bg-amber-100 whitespace-nowrap">Man</button>
-            </>
-          )}
-          {t.status === "MANUTENCAO" && (
-            <button onClick={(e) => { e.stopPropagation(); setActionTool({ tool: t, action: "DEVOLUCAO" }); }} className="px-2 py-1 text-xs bg-green-50 text-green-700 rounded hover:bg-green-100 whitespace-nowrap">Disponível</button>
-          )}
-          {canEdit && <button onClick={(e) => { e.stopPropagation(); setEditTool(t); setShowForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded"><EditIcon /></button>}
-          {canDelete && <button onClick={(e) => { e.stopPropagation(); setDeleteTool(t); }} className="p-1.5 text-danger hover:bg-red-50 rounded"><TrashIcon /></button>}
+          {canEdit && <button onClick={(e) => { e.stopPropagation(); setEditTool(t); setShowForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded" title="Editar"><EditIcon /></button>}
+          {canDelete && <button onClick={(e) => { e.stopPropagation(); setDeleteTool(t); }} className="p-1.5 text-danger hover:bg-red-50 rounded" title="Excluir"><TrashIcon /></button>}
         </div>
       ),
     },
@@ -156,9 +122,6 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
       <ConfirmDialog open={!!deleteTool} onClose={() => setDeleteTool(null)}
         onConfirm={async () => { setSaving(true); await db.from("tools").delete().eq("id", deleteTool!.id); setSaving(false); setDeleteTool(null); loadAll(); }}
         title={`Excluir ${singular}`} message={`Excluir "${deleteTool?.name}"?`} loading={saving} />
-
-      <ActionModal open={!!actionTool} onClose={() => setActionTool(null)} onConfirm={(notes) => handleAction(notes)}
-        title={actionTool ? `${MOVEMENT_TYPE_LABELS[actionTool.action]}: ${actionTool.tool.name}` : ""} saving={saving} />
     </>
   );
 }
@@ -182,28 +145,11 @@ function ToolFormModal({ open, onClose, onSave, item, singular, saving }: {
         <div>
           <label className="block text-sm font-medium mb-1">Status</label>
           <select value={status} onChange={(e) => setStatus(e.target.value as ToolStatus)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none">
-            {Object.entries(TOOL_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            {CONDITION_STATUSES.map((k) => <option key={k} value={k}>{TOOL_STATUS_LABELS[k]}</option>)}
           </select>
         </div>
         <div><label className="block text-sm font-medium mb-1">Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" /></div>
         <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button></div>
-      </form>
-    </Modal>
-  );
-}
-
-function ActionModal({ open, onClose, onConfirm, title, saving }: {
-  open: boolean; onClose: () => void; onConfirm: (notes: string) => void; title: string; saving: boolean;
-}) {
-  const [notes, setNotes] = useState("");
-
-  useEffect(() => { setNotes(""); }, [open]);
-
-  return (
-    <Modal open={open} onClose={onClose} title={title}>
-      <form onSubmit={(e) => { e.preventDefault(); onConfirm(notes); }} className="space-y-4">
-        <div><label className="block text-sm font-medium mb-1">Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Opcional..." className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" /></div>
-        <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Registrando..." : "Confirmar"}</Button></div>
       </form>
     </Modal>
   );
