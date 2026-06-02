@@ -38,6 +38,9 @@ yarn-error.log*
 # claude
 .claude/
 
+# arquivo temporário de mensagem de commit (git commit -F commit_msg.tmp)
+commit_msg.tmp
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
