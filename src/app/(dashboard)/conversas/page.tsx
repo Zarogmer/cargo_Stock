@@ -283,10 +283,12 @@ export default function ConversasPage() {
   // Preserva a posição do scroll ao carregar mensagens antigas (prepend).
   const preserveScrollRef = useRef(false);
   const prevScrollHeightRef = useRef(0);
-  // Não-lidos por conversa: seenMap = jid→último ts visto; unreadBoundaryMs =
-  // ponto de leitura capturado ao ABRIR a conversa (pro divisor "Mensagens novas").
-  const [seenMap, setSeenMap] = useState<Record<string, number>>(() => readSeenMap());
+  // Ponto de leitura capturado ao ABRIR a conversa (pro divisor "Mensagens
+  // novas" no thread). O "visto" persistente fica no localStorage (conversas_seen).
   const [unreadBoundaryMs, setUnreadBoundaryMs] = useState(0);
+  // Contagem de não-lidas por conversa (calculada no servidor a partir do mapa
+  // "visto" do localStorage). Dirige o badge numérico na lista.
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
 
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
@@ -313,6 +315,27 @@ export default function ConversasPage() {
   const threadRef = useRef<HTMLDivElement>(null);
   const lastMessageCount = useRef(0);
 
+  // Busca no servidor a contagem de não-lidas por conversa (msgs recebidas após
+  // o "visto" de cada uma), só pras conversas atualmente na lista.
+  const refreshUnreadCounts = useCallback(async (convs: Conversation[]) => {
+    const seenAll = readSeenMap();
+    const seen: Record<string, number> = {};
+    for (const c of convs) seen[c.remote_jid] = seenAll[c.remote_jid] || 0;
+    try {
+      const r = await fetch("/api/whatsapp/unread-counts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seen }),
+      });
+      if (r.ok) {
+        const b = await r.json();
+        setUnreadCounts((b.counts || {}) as Record<string, number>);
+      }
+    } catch {
+      // silent
+    }
+  }, []);
+
   const loadConversations = useCallback(async () => {
     try {
       const res = await fetch("/api/whatsapp/conversations");
@@ -330,16 +353,16 @@ export default function ConversasPage() {
             const baseline: Record<string, number> = {};
             for (const c of convs) baseline[c.remote_jid] = Number(c.last_timestamp_ms) || 0;
             writeSeenMap(baseline);
-            setSeenMap(baseline);
           }
         }
+        refreshUnreadCounts(convs);
       }
     } catch {
       // silent — keep previous list
     } finally {
       setLoadingConv(false);
     }
-  }, []);
+  }, [refreshUnreadCounts]);
 
   const loadMessages = useCallback(async (jid: string) => {
     setLoadingMsgs(true);
@@ -355,12 +378,8 @@ export default function ConversasPage() {
         // Marca a conversa aberta como lida até a mensagem mais recente.
         const latest = msgs.reduce((mx, mm) => Math.max(mx, Number(mm.timestamp_ms)), 0);
         if (latest > 0) {
-          setSeenMap((prev) => {
-            if ((prev[jid] || 0) >= latest) return prev;
-            const next = { ...prev, [jid]: latest };
-            writeSeenMap(next);
-            return next;
-          });
+          const cur = readSeenMap();
+          if ((cur[jid] || 0) < latest) writeSeenMap({ ...cur, [jid]: latest });
         }
       }
     } catch {
@@ -400,6 +419,7 @@ export default function ConversasPage() {
     setMessages([]);
     // Captura o ponto de leitura ANTES de marcar como lido (pro divisor de novas).
     setUnreadBoundaryMs(readSeenMap()[selectedJid] || 0);
+    setUnreadCounts((prev) => ({ ...prev, [selectedJid]: 0 }));
     loadMessages(selectedJid);
     const interval = setInterval(() => loadMessages(selectedJid), 30000);
     return () => clearInterval(interval);
@@ -601,8 +621,9 @@ export default function ConversasPage() {
               <ul className="divide-y divide-border">
                 {filteredConvs.map((c) => {
                   const active = c.remote_jid === selectedJid;
-                  // Não-lida: última msg é recebida e mais nova que o último visto.
-                  const unread = !active && !c.last_from_me && Number(c.last_timestamp_ms) > (seenMap[c.remote_jid] || 0);
+                  // Não-lidas: contagem do servidor (msgs recebidas após o visto).
+                  const unreadCount = active ? 0 : (unreadCounts[c.remote_jid] || 0);
+                  const unread = unreadCount > 0;
                   return (
                     <li key={c.remote_jid} className="group relative">
                       <button
@@ -623,7 +644,14 @@ export default function ConversasPage() {
                           <p className={`text-xs truncate ${unread ? "text-text font-medium" : "text-text-light"}`}>
                             {previewLine(c)}
                           </p>
-                          {unread && <span className="shrink-0 w-2.5 h-2.5 rounded-full bg-emerald-500" title="Mensagens novas" />}
+                          {unread && (
+                            <span
+                              className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center justify-center"
+                              title={`${unreadCount} mensagem(ns) não lida(s)`}
+                            >
+                              {unreadCount > 99 ? "99+" : unreadCount}
+                            </span>
+                          )}
                         </div>
                       </button>
                       <button
