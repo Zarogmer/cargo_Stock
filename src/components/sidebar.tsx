@@ -219,7 +219,12 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <div className="flex flex-col h-full">
           {/* Header */}
           <div className="flex items-center justify-between p-5 border-b border-white/5">
-            <div className="flex items-center gap-3">
+            <Link
+              href="/"
+              onClick={onClose}
+              title="Ir para o Dashboard"
+              className="flex items-center gap-3 -m-1.5 p-1.5 rounded-lg hover:bg-white/5 transition"
+            >
               <div className="w-10 h-10 bg-gradient-to-br from-primary to-primary-light rounded-xl flex items-center justify-center shadow-lg shadow-primary/20">
                 <span className="text-xl">🚢</span>
               </div>
@@ -227,7 +232,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 <h2 className="font-bold text-sm tracking-wide">Cargo Stock</h2>
                 <p className="text-[10px] text-gray-500 uppercase tracking-widest">v2.0</p>
               </div>
-            </div>
+            </Link>
             <button onClick={onClose} className="md:hidden p-1.5 hover:bg-sidebar-hover rounded-lg transition">
               <CloseIcon className="w-5 h-5" />
             </button>
