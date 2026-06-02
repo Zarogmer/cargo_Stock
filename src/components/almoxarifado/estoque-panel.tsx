@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDate, formatDateTime, matchSearch, parseDecimalBR, formatQty } from "@/lib/utils";
+import { formatDate, formatDateTime, matchSearch, parseDecimalBR, formatQty, buildCodeMap } from "@/lib/utils";
 import type { StockItem } from "@/types/database";
 
 const STOCK_CATEGORIES = [
@@ -68,10 +68,13 @@ export function EstoquePanel() {
     loadItems();
   }, [loadItems, pathname]);
 
+  // Código derivado do nome (prefixo de iniciais + sequência), por item.
+  const codeMap = useMemo(() => buildCodeMap(items, (i) => i.id, (i) => i.name), [items]);
+
   const filteredItems = items.filter((i) => {
     const matchesSearch =
       matchSearch(i.name, search) ||
-      matchSearch(i.location || "", search);
+      matchSearch(codeMap.get(i.id) || "", search);
     const matchesCategory =
       filterCategory === "TODOS" || i.category === filterCategory;
     const matchesTeam = i.team === activeTeam;
@@ -155,6 +158,11 @@ export function EstoquePanel() {
       render: (i: StockItem) => <span className="font-medium">{i.name}</span>,
     },
     {
+      key: "code",
+      label: "Código",
+      render: (i: StockItem) => <span className="font-mono text-xs text-text-light">{codeMap.get(i.id) || "—"}</span>,
+    },
+    {
       key: "category",
       label: "Categoria",
       render: (i: StockItem) => (
@@ -162,12 +170,6 @@ export function EstoquePanel() {
           {getCategoryLabel(i.category)}
         </span>
       ),
-    },
-    {
-      key: "location",
-      label: "Local",
-      hideOnMobile: true,
-      render: (i: StockItem) => i.location || "—",
     },
     {
       key: "default_quantity",
@@ -297,7 +299,7 @@ export function EstoquePanel() {
         onRowClick={canEdit ? (i) => { setEditItem(i); setShowForm(true); } : undefined}
         searchValue={search}
         onSearchChange={setSearch}
-        searchPlaceholder="Buscar por nome ou local..."
+        searchPlaceholder="Buscar por nome ou código..."
         actions={canCreate ? (
           <Button onClick={() => { setEditItem(null); setShowForm(true); }} size="sm">
             <PlusIcon className="w-4 h-4" />
@@ -344,7 +346,6 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
 }) {
   const [name, setName] = useState("");
   const [category, setCategory] = useState("SUPRIMENTOS");
-  const [location, setLocation] = useState("");
   // Strings para aceitar vírgula (ex.: "1,5"); convertidas no submit.
   const [quantity, setQuantity] = useState("");
   const [defaultQuantity, setDefaultQuantity] = useState("");
@@ -354,14 +355,12 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
     if (item) {
       setName(item.name);
       setCategory(item.category);
-      setLocation(item.location || "");
       setQuantity(formatQty(item.quantity));
       setDefaultQuantity(item.default_quantity ? formatQty(item.default_quantity) : "");
       setExpiryDate(item.expiry_date || "");
     } else {
       setName("");
       setCategory("SUPRIMENTOS");
-      setLocation("");
       setQuantity("");
       setDefaultQuantity("");
       setExpiryDate("");
@@ -373,7 +372,6 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
     onSave({
       name,
       category: category as StockItem["category"],
-      location: location || null,
       quantity: parseDecimalBR(quantity),
       default_quantity: parseDecimalBR(defaultQuantity),
       expiry_date: expiryDate || null,
@@ -397,10 +395,6 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
               <option key={c.value} value={c.value}>{c.label}</option>
             ))}
           </select>
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-text mb-1">Local</label>
-          <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} className={inputCls} />
         </div>
         <div className="grid grid-cols-3 gap-4">
           <div>

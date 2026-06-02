@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { TOOL_STATUS_LABELS, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
+import { TOOL_STATUS_LABELS, MOVEMENT_TYPE_LABELS, buildCodeMap } from "@/lib/utils";
 import type { Tool, ToolStatus, AssetType, ToolMovementType } from "@/types/database";
 
 // Painel de Ferramentas ou Maquinário (tabela `tools` filtrada por asset_type).
@@ -85,8 +85,12 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
     setSaving(false); setActionTool(null); loadAll();
   }
 
+  // Código derivado do nome (prefixo de iniciais + sequência), por item.
+  const codeMap = useMemo(() => buildCodeMap(tools, (t) => t.id, (t) => t.name), [tools]);
+
   const columns = [
     { key: "name", label: "Nome", render: (t: Tool) => <span className="font-medium">{t.name}</span> },
+    { key: "code", label: "Código", render: (t: Tool) => <span className="font-mono text-xs text-text-light">{codeMap.get(t.id) || "—"}</span> },
     {
       key: "status", label: "Status",
       render: (t: Tool) => {
@@ -99,7 +103,6 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
         return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${colors[t.status] || ""}`}>{TOOL_STATUS_LABELS[t.status]}</span>;
       },
     },
-    { key: "location", label: "Local", hideOnMobile: true, render: (t: Tool) => t.location || "—" },
     {
       key: "notes", label: "Obs", hideOnMobile: true,
       render: (t: Tool) => t.notes ? (
@@ -133,7 +136,10 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
     },
   ];
 
-  const filtered = tools.filter((t) => t.name.toLowerCase().includes(search.toLowerCase()));
+  const filtered = tools.filter((t) =>
+    t.name.toLowerCase().includes(search.toLowerCase()) ||
+    (codeMap.get(t.id) || "").toLowerCase().includes(search.toLowerCase()),
+  );
 
   return (
     <>
@@ -161,18 +167,17 @@ function ToolFormModal({ open, onClose, onSave, item, singular, saving }: {
   open: boolean; onClose: () => void; onSave: (d: Partial<Tool>) => void; item: Tool | null; singular: string; saving: boolean;
 }) {
   const [name, setName] = useState("");
-  const [location, setLocation] = useState("");
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState<ToolStatus>("DISPONIVEL");
 
   useEffect(() => {
-    if (item) { setName(item.name); setLocation(item.location || ""); setNotes(item.notes || ""); setStatus(item.status); }
-    else { setName(""); setLocation(""); setNotes(""); setStatus("DISPONIVEL"); }
+    if (item) { setName(item.name); setNotes(item.notes || ""); setStatus(item.status); }
+    else { setName(""); setNotes(""); setStatus("DISPONIVEL"); }
   }, [item, open]);
 
   return (
     <Modal open={open} onClose={onClose} title={item ? `Editar ${singular}` : `Novo ${singular}`}>
-      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, location: location || null, notes: notes || null, status }); }} className="space-y-4">
+      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, notes: notes || null, status }); }} className="space-y-4">
         <div><label className="block text-sm font-medium mb-1">Nome *</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} required className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
         <div>
           <label className="block text-sm font-medium mb-1">Status</label>
@@ -180,7 +185,6 @@ function ToolFormModal({ open, onClose, onSave, item, singular, saving }: {
             {Object.entries(TOOL_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </div>
-        <div><label className="block text-sm font-medium mb-1">Local</label><input type="text" value={location} onChange={(e) => setLocation(e.target.value)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
         <div><label className="block text-sm font-medium mb-1">Observações</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" /></div>
         <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button></div>
       </form>

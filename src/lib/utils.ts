@@ -48,6 +48,43 @@ export function formatQty(value: number | string | null | undefined): string {
   return n.toLocaleString("pt-BR", { maximumFractionDigits: 3 });
 }
 
+// ── Código automático de itens do Almoxarifado ──────────────────────────────
+// Palavras "vazias" ignoradas ao montar o prefixo (conectores).
+const CODE_STOPWORDS = new Set(["DE", "DA", "DO", "DAS", "DOS", "E", "COM", "PARA", "P", "A", "O", "NO", "NA", "EM"]);
+
+// Prefixo do código a partir do nome: iniciais das palavras significativas
+// (sem acento, maiúsculas). Ex.: "Mangueira Fina" -> "MF", "Calabresa" -> "CA".
+export function codePrefix(name: string): string {
+  const norm = normalize(name || "").toUpperCase();
+  const words = norm.split(/[^A-Z0-9]+/).filter(Boolean);
+  const significant = words.filter((w) => !CODE_STOPWORDS.has(w));
+  const pool = significant.length > 0 ? significant : words;
+  let prefix = pool.map((w) => w[0]).join("");
+  if (prefix.length < 2 && pool[0]) prefix = pool[0].slice(0, 2); // palavra única → 2 letras
+  if (!prefix) prefix = "XX";
+  return prefix.slice(0, 4);
+}
+
+// Gera um código por item (prefixo do nome + sequência de 2 dígitos entre itens
+// de mesmo prefixo, ordenados por id = ordem de cadastro). Ex.: dois itens com
+// prefixo "MF" → "MF01", "MF02". Derivado (não persiste); recalcula na lista.
+export function buildCodeMap<T>(
+  items: T[],
+  getId: (item: T) => number,
+  getName: (item: T) => string,
+): Map<number, string> {
+  const sorted = [...items].sort((a, b) => getId(a) - getId(b));
+  const counters = new Map<string, number>();
+  const result = new Map<number, string>();
+  for (const item of sorted) {
+    const prefix = codePrefix(getName(item));
+    const n = (counters.get(prefix) || 0) + 1;
+    counters.set(prefix, n);
+    result.set(getId(item), `${prefix}${String(n).padStart(2, "0")}`);
+  }
+  return result;
+}
+
 export function normalize(str: string): string {
   return str
     .normalize("NFD")

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { matchSearch } from "@/lib/utils";
+import { matchSearch, buildCodeMap } from "@/lib/utils";
 import { MovementModal } from "./movement-modal";
 import type { Employee, EpiMovementType } from "@/types/database";
 
@@ -86,8 +86,12 @@ export function SimpleInventoryPanel({ kind }: { kind: "EPI" | "UNIFORME" }) {
     setSaving(false); setMov(null); loadAll();
   }
 
+  // Código derivado do nome (prefixo de iniciais + sequência), por item.
+  const codeMap = useMemo(() => buildCodeMap(items, (i) => i.id, (i) => i.name), [items]);
+
   const columns = [
     { key: "name", label: cfg.colLabel, render: (i: SimpleItem) => <span className="font-medium">{i.name}</span> },
+    { key: "code", label: "Código", render: (i: SimpleItem) => <span className="font-mono text-xs text-text-light">{codeMap.get(i.id) || "—"}</span> },
     { key: "size", label: "Tam.", render: (i: SimpleItem) => i.size || "—" },
     { key: "stock_qty", label: "Qtd", render: (i: SimpleItem) => <span className="font-semibold">{i.stock_qty}</span> },
     { key: "actions", label: "", className: "w-36", render: (i: SimpleItem) => (
@@ -102,7 +106,7 @@ export function SimpleInventoryPanel({ kind }: { kind: "EPI" | "UNIFORME" }) {
 
   return (
     <>
-      <DataTable columns={columns} data={items.filter((i) => matchSearch(i.name, search))}
+      <DataTable columns={columns} data={items.filter((i) => matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search))}
         loading={loading} keyExtractor={(i) => i.id} searchValue={search} onSearchChange={setSearch}
         mobileCards
         onRowClick={canEdit ? (i) => { setEdit(i); setForm(true); } : undefined}
