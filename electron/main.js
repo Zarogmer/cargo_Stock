@@ -92,6 +92,13 @@ function createTray() {
 }
 
 app.whenReady().then(() => {
+  // Abre o Cargo Stock automaticamente ao ligar o computador (login do Windows).
+  // Só no app instalado (nao no modo dev). Reaplicado a cada inicializacao
+  // para se autocorrigir caso o caminho do executavel mude apos uma atualizacao.
+  if (app.isPackaged) {
+    app.setLoginItemSettings({ openAtLogin: true });
+  }
+
   createWindow();
   createTray();
 
