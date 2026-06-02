@@ -1,0 +1,10 @@
+Conversas: botao "carregar anteriores" e destaque de cor nos eventos de grupo
+
+- Botao "Carregar mensagens anteriores" no topo do thread: aumenta o limite em
+  +500 e re-busca (o polling de 30s usa o mesmo limite, entao nao apaga o
+  historico ja carregado). Preserva a posicao do scroll apos o prepend e some
+  quando nao ha mais mensagens. Teto do endpoint subiu de 500 -> 5000.
+- Eventos de grupo coloridos: verde = entrou/adicionado (➕), vermelho = saiu/
+  removido (➖), azul = admin (⭐/🔻). Avisos do sistema seguem amarelos.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>

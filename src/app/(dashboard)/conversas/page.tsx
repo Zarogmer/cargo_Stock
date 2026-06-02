@@ -265,6 +265,14 @@ export default function ConversasPage() {
   const [selectedJid, setSelectedJid] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
+  // Paginação "carregar anteriores": cresce o limite e re-busca. O polling de
+  // 30s usa o mesmo limite, então não apaga o histórico já carregado.
+  const msgLimitRef = useRef(500);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasMoreOlder, setHasMoreOlder] = useState(true);
+  // Preserva a posição do scroll ao carregar mensagens antigas (prepend).
+  const preserveScrollRef = useRef(false);
+  const prevScrollHeightRef = useRef(0);
 
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
@@ -314,15 +322,32 @@ export default function ConversasPage() {
   const loadMessages = useCallback(async (jid: string) => {
     setLoadingMsgs(true);
     try {
-      const res = await fetch(`/api/whatsapp/conversations/${encodeURIComponent(jid)}/messages?limit=500`);
+      const limit = msgLimitRef.current;
+      const res = await fetch(`/api/whatsapp/conversations/${encodeURIComponent(jid)}/messages?limit=${limit}`);
       const body = await res.json();
-      if (res.ok) setMessages(body.messages || []);
+      if (res.ok) {
+        const msgs = body.messages || [];
+        setMessages(msgs);
+        // Voltou menos que o limite pedido → não há mais histórico anterior.
+        setHasMoreOlder(msgs.length >= limit);
+      }
     } catch {
       // silent
     } finally {
       setLoadingMsgs(false);
     }
   }, []);
+
+  // Carrega mais histórico aumentando o limite e re-buscando; o efeito de
+  // scroll preserva a posição visual depois do prepend.
+  const loadOlder = useCallback(() => {
+    if (!selectedJid || loadingOlder || !hasMoreOlder) return;
+    prevScrollHeightRef.current = threadRef.current?.scrollHeight ?? 0;
+    preserveScrollRef.current = true;
+    msgLimitRef.current += 500;
+    setLoadingOlder(true);
+    loadMessages(selectedJid).finally(() => setLoadingOlder(false));
+  }, [selectedJid, loadingOlder, hasMoreOlder, loadMessages]);
 
   // Background polling — kept as a fallback for the SSE stream below.
   // The SSE stream pushes updates the moment Evolution delivers a message;
@@ -337,6 +362,9 @@ export default function ConversasPage() {
 
   useEffect(() => {
     if (!selectedJid) return;
+    // Reseta a janela de histórico ao trocar de conversa.
+    msgLimitRef.current = 500;
+    setHasMoreOlder(true);
     loadMessages(selectedJid);
     const interval = setInterval(() => loadMessages(selectedJid), 30000);
     return () => clearInterval(interval);
@@ -382,8 +410,16 @@ export default function ConversasPage() {
   // Auto-scroll to bottom when new messages arrive (but not when just polling
   // with the same count, so we don't fight the user's scroll position).
   useEffect(() => {
-    if (messages.length > lastMessageCount.current && threadRef.current) {
-      threadRef.current.scrollTop = threadRef.current.scrollHeight;
+    const el = threadRef.current;
+    if (el) {
+      if (preserveScrollRef.current) {
+        // Carregamos mensagens antigas (prepend): mantém a posição visual em
+        // vez de pular pro fim.
+        el.scrollTop = el.scrollHeight - prevScrollHeightRef.current;
+        preserveScrollRef.current = false;
+      } else if (messages.length > lastMessageCount.current) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
     lastMessageCount.current = messages.length;
   }, [messages]);
@@ -615,6 +651,18 @@ export default function ConversasPage() {
               </header>
 
               <div ref={threadRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-2 bg-[#f0f2f5]">
+                {messages.length > 0 && hasMoreOlder && (
+                  <div className="flex justify-center pb-1">
+                    <button
+                      type="button"
+                      onClick={loadOlder}
+                      disabled={loadingOlder}
+                      className="text-xs px-3 py-1.5 rounded-full bg-white border border-border text-text-light hover:bg-gray-50 transition disabled:opacity-50"
+                    >
+                      {loadingOlder ? "Carregando..." : "↑ Carregar mensagens anteriores"}
+                    </button>
+                  </div>
+                )}
                 {loadingMsgs && messages.length === 0 ? (
                   <p className="text-sm text-text-light text-center">Carregando mensagens...</p>
                 ) : messages.length === 0 ? (
@@ -641,16 +689,28 @@ export default function ConversasPage() {
                     const isSystem =
                       m.message_type === "systemNotice" ||
                       m.message_type === "groupParticipantUpdate";
+                    // Cor da pílula de evento de grupo: verde = entrou/adicionado
+                    // (➕), vermelho = saiu/removido (➖), azul = admin (⭐/🔻);
+                    // amarelo para avisos do sistema (sincronização etc.).
+                    const evtText = m.text || "";
+                    let pillCls = "bg-[#fef9c3]/80 border-[#fde047]/60";
+                    let pillText = "text-amber-900";
+                    let pillTime = "text-amber-700/80";
+                    if (m.message_type === "groupParticipantUpdate") {
+                      if (evtText.startsWith("➕")) { pillCls = "bg-emerald-50 border-emerald-300"; pillText = "text-emerald-800"; pillTime = "text-emerald-700/80"; }
+                      else if (evtText.startsWith("➖")) { pillCls = "bg-red-50 border-red-300"; pillText = "text-red-800"; pillTime = "text-red-700/80"; }
+                      else { pillCls = "bg-blue-50 border-blue-300"; pillText = "text-blue-800"; pillTime = "text-blue-700/80"; }
+                    }
                     const bubble = isSystem ? (
                       <div className="flex justify-center my-1">
                         <div
-                          className="max-w-[85%] bg-[#fef9c3]/80 border border-[#fde047]/60 rounded-lg px-3 py-1 shadow-sm text-center"
+                          className={`max-w-[85%] border ${pillCls} rounded-lg px-3 py-1 shadow-sm text-center`}
                           title={formatFullDateTime(m.timestamp_ms)}
                         >
-                          <p className="text-[12px] text-amber-900 whitespace-pre-wrap break-words">
+                          <p className={`text-[12px] ${pillText} whitespace-pre-wrap break-words`}>
                             {m.text || "(evento sem texto)"}
                           </p>
-                          <p className="text-[9px] text-amber-700/80 mt-0.5">
+                          <p className={`text-[9px] ${pillTime} mt-0.5`}>
                             {formatMsgTime(m.timestamp_ms)}
                             {m.push_name && m.message_type === "groupParticipantUpdate" && (
                               <> · por <strong>{m.push_name}</strong></>

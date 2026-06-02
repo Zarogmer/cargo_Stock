@@ -16,7 +16,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jid:
 
   const { jid: encodedJid } = await params;
   const jid = decodeURIComponent(encodedJid);
-  const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") || "100"), 500);
+  const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") || "100"), 5000);
   const beforeParam = req.nextUrl.searchParams.get("before");
   const before = beforeParam ? BigInt(beforeParam) : null;
 
