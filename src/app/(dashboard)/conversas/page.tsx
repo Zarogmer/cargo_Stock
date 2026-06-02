@@ -258,6 +258,16 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
   );
 }
 
+// Mapa "visto por última vez" por conversa (jid → timestamp ms) no localStorage,
+// pra marcar conversas/mensagens novas (não lidas) na aba.
+function readSeenMap(): Record<string, number> {
+  if (typeof window === "undefined") return {};
+  try { return JSON.parse(localStorage.getItem("conversas_seen") || "{}") as Record<string, number>; } catch { return {}; }
+}
+function writeSeenMap(map: Record<string, number>) {
+  try { localStorage.setItem("conversas_seen", JSON.stringify(map)); } catch { /* ignore */ }
+}
+
 export default function ConversasPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loadingConv, setLoadingConv] = useState(true);
@@ -273,6 +283,10 @@ export default function ConversasPage() {
   // Preserva a posição do scroll ao carregar mensagens antigas (prepend).
   const preserveScrollRef = useRef(false);
   const prevScrollHeightRef = useRef(0);
+  // Não-lidos por conversa: seenMap = jid→último ts visto; unreadBoundaryMs =
+  // ponto de leitura capturado ao ABRIR a conversa (pro divisor "Mensagens novas").
+  const [seenMap, setSeenMap] = useState<Record<string, number>>(() => readSeenMap());
+  const [unreadBoundaryMs, setUnreadBoundaryMs] = useState(0);
 
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
@@ -304,12 +318,20 @@ export default function ConversasPage() {
       const res = await fetch("/api/whatsapp/conversations");
       const body = await res.json();
       if (res.ok) {
-        setConversations(body.conversations || []);
-        // Marca como visto: o card "Conversas" do dashboard conta só as
-        // mensagens recebidas depois deste instante. Atualiza a cada load
-        // (mount + polling + SSE) enquanto a aba está aberta.
+        const convs = (body.conversations || []) as Conversation[];
+        setConversations(convs);
         if (typeof window !== "undefined") {
+          // Card "Conversas" do dashboard: conta mensagens após este instante.
           localStorage.setItem("conversas_last_seen", new Date().toISOString());
+          // Primeira vez (sem baseline): marca a última msg de cada conversa
+          // como vista, pra não exibir tudo como "novo" de cara. Depois disso,
+          // só mensagens novas viram não-lidas.
+          if (localStorage.getItem("conversas_seen") === null) {
+            const baseline: Record<string, number> = {};
+            for (const c of convs) baseline[c.remote_jid] = Number(c.last_timestamp_ms) || 0;
+            writeSeenMap(baseline);
+            setSeenMap(baseline);
+          }
         }
       }
     } catch {
@@ -326,10 +348,20 @@ export default function ConversasPage() {
       const res = await fetch(`/api/whatsapp/conversations/${encodeURIComponent(jid)}/messages?limit=${limit}`);
       const body = await res.json();
       if (res.ok) {
-        const msgs = body.messages || [];
+        const msgs = (body.messages || []) as Message[];
         setMessages(msgs);
         // Voltou menos que o limite pedido → não há mais histórico anterior.
         setHasMoreOlder(msgs.length >= limit);
+        // Marca a conversa aberta como lida até a mensagem mais recente.
+        const latest = msgs.reduce((mx, mm) => Math.max(mx, Number(mm.timestamp_ms)), 0);
+        if (latest > 0) {
+          setSeenMap((prev) => {
+            if ((prev[jid] || 0) >= latest) return prev;
+            const next = { ...prev, [jid]: latest };
+            writeSeenMap(next);
+            return next;
+          });
+        }
       }
     } catch {
       // silent
@@ -365,6 +397,9 @@ export default function ConversasPage() {
     // Reseta a janela de histórico ao trocar de conversa.
     msgLimitRef.current = 500;
     setHasMoreOlder(true);
+    setMessages([]);
+    // Captura o ponto de leitura ANTES de marcar como lido (pro divisor de novas).
+    setUnreadBoundaryMs(readSeenMap()[selectedJid] || 0);
     loadMessages(selectedJid);
     const interval = setInterval(() => loadMessages(selectedJid), 30000);
     return () => clearInterval(interval);
@@ -434,6 +469,12 @@ export default function ConversasPage() {
   }, [conversations, search]);
 
   const selectedConv = conversations.find((c) => c.remote_jid === selectedJid) || null;
+
+  // Índice da 1ª mensagem recebida após o ponto de leitura — marca o divisor
+  // "Mensagens novas" no thread. -1 = sem novas (ou conversa nunca aberta).
+  const firstUnreadIdx = unreadBoundaryMs > 0
+    ? messages.findIndex((m) => !m.from_me && Number(m.timestamp_ms) > unreadBoundaryMs)
+    : -1;
 
   async function handleDelete() {
     if (!confirmDelete) return;
@@ -560,25 +601,30 @@ export default function ConversasPage() {
               <ul className="divide-y divide-border">
                 {filteredConvs.map((c) => {
                   const active = c.remote_jid === selectedJid;
+                  // Não-lida: última msg é recebida e mais nova que o último visto.
+                  const unread = !active && !c.last_from_me && Number(c.last_timestamp_ms) > (seenMap[c.remote_jid] || 0);
                   return (
                     <li key={c.remote_jid} className="group relative">
                       <button
                         type="button"
                         onClick={() => setSelectedJid(c.remote_jid)}
-                        className={`w-full text-left px-3 py-2.5 pr-9 hover:bg-gray-50 transition ${active ? "bg-primary/5 border-l-2 border-primary" : ""}`}
+                        className={`w-full text-left px-3 py-2.5 pr-9 transition ${active ? "bg-primary/5 border-l-2 border-primary" : unread ? "bg-emerald-50/50 hover:bg-emerald-50" : "hover:bg-gray-50"}`}
                       >
                         <div className="flex items-baseline justify-between gap-2">
-                          <span className="font-medium text-sm truncate flex items-center gap-1">
+                          <span className={`text-sm truncate flex items-center gap-1 ${unread ? "font-bold text-text" : "font-medium"}`}>
                             {c.is_group && <span className="text-xs">👥</span>}
                             {displayName(c)}
                           </span>
-                          <span className="text-[10px] text-text-light shrink-0">
+                          <span className={`text-[10px] shrink-0 ${unread ? "text-emerald-600 font-semibold" : "text-text-light"}`}>
                             {formatTime(c.last_timestamp_ms)}
                           </span>
                         </div>
-                        <p className="text-xs text-text-light truncate mt-0.5">
-                          {previewLine(c)}
-                        </p>
+                        <div className="flex items-center justify-between gap-2 mt-0.5">
+                          <p className={`text-xs truncate ${unread ? "text-text font-medium" : "text-text-light"}`}>
+                            {previewLine(c)}
+                          </p>
+                          {unread && <span className="shrink-0 w-2.5 h-2.5 rounded-full bg-emerald-500" title="Mensagens novas" />}
+                        </div>
                       </button>
                       <button
                         type="button"
@@ -738,9 +784,17 @@ export default function ConversasPage() {
                       </div>
                     );
 
+                    const showNewDivider = idx === firstUnreadIdx;
                     return (
                       <Fragment key={m.id}>
                         {daySep}
+                        {showNewDivider && (
+                          <div className="flex justify-center my-2">
+                            <span className="bg-emerald-500 text-white text-[10px] font-semibold px-3 py-0.5 rounded-full shadow-sm uppercase tracking-wide">
+                              ↓ Mensagens novas
+                            </span>
+                          </div>
+                        )}
                         {bubble}
                       </Fragment>
                     );
