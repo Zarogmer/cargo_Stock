@@ -236,6 +236,9 @@ export default function NaviosPage() {
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  // "Fechar" navio Em Operação: registra a data de saída e marca CONCLUIDO.
+  const [closeShip, setCloseShip] = useState<Ship | null>(null);
+  const [closeDate, setCloseDate] = useState("");
 
   // External ships (AIS Stream) modal
   const [showExternalModal, setShowExternalModal] = useState(false);
@@ -840,6 +843,20 @@ export default function NaviosPage() {
     loadShips();
   }
 
+  // Fecha o navio: registra a data de saída, marca CONCLUIDO e fecha a ponta
+  // do(s) job(s) (end_date). Só depois disso o navio aparece no Financeiro.
+  async function handleClose() {
+    if (!closeShip || !closeDate) return;
+    await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate }).eq("id", closeShip.id);
+    await db.from("jobs").update({ end_date: closeDate }).eq("ship_id", closeShip.id);
+    if (selectedShip?.id === closeShip.id) {
+      setSelectedShip({ ...selectedShip, status: "CONCLUIDO", departure_date: closeDate });
+    }
+    setCloseShip(null);
+    setCloseDate("");
+    loadShips();
+  }
+
   // ── External ships (AIS Stream) ────────────────────────────────────────────
 
   const loadExternalShips = useCallback(async () => {
@@ -1082,7 +1099,7 @@ export default function NaviosPage() {
                       )}
                       <div className="flex flex-wrap gap-3 mt-2 text-xs text-text-light">
                         {ship.arrival_date && (
-                          <span>🚢 Chegada: <span className="font-medium text-text">{formatDate(ship.arrival_date)}</span></span>
+                          <span>🚢 Embarque: <span className="font-medium text-text">{formatDate(ship.arrival_date)}</span></span>
                         )}
                         {ship.departure_date && (
                           <span>🏁 Saída: <span className="font-medium text-text">{formatDate(ship.departure_date)}</span></span>
@@ -1115,7 +1132,16 @@ export default function NaviosPage() {
                     </div>
 
                     {(canEdit || canDelete) && (
-                      <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex gap-1 shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
+                        {canEdit && ship.status === "EM_OPERACAO" && (
+                          <button
+                            onClick={() => { setCloseShip(ship); setCloseDate(new Date().toISOString().slice(0, 10)); }}
+                            className="px-2 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition whitespace-nowrap"
+                            title="Fechar navio — registra a saída e libera pro Financeiro"
+                          >
+                            🏁 Fechar
+                          </button>
+                        )}
                         {canEdit && (
                           <button
                             onClick={() => openEdit(ship)}
@@ -1163,7 +1189,7 @@ export default function NaviosPage() {
                 <p><span className="text-text-light">Porto:</span> <span className="font-medium">{selectedShip.port}</span></p>
               )}
               {selectedShip.arrival_date && (
-                <p><span className="text-text-light">Chegada:</span> <span className="font-medium">{formatDate(selectedShip.arrival_date)}</span></p>
+                <p><span className="text-text-light">Embarque:</span> <span className="font-medium">{formatDate(selectedShip.arrival_date)}</span></p>
               )}
               {selectedShip.departure_date && (
                 <p><span className="text-text-light">Saída:</span> <span className="font-medium">{formatDate(selectedShip.departure_date)}</span></p>
@@ -1300,25 +1326,16 @@ export default function NaviosPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-text mb-1">Data de Chegada</label>
-                  <input
-                    type="date"
-                    value={form.arrival_date}
-                    onChange={(e) => setForm({ ...form, arrival_date: e.target.value })}
-                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-text mb-1">Data de Saída</label>
-                  <input
-                    type="date"
-                    value={form.departure_date}
-                    onChange={(e) => setForm({ ...form, departure_date: e.target.value })}
-                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                  />
-                </div>
+              <div>
+                <label className="block text-sm font-medium text-text mb-1">Data de Embarque</label>
+                <input
+                  type="date"
+                  value={form.arrival_date}
+                  onChange={(e) => setForm({ ...form, arrival_date: e.target.value })}
+                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                />
+                {/* A data de saída não é mais preenchida aqui — ela é registrada
+                    ao "Fechar" o navio (card de navio Em Operação). */}
               </div>
 
               {/* Tipo da Operação vem ANTES do Porto — define o resto do
@@ -2189,6 +2206,43 @@ export default function NaviosPage() {
                 className="flex-1 py-2 bg-danger text-white text-sm font-medium rounded-lg hover:bg-red-600 transition"
               >
                 Excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fechar navio — registra a saída e libera pro Financeiro */}
+      {closeShip && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm">
+            <div className="text-center mb-4">
+              <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl">🏁</div>
+              <h3 className="font-bold text-text mb-1">Fechar Navio</h3>
+              <p className="text-sm text-text-light">
+                Registra a saída de <strong className="text-text">{closeShip.name}</strong>, marca como <strong className="text-text">Concluído</strong> e libera o navio pro <strong className="text-text">Financeiro</strong>.
+              </p>
+            </div>
+            <label className="block text-sm font-medium text-text mb-1">Data de Saída *</label>
+            <input
+              type="date"
+              value={closeDate}
+              onChange={(e) => setCloseDate(e.target.value)}
+              className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm mb-4"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setCloseShip(null); setCloseDate(""); }}
+                className="flex-1 py-2 text-sm text-text-light hover:text-text hover:bg-gray-100 rounded-lg transition"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleClose}
+                disabled={!closeDate}
+                className="flex-1 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Fechar Navio
               </button>
             </div>
           </div>

@@ -213,7 +213,7 @@ export default function FinanceiroPage() {
     const [fnRes, rtRes, jbRes, alRes, adRes, shRes, emRes, srRes] = await Promise.all([
       db.from("job_functions").select("*").order("name"),
       db.from("job_function_rates").select("*").order("valid_from", { ascending: false }),
-      db.from("jobs").select("*, ships(name)").order("start_date", { ascending: false }),
+      db.from("jobs").select("*, ships(name, status)").order("start_date", { ascending: false }),
       db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)"),
       db.from("job_adjustments").select("*").order("created_at", { ascending: false }),
       db.from("ships").select("id, name, status, services").order("arrival_date", { ascending: false }).limit(50),
@@ -1551,7 +1551,12 @@ function TrabalhosTab({
   const costadoShipIds = new Set(
     ships.filter((s) => (s.services || []).includes("COSTADO")).map((s) => s.id)
   );
-  const embarqueJobs = jobs.filter((j) => !j.ship_id || !costadoShipIds.has(j.ship_id));
+  // Só navios fechados (CONCLUIDO) entram no Financeiro. Jobs sem navio
+  // (lançamentos manuais) sempre aparecem.
+  const embarqueJobs = jobs.filter((j) =>
+    (!j.ship_id || !costadoShipIds.has(j.ship_id)) &&
+    (!j.ship_id || (j as any).ships?.status === "CONCLUIDO"),
+  );
   // O filtro "EM_ANDAMENTO" pega qualquer status que NÃO é Pago nem Cancelado
   // (cobre os legados ABERTO/VERIFICADO).
   const filtered = embarqueJobs.filter((j) => {
@@ -4431,8 +4436,10 @@ function CostadoTab({
   const jobsWithCostadoAlloc = new Set(
     allocations.filter((a) => a.kind === "COSTADO").map((a) => a.job_id)
   );
+  // Só navios fechados (CONCLUIDO) entram no Financeiro; jobs sem navio sempre.
   const costadoJobs = jobs.filter(
-    (j) => (j.ship_id && costadoShipIds.has(j.ship_id)) || jobsWithCostadoAlloc.has(j.id),
+    (j) => ((j.ship_id && costadoShipIds.has(j.ship_id)) || jobsWithCostadoAlloc.has(j.id))
+      && (!j.ship_id || (j as any).ships?.status === "CONCLUIDO"),
   );
   const filtered = costadoJobs.filter((j) => {
     if (statusFilter === "TODOS") return true;
