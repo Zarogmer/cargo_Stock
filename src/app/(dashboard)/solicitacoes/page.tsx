@@ -397,8 +397,33 @@ export default function SolicitacoesPage() {
         stockMsg = ` ⚠️ Falhou ao lançar no Estoque: ${stockErr?.message || String(stockErr)}`;
       }
 
+      // 4) Avisa o grupo "Compras" no WhatsApp (best-effort — a conclusão já está
+      // gravada; só anexa o resultado ao toast). NÃO mira o grupo oficial
+      // "Compras Cargo Ships" — ver src/lib/services/compras-group.ts.
+      let groupMsg = "";
+      try {
+        const res = await fetch("/api/solicitacoes/notify-compras", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            toolName: req.tool_name,
+            quantity: qty,
+            value: unit,
+            supplier: req.supplier,
+            requestedBy: req.requested_by,
+            concludedBy: actor,
+            productUrl: req.product_url,
+          }),
+        });
+        const data = await res.json().catch(() => null);
+        if (data?.sent) groupMsg = " 📨 Avisado no grupo Compras.";
+        else if (data?.warning) groupMsg = ` ⚠️ ${data.warning}`;
+      } catch {
+        groupMsg = " ⚠️ Não consegui avisar o grupo Compras.";
+      }
+
       setConcludeRequest(null);
-      setSaveOk(`✅ "${req.tool_name}" concluído — compra registrada.${stockMsg}`);
+      setSaveOk(`✅ "${req.tool_name}" concluído — compra registrada.${stockMsg}${groupMsg}`);
       loadAll();
     } catch (err: any) {
       console.error("Erro ao concluir solicitação:", err);
