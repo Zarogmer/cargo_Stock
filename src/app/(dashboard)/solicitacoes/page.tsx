@@ -1002,7 +1002,7 @@ export default function SolicitacoesPage() {
       <Tabs tabs={tabs} defaultTab={effectiveTab} hideHeader />
 
       {/* Request Form Modal */}
-      <RequestFormModal open={showRequestForm} onClose={() => setShowRequestForm(false)} onSave={handleCreateRequest} saving={saving} />
+      <RequestFormModal open={showRequestForm} onClose={() => setShowRequestForm(false)} onSave={handleCreateRequest} suppliers={suppliers} saving={saving} />
 
       {/* Product Link Form Modal */}
       <LinkFormModal open={showLinkForm} onClose={() => { setShowLinkForm(false); setEditLink(null); setSaveError(null); }} onSave={handleSaveLink} item={editLink} saving={saving} error={saveError} />
@@ -1151,12 +1151,13 @@ function ImagePicker({ value, onChange, label = "Imagem do produto (opcional)" }
   );
 }
 
-function RequestFormModal({ open, onClose, onSave, saving }: {
+function RequestFormModal({ open, onClose, onSave, suppliers, saving }: {
   open: boolean; onClose: () => void;
   onSave: (data: {
     toolName: string; quantity: number; reason: string; imageUrl: string | null;
     productUrl: string | null; estimatedValue: number | null; supplier: string | null;
   }) => void;
+  suppliers: Supplier[];
   saving: boolean;
 }) {
   const [toolName, setToolName] = useState("");
@@ -1273,8 +1274,11 @@ function RequestFormModal({ open, onClose, onSave, saving }: {
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Fornecedor</label>
-            <input type="text" value={supplier} onChange={(e) => setSupplier(e.target.value)}
+            <input type="text" list="request-suppliers" value={supplier} onChange={(e) => setSupplier(e.target.value)}
               placeholder="Ex: Mercado Livre" className={inputCls} />
+            <datalist id="request-suppliers">
+              {suppliers.map((s) => <option key={s.id} value={s.name} />)}
+            </datalist>
           </div>
         </div>
         <div>
