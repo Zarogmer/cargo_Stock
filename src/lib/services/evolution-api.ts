@@ -177,6 +177,48 @@ export async function sendWhatsappTextToGroup(
   );
 }
 
+// Envia uma IMAGEM (com legenda opcional) a um grupo identificado pelo JID.
+// Aceita tanto um data URL ("data:image/jpeg;base64,AAAA…") quanto base64 puro —
+// é o formato que o app guarda em image_url (foto comprimida inline, sem storage
+// externo). Usa o endpoint /message/sendMedia do Evolution v2.
+export async function sendWhatsappMediaToGroup(
+  groupJid: string,
+  dataUrlOrBase64: string,
+  caption: string,
+  fileName = "produto.jpg",
+): Promise<unknown> {
+  const cfg = readConfig();
+  if (!groupJid.endsWith("@g.us")) throw new Error("JID de grupo inválido.");
+  const token = await getInstanceToken();
+
+  // Separa o mimetype e o base64 cru. O Evolution espera o base64 SEM o prefixo
+  // "data:…;base64," (ele faz Buffer.from(media, "base64") internamente).
+  let mimetype = "image/jpeg";
+  let media = dataUrlOrBase64.trim();
+  const m = /^data:([^;]+);base64,([\s\S]*)$/.exec(media);
+  if (m) {
+    mimetype = m[1];
+    media = m[2];
+  }
+  if (!media) throw new Error("Imagem vazia.");
+
+  return evolutionFetch(
+    `/message/sendMedia/${encodeURIComponent(cfg.instance)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        number: groupJid,
+        mediatype: "image",
+        mimetype,
+        caption,
+        media,
+        fileName,
+      }),
+    },
+    token,
+  );
+}
+
 interface CreateGroupResult {
   // Evolution returns { id: "12036...@g.us", subject, ... }
   id?: string;

@@ -413,10 +413,11 @@ export default function SolicitacoesPage() {
             requestedBy: req.requested_by,
             concludedBy: actor,
             productUrl: req.product_url,
+            imageUrl: req.image_url,
           }),
         });
         const data = await res.json().catch(() => null);
-        if (data?.sent) groupMsg = " 📨 Avisado no grupo Compras.";
+        if (data?.sent) groupMsg = data.withPhoto ? " 📨 Avisado no grupo Compras (com foto)." : " 📨 Avisado no grupo Compras.";
         else if (data?.warning) groupMsg = ` ⚠️ ${data.warning}`;
       } catch {
         groupMsg = " ⚠️ Não consegui avisar o grupo Compras.";

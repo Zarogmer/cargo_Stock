@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { isEvolutionConfigured, sendWhatsappTextToGroup } from "@/lib/services/evolution-api";
+import {
+  isEvolutionConfigured,
+  sendWhatsappTextToGroup,
+  sendWhatsappMediaToGroup,
+} from "@/lib/services/evolution-api";
 import { getComprasGroupJid, comprasGroupName } from "@/lib/services/compras-group";
 
 interface NotifyBody {
@@ -12,6 +16,7 @@ interface NotifyBody {
   requestedBy?: string | null;
   concludedBy?: string | null;
   productUrl?: string | null;
+  imageUrl?: string | null;
 }
 
 function formatBRL(value: number): string {
@@ -78,9 +83,24 @@ export async function POST(request: NextRequest) {
   }
 
   const message = buildMessage(body);
+  const image = body.imageUrl?.trim() || null;
 
+  // Com imagem: manda a FOTO com a mensagem como legenda (uma mensagem só).
+  // Se a mídia falhar (Evolution rejeita o base64, etc.), cai pro texto puro
+  // pra pelo menos a info chegar. Sem imagem: texto direto.
+  let withPhoto = false;
   try {
-    await sendWhatsappTextToGroup(jid, message);
+    if (image) {
+      try {
+        await sendWhatsappMediaToGroup(jid, image, message);
+        withPhoto = true;
+      } catch (mediaErr) {
+        console.warn("[notify-compras] envio de foto falhou, caindo pro texto:", (mediaErr as Error).message);
+        await sendWhatsappTextToGroup(jid, message);
+      }
+    } else {
+      await sendWhatsappTextToGroup(jid, message);
+    }
   } catch (err) {
     return NextResponse.json({
       status: "error",
@@ -110,5 +130,5 @@ export async function POST(request: NextRequest) {
     console.warn("[notify-compras] stub insert failed:", (stubErr as Error).message);
   }
 
-  return NextResponse.json({ status: "ok", sent: 1, group: groupName });
+  return NextResponse.json({ status: "ok", sent: 1, group: groupName, withPhoto });
 }
