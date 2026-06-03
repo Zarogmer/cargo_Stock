@@ -892,6 +892,10 @@ export default function ConversasPage() {
           loadConversations();
           if (selectedJid) loadMessages(selectedJid);
         }}
+        onChanged={() => {
+          loadConversations();
+          if (selectedJid) loadMessages(selectedJid);
+        }}
       />
     </div>
   );
@@ -901,7 +905,7 @@ export default function ConversasPage() {
 // Fetched on open from /api/whatsapp/groups/[jid] — shows subject, description,
 // creation date, linked ship, and the full participant list with employee
 // cross-reference so admins can see who's in each group.
-function GroupInfoModal({ jid, onClose, onLeft }: { jid: string | null; onClose: () => void; onLeft: () => void }) {
+function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | null; onClose: () => void; onLeft: () => void; onChanged: () => void }) {
   const [info, setInfo] = useState<GroupInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -910,6 +914,11 @@ function GroupInfoModal({ jid, onClose, onLeft }: { jid: string | null; onClose:
   const [addingName, setAddingName] = useState("");
   const [addingSaving, setAddingSaving] = useState(false);
   const [addingErr, setAddingErr] = useState<string | null>(null);
+  // "Remover participante": confirmação inline por linha (key = phone digits do
+  // participante) + chamada ao endpoint de remoção.
+  const [confirmRemovePhone, setConfirmRemovePhone] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const [removeErr, setRemoveErr] = useState<string | null>(null);
   // "Sair do grupo": confirmação inline + chamada ao endpoint de leave.
   const [confirmingLeave, setConfirmingLeave] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -934,9 +943,33 @@ function GroupInfoModal({ jid, onClose, onLeft }: { jid: string | null; onClose:
     if (!jid) { setInfo(null); return; }
     setInfo(null);
     setAddingPhone(null); setAddingName(""); setAddingErr(null);
+    setConfirmRemovePhone(null); setRemoving(false); setRemoveErr(null);
     setConfirmingLeave(false); setLeaving(false); setLeaveErr(null);
     loadInfo();
   }, [jid, loadInfo]);
+
+  // Remove um participante (terceiro) do grupo. Recarrega o painel na hora pra
+  // refletir a saída; a pílula "➖ saiu do grupo" no thread vem pelo webhook.
+  async function handleRemove(phone: string, label: string) {
+    if (!jid || !phone) return;
+    setRemoving(true); setRemoveErr(null);
+    try {
+      const res = await fetch(`/api/whatsapp/groups/${encodeURIComponent(jid)}/remove-participant`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone, name: label }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setConfirmRemovePhone(null);
+      await loadInfo();
+      onChanged();
+    } catch (e) {
+      setRemoveErr((e as Error).message);
+    } finally {
+      setRemoving(false);
+    }
+  }
 
   async function handleLeave() {
     if (!jid) return;
@@ -1089,6 +1122,12 @@ function GroupInfoModal({ jid, onClose, onLeft }: { jid: string | null; onClose:
                   const avatarSeed = displayName || p.phone || "?";
                   const isAdding = addingPhone === p.phone && !!p.phone;
                   const canRegister = !p.employee && !!p.phone;
+                  const isConfirmingRemove = confirmRemovePhone === p.phone && !!p.phone;
+                  // Só dá pra remover quem tem telefone resolvido (precisamos do
+                  // número pra mirar a remoção) e que não seja o dono do grupo —
+                  // o WhatsApp não deixa remover o superadmin.
+                  const canRemove = !!p.phone && p.admin !== "superadmin";
+                  const removeLabel = displayName || formatPhone(p.phone) || p.phone;
                   return (
                   <div key={p.jid || p.phone} className="px-3 py-2 flex flex-col gap-2">
                     <div className="flex items-center gap-3">
@@ -1127,6 +1166,17 @@ function GroupInfoModal({ jid, onClose, onLeft }: { jid: string | null; onClose:
                           className="shrink-0 text-[10px] font-semibold px-2 py-1 rounded-lg border border-primary/30 text-primary hover:bg-primary/10 transition"
                         >
                           + Cadastrar
+                        </button>
+                      )}
+                      {canRemove && !isConfirmingRemove && !isAdding && (
+                        <button
+                          type="button"
+                          onClick={() => { setConfirmRemovePhone(p.phone); setRemoveErr(null); }}
+                          className="shrink-0 p-1 rounded text-text-light hover:text-red-600 hover:bg-red-50 transition"
+                          title="Remover do grupo"
+                          aria-label="Remover do grupo"
+                        >
+                          <TrashIcon className="w-3.5 h-3.5" />
                         </button>
                       )}
                     </div>
@@ -1172,6 +1222,38 @@ function GroupInfoModal({ jid, onClose, onLeft }: { jid: string | null; onClose:
                         <p className="text-[10px] text-text-light">
                           Salvo como ATIVO. Edite outros campos depois em <strong>Colaboradores</strong>.
                         </p>
+                      </div>
+                    )}
+                    {isConfirmingRemove && (
+                      <div className="ml-11 flex flex-col gap-1.5 bg-red-50 border border-red-200 rounded-lg p-2">
+                        <p className="text-[11px] text-red-900 font-semibold">
+                          Remover {removeLabel} do grupo?
+                        </p>
+                        <p className="text-[10px] text-red-800">
+                          O número sai do grupo no WhatsApp. Pra voltar, alguém precisa
+                          adicioná-lo de novo. O histórico de mensagens continua aqui.
+                        </p>
+                        {removeErr && (
+                          <p className="text-[10px] text-red-700">{removeErr}</p>
+                        )}
+                        <div className="flex items-center gap-2 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => { setConfirmRemovePhone(null); setRemoveErr(null); }}
+                            disabled={removing}
+                            className="text-[10px] font-semibold px-2 py-1 rounded-md text-text-light hover:bg-white/70 transition disabled:opacity-50"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRemove(p.phone, removeLabel)}
+                            disabled={removing}
+                            className="text-[10px] font-semibold px-2 py-1 rounded-md bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50"
+                          >
+                            {removing ? "Removendo..." : "Remover"}
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
