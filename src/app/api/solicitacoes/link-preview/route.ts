@@ -15,6 +15,43 @@ interface PreviewResult {
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
+// Alguns marketplaces (ex.: Mercado Livre) servem uma página "isca" minúscula
+// pra fetch de servidor com UA de navegador, mas entregam o HTML completo (com
+// JSON-LD de preço) pro Googlebot — que eles tratam como SEO. Pra esses hosts
+// usamos o UA do Googlebot, e aí o valor passa a vir.
+const GOOGLEBOT_UA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+
+// Detecta domínios do Mercado Livre (.com.br e variações do Mercado Libre).
+function isMercadoLivre(host: string): boolean {
+  const h = host.toLowerCase();
+  return /(^|\.)mercadolivre\.com(\.br)?$/.test(h) || /(^|\.)mercadolibre\.com(\.[a-z]{2})?$/.test(h);
+}
+
+// Hosts que rendem mais com o UA do Googlebot (hoje só o ML precisa).
+function prefersGooglebot(host: string): boolean {
+  return isMercadoLivre(host);
+}
+
+// Nome "bonito" do fornecedor a partir do host — mostra "Mercado Livre" em vez
+// de "mercadolivre.com.br". Cobre os marketplaces mais usados; o resto cai no
+// og:site_name ou no próprio host.
+const SUPPLIER_NAMES: { test: (h: string) => boolean; name: string }[] = [
+  { test: isMercadoLivre, name: "Mercado Livre" },
+  { test: (h) => /(^|\.)amazon\.com(\.br)?$/.test(h), name: "Amazon" },
+  { test: (h) => /(^|\.)magazineluiza\.com\.br$/.test(h) || /(^|\.)magalu\.com$/.test(h), name: "Magazine Luiza" },
+  { test: (h) => /(^|\.)americanas\.com\.br$/.test(h), name: "Americanas" },
+  { test: (h) => /(^|\.)casasbahia\.com\.br$/.test(h), name: "Casas Bahia" },
+  { test: (h) => /(^|\.)shopee\.com\.br$/.test(h), name: "Shopee" },
+  { test: (h) => /(^|\.)aliexpress\.com$/.test(h), name: "AliExpress" },
+  { test: (h) => /(^|\.)kabum\.com\.br$/.test(h), name: "KaBuM!" },
+  { test: (h) => /(^|\.)leroymerlin\.com\.br$/.test(h), name: "Leroy Merlin" },
+];
+function friendlySupplier(host: string): string | null {
+  const h = host.toLowerCase();
+  for (const s of SUPPLIER_NAMES) if (s.test(h)) return s.name;
+  return null;
+}
+
 // ── Anti-SSRF ────────────────────────────────────────────────────────────────
 // O app roda na Railway com serviços internos (Evolution em *.railway.internal,
 // Postgres, etc.). Buscar URLs arbitrárias no servidor é um risco de SSRF, então
@@ -66,6 +103,7 @@ async function safeFetch(
   initial: URL,
   accept: string,
   ms: number,
+  ua: string = UA,
   maxHops = 5,
 ): Promise<{ res: Response; finalUrl: string }> {
   let current = initial;
@@ -73,7 +111,7 @@ async function safeFetch(
     const res = await fetchWithTimeout(
       current.toString(),
       {
-        headers: { "User-Agent": UA, Accept: accept, "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8" },
+        headers: { "User-Agent": ua, Accept: accept, "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8" },
       },
       ms,
     );
@@ -161,6 +199,78 @@ function priceFromJsonLd(html: string): number | null {
   return null;
 }
 
+// Primeiro valor string plausível — `image` no JSON-LD pode vir como string,
+// array ou objeto { url }.
+function firstString(v: unknown): string | null {
+  if (typeof v === "string") return v.trim() || null;
+  if (Array.isArray(v)) {
+    for (const x of v) { const s = firstString(x); if (s) return s; }
+    return null;
+  }
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    if (typeof o.url === "string" && o.url.trim()) return o.url.trim();
+  }
+  return null;
+}
+
+// Lê name/image/price do JSON-LD de produto. Um "nó de produto" é qualquer
+// objeto com @type Product OU com `name` + `offers` — o ML não marca
+// @type:"Product", então não dá pra exigir isso. Achata arrays e @graph.
+// Pegar o nome daqui evita o og:title do ML, que vem sujo
+// ("... - R$ 6.999,00 | Parcelamento sem juros").
+interface JsonLdInfo { name: string | null; image: string | null; price: number | null; }
+function parseJsonLd(html: string): JsonLdInfo {
+  const out: JsonLdInfo = { name: null, image: null, price: null };
+  const re = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const raw = m[1].trim();
+    if (!raw) continue;
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { continue; }
+    const stack: unknown[] = [parsed];
+    while (stack.length) {
+      const node = stack.pop();
+      if (Array.isArray(node)) { stack.push(...node); continue; }
+      if (!node || typeof node !== "object") continue;
+      const o = node as Record<string, unknown>;
+      if (Array.isArray(o["@graph"])) stack.push(...(o["@graph"] as unknown[]));
+      const type = o["@type"];
+      const isProduct = type === "Product" || (Array.isArray(type) && type.includes("Product"));
+      const productLike = isProduct || (typeof o.name === "string" && "offers" in o);
+      if (!productLike) continue;
+      if (out.name == null && typeof o.name === "string" && o.name.trim()) {
+        out.name = decodeEntities(o.name).trim();
+      }
+      if (out.image == null) {
+        const img = firstString(o.image);
+        if (img) out.image = img;
+      }
+      if (out.price == null) {
+        const p = findPrice(o);
+        if (p != null) out.price = p;
+      }
+    }
+    if (out.name && out.image && out.price != null) break;
+  }
+  return out;
+}
+
+// <meta itemprop="price" content="6999"> — comum em PDPs (inclusive ML).
+function priceFromItemprop(html: string): number | null {
+  const m =
+    html.match(/itemprop=["']price["'][^>]*\bcontent=["']([^"']+)["']/i) ||
+    html.match(/\bcontent=["']([^"']+)["'][^>]*itemprop=["']price["']/i);
+  if (!m?.[1]) return null;
+  const cleaned = m[1]
+    .replace(/[^\d.,]/g, "")
+    .replace(/\.(?=\d{3}(\D|$))/g, "")
+    .replace(",", ".");
+  const n = Number(cleaned);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function priceFromMeta(html: string): number | null {
   const raw =
     metaContent(html, "product:price:amount") ||
@@ -184,12 +294,20 @@ function extractTitle(html: string, siteName: string | null): string | null {
     if (tm?.[1]) title = decodeEntities(tm[1]).trim();
   }
   if (!title) return null;
-  // Remove sufixos comuns de marketplace ("... | Mercado Livre").
-  const known = "Mercado Livre|MercadoLivre|Mercado Libre|Amazon[^|\\-–—]*|Shopee|Magazine Luiza|Magalu|Americanas|AliExpress";
-  title = title.replace(new RegExp(`\\s*[|\\-–—]\\s*(?:${known})\\s*$`, "i"), "");
-  if (siteName) {
-    const sn = siteName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    title = title.replace(new RegExp(`\\s*[|\\-–—]\\s*${sn}\\s*$`, "i"), "");
+  // Remove sufixos comuns de marketplace e marketing: "... | Mercado Livre",
+  // "... - R$ 6.999,00", "... | Parcelamento sem juros".
+  const known = "Mercado Livre|MercadoLivre|Mercado Libre|Amazon[^|\\-–—]*|Shopee|Magazine Luiza|Magalu|Americanas|AliExpress|Parcelamento sem juros|Frete gr[aá]tis";
+  const knownRe = new RegExp(`\\s*[|\\-–—]\\s*(?:${known})\\s*$`, "i");
+  const priceRe = /\s*[|\-–—]\s*R\$\s*[\d.,]+\s*$/i;
+  // Loop porque o ML empilha vários sufixos ("... - R$ X | Parcelamento...").
+  for (let i = 0; i < 4; i++) {
+    const before: string = title;
+    title = title.replace(knownRe, "").replace(priceRe, "");
+    if (siteName) {
+      const sn = siteName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      title = title.replace(new RegExp(`\\s*[|\\-–—]\\s*${sn}\\s*$`, "i"), "");
+    }
+    if (title === before) break;
   }
   return title.trim() || null;
 }
@@ -229,6 +347,8 @@ export async function POST(request: NextRequest) {
   const u = safeUrl(url || "");
   if (!u) return NextResponse.json({ error: "Link inválido ou não permitido." }, { status: 200 });
 
+  // ML (e afins) só entregam a página completa — com o preço — pro Googlebot.
+  const htmlUa = prefersGooglebot(u.hostname) ? GOOGLEBOT_UA : UA;
   let html: string;
   let finalUrl = u.toString();
   try {
@@ -236,6 +356,7 @@ export async function POST(request: NextRequest) {
       u,
       "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       9000,
+      htmlUa,
     );
     finalUrl = fu;
     if (!res.ok) {
@@ -250,19 +371,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Falha ao buscar o link (tempo esgotado ou bloqueado pelo site).", url: finalUrl }, { status: 200 });
   }
 
+  const ld = parseJsonLd(html);
   const siteName = metaContent(html, "og:site_name");
-  const name = extractTitle(html, siteName);
+  // Nome: prioriza o JSON-LD (limpo); cai no og:title/title só se faltar.
+  const name = ld.name || extractTitle(html, siteName);
 
   const ogImage =
     metaContent(html, "og:image:secure_url") ||
     metaContent(html, "og:image") ||
     metaContent(html, "twitter:image") ||
     metaContent(html, "twitter:image:src");
-  const image = ogImage ? (await imageToDataUrl(ogImage)) || ogImage : null;
+  const imageSrc = ogImage || ld.image;
+  const image = imageSrc ? (await imageToDataUrl(imageSrc)) || imageSrc : null;
 
-  const value = priceFromJsonLd(html) ?? priceFromMeta(html);
+  // Valor: JSON-LD de produto → meta de preço → itemprop → varredura global de
+  // JSON-LD. Fica `null` quando o item está sem preço (ex.: anúncio esgotado),
+  // e aí a UI deixa o campo em branco pro preenchimento manual.
+  const value =
+    ld.price ?? priceFromMeta(html) ?? priceFromItemprop(html) ?? priceFromJsonLd(html);
 
-  const supplier = siteName || u.hostname.replace(/^www\./, "");
+  // Fornecedor: nome amigável do marketplace ("Mercado Livre") quando o host é
+  // conhecido; senão og:site_name; por último o host sem "www.".
+  const supplier =
+    friendlySupplier(u.hostname) || siteName || u.hostname.replace(/^www\./, "");
 
   const result: PreviewResult = { name, value, image, supplier, url: finalUrl };
   return NextResponse.json(result);
