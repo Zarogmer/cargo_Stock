@@ -43,6 +43,7 @@ export default function ColaboradoresPage() {
   const [empTeamFilter, setEmpTeamFilter] = useState("Todos");
   const [empStatusFilter, setEmpStatusFilter] = useState<"Todos" | "ATIVO" | "INATIVO" | "PENDENCIA">("Todos");
   const [empEscalaFilter, setEmpEscalaFilter] = useState<"Todos" | "DISPONIVEL" | "EMBARCADO" | "COSTADO">("Todos");
+  const [empRoleFilter, setEmpRoleFilter] = useState("Todos");
   const [empViewMode, setEmpViewMode] = useState<"cards" | "spreadsheet">("cards");
   const [exportingXlsx, setExportingXlsx] = useState(false);
   const [empForm, setEmpForm] = useState(false);
@@ -270,6 +271,11 @@ export default function ColaboradoresPage() {
     {
       key: "colaboradores", label: "Colaboradores",
       content: (() => {
+        // Funções disponíveis para o filtro — derivadas dos próprios dados, então
+        // sempre refletem o que está cadastrado (inclusive valores personalizados).
+        const availableRoles = Array.from(
+          new Set(employees.map((e) => (e.role || "").trim()).filter(Boolean))
+        ).sort((a, b) => a.localeCompare(b, "pt-BR"));
         const filteredEmployees = employees.filter((e) => {
           const nameMatch = matchSearch(e.name, empSearch);
           const statusMatch = empStatusFilter === "Todos" ? true : effectiveEmployeeStatus(e) === empStatusFilter;
@@ -284,7 +290,8 @@ export default function ColaboradoresPage() {
             empEscalaFilter === "DISPONIVEL" ? !k :
             empEscalaFilter === "EMBARCADO" ? k === "EMBARQUE" :
             empEscalaFilter === "COSTADO" ? k === "COSTADO" : true;
-          return nameMatch && statusMatch && teamMatch && escalaMatch;
+          const roleMatch = empRoleFilter === "Todos" ? true : (e.role || "").trim() === empRoleFilter;
+          return nameMatch && statusMatch && teamMatch && escalaMatch && roleMatch;
         });
         return (
           <div className="space-y-3">
@@ -340,6 +347,21 @@ export default function ColaboradoresPage() {
                   {t.label}
                 </button>
               ))}
+            </div>
+            <div className="flex gap-2 flex-wrap items-center">
+              <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Função:</span>
+              <select value={empRoleFilter} onChange={(e) => setEmpRoleFilter(e.target.value)}
+                className={`px-3 py-1.5 text-xs rounded-full font-medium border outline-none transition focus:ring-2 focus:ring-primary cursor-pointer ${empRoleFilter !== "Todos" ? "bg-primary text-white border-primary" : "bg-gray-100 text-text-light border-transparent hover:bg-gray-200"}`}>
+                <option value="Todos">Todas as funções</option>
+                {availableRoles.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+              {empRoleFilter !== "Todos" && (
+                <button onClick={() => setEmpRoleFilter("Todos")}
+                  className="px-2 py-1.5 text-xs rounded-full font-medium text-text-light hover:bg-gray-200 transition"
+                  title="Limpar filtro de função">
+                  ✕ Limpar
+                </button>
+              )}
             </div>
 
             {empViewMode === "cards" ? (
