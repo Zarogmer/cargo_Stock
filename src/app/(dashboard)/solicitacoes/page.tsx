@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
-import { hasPermission } from "@/lib/rbac";
+import { hasPermission, COMPRAS_ROLES } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -233,7 +233,11 @@ export default function SolicitacoesPage() {
   const canManageLinks = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
   const canEditRequests = hasPermission(role, "SOLICITACOES", "edit");
   const canDeleteRequests = hasPermission(role, "SOLICITACOES", "delete");
-  const canManagePurchases = hasPermission(role, "SOLICITACOES", "create");
+  // Gerir compras (Registrar Compra, Armazenar no estoque, Nova/editar compra) é
+  // dos papéis de gestão — os mesmos que veem a aba Controle de Compras. Manutenção
+  // tem permissão "create" em SOLICITACOES só pra ABRIR pedidos, então NÃO basta
+  // checar a permissão: separamos pelo COMPRAS_ROLES pra Manutenção só pedir.
+  const canManagePurchases = COMPRAS_ROLES.includes(role);
 
   const [dbError, setDbError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -1148,7 +1152,12 @@ export default function SolicitacoesPage() {
         </div>
       ),
     },
-  ].filter((t) => t.key !== "produtos" || role === "TECNOLOGIA");
+  ]
+    .filter((t) => t.key !== "produtos" || role === "TECNOLOGIA")
+    // "Controle de Compras" só pros papéis de gestão (mesma regra do menu em
+    // rbac.ts). Manutenção/RH não veem a aba nem acessando ?tab=compras direto —
+    // o effectiveTab abaixo cai pra primeira aba disponível (Solicitações).
+    .filter((t) => t.key !== "compras" || COMPRAS_ROLES.includes(role));
 
   // If the URL points to a tab the current role can't see (e.g. someone with a
   // stale bookmark to ?tab=produtos), fall back to the first available tab.

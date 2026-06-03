@@ -162,6 +162,13 @@ export interface NavSubItem {
   children?: NavSubItem[];
 }
 
+// Papéis que enxergam "Controle de Compras" (o registro/ledger de compras).
+// Manutenção fica de fora de propósito: o pessoal de manutenção usa a aba
+// Solicitações só pra PEDIR material — quem controla as compras é a gestão.
+// RH (acesso só-leitura em Solicitações) também não entra nessa lista.
+// Fonte única: o menu (rbac) e a própria página de Solicitações filtram por isto.
+export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "FINANCEIRO"];
+
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/", icon: "dashboard", module: "DASHBOARD" },
   { label: "Navios", href: "/navios", icon: "navios", module: "NAVIOS" },
@@ -229,7 +236,7 @@ export const NAV_ITEMS: NavItem[] = [
     module: "SOLICITACOES",
     children: [
       { label: "Solicitações", href: "/solicitacoes?tab=solicitacoes" },
-      { label: "Controle de Compras", href: "/solicitacoes?tab=compras" },
+      { label: "Controle de Compras", href: "/solicitacoes?tab=compras", roles: COMPRAS_ROLES },
       { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos", roles: ["TECNOLOGIA"] },
       { label: "Fornecedores", href: "/solicitacoes?tab=fornecedores" },
     ],
