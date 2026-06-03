@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { whatsappBus } from "@/lib/services/whatsapp-bus";
 import { findGroupInfo, isEvolutionConfigured } from "@/lib/services/evolution-api";
+import { isJidLikeName } from "@/lib/utils";
 
 // Evolution API posts events here whenever messages arrive (or are sent),
 // connection state changes, etc. The URL is registered via /webhook/set on
@@ -183,10 +184,11 @@ async function resolveParticipantLabel(participantJid: string): Promise<{ label:
           select: { name: true, phone: true },
         });
         if (emp) return { label: emp.name, phone: emp.phone, jid: participantJid };
-        return { label: m.push_name || formatBrPhone(phoneDigits), phone: phoneDigits, jid: participantJid };
+        const pushName = m.push_name && !isJidLikeName(m.push_name) ? m.push_name : null;
+        return { label: pushName || formatBrPhone(phoneDigits), phone: phoneDigits, jid: participantJid };
       }
-      // Sem phone resolvido mas com pushName — usa o pushName.
-      if (m.push_name) return { label: m.push_name, phone: null, jid: participantJid };
+      // Sem phone resolvido mas com pushName de verdade (ignora LID/JID cru).
+      if (m.push_name && !isJidLikeName(m.push_name)) return { label: m.push_name, phone: null, jid: participantJid };
     }
   }
 
@@ -416,9 +418,12 @@ export async function POST(req: NextRequest) {
     await prisma.whatsappMessage.upsert({
       where: { unique_message: unique },
       update: {
-        // If we get a richer payload later (e.g., status update), update what we know
+        // If we get a richer payload later (e.g., status update), update what we know.
+        // Não rebaixamos um nome bom já gravado pra um LID/JID cru: Evolution às
+        // vezes reenvia o mesmo evento com o pushName = LID. Só sobrescrevemos
+        // quando o novo pushName é um nome de verdade.
         text: text ?? undefined,
-        push_name: data?.pushName ?? undefined,
+        push_name: isJidLikeName(data?.pushName) ? undefined : (data?.pushName ?? undefined),
         raw_event: payload as unknown as object,
       },
       create: {
@@ -426,6 +431,8 @@ export async function POST(req: NextRequest) {
         instance_name: instanceName,
         remote_jid: remoteJid,
         from_me: fromMe,
+        // Guarda o pushName como veio (mesmo sendo um LID cru): é o único
+        // identificador desse remetente, e a UI o exibe limpo via cleanSenderName.
         push_name: data?.pushName || null,
         message_type: messageType,
         text,

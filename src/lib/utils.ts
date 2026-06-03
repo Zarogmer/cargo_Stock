@@ -23,6 +23,30 @@ export function formatCurrency(value: number): string {
   });
 }
 
+// Evolution às vezes manda, no lugar do nome do remetente (pushName), um
+// identificador cru do WhatsApp — o "LID" de privacidade (ex.: "12658…@lid"),
+// um JID ("…@s.whatsapp.net") ou só dígitos. Isso NÃO é um nome: o contato não
+// está salvo e o número não foi exposto, então não dá pra descobrir quem é.
+export function isJidLikeName(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const t = value.trim();
+  return /@(lid|s\.whatsapp\.net|g\.us)\s*$/i.test(t) || /^\+?\d{11,}$/.test(t);
+}
+
+// Nome de remetente pronto pra exibir: devolve o pushName quando é um nome de
+// verdade; quando é um LID/JID cru, devolve um rótulo curto ("Participante
+// 499056") em vez do identificador feio; vazio -> null (sem rótulo).
+export function cleanSenderName(pushName: string | null | undefined): string | null {
+  if (!pushName) return null;
+  const name = pushName.trim();
+  if (!name) return null;
+  if (isJidLikeName(name)) {
+    const digits = name.replace(/\D/g, "");
+    return digits ? `Participante ${digits.slice(-6)}` : null;
+  }
+  return name;
+}
+
 // Converte um texto digitado em pt-BR (vírgula como separador decimal) para
 // número. Ex.: "1,5" -> 1.5, "1,500" -> 1.5, "1.234,5" -> 1234.5, "2" -> 2.
 // Se não houver vírgula, assume que o ponto (se houver) é o separador decimal

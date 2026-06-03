@@ -7,7 +7,7 @@ import { Modal } from "@/components/ui/modal";
 import { TrashIcon, PlusIcon } from "@/components/icons";
 import { db } from "@/lib/db";
 import { useAuth } from "@/lib/auth-context";
-import { formatPhone } from "@/lib/utils";
+import { formatPhone, cleanSenderName } from "@/lib/utils";
 
 interface Conversation {
   remote_jid: string;
@@ -798,8 +798,8 @@ export default function ConversasPage() {
                         <div className={`max-w-[70%] rounded-lg px-3 py-2 shadow-sm ${
                           m.from_me ? "bg-[#d9fdd3] text-gray-900" : "bg-white text-gray-900"
                         }`}>
-                          {!m.from_me && m.push_name && selectedConv?.is_group && (
-                            <p className="text-[10px] font-semibold text-primary mb-0.5">{m.push_name}</p>
+                          {!m.from_me && selectedConv?.is_group && cleanSenderName(m.push_name) && (
+                            <p className="text-[10px] font-semibold text-primary mb-0.5">{cleanSenderName(m.push_name)}</p>
                           )}
                           {hasMedia ? (
                             <MediaBubble msg={m} onImageClick={setLightboxSrc} />

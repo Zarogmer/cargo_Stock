@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { findGroupInfo, isEvolutionConfigured } from "@/lib/services/evolution-api";
 import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
+import { isJidLikeName } from "@/lib/utils";
 
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
@@ -110,10 +111,11 @@ export async function GET(
         const pnDigits = pn ? jidToDigits(pn) : "";
         if (pnDigits) lidToPhone.set(partDigits, pnDigits);
       }
-      // pushName: só usa mensagens DESTE grupo pra não importar apelido de outro contexto.
+      // pushName: só usa mensagens DESTE grupo pra não importar apelido de outro
+      // contexto, e ignora pushName que é um LID/JID cru (não é nome de verdade).
       if (m.remote_jid === jid && !lidToPushName.has(partDigits)) {
         const name = (m.push_name || "").trim();
-        if (name) lidToPushName.set(partDigits, name);
+        if (name && !isJidLikeName(name)) lidToPushName.set(partDigits, name);
       }
     }
 
