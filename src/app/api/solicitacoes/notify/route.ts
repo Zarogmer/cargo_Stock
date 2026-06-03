@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { isEvolutionConfigured, sendWhatsappText } from "@/lib/services/evolution-api";
+import { isEvolutionConfigured, sendWhatsappText, sendWhatsappMediaToNumber } from "@/lib/services/evolution-api";
 
 interface NotifyBody {
   toolName: string;
@@ -11,6 +11,7 @@ interface NotifyBody {
   value?: number | null;
   supplier?: string | null;
   productUrl?: string | null;
+  imageUrl?: string | null;
 }
 
 function formatBRL(value: number): string {
@@ -75,6 +76,7 @@ export async function POST(request: NextRequest) {
   ).filter((s) => s.status !== "INATIVO");
 
   const message = buildMessage(body);
+  const image = body.imageUrl?.trim() || null;
   const results: { target: string; ok: boolean; error?: string }[] = [];
 
   for (const sup of supervisors) {
@@ -83,7 +85,18 @@ export async function POST(request: NextRequest) {
       continue;
     }
     try {
-      await sendWhatsappText(sup.phone, message);
+      // Com imagem: manda a foto com a mensagem como legenda; se a mídia falhar,
+      // cai pro texto puro. Sem imagem: texto direto.
+      if (image) {
+        try {
+          await sendWhatsappMediaToNumber(sup.phone, image, message);
+        } catch (mediaErr) {
+          console.warn(`[solicitacoes/notify] foto falhou pra ${sup.name}, fallback texto:`, (mediaErr as Error).message);
+          await sendWhatsappText(sup.phone, message);
+        }
+      } else {
+        await sendWhatsappText(sup.phone, message);
+      }
       results.push({ target: `dm:${sup.name}`, ok: true });
     } catch (err) {
       results.push({ target: `dm:${sup.name}`, ok: false, error: (err as Error).message });

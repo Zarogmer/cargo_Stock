@@ -89,13 +89,17 @@ export async function POST(request: NextRequest) {
   // Se a mídia falhar (Evolution rejeita o base64, etc.), cai pro texto puro
   // pra pelo menos a info chegar. Sem imagem: texto direto.
   let withPhoto = false;
+  let photoError: string | null = null;
   try {
     if (image) {
       try {
         await sendWhatsappMediaToGroup(jid, image, message);
         withPhoto = true;
       } catch (mediaErr) {
-        console.warn("[notify-compras] envio de foto falhou, caindo pro texto:", (mediaErr as Error).message);
+        // Guarda o erro real do Evolution pra surfacear no toast (diagnóstico) e
+        // cai pro texto puro pra pelo menos a info chegar.
+        photoError = (mediaErr as Error).message;
+        console.warn("[notify-compras] envio de foto falhou, caindo pro texto:", photoError);
         await sendWhatsappTextToGroup(jid, message);
       }
     } else {
@@ -130,5 +134,5 @@ export async function POST(request: NextRequest) {
     console.warn("[notify-compras] stub insert failed:", (stubErr as Error).message);
   }
 
-  return NextResponse.json({ status: "ok", sent: 1, group: groupName, withPhoto });
+  return NextResponse.json({ status: "ok", sent: 1, group: groupName, withPhoto, ...(photoError && { photoError }) });
 }

@@ -331,6 +331,7 @@ export default function SolicitacoesPage() {
           value: data.estimatedValue,
           supplier: data.supplier,
           productUrl: data.productUrl,
+          imageUrl: data.imageUrl,
         }),
       }).catch((err) => console.warn("[solicitacoes] notify failed:", err));
       setShowRequestForm(false);
@@ -417,8 +418,13 @@ export default function SolicitacoesPage() {
           }),
         });
         const data = await res.json().catch(() => null);
-        if (data?.sent) groupMsg = data.withPhoto ? " 📨 Avisado no grupo Compras (com foto)." : " 📨 Avisado no grupo Compras.";
-        else if (data?.warning) groupMsg = ` ⚠️ ${data.warning}`;
+        if (data?.sent) {
+          groupMsg = data.withPhoto
+            ? " 📨 Avisado no grupo Compras (com foto)."
+            : ` 📨 Avisado no grupo Compras${data.photoError ? ` (foto falhou: ${data.photoError})` : ""}.`;
+        } else if (data?.warning) {
+          groupMsg = ` ⚠️ ${data.warning}`;
+        }
       } catch {
         groupMsg = " ⚠️ Não consegui avisar o grupo Compras.";
       }

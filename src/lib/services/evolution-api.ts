@@ -177,37 +177,38 @@ export async function sendWhatsappTextToGroup(
   );
 }
 
-// Envia uma IMAGEM (com legenda opcional) a um grupo identificado pelo JID.
-// Aceita tanto um data URL ("data:image/jpeg;base64,AAAA…") quanto base64 puro —
-// é o formato que o app guarda em image_url (foto comprimida inline, sem storage
-// externo). Usa o endpoint /message/sendMedia do Evolution v2.
-export async function sendWhatsappMediaToGroup(
-  groupJid: string,
-  dataUrlOrBase64: string,
+// Núcleo do envio de IMAGEM (endpoint /message/sendMedia do Evolution v2).
+// `target` é o destino que vai no campo `number`: número normalizado (DM) ou
+// JID do grupo (…@g.us). Aceita data URL ("data:image/jpeg;base64,AAAA…"),
+// base64 puro ou URL pública — é o formato guardado em image_url (foto
+// comprimida inline, sem storage externo).
+async function sendMediaRaw(
+  target: string,
+  media0: string,
   caption: string,
-  fileName = "produto.jpg",
+  fileName: string,
 ): Promise<unknown> {
   const cfg = readConfig();
-  if (!groupJid.endsWith("@g.us")) throw new Error("JID de grupo inválido.");
   const token = await getInstanceToken();
 
   // Separa o mimetype e o base64 cru. O Evolution espera o base64 SEM o prefixo
-  // "data:…;base64," (ele faz Buffer.from(media, "base64") internamente).
+  // "data:…;base64," (ele faz Buffer.from(media, "base64") internamente). Se for
+  // uma URL pública (http…), passa direto — o Evolution baixa.
   let mimetype = "image/jpeg";
-  let media = dataUrlOrBase64.trim();
+  let media = (media0 || "").trim();
+  if (!media) throw new Error("Imagem vazia.");
   const m = /^data:([^;]+);base64,([\s\S]*)$/.exec(media);
   if (m) {
     mimetype = m[1];
     media = m[2];
   }
-  if (!media) throw new Error("Imagem vazia.");
 
   return evolutionFetch(
     `/message/sendMedia/${encodeURIComponent(cfg.instance)}`,
     {
       method: "POST",
       body: JSON.stringify({
-        number: groupJid,
+        number: target,
         mediatype: "image",
         mimetype,
         caption,
@@ -217,6 +218,30 @@ export async function sendWhatsappMediaToGroup(
     },
     token,
   );
+}
+
+// Envia uma IMAGEM (com legenda) a um grupo identificado pelo JID.
+export async function sendWhatsappMediaToGroup(
+  groupJid: string,
+  dataUrlOrBase64: string,
+  caption: string,
+  fileName = "produto.jpg",
+): Promise<unknown> {
+  if (!groupJid.endsWith("@g.us")) throw new Error("JID de grupo inválido.");
+  return sendMediaRaw(groupJid, dataUrlOrBase64, caption, fileName);
+}
+
+// Envia uma IMAGEM (com legenda) numa conversa individual (DM). O número é
+// normalizado pro formato BR (55 + DDD + número), igual ao sendWhatsappText.
+export async function sendWhatsappMediaToNumber(
+  to: string,
+  dataUrlOrBase64: string,
+  caption: string,
+  fileName = "produto.jpg",
+): Promise<unknown> {
+  const number = normalizeBRNumber(to);
+  if (!number) throw new Error("Número inválido.");
+  return sendMediaRaw(number, dataUrlOrBase64, caption, fileName);
 }
 
 interface CreateGroupResult {
