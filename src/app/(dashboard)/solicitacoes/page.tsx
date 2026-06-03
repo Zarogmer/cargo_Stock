@@ -180,6 +180,7 @@ export default function SolicitacoesPage() {
   const [saving, setSaving] = useState(false);
 
   const [showRequestForm, setShowRequestForm] = useState(false);
+  const [editRequest, setEditRequest] = useState<ToolRequest | null>(null);
   const [showLinkForm, setShowLinkForm] = useState(false);
   const [editLink, setEditLink] = useState<ProductLink | null>(null);
   const [deleteRequest, setDeleteRequest] = useState<ToolRequest | null>(null);
@@ -206,6 +207,7 @@ export default function SolicitacoesPage() {
 
   const canApproveRequests = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
   const canManageLinks = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
+  const canEditRequests = hasPermission(role, "SOLICITACOES", "edit");
   const canDeleteRequests = hasPermission(role, "SOLICITACOES", "delete");
   const canManagePurchases = hasPermission(role, "SOLICITACOES", "create");
 
@@ -247,13 +249,32 @@ export default function SolicitacoesPage() {
 
   useEffect(() => { loadAll(); }, [loadAll, pathname]);
 
-  async function handleCreateRequest(data: {
+  async function handleSaveRequest(data: {
     toolName: string; quantity: number; reason: string; imageUrl: string | null;
     productUrl: string | null; estimatedValue: number | null; supplier: string | null;
   }) {
     setSaving(true);
     setSaveError(null);
     try {
+      if (editRequest) {
+        // Edição: atualiza os campos sem mexer em status/autor nem reavisar.
+        const { error } = await db.from("tool_requests").update({
+          tool_name: data.toolName,
+          quantity: data.quantity,
+          reason: data.reason,
+          image_url: data.imageUrl,
+          product_url: data.productUrl,
+          estimated_value: data.estimatedValue,
+          supplier: data.supplier,
+          updated_at: new Date().toISOString(),
+        } as any).eq("id", editRequest.id);
+        if (error) throw error;
+        setShowRequestForm(false);
+        setEditRequest(null);
+        loadAll();
+        return;
+      }
+
       const { error } = await db.from("tool_requests").insert({
         tool_name: data.toolName,
         quantity: data.quantity,
@@ -284,8 +305,8 @@ export default function SolicitacoesPage() {
       setShowRequestForm(false);
       loadAll();
     } catch (err: any) {
-      console.error("Erro ao criar solicitação:", err);
-      setSaveError(`Erro ao criar solicitação: ${err?.message || String(err)}`);
+      console.error("Erro ao salvar solicitação:", err);
+      setSaveError(`Erro ao salvar solicitação: ${err?.message || String(err)}`);
     } finally {
       setSaving(false);
     }
@@ -501,7 +522,7 @@ export default function SolicitacoesPage() {
         <div className="space-y-4">
           <div className="flex justify-between items-center">
             <p className="text-sm text-text-light">Solicitações de compra de equipamentos e materiais</p>
-            <Button size="sm" onClick={() => setShowRequestForm(true)}>
+            <Button size="sm" onClick={() => { setEditRequest(null); setShowRequestForm(true); }}>
               <PlusIcon className="w-4 h-4" />Nova Solicitação
             </Button>
           </div>
@@ -601,6 +622,15 @@ export default function SolicitacoesPage() {
                             className="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 font-medium transition"
                           >
                             Registrar Compra
+                          </button>
+                        )}
+                        {canEditRequests && (
+                          <button
+                            onClick={() => { setEditRequest(req); setShowRequestForm(true); }}
+                            className="p-1.5 text-primary hover:bg-blue-50 rounded-lg transition"
+                            title="Editar solicitação"
+                          >
+                            <EditIcon />
                           </button>
                         )}
                         {canDeleteRequests && (
@@ -1002,7 +1032,7 @@ export default function SolicitacoesPage() {
       <Tabs tabs={tabs} defaultTab={effectiveTab} hideHeader />
 
       {/* Request Form Modal */}
-      <RequestFormModal open={showRequestForm} onClose={() => setShowRequestForm(false)} onSave={handleCreateRequest} suppliers={suppliers} saving={saving} />
+      <RequestFormModal open={showRequestForm} onClose={() => { setShowRequestForm(false); setEditRequest(null); }} onSave={handleSaveRequest} item={editRequest} suppliers={suppliers} saving={saving} />
 
       {/* Product Link Form Modal */}
       <LinkFormModal open={showLinkForm} onClose={() => { setShowLinkForm(false); setEditLink(null); setSaveError(null); }} onSave={handleSaveLink} item={editLink} saving={saving} error={saveError} />
@@ -1151,12 +1181,13 @@ function ImagePicker({ value, onChange, label = "Imagem do produto (opcional)" }
   );
 }
 
-function RequestFormModal({ open, onClose, onSave, suppliers, saving }: {
+function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
   open: boolean; onClose: () => void;
   onSave: (data: {
     toolName: string; quantity: number; reason: string; imageUrl: string | null;
     productUrl: string | null; estimatedValue: number | null; supplier: string | null;
   }) => void;
+  item: ToolRequest | null;
   suppliers: Supplier[];
   saving: boolean;
 }) {
@@ -1173,10 +1204,24 @@ function RequestFormModal({ open, onClose, onSave, suppliers, saving }: {
   const lastFetchedRef = useRef<string>("");
 
   useEffect(() => {
-    setToolName(""); setQuantity(1); setReason(""); setImageUrl(null);
-    setLink(""); setValue(""); setSupplier(""); setFetching(false); setFetchError(null);
-    lastFetchedRef.current = "";
-  }, [open]);
+    if (!open) return;
+    if (item) {
+      setToolName(item.tool_name || "");
+      setQuantity(item.quantity || 1);
+      setReason(item.reason || "");
+      setImageUrl(item.image_url || null);
+      setLink(item.product_url || "");
+      setValue(numToInput(parseDecimalBR(item.estimated_value)));
+      setSupplier(item.supplier || "");
+      // Já tem dados preenchidos — não dispara o auto-fetch do link ao abrir.
+      lastFetchedRef.current = (item.product_url || "").trim();
+    } else {
+      setToolName(""); setQuantity(1); setReason(""); setImageUrl(null);
+      setLink(""); setValue(""); setSupplier("");
+      lastFetchedRef.current = "";
+    }
+    setFetching(false); setFetchError(null);
+  }, [open, item]);
 
   const isUrl = (s: string) => /^https?:\/\/.+/i.test(s.trim());
 
@@ -1235,7 +1280,7 @@ function RequestFormModal({ open, onClose, onSave, suppliers, saving }: {
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Nova Solicitação">
+    <Modal open={open} onClose={onClose} title={item ? "Editar Solicitação" : "Nova Solicitação"}>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium mb-1">Link do produto (opcional)</label>
@@ -1289,7 +1334,7 @@ function RequestFormModal({ open, onClose, onSave, suppliers, saving }: {
         <ImagePicker value={imageUrl} onChange={setImageUrl} />
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={saving}>{saving ? "Enviando..." : "Enviar Solicitação"}</Button>
+          <Button type="submit" disabled={saving}>{saving ? "Salvando..." : item ? "Salvar" : "Enviar Solicitação"}</Button>
         </div>
       </form>
     </Modal>
