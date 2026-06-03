@@ -887,6 +887,11 @@ export default function ConversasPage() {
       <GroupInfoModal
         jid={showGroupInfoJid}
         onClose={() => setShowGroupInfoJid(null)}
+        onLeft={() => {
+          setShowGroupInfoJid(null);
+          loadConversations();
+          if (selectedJid) loadMessages(selectedJid);
+        }}
       />
     </div>
   );
@@ -896,7 +901,7 @@ export default function ConversasPage() {
 // Fetched on open from /api/whatsapp/groups/[jid] — shows subject, description,
 // creation date, linked ship, and the full participant list with employee
 // cross-reference so admins can see who's in each group.
-function GroupInfoModal({ jid, onClose }: { jid: string | null; onClose: () => void }) {
+function GroupInfoModal({ jid, onClose, onLeft }: { jid: string | null; onClose: () => void; onLeft: () => void }) {
   const [info, setInfo] = useState<GroupInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -905,6 +910,10 @@ function GroupInfoModal({ jid, onClose }: { jid: string | null; onClose: () => v
   const [addingName, setAddingName] = useState("");
   const [addingSaving, setAddingSaving] = useState(false);
   const [addingErr, setAddingErr] = useState<string | null>(null);
+  // "Sair do grupo": confirmação inline + chamada ao endpoint de leave.
+  const [confirmingLeave, setConfirmingLeave] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const [leaveErr, setLeaveErr] = useState<string | null>(null);
 
   const loadInfo = useCallback(async () => {
     if (!jid) return;
@@ -925,8 +934,26 @@ function GroupInfoModal({ jid, onClose }: { jid: string | null; onClose: () => v
     if (!jid) { setInfo(null); return; }
     setInfo(null);
     setAddingPhone(null); setAddingName(""); setAddingErr(null);
+    setConfirmingLeave(false); setLeaving(false); setLeaveErr(null);
     loadInfo();
   }, [jid, loadInfo]);
+
+  async function handleLeave() {
+    if (!jid) return;
+    setLeaving(true); setLeaveErr(null);
+    try {
+      const res = await fetch(`/api/whatsapp/groups/${encodeURIComponent(jid)}/leave`, {
+        method: "POST",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      onLeft();
+    } catch (e) {
+      setLeaveErr((e as Error).message);
+    } finally {
+      setLeaving(false);
+    }
+  }
 
   function startAdd(phone: string, suggestedName: string) {
     setAddingPhone(phone);
@@ -1159,8 +1186,56 @@ function GroupInfoModal({ jid, onClose }: { jid: string | null; onClose: () => v
             </p>
           </div>
 
-          <div className="flex justify-end pt-2">
-            <Button variant="secondary" onClick={onClose}>Fechar</Button>
+          {/* Footer: sair do grupo + fechar */}
+          <div className="pt-3 border-t border-border">
+            {leaveErr && (
+              <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-2">
+                {leaveErr}
+              </p>
+            )}
+            {confirmingLeave ? (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+                <p className="text-sm text-red-900 font-semibold">Sair deste grupo?</p>
+                <p className="text-xs text-red-800 mt-1">
+                  O número do WhatsApp conectado vai deixar o grupo. Pra voltar, alguém
+                  precisa adicionar o número de novo lá no WhatsApp. O histórico de
+                  mensagens continua aqui no sistema.
+                  {info.ship && (
+                    <> Além disso, o navio <strong>{info.ship.name}</strong> será desvinculado
+                    e a escala automática deixa de ser postada.</>
+                  )}
+                </p>
+                <div className="flex items-center gap-2 justify-end mt-3">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingLeave(false)}
+                    disabled={leaving}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-lg text-text-light hover:bg-white/70 transition disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleLeave}
+                    disabled={leaving}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50"
+                  >
+                    {leaving ? "Saindo..." : "🚪 Sair do grupo"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => { setConfirmingLeave(true); setLeaveErr(null); }}
+                  className="text-xs font-semibold px-3 py-2 rounded-lg border border-red-200 text-red-700 hover:bg-red-50 transition inline-flex items-center gap-1.5"
+                >
+                  🚪 Sair do grupo
+                </button>
+                <Button variant="secondary" onClick={onClose}>Fechar</Button>
+              </div>
+            )}
           </div>
         </div>
       )}

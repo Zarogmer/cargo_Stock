@@ -253,6 +253,23 @@ export async function updateGroupParticipants(
   );
 }
 
+// Faz o número conectado (o "bot" do sistema) SAIR de um grupo. Diferente de
+// `updateGroupParticipants("remove", ...)`, que tira OUTRO participante: aqui é
+// a própria conta que deixa o grupo. Evolution expõe isso como
+// DELETE /group/leaveGroup. Depois de sair, o app não consegue mais postar nem
+// ler o grupo (ele some das próximas sincronizações) — pra voltar, alguém
+// precisa readicionar o número manualmente no WhatsApp.
+export async function leaveWhatsappGroup(groupJid: string): Promise<unknown> {
+  const cfg = readConfig();
+  if (!groupJid.endsWith("@g.us")) throw new Error("JID de grupo inválido.");
+  const token = await getInstanceToken();
+  return evolutionFetch(
+    `/group/leaveGroup/${encodeURIComponent(cfg.instance)}?groupJid=${encodeURIComponent(groupJid)}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
 export async function getInstanceStatus(): Promise<{ state?: string } & Record<string, unknown>> {
   const cfg = readConfig();
   return evolutionFetch(`/instance/connectionState/${encodeURIComponent(cfg.instance)}`);
