@@ -207,6 +207,8 @@ export default function SolicitacoesPage() {
   const [editLink, setEditLink] = useState<ProductLink | null>(null);
   const [deleteRequest, setDeleteRequest] = useState<ToolRequest | null>(null);
   const [deleteLink, setDeleteLink] = useState<ProductLink | null>(null);
+  // Aprovação = conclusão num passo só (registra compra + lança no estoque).
+  const [concludeRequest, setConcludeRequest] = useState<ToolRequest | null>(null);
 
   // Imagem em tela cheia (lightbox)
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
@@ -341,27 +343,69 @@ export default function SolicitacoesPage() {
     }
   }
 
-  async function handleRespondRequest(reqId: string, status: "APROVADO" | "RECUSADO", notes: string) {
+  // Aprovar = concluir num passo só: registra a compra automaticamente a partir
+  // da solicitação, marca como concluída (status APROVADO, exibido "Concluído") e
+  // lança o item no Estoque do galpão. Substitui o antigo "Aprovar → Registrar
+  // Compra → Armazenar". Não há mais recusa — a solicitação ou é concluída ou
+  // apagada.
+  async function handleConcludeRequest() {
+    const req = concludeRequest;
+    if (!req) return;
+    setSaving(true);
+    setSaveError(null);
+    setSaveOk(null);
     try {
-      const { error } = await db.from("tool_requests").update({
-        status,
-        responded_by: profile?.full_name || "Sistema",
-        response_notes: notes || null,
-        updated_at: new Date().toISOString(),
-      } as any).eq("id", reqId);
-      if (error) throw error;
-      loadAll();
-    } catch (err) {
-      console.error("Erro ao responder solicitação:", err);
-      setSaveError(`Erro ao responder solicitação: ${(err as any)?.message || String(err)}`);
-    }
-  }
+      const actor = profile?.full_name || "Sistema";
+      const unit = parseDecimalBR(req.estimated_value);
+      const qty = req.quantity > 0 ? req.quantity : 1;
+      const today = new Date();
+      const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
-  // Abre o formulário de compra já preenchido a partir de uma solicitação aprovada.
-  function openPurchaseFromRequest(req: ToolRequest) {
-    setEditPurchase(null);
-    setPurchaseFromRequest(req);
-    setShowPurchaseForm(true);
+      // 1) Registra a compra (valor estimado da solicitação vira o valor unitário).
+      const { error: buyErr } = await db.from("purchase_orders").insert({
+        description: req.tool_name,
+        department: null,
+        supplier: req.supplier || null,
+        purchase_date: todayISO,
+        unit_value: unit,
+        quantity: qty,
+        total_value: unit * qty,
+        payment_method: null,
+        notes: null,
+        image_url: req.image_url,
+        request_id: req.id,
+        created_by: actor,
+      } as any);
+      if (buyErr) throw buyErr;
+
+      // 2) Marca a solicitação como concluída.
+      const { error: updErr } = await db.from("tool_requests").update({
+        status: "APROVADO",
+        responded_by: actor,
+        updated_at: new Date().toISOString(),
+      } as any).eq("id", req.id);
+      if (updErr) throw updErr;
+
+      // 3) Lança no Estoque do galpão (não-fatal: a compra já foi salva). Sem
+      // categoria definida na solicitação, entra como "Outros" — recategorizável
+      // depois em Almoxarifado › Estoque.
+      let stockMsg = "";
+      try {
+        const r = await storeInStock({ name: req.tool_name, quantity: qty, category: "Outros" });
+        stockMsg = ` ${r.created ? "Material criado" : "Estoque reposto"} (+${formatQty(r.quantity)}) em ${r.category}.`;
+      } catch (stockErr: any) {
+        stockMsg = ` ⚠️ Falhou ao lançar no Estoque: ${stockErr?.message || String(stockErr)}`;
+      }
+
+      setConcludeRequest(null);
+      setSaveOk(`✅ "${req.tool_name}" concluído — compra registrada.${stockMsg}`);
+      loadAll();
+    } catch (err: any) {
+      console.error("Erro ao concluir solicitação:", err);
+      setSaveError(`Erro ao concluir solicitação: ${err?.message || String(err)}`);
+    } finally {
+      setSaving(false);
+    }
   }
 
   // Lança um item no Estoque de materiais do galpão (stock_items, team=GALPAO) —
@@ -647,11 +691,6 @@ export default function SolicitacoesPage() {
   );
   const monthTotal = purchasesForMonth.reduce((sum, p) => sum + (p.total_value || 0), 0);
   const monthCount = purchasesForMonth.length;
-  // Solicitações aprovadas que ainda não viraram compra (aguardando registro).
-  const linkedRequestIds = new Set(purchases.map((p) => p.request_id).filter(Boolean));
-  const approvedAwaitingPurchase = requests.filter(
-    (r) => r.status === "APROVADO" && !linkedRequestIds.has(r.id)
-  );
 
   // Group product links by category
   const linksByCategory = productLinks.reduce<Record<string, ProductLink[]>>((acc, link) => {
@@ -683,7 +722,7 @@ export default function SolicitacoesPage() {
               {requests.map((req) => {
                 const statusConfig: Record<string, { color: string; label: string }> = {
                   PENDENTE: { color: "bg-amber-100 text-amber-700", label: "Pendente" },
-                  APROVADO: { color: "bg-green-100 text-green-700", label: "Aprovado" },
+                  APROVADO: { color: "bg-green-100 text-green-700", label: "Concluído" },
                   RECUSADO: { color: "bg-red-100 text-red-700", label: "Recusado" },
                   COMPRADO: { color: "bg-blue-100 text-blue-700", label: "Comprado" },
                 };
@@ -741,33 +780,12 @@ export default function SolicitacoesPage() {
                       </div>
                       <div className="flex gap-1 shrink-0 flex-wrap justify-end">
                         {canApproveRequests && req.status === "PENDENTE" && (
-                          <>
-                            <button
-                              onClick={() => {
-                                const notes = prompt("Observação (opcional):");
-                                handleRespondRequest(req.id, "APROVADO", notes || "");
-                              }}
-                              className="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 font-medium transition"
-                            >
-                              Aprovar
-                            </button>
-                            <button
-                              onClick={() => {
-                                const notes = prompt("Motivo da recusa:");
-                                if (notes) handleRespondRequest(req.id, "RECUSADO", notes);
-                              }}
-                              className="px-3 py-1.5 text-xs bg-red-50 text-red-700 rounded-lg hover:bg-red-100 font-medium transition"
-                            >
-                              Recusar
-                            </button>
-                          </>
-                        )}
-                        {canManagePurchases && req.status === "APROVADO" && (
                           <button
-                            onClick={() => openPurchaseFromRequest(req)}
-                            className="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 font-medium transition"
+                            onClick={() => setConcludeRequest(req)}
+                            className="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 font-medium transition"
+                            title="Registra a compra e lança no Estoque automaticamente"
                           >
-                            Registrar Compra
+                            Aprovar
                           </button>
                         )}
                         {canManagePurchases && req.status === "COMPRADO" && (
@@ -839,37 +857,6 @@ export default function SolicitacoesPage() {
               <p className="text-[11px] text-text-light">{monthCount} {monthCount === 1 ? "compra" : "compras"}</p>
             </div>
           </div>
-
-          {/* Solicitações aprovadas aguardando registro de compra */}
-          {approvedAwaitingPurchase.length > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-              <p className="text-sm font-semibold text-amber-800 mb-2">
-                Solicitações aprovadas aguardando registro ({approvedAwaitingPurchase.length})
-              </p>
-              <div className="space-y-2">
-                {approvedAwaitingPurchase.map((req) => (
-                  <div key={req.id} className="flex items-center justify-between gap-3 bg-white rounded-lg border border-amber-100 px-3 py-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      {req.image_url && (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={req.image_url} alt="" className="w-8 h-8 rounded object-cover border border-border shrink-0" />
-                      )}
-                      <span className="text-sm font-medium truncate">{req.tool_name}</span>
-                      <span className="text-xs text-text-light shrink-0">x{req.quantity}</span>
-                    </div>
-                    {canManagePurchases && (
-                      <button
-                        onClick={() => openPurchaseFromRequest(req)}
-                        className="px-3 py-1.5 text-xs bg-primary text-white rounded-lg hover:bg-primary-dark font-medium transition shrink-0"
-                      >
-                        Registrar compra
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Lista de compras do mês */}
           {purchasesForMonth.length === 0 ? (
@@ -1211,6 +1198,18 @@ export default function SolicitacoesPage() {
         onConfirm={handleDeleteRequest}
         title="Excluir Solicitação"
         message={`Excluir a solicitação "${deleteRequest?.tool_name}"?`}
+        loading={saving}
+      />
+
+      {/* Aprovar = concluir: registra a compra + lança no Estoque */}
+      <ConfirmDialog
+        open={!!concludeRequest}
+        onClose={() => setConcludeRequest(null)}
+        onConfirm={handleConcludeRequest}
+        title="Aprovar e concluir"
+        message={`Aprovar "${concludeRequest?.tool_name}" (x${concludeRequest?.quantity})? A compra é registrada no Controle de Compras e o item entra no Estoque do galpão automaticamente.`}
+        confirmLabel="Aprovar e concluir"
+        variant="primary"
         loading={saving}
       />
 
