@@ -257,6 +257,18 @@ export default function SolicitacoesPage() {
         image_url: imageUrl,
       } as any);
       if (error) throw error;
+      // Avisa os supervisores por WhatsApp (best-effort — não bloqueia nem
+      // falha a criação da solicitação se a Evolution estiver fora do ar).
+      fetch("/api/solicitacoes/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          toolName,
+          quantity,
+          reason,
+          requestedBy: profile?.full_name || "Sistema",
+        }),
+      }).catch((err) => console.warn("[solicitacoes] notify failed:", err));
       setShowRequestForm(false);
       loadAll();
     } catch (err: any) {
