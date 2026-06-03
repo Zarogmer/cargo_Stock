@@ -8,6 +8,13 @@ interface NotifyBody {
   quantity?: number;
   reason?: string;
   requestedBy: string;
+  value?: number | null;
+  supplier?: string | null;
+  productUrl?: string | null;
+}
+
+function formatBRL(value: number): string {
+  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
 // Mensagem enviada (pelo número da Cargo no WhatsApp) aos supervisores quando
@@ -15,12 +22,18 @@ interface NotifyBody {
 function buildMessage(b: NotifyBody): string {
   const qty = b.quantity && b.quantity > 1 ? ` (x${b.quantity})` : "";
   const reason = b.reason?.trim() ? `📝 Motivo: ${b.reason.trim()}\n` : "";
+  const value = b.value != null && Number(b.value) > 0 ? `💰 Valor: ${formatBRL(Number(b.value))}\n` : "";
+  const supplier = b.supplier?.trim() ? `🏬 Fornecedor: ${b.supplier.trim()}\n` : "";
+  const link = b.productUrl?.trim() ? `🔗 ${b.productUrl.trim()}\n` : "";
   return (
     `🛒 *Nova solicitação de compra*\n\n` +
     `📦 Produto: *${b.toolName}*${qty}\n` +
+    value +
+    supplier +
     reason +
-    `👤 Solicitado por: ${b.requestedBy}\n\n` +
-    `Acesse o Cargo Stock para aprovar ou recusar.`
+    `👤 Solicitado por: ${b.requestedBy}\n` +
+    link +
+    `\nAcesse o Cargo Stock para aprovar ou recusar.`
   );
 }
 

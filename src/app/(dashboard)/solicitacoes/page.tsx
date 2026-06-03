@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
@@ -22,6 +22,9 @@ interface ToolRequest {
   responded_by: string | null;
   response_notes: string | null;
   image_url: string | null;
+  product_url: string | null;
+  estimated_value: number | string | null;
+  supplier: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -244,17 +247,23 @@ export default function SolicitacoesPage() {
 
   useEffect(() => { loadAll(); }, [loadAll, pathname]);
 
-  async function handleCreateRequest(toolName: string, quantity: number, reason: string, imageUrl: string | null) {
+  async function handleCreateRequest(data: {
+    toolName: string; quantity: number; reason: string; imageUrl: string | null;
+    productUrl: string | null; estimatedValue: number | null; supplier: string | null;
+  }) {
     setSaving(true);
     setSaveError(null);
     try {
       const { error } = await db.from("tool_requests").insert({
-        tool_name: toolName,
-        quantity,
-        reason,
+        tool_name: data.toolName,
+        quantity: data.quantity,
+        reason: data.reason,
         status: "PENDENTE",
         requested_by: profile?.full_name || "Sistema",
-        image_url: imageUrl,
+        image_url: data.imageUrl,
+        product_url: data.productUrl,
+        estimated_value: data.estimatedValue,
+        supplier: data.supplier,
       } as any);
       if (error) throw error;
       // Avisa os supervisores por WhatsApp (best-effort — não bloqueia nem
@@ -263,10 +272,13 @@ export default function SolicitacoesPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          toolName,
-          quantity,
-          reason,
+          toolName: data.toolName,
+          quantity: data.quantity,
+          reason: data.reason,
           requestedBy: profile?.full_name || "Sistema",
+          value: data.estimatedValue,
+          supplier: data.supplier,
+          productUrl: data.productUrl,
         }),
       }).catch((err) => console.warn("[solicitacoes] notify failed:", err));
       setShowRequestForm(false);
@@ -532,6 +544,24 @@ export default function SolicitacoesPage() {
                           </span>
                         </div>
                         <p className="text-sm text-text-light mt-1.5">{req.reason}</p>
+                        {(req.estimated_value != null || req.supplier || req.product_url) && (
+                          <div className="flex gap-2 mt-2 flex-wrap items-center">
+                            {req.estimated_value != null && Number(req.estimated_value) > 0 && (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">
+                                {formatCurrency(Number(req.estimated_value))}
+                              </span>
+                            )}
+                            {req.supplier && (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-text-light font-medium">🏬 {req.supplier}</span>
+                            )}
+                            {req.product_url && (
+                              <a href={req.product_url} target="_blank" rel="noopener noreferrer"
+                                className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-primary font-medium hover:bg-blue-100 transition">
+                                🔗 Ver produto
+                              </a>
+                            )}
+                          </div>
+                        )}
                         <div className="flex gap-3 mt-2 text-xs text-text-light">
                           <span>Solicitado por: <strong>{req.requested_by}</strong></span>
                           <span>{formatDateTime(req.created_at)}</span>
@@ -1122,34 +1152,135 @@ function ImagePicker({ value, onChange, label = "Imagem do produto (opcional)" }
 }
 
 function RequestFormModal({ open, onClose, onSave, saving }: {
-  open: boolean; onClose: () => void; onSave: (toolName: string, qty: number, reason: string, imageUrl: string | null) => void; saving: boolean;
+  open: boolean; onClose: () => void;
+  onSave: (data: {
+    toolName: string; quantity: number; reason: string; imageUrl: string | null;
+    productUrl: string | null; estimatedValue: number | null; supplier: string | null;
+  }) => void;
+  saving: boolean;
 }) {
   const [toolName, setToolName] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [reason, setReason] = useState("");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  // Link + dados puxados automaticamente da página do produto.
+  const [link, setLink] = useState("");
+  const [value, setValue] = useState("");
+  const [supplier, setSupplier] = useState("");
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const lastFetchedRef = useRef<string>("");
 
-  useEffect(() => { setToolName(""); setQuantity(1); setReason(""); setImageUrl(null); }, [open]);
+  useEffect(() => {
+    setToolName(""); setQuantity(1); setReason(""); setImageUrl(null);
+    setLink(""); setValue(""); setSupplier(""); setFetching(false); setFetchError(null);
+    lastFetchedRef.current = "";
+  }, [open]);
+
+  const isUrl = (s: string) => /^https?:\/\/.+/i.test(s.trim());
+
+  // Busca os dados do link no servidor (Open Graph / JSON-LD). `force` sobrescreve
+  // campos já preenchidos; sem force, só preenche o que estiver vazio.
+  const fetchPreview = useCallback(async (rawUrl: string, force: boolean) => {
+    const u = rawUrl.trim();
+    if (!isUrl(u)) return;
+    lastFetchedRef.current = u;
+    setFetching(true);
+    setFetchError(null);
+    try {
+      const res = await fetch("/api/solicitacoes/link-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: u }),
+      });
+      const data = await res.json();
+      if (!res.ok || data?.error) {
+        setFetchError(data?.error || "Não consegui buscar os dados do link.");
+        return;
+      }
+      if (data.name) setToolName((p) => (force || !p.trim() ? data.name : p));
+      if (data.value != null) setValue((p) => (force || !p.trim() ? String(data.value).replace(".", ",") : p));
+      if (data.supplier) setSupplier((p) => (force || !p.trim() ? data.supplier : p));
+      if (data.image) setImageUrl((p) => (force || !p ? data.image : p));
+      if (!data.name && data.value == null && !data.image) {
+        setFetchError("Não achei dados nessa página. Preencha manualmente.");
+      }
+    } catch {
+      setFetchError("Não consegui buscar os dados do link.");
+    } finally {
+      setFetching(false);
+    }
+  }, []);
+
+  // Auto-busca ao colar/digitar o link (debounce), só quando o modal está aberto.
+  useEffect(() => {
+    if (!open) return;
+    const u = link.trim();
+    if (!isUrl(u) || u === lastFetchedRef.current) return;
+    const t = setTimeout(() => { fetchPreview(u, false); }, 700);
+    return () => clearTimeout(t);
+  }, [link, open, fetchPreview]);
+
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    onSave({
+      toolName, quantity, reason, imageUrl,
+      productUrl: link.trim() || null,
+      estimatedValue: value.trim() ? parseDecimalBR(value) : null,
+      supplier: supplier.trim() || null,
+    });
+  }
 
   return (
     <Modal open={open} onClose={onClose} title="Nova Solicitação">
-      <form onSubmit={(e) => { e.preventDefault(); onSave(toolName, quantity, reason, imageUrl); }} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">Link do produto (opcional)</label>
+          <div className="flex gap-2">
+            <input type="url" value={link} onChange={(e) => setLink(e.target.value)}
+              onBlur={() => { const u = link.trim(); if (isUrl(u) && u !== lastFetchedRef.current) fetchPreview(u, false); }}
+              placeholder="Cole o link do Mercado Livre ou outro site..."
+              className={`flex-1 px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none ${fetching ? "opacity-70" : ""}`} />
+            <button type="button" onClick={() => fetchPreview(link, true)} disabled={fetching || !isUrl(link)}
+              className="px-3 py-2.5 text-sm font-medium bg-gray-100 hover:bg-gray-200 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+              {fetching ? "Buscando..." : "Buscar"}
+            </button>
+          </div>
+          {fetching ? (
+            <p className="text-xs text-text-light mt-1">🔎 Buscando dados do produto...</p>
+          ) : fetchError ? (
+            <p className="text-xs text-amber-600 mt-1">⚠️ {fetchError}</p>
+          ) : (
+            <p className="text-[10px] text-text-light mt-1">Cole o link e o nome, valor, imagem e fornecedor são preenchidos automaticamente.</p>
+          )}
+        </div>
         <div>
           <label className="block text-sm font-medium mb-1">Produto / Equipamento *</label>
           <input type="text" value={toolName} onChange={(e) => setToolName(e.target.value)} required
-            placeholder="Ex: Furadeira, Chave inglesa, Luvas..."
-            className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" />
+            placeholder="Ex: Furadeira, Chave inglesa, Luvas..." className={inputCls} />
         </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Quantidade</label>
-          <input type="number" value={quantity} onChange={(e) => setQuantity(Number(e.target.value))} min={1}
-            className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" />
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Quantidade</label>
+            <input type="number" value={quantity} onChange={(e) => setQuantity(Number(e.target.value))} min={1} className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Valor estimado (R$)</label>
+            <input type="text" inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)}
+              placeholder="0,00" className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Fornecedor</label>
+            <input type="text" value={supplier} onChange={(e) => setSupplier(e.target.value)}
+              placeholder="Ex: Mercado Livre" className={inputCls} />
+          </div>
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Motivo / Justificativa *</label>
           <textarea value={reason} onChange={(e) => setReason(e.target.value)} required rows={3}
-            placeholder="Para que será utilizado..."
-            className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none" />
+            placeholder="Para que será utilizado..." className={`${inputCls} resize-none`} />
         </div>
         <ImagePicker value={imageUrl} onChange={setImageUrl} />
         <div className="flex gap-3 justify-end pt-2">
@@ -1202,9 +1333,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
     } else if (fromRequest) {
       setDescription(fromRequest.tool_name || "");
       setDepartment("");
-      setSupplier("");
+      setSupplier(fromRequest.supplier || "");
       setPurchaseDate(todayISO);
-      setUnitValue("");
+      setUnitValue(numToInput(parseDecimalBR(fromRequest.estimated_value)));
       setQuantity(numToInput(fromRequest.quantity) || "1");
       setPaymentMethod("");
       setNotes("");

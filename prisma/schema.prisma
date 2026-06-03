@@ -569,6 +569,11 @@ model ToolRequest {
   // Foto opcional do produto (data URL base64 comprimida no cliente). Guardada
   // inline no banco porque a infra é só Railway/Postgres, sem storage externo.
   image_url      String?
+  // Link do produto (Mercado Livre etc.) + dados puxados automaticamente da
+  // página (Open Graph / JSON-LD) ao colar o link na Nova Solicitação.
+  product_url     String?
+  estimated_value Decimal? @db.Decimal(10, 2)
+  supplier        String?
   created_at     DateTime @default(now()) @db.Timestamptz()
   updated_at     DateTime @default(now()) @db.Timestamptz()
 
