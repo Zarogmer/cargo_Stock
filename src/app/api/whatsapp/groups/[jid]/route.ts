@@ -119,6 +119,20 @@ export async function GET(
       }
     }
 
+    // Vínculos manuais LID -> telefone (informados pelo usuário em Conversas).
+    // Têm prioridade sobre o que foi inferido do histórico (overwrite). Defensivo:
+    // se a tabela ainda não existir (db push não rodado), não derruba o painel.
+    try {
+      const aliases = await prisma.whatsappLidAlias.findMany({ where: { phone: { not: null } } });
+      for (const a of aliases) {
+        const aLid = a.lid.replace(/\D/g, "");
+        const aPhone = (a.phone || "").replace(/\D/g, "");
+        if (aLid && aPhone) lidToPhone.set(aLid, aPhone);
+      }
+    } catch (aliasErr) {
+      console.warn("[groups] lid aliases lookup skipped:", (aliasErr as Error).message);
+    }
+
     // Helper: tenta achar um Employee a partir de dígitos de telefone, testando
     // variantes com/sem o prefixo 55 (Brasil).
     function findEmpByPhoneDigits(d: string): typeof allEmployees[number] | null {

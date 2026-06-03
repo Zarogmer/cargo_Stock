@@ -7,7 +7,7 @@ import { Modal } from "@/components/ui/modal";
 import { TrashIcon, PlusIcon } from "@/components/icons";
 import { db } from "@/lib/db";
 import { useAuth } from "@/lib/auth-context";
-import { formatPhone, cleanSenderName } from "@/lib/utils";
+import { formatPhone, cleanSenderName, isJidLikeName } from "@/lib/utils";
 
 interface Conversation {
   remote_jid: string;
@@ -81,6 +81,28 @@ function displayName(c: Conversation): string {
   if (c.push_name && c.push_name.trim()) return c.push_name;
   if (c.is_group) return "Grupo";
   return formatPhone(jidToNumber(c.remote_jid)) || c.remote_jid;
+}
+
+// Vínculo manual LID -> { telefone, nome resolvido } vindo de /api/whatsapp/lid-alias.
+type LidAliasMap = Record<string, { phone: string | null; name: string | null }>;
+
+// Resolve o rótulo do remetente de uma mensagem de grupo. Quando o pushName é
+// um LID/JID cru: usa o vínculo manual (alias) se existir; senão um rótulo curto
+// "Participante #…". `lid` (dígitos) != null sinaliza que dá pra clicar e
+// identificar/editar o número daquele participante.
+function resolveSender(
+  pushName: string | null,
+  aliases: LidAliasMap,
+): { label: string | null; lid: string | null } {
+  if (!pushName || !pushName.trim()) return { label: null, lid: null };
+  const name = pushName.trim();
+  if (isJidLikeName(name)) {
+    const lid = name.replace(/\D/g, "");
+    if (!lid) return { label: null, lid: null };
+    const aliasName = aliases[lid]?.name;
+    return { label: aliasName || `Participante ${lid.slice(-6)}`, lid };
+  }
+  return { label: name, lid: null };
 }
 
 // Tudo no fuso do Brasil — o usuário raciocina em horário de Brasília,
@@ -313,6 +335,11 @@ export default function ConversasPage() {
   // Group info panel — opened from the chat header on group conversations.
   const [showGroupInfoJid, setShowGroupInfoJid] = useState<string | null>(null);
 
+  // Vínculos manuais LID -> telefone (pra mostrar nome em vez do identificador
+  // cru do WhatsApp). `identifyLid` = o LID sendo identificado no modal.
+  const [lidAliases, setLidAliases] = useState<LidAliasMap>({});
+  const [identifyLid, setIdentifyLid] = useState<string | null>(null);
+
   const threadRef = useRef<HTMLDivElement>(null);
   const lastMessageCount = useRef(0);
 
@@ -411,6 +438,21 @@ export default function ConversasPage() {
     const interval = setInterval(loadConversations, 30000);
     return () => clearInterval(interval);
   }, [loadConversations]);
+
+  // Vínculos LID -> telefone (pra resolver nomes de participantes no thread).
+  const loadLidAliases = useCallback(async () => {
+    try {
+      const r = await fetch("/api/whatsapp/lid-alias");
+      if (r.ok) {
+        const b = await r.json();
+        setLidAliases((b.aliases || {}) as LidAliasMap);
+      }
+    } catch {
+      // silent — sem aliases o thread cai no rótulo "Participante #…"
+    }
+  }, []);
+
+  useEffect(() => { loadLidAliases(); }, [loadLidAliases]);
 
   useEffect(() => {
     if (!selectedJid) return;
@@ -776,6 +818,12 @@ export default function ConversasPage() {
                       else if (evtText.startsWith("➖")) { pillCls = "bg-red-50 border-red-300"; pillText = "text-red-800"; pillTime = "text-red-700/80"; }
                       else { pillCls = "bg-blue-50 border-blue-300"; pillText = "text-blue-800"; pillTime = "text-blue-700/80"; }
                     }
+                    // Rótulo do remetente (só em grupo). Resolve LIDs crus pelos
+                    // vínculos manuais (lidAliases); quando é um LID, vira um
+                    // botão pra identificar/editar o número do participante.
+                    const sender = !m.from_me && selectedConv?.is_group
+                      ? resolveSender(m.push_name, lidAliases)
+                      : { label: null as string | null, lid: null as string | null };
                     const bubble = isSystem ? (
                       <div className="flex justify-center my-1">
                         <div
@@ -788,7 +836,7 @@ export default function ConversasPage() {
                           <p className={`text-[9px] ${pillTime} mt-0.5`}>
                             {formatMsgTime(m.timestamp_ms)}
                             {m.push_name && m.message_type === "groupParticipantUpdate" && (
-                              <> · por <strong>{m.push_name}</strong></>
+                              <> · por <strong>{cleanSenderName(m.push_name)}</strong></>
                             )}
                           </p>
                         </div>
@@ -798,8 +846,20 @@ export default function ConversasPage() {
                         <div className={`max-w-[70%] rounded-lg px-3 py-2 shadow-sm ${
                           m.from_me ? "bg-[#d9fdd3] text-gray-900" : "bg-white text-gray-900"
                         }`}>
-                          {!m.from_me && selectedConv?.is_group && cleanSenderName(m.push_name) && (
-                            <p className="text-[10px] font-semibold text-primary mb-0.5">{cleanSenderName(m.push_name)}</p>
+                          {sender.label && (
+                            sender.lid ? (
+                              <button
+                                type="button"
+                                onClick={() => setIdentifyLid(sender.lid)}
+                                className="text-[10px] font-semibold text-primary mb-0.5 inline-flex items-center gap-1 hover:underline"
+                                title="Identificar participante (vincular a um número)"
+                              >
+                                {sender.label}
+                                <span className="opacity-50 text-[9px]">✎</span>
+                              </button>
+                            ) : (
+                              <p className="text-[10px] font-semibold text-primary mb-0.5">{sender.label}</p>
+                            )
                           )}
                           {hasMedia ? (
                             <MediaBubble msg={m} onImageClick={setLightboxSrc} />
@@ -897,6 +957,13 @@ export default function ConversasPage() {
           loadConversations();
           if (selectedJid) loadMessages(selectedJid);
         }}
+      />
+
+      <IdentifyParticipantModal
+        lid={identifyLid}
+        currentPhone={identifyLid ? (lidAliases[identifyLid]?.phone || "") : ""}
+        onClose={() => setIdentifyLid(null)}
+        onSaved={() => { setIdentifyLid(null); loadLidAliases(); }}
       />
     </div>
   );
@@ -1324,6 +1391,78 @@ function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | nul
           </div>
         </div>
       )}
+    </Modal>
+  );
+}
+
+// ─── Identificar Participante (LID → número) ────────────────────────────────
+// Quando o WhatsApp entrega o remetente só por um LID opaco (sem nome nem
+// número), o usuário informa aqui o telefone. Se o número estiver em
+// Colaboradores, o nome passa a aparecer; senão, mostra o número formatado.
+function IdentifyParticipantModal({ lid, currentPhone, onClose, onSaved }: {
+  lid: string | null;
+  currentPhone: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [phone, setPhone] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (lid) { setPhone(currentPhone || ""); setErr(null); setSaving(false); }
+  }, [lid, currentPhone]);
+
+  async function save() {
+    if (!lid) return;
+    setSaving(true); setErr(null);
+    try {
+      const r = await fetch("/api/whatsapp/lid-alias", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lid, phone }),
+      });
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
+      onSaved();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal open={!!lid} onClose={onClose} title="Identificar participante" maxWidth="max-w-md">
+      <div className="space-y-4">
+        <p className="text-sm text-text-light">
+          O WhatsApp não informou o nome desse participante — só um identificador interno de
+          privacidade. Coloque o número dele: se estiver cadastrado em <strong>Colaboradores</strong>,
+          mostramos o nome; senão, o próprio número.
+        </p>
+        <div>
+          <label className="block text-sm font-medium mb-1">Número (WhatsApp)</label>
+          <input
+            type="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(); } }}
+            placeholder="(13) 99674-4755"
+            autoFocus
+            className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+          />
+          <p className="text-[10px] text-text-light mt-1">
+            Pode digitar com DDD; o 55 é completado automaticamente. Deixe vazio pra desvincular.
+          </p>
+        </div>
+        {err && (
+          <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</p>
+        )}
+        <div className="flex gap-2 justify-end">
+          <Button variant="secondary" onClick={onClose} disabled={saving}>Cancelar</Button>
+          <Button onClick={save} disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>
+        </div>
+      </div>
     </Modal>
   );
 }

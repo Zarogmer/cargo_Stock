@@ -671,6 +671,21 @@ model WhatsappMessage {
   @@map("whatsapp_messages")
 }
 
+// Vínculo manual "participante (LID) -> telefone". O WhatsApp às vezes entrega
+// mensagens identificando o remetente só por um "LID" opaco (id de privacidade)
+// sem expor o número, então não dá pra descobrir quem é automaticamente. Aqui o
+// usuário informa o telefone daquele LID; o nome passa a ser resolvido pelo
+// telefone (casando com Colaboradores) no thread e no painel do grupo.
+model WhatsappLidAlias {
+  lid        String   @id // dígitos do LID, ex.: "126581477499056"
+  phone      String? // telefone informado (dígitos, normalizado com 55)
+  created_by String
+  created_at DateTime @default(now()) @db.Timestamptz()
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz()
+
+  @@map("whatsapp_lid_aliases")
+}
+
 // ── Marketing: cadastro de clientes para prospecção por email ─────────────────
 // Lista de clientes/contatos usada na aba Marketing para reaproveitar no envio
 // de email (selecionar um cliente preenche destinatário e saudação).
