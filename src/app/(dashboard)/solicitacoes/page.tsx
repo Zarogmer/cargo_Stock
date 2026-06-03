@@ -112,6 +112,28 @@ const DEPARTMENT_BADGE: Record<string, string> = {
   "OUTROS": "bg-gray-100 text-gray-700",
 };
 
+// Sentinela de equipe usada pelos materiais do galpão na tabela stock_items —
+// precisa bater com o TEAM da aba Almoxarifado › Estoque (materiais-panel.tsx).
+const STOCK_TEAM = "GALPAO";
+
+// Categorias do Estoque de materiais (espelha os grupos da aba Almoxarifado ›
+// Estoque). Usadas quando uma compra é lançada direto no estoque do galpão.
+// É uma datalist (texto livre), então categorias novas também valem.
+const STOCK_CATEGORIES = [
+  "Cozinha",
+  "Elétrica",
+  "Embarque",
+  "EPI e Químicos",
+  "Ferramentas",
+  "Hidrojato",
+  "Líquidos",
+  "Mangueiras e Conexões",
+  "Pistola e Caneta",
+  "Rodas",
+  "Varões",
+  "Outros",
+];
+
 // Comprime/redimensiona uma imagem escolhida pelo usuário para um data URL
 // (base64) pequeno antes de guardar no banco — a infra é só Railway/Postgres,
 // sem storage externo, então a foto vai inline. Máx. ~1024px, JPEG qualidade 0.72.
@@ -194,6 +216,8 @@ export default function SolicitacoesPage() {
   const [editPurchase, setEditPurchase] = useState<PurchaseOrder | null>(null);
   const [purchaseFromRequest, setPurchaseFromRequest] = useState<ToolRequest | null>(null);
   const [deletePurchase, setDeletePurchase] = useState<PurchaseOrder | null>(null);
+  // "Armazenar no Estoque": lança uma solicitação já comprada no estoque do galpão.
+  const [stockRequest, setStockRequest] = useState<ToolRequest | null>(null);
   const now = new Date();
   const [purchaseMonth, setPurchaseMonth] = useState(
     `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
@@ -213,6 +237,7 @@ export default function SolicitacoesPage() {
 
   const [dbError, setDbError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveOk, setSaveOk] = useState<string | null>(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -335,9 +360,86 @@ export default function SolicitacoesPage() {
     setShowPurchaseForm(true);
   }
 
-  async function handleSavePurchase(data: Partial<PurchaseOrder>, fromRequestId: string | null) {
+  // Lança um item no Estoque de materiais do galpão (stock_items, team=GALPAO) —
+  // a mesma tabela da aba Almoxarifado › Estoque. Se já existe um material com o
+  // mesmo nome, soma a quantidade (reposição); senão cria um material novo com a
+  // categoria escolhida. Também registra um movimento de ENTRADA pro histórico.
+  // É a "ponte" entre Solicitações de compra e o Estoque.
+  const storeInStock = useCallback(async (opts: { name: string; quantity: number; category: string }) => {
+    const actor = profile?.full_name || "Sistema";
+    const name = (opts.name || "").trim();
+    const qty = opts.quantity > 0 ? opts.quantity : 1;
+    const category = (opts.category || "").trim() || "Outros";
+    if (!name) throw new Error("Nome do material vazio");
+
+    // Procura material existente no galpão por nome (match exato, sem caixa) —
+    // o cliente db não tem "equals" case-insensitive, então casamos em JS.
+    const { data: galpao, error: loadErr } = await db
+      .from("stock_items")
+      .select("id, name, quantity, location")
+      .eq("team", STOCK_TEAM);
+    if (loadErr) throw new Error(loadErr.message);
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    const existing = (galpao || []).find((s: any) => norm(s.name) === norm(name)) as
+      | { id: number; name: string; quantity: number; location: string | null }
+      | undefined;
+
+    let stockItemId: number | undefined;
+    let created: boolean;
+    if (existing) {
+      created = false;
+      stockItemId = existing.id;
+      const newQty = Math.round((Number(existing.quantity || 0) + qty) * 1000) / 1000;
+      const { error } = await db.from("stock_items").update({
+        quantity: newQty,
+        // Preenche a categoria só se ainda não havia uma definida.
+        location: existing.location && existing.location.trim() && existing.location !== "Outros"
+          ? existing.location
+          : category,
+        updated_by: actor,
+      } as any).eq("id", existing.id);
+      if (error) throw new Error(error.message);
+    } else {
+      created = true;
+      const { data: inserted, error } = await db.from("stock_items").insert({
+        name,
+        location: category,
+        quantity: qty,
+        default_quantity: qty,
+        category: "OUTROS",
+        team: STOCK_TEAM,
+        min_quantity: 0,
+        updated_by: actor,
+      } as any);
+      if (error) throw new Error(error.message);
+      stockItemId = (inserted as any)?.id;
+    }
+
+    // Movimento de ENTRADA pro histórico do almoxarifado (não-fatal).
+    if (stockItemId) {
+      try {
+        await db.from("stock_movements").insert({
+          stock_item_id: stockItemId,
+          movement_type: "ENTRADA",
+          quantity: qty,
+          movement_date: new Date().toISOString().split("T")[0],
+          notes: "Entrada via Solicitações de compra",
+          created_by: actor,
+        } as any);
+      } catch { /* histórico é best-effort */ }
+    }
+
+    return { created, name, category, quantity: qty };
+  }, [profile]);
+
+  async function handleSavePurchase(
+    data: Partial<PurchaseOrder>,
+    fromRequestId: string | null,
+    stock?: { category: string } | null,
+  ) {
     setSaving(true);
     setSaveError(null);
+    setSaveOk(null);
     try {
       const actor = profile?.full_name || "Sistema";
       if (editPurchase) {
@@ -357,6 +459,22 @@ export default function SolicitacoesPage() {
             responded_by: actor,
           } as any).eq("id", fromRequestId);
         }
+        // Lança no Estoque do galpão, se o usuário marcou a opção na compra.
+        // Falha aqui é não-fatal: a compra já foi salva, só avisamos.
+        if (stock) {
+          try {
+            const r = await storeInStock({
+              name: data.description || "",
+              quantity: Number(data.quantity) || 1,
+              category: stock.category,
+            });
+            setSaveOk(
+              `📦 ${r.created ? "Material criado" : "Estoque reposto"}: "${r.name}" (+${formatQty(r.quantity)}) em ${r.category}.`,
+            );
+          } catch (stockErr: any) {
+            setSaveError(`Compra salva, mas falhou ao lançar no Estoque: ${stockErr?.message || String(stockErr)}`);
+          }
+        }
       }
       setShowPurchaseForm(false);
       setEditPurchase(null);
@@ -365,6 +483,30 @@ export default function SolicitacoesPage() {
     } catch (err: any) {
       console.error("Erro ao salvar compra:", err);
       setSaveError(`Erro ao salvar compra: ${err?.message || String(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // "Armazenar no Estoque" a partir de uma solicitação já comprada (botão no card).
+  async function handleStoreRequest(category: string) {
+    if (!stockRequest) return;
+    setSaving(true);
+    setSaveError(null);
+    setSaveOk(null);
+    try {
+      const r = await storeInStock({
+        name: stockRequest.tool_name,
+        quantity: stockRequest.quantity,
+        category,
+      });
+      setStockRequest(null);
+      setSaveOk(
+        `📦 ${r.created ? "Material criado" : "Estoque reposto"}: "${r.name}" (+${formatQty(r.quantity)}) em ${r.category}.`,
+      );
+    } catch (err: any) {
+      console.error("Erro ao lançar no estoque:", err);
+      setSaveError(`Erro ao lançar no Estoque: ${err?.message || String(err)}`);
     } finally {
       setSaving(false);
     }
@@ -622,6 +764,15 @@ export default function SolicitacoesPage() {
                             className="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 font-medium transition"
                           >
                             Registrar Compra
+                          </button>
+                        )}
+                        {canManagePurchases && req.status === "COMPRADO" && (
+                          <button
+                            onClick={() => setStockRequest(req)}
+                            className="px-3 py-1.5 text-xs bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 font-medium transition"
+                            title="Lançar este item no Estoque do galpão"
+                          >
+                            📦 Armazenar
                           </button>
                         )}
                         {canEditRequests && (
@@ -1029,6 +1180,13 @@ export default function SolicitacoesPage() {
         </div>
       )}
 
+      {saveOk && (
+        <div className="bg-emerald-50 border border-emerald-300 rounded-lg p-3 text-sm text-emerald-700 flex justify-between items-start gap-2">
+          <span>{saveOk}</span>
+          <button onClick={() => setSaveOk(null)} className="text-emerald-500 hover:text-emerald-700 font-bold shrink-0">✕</button>
+        </div>
+      )}
+
       <Tabs tabs={tabs} defaultTab={effectiveTab} hideHeader />
 
       {/* Request Form Modal */}
@@ -1089,6 +1247,15 @@ export default function SolicitacoesPage() {
         title="Excluir Compra"
         message={`Excluir a compra "${deletePurchase?.description}"?`}
         loading={saving}
+      />
+
+      {/* Armazenar no Estoque (a partir de uma solicitação comprada) */}
+      <ArmazenarEstoqueModal
+        open={!!stockRequest}
+        onClose={() => setStockRequest(null)}
+        onConfirm={handleStoreRequest}
+        request={stockRequest}
+        saving={saving}
       />
 
       {/* Image Lightbox */}
@@ -1387,7 +1554,7 @@ function numToInput(n: number | null | undefined): string {
 
 function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers, saving }: {
   open: boolean; onClose: () => void;
-  onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null) => void;
+  onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: { category: string } | null) => void;
   item: PurchaseOrder | null;
   fromRequest: ToolRequest | null;
   suppliers: Supplier[];
@@ -1402,6 +1569,10 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
   const [paymentMethod, setPaymentMethod] = useState("");
   const [notes, setNotes] = useState("");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  // Lançar a compra direto no Estoque do galpão (ponte com Almoxarifado › Estoque).
+  // Marcado por padrão em compras novas; some ao editar (pra não contar duas vezes).
+  const [addToStock, setAddToStock] = useState(true);
+  const [stockCategory, setStockCategory] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -1431,6 +1602,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       setDescription(""); setDepartment(""); setSupplier(""); setPurchaseDate(todayISO);
       setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setImageUrl(null);
     }
+    // Estoque: compras novas vêm com a opção marcada e categoria em branco.
+    setAddToStock(true);
+    setStockCategory("");
   }, [item, fromRequest, open]);
 
   const unit = parseDecimalBR(unitValue);
@@ -1450,7 +1624,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       payment_method: paymentMethod || null,
       notes: notes || null,
       image_url: imageUrl,
-    }, fromRequest?.id || null);
+    }, fromRequest?.id || null,
+      // Só lança no estoque em compras novas (não na edição) e quando marcado.
+      !item && addToStock ? { category: stockCategory } : null);
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
@@ -1519,9 +1695,99 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
             placeholder="Ex: Crédito de 354,22, frete incluso..." className={`${inputCls} resize-none`} />
         </div>
         <ImagePicker value={imageUrl} onChange={setImageUrl} />
+
+        {/* Ponte com o Estoque: lança a compra como material no almoxarifado.
+            Só aparece em compras novas — editar não relança pra não duplicar. */}
+        {!item && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 space-y-2">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={addToStock}
+                onChange={(e) => setAddToStock(e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-emerald-600"
+              />
+              <span className="text-sm">
+                <span className="font-medium text-emerald-800">📦 Lançar no Estoque do almoxarifado</span>
+                <span className="block text-xs text-emerald-700/80">
+                  Cria (ou repõe) o material no galpão com a quantidade desta compra.
+                </span>
+              </span>
+            </label>
+            {addToStock && (
+              <div>
+                <label className="block text-xs font-medium text-emerald-800 mb-1">Categoria no Estoque</label>
+                <input
+                  type="text"
+                  list="stock-categories"
+                  value={stockCategory}
+                  onChange={(e) => setStockCategory(e.target.value)}
+                  placeholder="Ex: Elétrica, Hidrojato, Ferramentas..."
+                  className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+                <datalist id="stock-categories">
+                  {STOCK_CATEGORIES.map((c) => <option key={c} value={c} />)}
+                </datalist>
+                <p className="text-[10px] text-emerald-700/80 mt-1">
+                  Sem categoria, entra como <strong>Outros</strong>. Se já existir um material com esse nome, a quantidade é somada.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar Compra"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// Lança uma solicitação já comprada no Estoque do galpão: o usuário só confirma
+// a categoria. Nome e quantidade vêm da própria solicitação. Usado pelo botão
+// "📦 Armazenar" dos cards COMPRADO.
+function ArmazenarEstoqueModal({ open, onClose, onConfirm, request, saving }: {
+  open: boolean; onClose: () => void;
+  onConfirm: (category: string) => void;
+  request: ToolRequest | null;
+  saving: boolean;
+}) {
+  const [category, setCategory] = useState("");
+
+  useEffect(() => { if (open) setCategory(""); }, [open]);
+
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+
+  return (
+    <Modal open={open} onClose={onClose} title="Armazenar no Estoque" maxWidth="max-w-md">
+      <form onSubmit={(e) => { e.preventDefault(); onConfirm(category); }} className="space-y-4">
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-sm text-emerald-800">
+          Lançar <strong>{request?.tool_name}</strong> (x{request?.quantity}) no Estoque de materiais do galpão.
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Categoria no Estoque</label>
+          <input
+            type="text"
+            list="stock-categories-armazenar"
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            placeholder="Ex: Elétrica, Hidrojato, Ferramentas..."
+            autoFocus
+            className={inputCls}
+          />
+          <datalist id="stock-categories-armazenar">
+            {STOCK_CATEGORIES.map((c) => <option key={c} value={c} />)}
+          </datalist>
+          <p className="text-[11px] text-text-light mt-1">
+            Sem categoria, entra como <strong>Outros</strong>. Se já existir um material com esse nome,
+            a quantidade é somada (reposição).
+          </p>
+        </div>
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={saving}>{saving ? "Lançando..." : "Lançar no Estoque"}</Button>
         </div>
       </form>
     </Modal>
