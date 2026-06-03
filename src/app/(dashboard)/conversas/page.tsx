@@ -988,6 +988,10 @@ function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | nul
   const [confirmRemovePhone, setConfirmRemovePhone] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
   const [removeErr, setRemoveErr] = useState<string | null>(null);
+  // "Tornar/Remover admin": promove (→ admin) ou rebaixa (→ membro). É reversível,
+  // então é ação direta sem confirmação. promotingPhone = linha em andamento.
+  const [promotingPhone, setPromotingPhone] = useState<string | null>(null);
+  const [promoteErr, setPromoteErr] = useState<string | null>(null);
   // "Sair do grupo": confirmação inline + chamada ao endpoint de leave.
   const [confirmingLeave, setConfirmingLeave] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -1013,6 +1017,7 @@ function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | nul
     setInfo(null);
     setAddingPhone(null); setAddingName(""); setAddingErr(null);
     setConfirmRemovePhone(null); setRemoving(false); setRemoveErr(null);
+    setPromotingPhone(null); setPromoteErr(null);
     setConfirmingLeave(false); setLeaving(false); setLeaveErr(null);
     loadInfo();
   }, [jid, loadInfo]);
@@ -1037,6 +1042,29 @@ function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | nul
       setRemoveErr((e as Error).message);
     } finally {
       setRemoving(false);
+    }
+  }
+
+  // Promove (→ admin) ou rebaixa (→ membro) um participante. Recarrega o painel
+  // na hora pra refletir o novo badge. Requer que o número conectado seja
+  // admin/dono do grupo — senão o WhatsApp recusa e mostramos o erro.
+  async function handlePromote(phone: string, action: "promote" | "demote") {
+    if (!jid || !phone) return;
+    setPromotingPhone(phone); setPromoteErr(null);
+    try {
+      const res = await fetch(`/api/whatsapp/groups/${encodeURIComponent(jid)}/promote-participant`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone, action }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      await loadInfo();
+      onChanged();
+    } catch (e) {
+      setPromoteErr((e as Error).message);
+    } finally {
+      setPromotingPhone(null);
     }
   }
 
@@ -1198,6 +1226,11 @@ function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | nul
                   // o WhatsApp não deixa remover o superadmin.
                   const canRemove = !!p.phone && p.admin !== "superadmin";
                   const removeLabel = displayName || formatPhone(p.phone) || p.phone;
+                  // Tornar/remover admin: vale pra quem tem telefone e não é o Dono
+                  // (superadmin não muda). Se já é "admin", o botão vira rebaixar.
+                  const isAdminRole = p.admin === "admin";
+                  const canToggleAdmin = !!p.phone && p.admin !== "superadmin";
+                  const isPromoting = promotingPhone === p.phone && !!p.phone;
                   return (
                   <div key={p.jid || p.phone} className="px-3 py-2 flex flex-col gap-2">
                     <div className="flex items-center gap-3">
@@ -1236,6 +1269,17 @@ function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | nul
                           className="shrink-0 text-[10px] font-semibold px-2 py-1 rounded-lg border border-primary/30 text-primary hover:bg-primary/10 transition"
                         >
                           + Cadastrar
+                        </button>
+                      )}
+                      {canToggleAdmin && !isAdding && !isConfirmingRemove && (
+                        <button
+                          type="button"
+                          onClick={() => handlePromote(p.phone, isAdminRole ? "demote" : "promote")}
+                          disabled={isPromoting}
+                          className="shrink-0 text-[10px] font-semibold px-2 py-1 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 transition disabled:opacity-50"
+                          title={isAdminRole ? "Remover admin deste participante" : "Tornar este participante admin do grupo"}
+                        >
+                          {isPromoting ? "..." : isAdminRole ? "Remover admin" : "★ Tornar admin"}
                         </button>
                       )}
                       {canRemove && !isConfirmingRemove && !isAdding && (
@@ -1331,10 +1375,18 @@ function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | nul
                 })
               )}
             </div>
+            {promoteErr && (
+              <p className="text-[10px] text-red-700 mt-1">{promoteErr}</p>
+            )}
             <p className="text-[10px] text-text-light mt-2">
               Os nomes são casados pelo telefone com a aba <strong>Colaboradores</strong>. Quem aparece como
               &quot;Não cadastrado&quot; ainda não tem registro no sistema (ou o telefone está em outro formato).
               Após cadastrar ou atualizar números, use <strong>Atualizar</strong> para recarregar.
+            </p>
+            <p className="text-[10px] text-text-light mt-1">
+              <strong>★ Tornar admin</strong> dá ao participante os poderes de gestão do grupo (adicionar/remover,
+              editar). Só funciona se o número conectado (Cargo Ships) for admin/dono. O <strong>Dono</strong> (criador)
+              não é transferível pelo WhatsApp.
             </p>
           </div>
 
