@@ -39,6 +39,9 @@ export default function ColaboradoresPage() {
 
   // --- EMPLOYEES ---
   const [employees, setEmployees] = useState<Employee[]>([]);
+  // Funções vindas do Financeiro (tabela job_functions) — fonte única, usada no
+  // formulário de cadastro pra manter Colaboradores e Financeiro em sincronia.
+  const [jobRoleOptions, setJobRoleOptions] = useState<string[]>([]);
   const [empSearch, setEmpSearch] = useState("");
   const [empTeamFilter, setEmpTeamFilter] = useState("Todos");
   const [empStatusFilter, setEmpStatusFilter] = useState<"Todos" | "ATIVO" | "INATIVO" | "PENDENCIA">("Todos");
@@ -75,9 +78,10 @@ export default function ColaboradoresPage() {
         console.warn("[colaboradores] auto-release failed:", (err as Error).message);
       }
 
-      const [empRes, allocRes] = await Promise.all([
+      const [empRes, allocRes, fnRes] = await Promise.all([
         db.from("employees").select("*").order("name"),
         db.from("job_allocations").select("employee_id, kind, status").eq("status", "ATIVO"),
+        db.from("job_functions").select("name").order("name"),
       ]);
 
       if (empRes.error) {
@@ -86,6 +90,11 @@ export default function ColaboradoresPage() {
       }
 
       setEmployees(empRes.data || []);
+      setJobRoleOptions(
+        ((fnRes.data as Array<{ name: string }> | null) || [])
+          .map((f) => (f.name || "").trim())
+          .filter(Boolean)
+      );
 
       // Build escalação status map. EMBARQUE wins over COSTADO if both exist.
       const statusMap = new Map<number, "EMBARQUE" | "COSTADO">();
@@ -427,7 +436,7 @@ export default function ColaboradoresPage() {
       <Tabs tabs={tabs} defaultTab={initialTab} hideHeader />
 
       {/* Employee Form */}
-      <EmployeeFormModal open={empForm} onClose={() => { setEmpForm(false); setEditEmp(null); }} onSave={saveEmployee} item={editEmp} saving={saving} />
+      <EmployeeFormModal open={empForm} onClose={() => { setEmpForm(false); setEditEmp(null); }} onSave={saveEmployee} item={editEmp} saving={saving} roleOptions={jobRoleOptions} />
       <ConfirmDialog open={!!deleteEmp} onClose={() => setDeleteEmp(null)} onConfirm={async () => { setSaving(true); await db.from("employees").delete().eq("id", deleteEmp!.id); setSaving(false); setDeleteEmp(null); loadAll(); }} title="Excluir Colaborador" message={`Excluir "${deleteEmp?.name}"?`} loading={saving} />
 
       {/* Employee Detail */}
@@ -604,7 +613,7 @@ function formatPhoneMask(value: string): string {
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
 }
 
-function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: boolean; onClose: () => void; onSave: (d: Partial<Employee>) => void; item: Employee | null; saving: boolean }) {
+function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions }: { open: boolean; onClose: () => void; onSave: (d: Partial<Employee>) => void; item: Employee | null; saving: boolean; roleOptions: string[] }) {
   // Pessoais
   const [name, setName] = useState("");
   const [team, setTeam] = useState<string>("");
@@ -829,20 +838,10 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving }: { open: bool
               <label className="block text-sm font-medium mb-1">Função</label>
               <select value={role} onChange={(e) => setRole(e.target.value)} className={inputCls}>
                 <option value="">Selecionar...</option>
-                <option value="WAP">WAP</option>
-                <option value="AJUDANTE">Ajudante</option>
-                <option value="ESFREGAO">Esfregão</option>
-                <option value="SUPERVISOR">Supervisor</option>
-                <option value="MAQUINISTA">Maquinista</option>
-                <option value="COZINHEIRO">Cozinheiro</option>
-                <option value="MECANICO">Mecânico</option>
-                <option value="ANALISTA RH">Analista RH</option>
-                <option value="ASSISTENTE">Assistente</option>
-                <option value="OPERACIONAL">Operacional</option>
-                <option value="EXECUTIVO">Executivo</option>
-                {role && !["WAP","AJUDANTE","ESFREGAO","SUPERVISOR","MAQUINISTA","COZINHEIRO","MECANICO","ANALISTA RH","ASSISTENTE","OPERACIONAL","EXECUTIVO"].includes(role) && (
-                  <option value={role}>{role}</option>
-                )}
+                {roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
+                {/* Mantém o valor atual visível mesmo que não esteja na lista de
+                    funções do Financeiro (cadastro antigo ainda não ajustado). */}
+                {role && !roleOptions.includes(role) && <option value={role}>{role}</option>}
               </select>
             </div>
             <div><label className="block text-sm font-medium mb-1">Salário (R$)</label><input type="number" step="0.01" value={salary} onChange={(e) => setSalary(e.target.value)} placeholder="0,00" className={inputCls} /></div>
