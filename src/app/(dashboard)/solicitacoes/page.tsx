@@ -1181,6 +1181,48 @@ function ImagePicker({ value, onChange, label = "Imagem do produto (opcional)" }
   );
 }
 
+// Campo de fornecedor reutilizável: dropdown com os fornecedores cadastrados +
+// a opção "Outro" para digitar um novo. Não usa <datalist> de propósito — o
+// navegador filtra a datalist pelo texto já preenchido, escondendo os demais
+// fornecedores ao editar uma compra/solicitação que já tem fornecedor. Um
+// <select> nativo sempre mostra a lista inteira e não é cortado pelo overflow
+// do modal.
+function SupplierField({ value, onChange, suppliers, className, placeholder = "Selecionar..." }: {
+  value: string; onChange: (v: string) => void; suppliers: Supplier[];
+  className?: string; placeholder?: string;
+}) {
+  const OTHER = "__outro__";
+  const [typing, setTyping] = useState(false);
+  const known = suppliers.some((s) => s.name === value);
+
+  if (typing) {
+    return (
+      <div className="flex gap-2">
+        <input type="text" value={value} onChange={(e) => onChange(e.target.value)} autoFocus
+          placeholder="Nome do fornecedor" className={`flex-1 ${className ?? ""}`} />
+        <button type="button" onClick={() => { setTyping(false); onChange(""); }}
+          className="px-3 text-sm font-medium text-text-light hover:text-text border border-border rounded-lg whitespace-nowrap">
+          Lista
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <select value={value}
+      onChange={(e) => {
+        if (e.target.value === OTHER) { onChange(""); setTyping(true); }
+        else onChange(e.target.value);
+      }}
+      className={className}>
+      <option value="">{placeholder}</option>
+      {value && !known && <option value={value}>{value}</option>}
+      {suppliers.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+      <option value={OTHER}>➕ Outro (digitar)…</option>
+    </select>
+  );
+}
+
 function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
   open: boolean; onClose: () => void;
   onSave: (data: {
@@ -1319,11 +1361,7 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Fornecedor</label>
-            <input type="text" list="request-suppliers" value={supplier} onChange={(e) => setSupplier(e.target.value)}
-              placeholder="Ex: Mercado Livre" className={inputCls} />
-            <datalist id="request-suppliers">
-              {suppliers.map((s) => <option key={s.id} value={s.name} />)}
-            </datalist>
+            <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
           </div>
         </div>
         <div>
@@ -1441,11 +1479,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Fornecedor</label>
-            <input type="text" list="purchase-suppliers" value={supplier} onChange={(e) => setSupplier(e.target.value)}
-              placeholder="Ex: POTENCYA" className={inputCls} />
-            <datalist id="purchase-suppliers">
-              {suppliers.map((s) => <option key={s.id} value={s.name} />)}
-            </datalist>
+            <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
