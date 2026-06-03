@@ -6,6 +6,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Modal } from "@/components/ui/modal";
 import { TrashIcon, PlusIcon } from "@/components/icons";
 import { db } from "@/lib/db";
+import { useAuth } from "@/lib/auth-context";
 import { formatPhone } from "@/lib/utils";
 
 interface Conversation {
@@ -906,6 +907,7 @@ export default function ConversasPage() {
 // creation date, linked ship, and the full participant list with employee
 // cross-reference so admins can see who's in each group.
 function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | null; onClose: () => void; onLeft: () => void; onChanged: () => void }) {
+  const { profile } = useAuth();
   const [info, setInfo] = useState<GroupInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1011,6 +1013,7 @@ function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | nul
         name,
         phone: digits,
         status: "ATIVO",
+        updated_by: profile?.full_name || "Sistema",
       } as Record<string, unknown>);
       if (error) throw new Error(error.message);
       cancelAdd();
