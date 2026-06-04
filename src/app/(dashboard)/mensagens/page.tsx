@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { db } from "@/lib/db";
 import { formatPhone, matchSearch } from "@/lib/utils";
@@ -126,6 +126,7 @@ export default function MensagensPage() {
     hour: 8,
     minute: 0,
   });
+  const schedFormRef = useRef<HTMLFormElement>(null);
 
   const loadStatus = useCallback(async () => {
     setLoadingStatus(true);
@@ -331,6 +332,25 @@ export default function MensagensPage() {
     } finally {
       setSavingSched(false);
     }
+  }
+
+  // Carrega os dados de um agendamento no formulário "Novo agendamento" pra
+  // criar uma cópia. O usuário ajusta o que quiser (grupo, dia, horário) e salva.
+  function duplicateSchedule(s: Schedule) {
+    const validTeams: ProntidaoTeam[] = ["ALL", "EQUIPE_1", "EQUIPE_2", "EQUIPE_3"];
+    setSchedForm({
+      group_jid: s.group_jid,
+      template: s.template,
+      team: s.team && validTeams.includes(s.team as ProntidaoTeam) ? (s.team as ProntidaoTeam) : "ALL",
+      header_text: s.header_text || "",
+      body_text: s.body_text || "",
+      frequency: s.frequency,
+      weekday: s.weekday ?? 1,
+      hour: s.hour,
+      minute: s.minute,
+    });
+    setSchedMsg({ kind: "ok", text: "Cópia carregada no formulário abaixo — ajuste o que quiser e salve." });
+    schedFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function toggleSchedule(s: Schedule) {
@@ -816,6 +836,13 @@ export default function MensagensPage() {
                 <div className="flex items-center gap-2 shrink-0">
                   <button
                     type="button"
+                    onClick={() => duplicateSchedule(s)}
+                    className="text-xs px-2 py-1 rounded-lg font-medium bg-sky-100 text-sky-800 hover:bg-sky-200"
+                  >
+                    Duplicar
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => toggleSchedule(s)}
                     className={`text-xs px-2 py-1 rounded-lg font-medium ${
                       s.enabled
@@ -838,7 +865,7 @@ export default function MensagensPage() {
           </ul>
         )}
 
-        <form onSubmit={createSchedule} className="border-t border-border pt-4 space-y-3">
+        <form ref={schedFormRef} onSubmit={createSchedule} className="border-t border-border pt-4 space-y-3">
           <p className="text-sm font-semibold">Novo agendamento</p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
