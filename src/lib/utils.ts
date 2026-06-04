@@ -72,6 +72,16 @@ export function formatQty(value: number | string | null | undefined): string {
   return n.toLocaleString("pt-BR", { maximumFractionDigits: 3 });
 }
 
+// Sufixo curto da unidade de medida do rancho (ex.: "kg", "un", "fardo").
+// Usado no Almoxarifado (tabela/modal) e nas mensagens de prontidão.
+export function unitSuffix(unit: string | null | undefined): string {
+  const u = (unit || "UN").toUpperCase();
+  const map: Record<string, string> = {
+    KG: "kg", FARDO: "fardo", L: "L", CX: "cx", PCT: "pct", DZ: "dz", SACO: "saco",
+  };
+  return map[u] || "un";
+}
+
 // ── Código automático de itens do Almoxarifado ──────────────────────────────
 // Palavras "vazias" ignoradas ao montar o prefixo (conectores).
 const CODE_STOPWORDS = new Set(["DE", "DA", "DO", "DAS", "DOS", "E", "COM", "PARA", "P", "A", "O", "NO", "NA", "EM"]);

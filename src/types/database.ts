@@ -29,6 +29,7 @@ export interface StockItem {
   id: number;
   name: string;
   category: StockCategory;
+  unit: string;
   location: string | null;
   quantity: number;
   default_quantity: number;

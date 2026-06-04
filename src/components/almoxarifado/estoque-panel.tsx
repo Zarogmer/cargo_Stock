@@ -10,13 +10,26 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDate, formatDateTime, matchSearch, parseDecimalBR, formatQty, buildCodeMap } from "@/lib/utils";
+import { formatDate, formatDateTime, matchSearch, parseDecimalBR, formatQty, buildCodeMap, unitSuffix } from "@/lib/utils";
 import type { StockItem } from "@/types/database";
 
 const STOCK_CATEGORIES = [
   { value: "SUPRIMENTOS", label: "Suprimentos" },
   { value: "CARNE", label: "Carne" },
   { value: "FEIRA", label: "Feira" },
+];
+
+// Unidades de medida do rancho. Carne normalmente é KG (peso), o resto varia
+// (un, fardo, litro, caixa, pacote, dúzia, saco).
+const STOCK_UNITS = [
+  { value: "UN", label: "Unidade (un)" },
+  { value: "KG", label: "Quilograma (kg)" },
+  { value: "FARDO", label: "Fardo" },
+  { value: "L", label: "Litro (L)" },
+  { value: "CX", label: "Caixa (cx)" },
+  { value: "PCT", label: "Pacote (pct)" },
+  { value: "DZ", label: "Dúzia (dz)" },
+  { value: "SACO", label: "Saco" },
 ];
 
 // Painel de Rancho (comida/suprimentos por equipe, stock_items filtrados por
@@ -177,7 +190,7 @@ export function EstoquePanel() {
       key: "default_quantity",
       label: "Padrão",
       render: (i: StockItem) => (
-        <span className="text-text-light">{i.default_quantity ? formatQty(i.default_quantity) : "—"}</span>
+        <span className="text-text-light">{i.default_quantity ? `${formatQty(i.default_quantity)} ${unitSuffix(i.unit)}` : "—"}</span>
       ),
     },
     {
@@ -189,7 +202,7 @@ export function EstoquePanel() {
         const isEmpty = i.quantity <= 0;
         return (
           <span className={`font-semibold ${isEmpty ? "text-danger" : isLow ? "text-amber-500" : "text-success"}`}>
-            {formatQty(i.quantity)}
+            {formatQty(i.quantity)} <span className="text-xs font-normal text-text-light">{unitSuffix(i.unit)}</span>
           </span>
         );
       },
@@ -348,6 +361,7 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
 }) {
   const [name, setName] = useState("");
   const [category, setCategory] = useState("SUPRIMENTOS");
+  const [unit, setUnit] = useState("UN");
   // Strings para aceitar vírgula (ex.: "1,5"); convertidas no submit.
   const [quantity, setQuantity] = useState("");
   const [defaultQuantity, setDefaultQuantity] = useState("");
@@ -357,12 +371,14 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
     if (item) {
       setName(item.name);
       setCategory(item.category);
+      setUnit(item.unit || "UN");
       setQuantity(formatQty(item.quantity));
       setDefaultQuantity(item.default_quantity ? formatQty(item.default_quantity) : "");
       setExpiryDate(item.expiry_date || "");
     } else {
       setName("");
       setCategory("SUPRIMENTOS");
+      setUnit("UN");
       setQuantity("");
       setDefaultQuantity("");
       setExpiryDate("");
@@ -374,6 +390,7 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
     onSave({
       name,
       category: category as StockItem["category"],
+      unit,
       quantity: parseDecimalBR(quantity),
       default_quantity: parseDecimalBR(defaultQuantity),
       expiry_date: expiryDate || null,
@@ -395,6 +412,14 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
           <select value={category} onChange={(e) => setCategory(e.target.value)} className={inputCls}>
             {STOCK_CATEGORIES.map((c) => (
               <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Unidade de medida</label>
+          <select value={unit} onChange={(e) => setUnit(e.target.value)} className={inputCls}>
+            {STOCK_UNITS.map((u) => (
+              <option key={u.value} value={u.value}>{u.label}</option>
             ))}
           </select>
         </div>

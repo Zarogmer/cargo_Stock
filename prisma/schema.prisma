@@ -85,6 +85,8 @@ model StockItem {
   id               Int             @id @default(autoincrement())
   name             String
   category         StockCategory   @default(OUTROS)
+  // Unidade de medida do item (UN, KG, FARDO, L, CX, PCT, DZ, SACO). Carne = KG.
+  unit             String          @default("UN")
   location         String?
   // Float (não Int) pra aceitar quantidades quebradas: 1,5 kg, 1,67, etc.
   quantity         Float           @default(0)

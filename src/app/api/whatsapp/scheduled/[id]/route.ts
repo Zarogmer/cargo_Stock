@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { computeNextRun } from "@/lib/services/scheduler";
-import { parseSchedule, type ScheduleInput } from "../route";
+import { parseSchedule, type ScheduleInput } from "@/lib/services/scheduled-message";
 
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 

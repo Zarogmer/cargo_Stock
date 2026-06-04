@@ -9,6 +9,7 @@
 // ao padrão, % = atual/padrão.
 
 import { prisma } from "@/lib/prisma";
+import { unitSuffix } from "@/lib/utils";
 
 export type TemplateKind = "EPI" | "UNIFORME" | "PRONTIDAO";
 export type ProntidaoTeam = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "ALL";
@@ -88,7 +89,7 @@ export async function buildUniformStockMessage(): Promise<string> {
 }
 
 // ── Prontidão ────────────────────────────────────────────────────────────────
-interface StockRow { name: string; quantity: number; default_quantity: number; team: string | null }
+interface StockRow { name: string; quantity: number; default_quantity: number; team: string | null; unit: string }
 
 // Bloco de prontidão de UMA equipe (sem cabeçalho "atualizado em" — fica no
 // envelope `buildProntidaoMessage`). % e totais replicam o EmbarqueChart.
@@ -126,8 +127,9 @@ function prontidaoBlock(team: string, rows: StockRow[], full: boolean): string {
     head.push("");
     for (const i of sorted) {
       const falta = i.default_quantity - i.quantity;
-      const base = `• ${i.name} — ${fmtQty(i.quantity)}/${fmtQty(i.default_quantity)}`;
-      head.push(falta > 0 ? `${base} (faltam ${fmtQty(falta)})` : `${base} ✅`);
+      const u = unitSuffix(i.unit);
+      const base = `• ${i.name} — ${fmtQty(i.quantity)}/${fmtQty(i.default_quantity)} ${u}`;
+      head.push(falta > 0 ? `${base} (faltam ${fmtQty(falta)} ${u})` : `${base} ✅`);
     }
     return head.join("\n");
   }
@@ -135,21 +137,21 @@ function prontidaoBlock(team: string, rows: StockRow[], full: boolean): string {
   // Resumo (todas as equipes): só os itens em falta.
   const missing = withDefault
     .filter((i) => i.quantity < i.default_quantity)
-    .map((i) => ({ name: i.name, falta: i.default_quantity - i.quantity }))
+    .map((i) => ({ name: i.name, falta: i.default_quantity - i.quantity, unit: i.unit }))
     .sort((a, b) => b.falta - a.falta);
   if (missing.length === 0) {
     head.push("_Rancho completo ✅_");
     return head.join("\n");
   }
   head.push("", "Em falta:");
-  for (const m of missing) head.push(`• ${m.name} — faltam ${fmtQty(m.falta)}`);
+  for (const m of missing) head.push(`• ${m.name} — faltam ${fmtQty(m.falta)} ${unitSuffix(m.unit)}`);
   return head.join("\n");
 }
 
 export async function buildProntidaoMessage(team: ProntidaoTeam = "ALL"): Promise<string> {
   const rows = (await prisma.stockItem.findMany({
     where: { team: { in: [...FOOD_TEAMS] } },
-    select: { name: true, quantity: true, default_quantity: true, team: true },
+    select: { name: true, quantity: true, default_quantity: true, team: true, unit: true },
   })) as StockRow[];
 
   // Equipe específica → lista completa; "Todas" → resumo por equipe.
