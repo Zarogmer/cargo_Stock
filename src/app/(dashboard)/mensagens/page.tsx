@@ -81,6 +81,18 @@ const TEMPLATE_LABELS: Record<ScheduleTemplate, string> = {
   CUSTOM: "Mensagem personalizada",
 };
 
+const INITIAL_SCHED_FORM: SchedForm = {
+  group_jid: "",
+  template: "EPI",
+  team: "ALL",
+  header_text: "",
+  body_text: "",
+  frequency: "WEEKLY",
+  weekday: 1,
+  hour: 8,
+  minute: 0,
+};
+
 export default function MensagensPage() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
@@ -115,17 +127,8 @@ export default function MensagensPage() {
   const [loadingSchedules, setLoadingSchedules] = useState(true);
   const [savingSched, setSavingSched] = useState(false);
   const [schedMsg, setSchedMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-  const [schedForm, setSchedForm] = useState<SchedForm>({
-    group_jid: "",
-    template: "EPI",
-    team: "ALL",
-    header_text: "",
-    body_text: "",
-    frequency: "WEEKLY",
-    weekday: 1,
-    hour: 8,
-    minute: 0,
-  });
+  const [schedForm, setSchedForm] = useState<SchedForm>(INITIAL_SCHED_FORM);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const schedFormRef = useRef<HTMLFormElement>(null);
 
   const loadStatus = useCallback(async () => {
@@ -291,7 +294,10 @@ export default function MensagensPage() {
     return `${tpl} (todas as equipes)`;
   }
 
-  async function createSchedule(e: React.FormEvent) {
+  // Cria (POST) ou edita (PATCH) conforme editingId. O payload manda os campos
+  // de texto como string (mesmo vazia) em vez de null: o PATCH mescla com `??`,
+  // então um null reverteria pro valor antigo — "" deixa o usuário limpá-los.
+  async function saveSchedule(e: React.FormEvent) {
     e.preventDefault();
     setSchedMsg(null);
     if (!schedForm.group_jid) {
@@ -307,25 +313,34 @@ export default function MensagensPage() {
       const grp = groups.find((g) => g.remote_jid === schedForm.group_jid);
       const payload = {
         group_jid: schedForm.group_jid,
-        group_label: grp?.push_name || null,
+        group_label: grp?.push_name || "",
         template: schedForm.template,
         team: schedForm.template === "PRONTIDAO" ? schedForm.team : null,
-        header_text: schedForm.header_text.trim() || null,
-        body_text: schedForm.template === "CUSTOM" ? schedForm.body_text.trim() : null,
+        header_text: schedForm.header_text.trim(),
+        body_text: schedForm.template === "CUSTOM" ? schedForm.body_text.trim() : "",
         frequency: schedForm.frequency,
         weekday: schedForm.frequency === "WEEKLY" ? schedForm.weekday : null,
         hour: schedForm.hour,
         minute: schedForm.minute,
       };
-      const res = await fetch("/api/whatsapp/scheduled", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const res = await fetch(
+        editingId ? `/api/whatsapp/scheduled/${editingId}` : "/api/whatsapp/scheduled",
+        {
+          method: editingId ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-      setSchedMsg({ kind: "ok", text: "Agendamento criado." });
-      setSchedForm((f) => ({ ...f, header_text: "", body_text: "" }));
+      if (editingId) {
+        setSchedMsg({ kind: "ok", text: "Agendamento atualizado." });
+        setEditingId(null);
+        setSchedForm(INITIAL_SCHED_FORM);
+      } else {
+        setSchedMsg({ kind: "ok", text: "Agendamento criado." });
+        setSchedForm((f) => ({ ...f, header_text: "", body_text: "" }));
+      }
       loadSchedules();
     } catch (err) {
       setSchedMsg({ kind: "err", text: (err as Error).message });
@@ -334,11 +349,10 @@ export default function MensagensPage() {
     }
   }
 
-  // Carrega os dados de um agendamento no formulário "Novo agendamento" pra
-  // criar uma cópia. O usuário ajusta o que quiser (grupo, dia, horário) e salva.
-  function duplicateSchedule(s: Schedule) {
+  // Mapeia um agendamento salvo pros campos do formulário.
+  function schedToForm(s: Schedule): SchedForm {
     const validTeams: ProntidaoTeam[] = ["ALL", "EQUIPE_1", "EQUIPE_2", "EQUIPE_3"];
-    setSchedForm({
+    return {
       group_jid: s.group_jid,
       template: s.template,
       team: s.team && validTeams.includes(s.team as ProntidaoTeam) ? (s.team as ProntidaoTeam) : "ALL",
@@ -348,9 +362,30 @@ export default function MensagensPage() {
       weekday: s.weekday ?? 1,
       hour: s.hour,
       minute: s.minute,
-    });
+    };
+  }
+
+  // Carrega os dados no formulário pra criar uma CÓPIA (novo agendamento).
+  function duplicateSchedule(s: Schedule) {
+    setEditingId(null);
+    setSchedForm(schedToForm(s));
     setSchedMsg({ kind: "ok", text: "Cópia carregada no formulário abaixo — ajuste o que quiser e salve." });
     schedFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // Carrega os dados no formulário pra EDITAR o próprio agendamento (salva por cima).
+  function editSchedule(s: Schedule) {
+    setEditingId(s.id);
+    setSchedForm(schedToForm(s));
+    setSchedMsg({ kind: "ok", text: "Editando agendamento — altere o que quiser e salve." });
+    schedFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // Sai do modo edição e limpa o formulário.
+  function cancelEdit() {
+    setEditingId(null);
+    setSchedForm(INITIAL_SCHED_FORM);
+    setSchedMsg(null);
   }
 
   async function toggleSchedule(s: Schedule) {
@@ -812,7 +847,7 @@ export default function MensagensPage() {
         ) : (
           <ul className="divide-y divide-border border border-border rounded-lg">
             {schedules.map((s) => (
-              <li key={s.id} className="flex items-start gap-3 px-3 py-2.5">
+              <li key={s.id} className={`flex items-start gap-3 px-3 py-2.5 ${editingId === s.id ? "bg-indigo-50" : ""}`}>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">
                     👥 {s.group_label || s.group_jid.replace("@g.us", "")}
@@ -833,7 +868,14 @@ export default function MensagensPage() {
                     )}
                   </p>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => editSchedule(s)}
+                    className="text-xs px-2 py-1 rounded-lg font-medium bg-indigo-100 text-indigo-800 hover:bg-indigo-200"
+                  >
+                    Editar
+                  </button>
                   <button
                     type="button"
                     onClick={() => duplicateSchedule(s)}
@@ -865,8 +907,8 @@ export default function MensagensPage() {
           </ul>
         )}
 
-        <form ref={schedFormRef} onSubmit={createSchedule} className="border-t border-border pt-4 space-y-3">
-          <p className="text-sm font-semibold">Novo agendamento</p>
+        <form ref={schedFormRef} onSubmit={saveSchedule} className="border-t border-border pt-4 space-y-3">
+          <p className="text-sm font-semibold">{editingId ? "Editar agendamento" : "Novo agendamento"}</p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -994,9 +1036,20 @@ export default function MensagensPage() {
                 ? "O texto vai exatamente como digitado."
                 : "O conteúdo é montado com os números atuais no momento do envio."}
             </p>
-            <Button type="submit" disabled={savingSched}>
-              {savingSched ? "Salvando..." : "Salvar agendamento"}
-            </Button>
+            <div className="flex items-center gap-2">
+              {editingId && (
+                <Button type="button" variant="secondary" onClick={cancelEdit} disabled={savingSched}>
+                  Cancelar
+                </Button>
+              )}
+              <Button type="submit" disabled={savingSched}>
+                {savingSched
+                  ? "Salvando..."
+                  : editingId
+                    ? "Salvar alterações"
+                    : "Salvar agendamento"}
+              </Button>
+            </div>
           </div>
         </form>
       </section>
