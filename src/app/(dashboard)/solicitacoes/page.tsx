@@ -25,6 +25,7 @@ interface ToolRequest {
   product_url: string | null;
   estimated_value: number | string | null;
   supplier: string | null;
+  department: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -41,6 +42,7 @@ interface PurchaseOrder {
   payment_method: string | null;
   notes: string | null;
   image_url: string | null;
+  product_url: string | null;
   request_id: string | null;
   created_by: string;
   created_at: string;
@@ -341,6 +343,7 @@ export default function SolicitacoesPage() {
   async function handleSaveRequest(data: {
     toolName: string; quantity: number; reason: string; imageUrl: string | null;
     productUrl: string | null; estimatedValue: number | null; supplier: string | null;
+    department: string;
   }) {
     setSaving(true);
     setSaveError(null);
@@ -355,6 +358,7 @@ export default function SolicitacoesPage() {
           product_url: data.productUrl,
           estimated_value: data.estimatedValue,
           supplier: data.supplier,
+          department: data.department,
           updated_at: new Date().toISOString(),
         } as any).eq("id", editRequest.id);
         if (error) throw error;
@@ -374,6 +378,7 @@ export default function SolicitacoesPage() {
         product_url: data.productUrl,
         estimated_value: data.estimatedValue,
         supplier: data.supplier,
+        department: data.department,
       } as any);
       if (error) throw error;
       // Avisa os supervisores por WhatsApp (best-effort — não bloqueia nem
@@ -963,8 +968,13 @@ export default function SolicitacoesPage() {
                           </span>
                         </div>
                         <p className="text-sm text-text-light mt-1.5">{req.reason}</p>
-                        {(req.estimated_value != null || req.supplier || req.product_url) && (
+                        {(req.estimated_value != null || req.supplier || req.product_url || req.department) && (
                           <div className="flex gap-2 mt-2 flex-wrap items-center">
+                            {req.department && (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium" title="Destino sugerido no Almoxarifado">
+                                📍 {departmentLabel(req.department)}
+                              </span>
+                            )}
                             {req.estimated_value != null && Number(req.estimated_value) > 0 && (
                               <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">
                                 {formatCurrency(Number(req.estimated_value))}
@@ -1608,52 +1618,30 @@ function SupplierField({ value, onChange, suppliers, className, placeholder = "S
   );
 }
 
-function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
-  open: boolean; onClose: () => void;
-  onSave: (data: {
-    toolName: string; quantity: number; reason: string; imageUrl: string | null;
-    productUrl: string | null; estimatedValue: number | null; supplier: string | null;
-  }) => void;
-  item: ToolRequest | null;
-  suppliers: Supplier[];
-  saving: boolean;
+// Campo de link do produto com auto-preenchimento (Open Graph / JSON-LD via
+// /api/solicitacoes/link-preview). Compartilhado por Nova Solicitação e Nova
+// Compra. O pai guarda o `link`; ao buscar, devolve os dados via onData(data,
+// force) e o pai decide em quais campos aplicar.
+function ProductLinkField({ link, onLinkChange, onData, open }: {
+  link: string;
+  onLinkChange: (v: string) => void;
+  onData: (data: { name?: string; value?: number; supplier?: string; image?: string }, force: boolean) => void;
+  open: boolean;
 }) {
-  const [toolName, setToolName] = useState("");
-  const [quantity, setQuantity] = useState(1);
-  const [reason, setReason] = useState("");
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  // Link + dados puxados automaticamente da página do produto.
-  const [link, setLink] = useState("");
-  const [value, setValue] = useState("");
-  const [supplier, setSupplier] = useState("");
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const lastFetchedRef = useRef<string>("");
-
-  useEffect(() => {
-    if (!open) return;
-    if (item) {
-      setToolName(item.tool_name || "");
-      setQuantity(item.quantity || 1);
-      setReason(item.reason || "");
-      setImageUrl(item.image_url || null);
-      setLink(item.product_url || "");
-      setValue(numToInput(parseDecimalBR(item.estimated_value)));
-      setSupplier(item.supplier || "");
-      // Já tem dados preenchidos — não dispara o auto-fetch do link ao abrir.
-      lastFetchedRef.current = (item.product_url || "").trim();
-    } else {
-      setToolName(""); setQuantity(1); setReason(""); setImageUrl(null);
-      setLink(""); setValue(""); setSupplier("");
-      lastFetchedRef.current = "";
-    }
-    setFetching(false); setFetchError(null);
-  }, [open, item]);
-
   const isUrl = (s: string) => /^https?:\/\/.+/i.test(s.trim());
 
-  // Busca os dados do link no servidor (Open Graph / JSON-LD). `force` sobrescreve
-  // campos já preenchidos; sem force, só preenche o que estiver vazio.
+  // Ao (re)abrir, marca o link atual como "já buscado" pra não auto-buscar um
+  // link que já veio salvo (edição), e limpa o estado de busca.
+  useEffect(() => {
+    if (open) { lastFetchedRef.current = link.trim(); setFetching(false); setFetchError(null); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Busca os dados do link no servidor. `force` sobrescreve campos já preenchidos;
+  // sem force, o pai só preenche o que estiver vazio.
   const fetchPreview = useCallback(async (rawUrl: string, force: boolean) => {
     const u = rawUrl.trim();
     if (!isUrl(u)) return;
@@ -1671,10 +1659,7 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
         setFetchError(data?.error || "Não consegui buscar os dados do link.");
         return;
       }
-      if (data.name) setToolName((p) => (force || !p.trim() ? data.name : p));
-      if (data.value != null) setValue((p) => (force || !p.trim() ? String(data.value).replace(".", ",") : p));
-      if (data.supplier) setSupplier((p) => (force || !p.trim() ? data.supplier : p));
-      if (data.image) setImageUrl((p) => (force || !p ? data.image : p));
+      onData({ name: data.name, value: data.value, supplier: data.supplier, image: data.image }, force);
       if (!data.name && data.value == null && !data.image) {
         setFetchError("Não achei dados nessa página. Preencha manualmente.");
       }
@@ -1683,9 +1668,9 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
     } finally {
       setFetching(false);
     }
-  }, []);
+  }, [onData]);
 
-  // Auto-busca ao colar/digitar o link (debounce), só quando o modal está aberto.
+  // Auto-busca ao colar/digitar o link (debounce), só com o modal aberto.
   useEffect(() => {
     if (!open) return;
     const u = link.trim();
@@ -1693,6 +1678,77 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
     const t = setTimeout(() => { fetchPreview(u, false); }, 700);
     return () => clearTimeout(t);
   }, [link, open, fetchPreview]);
+
+  return (
+    <div>
+      <label className="block text-sm font-medium mb-1">Link do produto (opcional)</label>
+      <div className="flex gap-2">
+        <input type="url" value={link} onChange={(e) => onLinkChange(e.target.value)}
+          onBlur={() => { const u = link.trim(); if (isUrl(u) && u !== lastFetchedRef.current) fetchPreview(u, false); }}
+          placeholder="Cole o link do Mercado Livre ou outro site..."
+          className={`flex-1 px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none ${fetching ? "opacity-70" : ""}`} />
+        <button type="button" onClick={() => fetchPreview(link, true)} disabled={fetching || !isUrl(link)}
+          className="px-3 py-2.5 text-sm font-medium bg-gray-100 hover:bg-gray-200 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+          {fetching ? "Buscando..." : "Buscar"}
+        </button>
+      </div>
+      {fetching ? (
+        <p className="text-xs text-text-light mt-1">🔎 Buscando dados do produto...</p>
+      ) : fetchError ? (
+        <p className="text-xs text-amber-600 mt-1">⚠️ {fetchError}</p>
+      ) : (
+        <p className="text-[10px] text-text-light mt-1">Cole o link e o nome, valor, imagem e fornecedor são preenchidos automaticamente.</p>
+      )}
+    </div>
+  );
+}
+
+function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
+  open: boolean; onClose: () => void;
+  onSave: (data: {
+    toolName: string; quantity: number; reason: string; imageUrl: string | null;
+    productUrl: string | null; estimatedValue: number | null; supplier: string | null;
+    department: string;
+  }) => void;
+  item: ToolRequest | null;
+  suppliers: Supplier[];
+  saving: boolean;
+}) {
+  const [toolName, setToolName] = useState("");
+  const [quantity, setQuantity] = useState(1);
+  const [reason, setReason] = useState("");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [link, setLink] = useState("");
+  const [value, setValue] = useState("");
+  const [supplier, setSupplier] = useState("");
+  // Destino sugerido no Almoxarifado — o gestor confirma/ajusta ao aprovar.
+  const [dest, setDest] = useState<WarehouseDest>("ESTOQUE");
+
+  useEffect(() => {
+    if (!open) return;
+    if (item) {
+      setToolName(item.tool_name || "");
+      setQuantity(item.quantity || 1);
+      setReason(item.reason || "");
+      setImageUrl(item.image_url || null);
+      setLink(item.product_url || "");
+      setValue(numToInput(parseDecimalBR(item.estimated_value)));
+      setSupplier(item.supplier || "");
+      setDest((item.department as WarehouseDest) || "ESTOQUE");
+    } else {
+      setToolName(""); setQuantity(1); setReason(""); setImageUrl(null);
+      setLink(""); setValue(""); setSupplier(""); setDest("ESTOQUE");
+    }
+  }, [open, item]);
+
+  // Aplica os dados puxados do link (sem sobrescrever o que o usuário já digitou,
+  // exceto no "Buscar" manual com force=true).
+  const applyPreview = useCallback((d: { name?: string; value?: number; supplier?: string; image?: string }, force: boolean) => {
+    if (d.name) setToolName((p) => (force || !p.trim() ? d.name! : p));
+    if (d.value != null) setValue((p) => (force || !p.trim() ? String(d.value).replace(".", ",") : p));
+    if (d.supplier) setSupplier((p) => (force || !p.trim() ? d.supplier! : p));
+    if (d.image) setImageUrl((p) => (force || !p ? d.image! : p));
+  }, []);
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
@@ -1703,36 +1759,25 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
       productUrl: link.trim() || null,
       estimatedValue: value.trim() ? parseDecimalBR(value) : null,
       supplier: supplier.trim() || null,
+      department: dest,
     });
   }
 
   return (
     <Modal open={open} onClose={onClose} title={item ? "Editar Solicitação" : "Nova Solicitação"}>
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium mb-1">Link do produto (opcional)</label>
-          <div className="flex gap-2">
-            <input type="url" value={link} onChange={(e) => setLink(e.target.value)}
-              onBlur={() => { const u = link.trim(); if (isUrl(u) && u !== lastFetchedRef.current) fetchPreview(u, false); }}
-              placeholder="Cole o link do Mercado Livre ou outro site..."
-              className={`flex-1 px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none ${fetching ? "opacity-70" : ""}`} />
-            <button type="button" onClick={() => fetchPreview(link, true)} disabled={fetching || !isUrl(link)}
-              className="px-3 py-2.5 text-sm font-medium bg-gray-100 hover:bg-gray-200 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
-              {fetching ? "Buscando..." : "Buscar"}
-            </button>
-          </div>
-          {fetching ? (
-            <p className="text-xs text-text-light mt-1">🔎 Buscando dados do produto...</p>
-          ) : fetchError ? (
-            <p className="text-xs text-amber-600 mt-1">⚠️ {fetchError}</p>
-          ) : (
-            <p className="text-[10px] text-text-light mt-1">Cole o link e o nome, valor, imagem e fornecedor são preenchidos automaticamente.</p>
-          )}
-        </div>
+        <ProductLinkField link={link} onLinkChange={setLink} onData={applyPreview} open={open} />
         <div>
           <label className="block text-sm font-medium mb-1">Produto / Equipamento *</label>
           <input type="text" value={toolName} onChange={(e) => setToolName(e.target.value)} required
             placeholder="Ex: Furadeira, Chave inglesa, Luvas..." className={inputCls} />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Destino no Almoxarifado</label>
+          <select value={dest} onChange={(e) => setDest(e.target.value as WarehouseDest)} className={inputCls}>
+            {WAREHOUSE_DESTINATIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+          </select>
+          <p className="text-[10px] text-text-light mt-1">Sugestão de onde guardar — o gestor confirma ao aprovar.</p>
         </div>
         <div className="grid grid-cols-3 gap-4">
           <div>
@@ -1870,6 +1915,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
   saving: boolean;
 }) {
   const [description, setDescription] = useState("");
+  const [link, setLink] = useState("");
   const [supplier, setSupplier] = useState("");
   const [purchaseDate, setPurchaseDate] = useState("");
   const [unitValue, setUnitValue] = useState("");
@@ -1888,6 +1934,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
     const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     if (item) {
       setDescription(item.description || "");
+      setLink(item.product_url || "");
       // Edição: o destino salvo vira só rótulo (pode ser um valor legado da planilha).
       setDestSpec({ ...DEFAULT_DEST_SPEC, dest: (item.department as WarehouseDest) || "OUTROS" });
       setSupplier(item.supplier || "");
@@ -1899,6 +1946,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       setImageUrl(item.image_url || null);
     } else if (fromRequest) {
       setDescription(fromRequest.tool_name || "");
+      setLink(fromRequest.product_url || "");
       setDestSpec({ ...DEFAULT_DEST_SPEC });
       setSupplier(fromRequest.supplier || "");
       setPurchaseDate(todayISO);
@@ -1908,7 +1956,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       setNotes("");
       setImageUrl(fromRequest.image_url || null);
     } else {
-      setDescription(""); setDestSpec({ ...DEFAULT_DEST_SPEC }); setSupplier(""); setPurchaseDate(todayISO);
+      setDescription(""); setLink(""); setDestSpec({ ...DEFAULT_DEST_SPEC }); setSupplier(""); setPurchaseDate(todayISO);
       setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setImageUrl(null);
     }
   }, [item, fromRequest, open]);
@@ -1916,6 +1964,15 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
   const unit = parseDecimalBR(unitValue);
   const qty = parseDecimalBR(quantity);
   const total = unit * qty;
+
+  // Aplica os dados puxados do link (igual à Nova Solicitação): preenche descrição,
+  // valor, fornecedor e foto sem sobrescrever o que já foi digitado (salvo "Buscar").
+  const applyPreview = useCallback((d: { name?: string; value?: number; supplier?: string; image?: string }, force: boolean) => {
+    if (d.name) setDescription((p) => (force || !p.trim() ? d.name! : p));
+    if (d.value != null) setUnitValue((p) => (force || !p.trim() ? String(d.value).replace(".", ",") : p));
+    if (d.supplier) setSupplier((p) => (force || !p.trim() ? d.supplier! : p));
+    if (d.image) setImageUrl((p) => (force || !p ? d.image! : p));
+  }, []);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -1930,6 +1987,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       payment_method: paymentMethod || null,
       notes: notes || null,
       image_url: imageUrl,
+      product_url: link.trim() || null,
     }, fromRequest?.id || null,
       // Só lança no Almoxarifado em compras novas (na edição vira só rótulo).
       !item ? destSpec : null);
@@ -1946,6 +2004,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
             Compra a partir da solicitação de <strong>{fromRequest.requested_by}</strong>. Ao salvar, a solicitação é marcada como <strong>Comprada</strong>.
           </div>
         )}
+        <ProductLinkField link={link} onLinkChange={setLink} onData={applyPreview} open={open} />
         <div>
           <label className="block text-sm font-medium mb-1">Descrição *</label>
           <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} required
@@ -2042,7 +2101,11 @@ function AprovarModal({ open, onClose, onConfirm, request, saving }: {
 }) {
   const [spec, setSpec] = useState<DestSpec>({ ...DEFAULT_DEST_SPEC });
 
-  useEffect(() => { if (open) setSpec({ ...DEFAULT_DEST_SPEC }); }, [open]);
+  // Pré-preenche o destino com a sugestão que veio da solicitação (campo
+  // department), se houver — o gestor ainda pode trocar.
+  useEffect(() => {
+    if (open) setSpec({ ...DEFAULT_DEST_SPEC, dest: (request?.department as WarehouseDest) || "ESTOQUE" });
+  }, [open, request]);
 
   return (
     <Modal open={open} onClose={onClose} title="Aprovar e concluir" maxWidth="max-w-md">

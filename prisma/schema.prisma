@@ -601,6 +601,9 @@ model ToolRequest {
   product_url     String?
   estimated_value Decimal? @db.Decimal(10, 2)
   supplier        String?
+  // Destino sugerido no Almoxarifado (ESTOQUE/RANCHO/EPI/UNIFORME/MAQUINARIO/
+  // ESCRITORIO/OUTROS). O gestor confirma/ajusta ao aprovar.
+  department      String?
   created_at     DateTime @default(now()) @db.Timestamptz()
   updated_at     DateTime @default(now()) @db.Timestamptz()
 
@@ -627,6 +630,7 @@ model PurchaseOrder {
   payment_method String? // FORMA DE PAGAMENTO
   notes          String? // OBSERVAÇÃO
   image_url      String? // foto do produto (herdada da solicitação ou anexada)
+  product_url    String? // link do produto (Mercado Livre etc.), usado pra puxar nome/valor/foto
   request_id     String?   @db.Uuid // solicitação de origem, se houver
   created_by     String
   created_at     DateTime  @default(now()) @db.Timestamptz()
