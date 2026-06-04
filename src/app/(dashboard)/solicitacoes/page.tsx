@@ -83,15 +83,58 @@ const PRODUCT_CATEGORIES = [
   "Outros",
 ];
 
-// Departamentos da planilha oficial de compras (coluna "SELECIONE DEPTO.").
-const PURCHASE_DEPARTMENTS = [
-  "MANUTENÇÃO",
-  "ESCRITÓRIO",
-  "OPERAÇÃO",
-  "RANCHO",
-  "EPI",
-  "OUTROS",
+// Destinos no Almoxarifado. O item de uma compra/solicitação é lançado no setor
+// escolhido — é a ponte entre Compras/Solicitações e o Almoxarifado inteiro.
+// Substitui o antigo "Departamento" (que era só rótulo e não batia com as abas
+// do Almoxarifado). "OUTROS" = só registra a compra, sem mexer no estoque.
+type WarehouseDest = "ESTOQUE" | "RANCHO" | "EPI" | "UNIFORME" | "MAQUINARIO" | "OUTROS";
+
+const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
+  { value: "ESTOQUE", label: "📦 Estoque (galpão)" },
+  { value: "RANCHO", label: "🍽️ Rancho (alimentos)" },
+  { value: "EPI", label: "⛑️ EPI" },
+  { value: "UNIFORME", label: "👕 Uniforme" },
+  { value: "MAQUINARIO", label: "⚙️ Maquinário" },
+  { value: "OUTROS", label: "— Outros (não lançar no estoque)" },
 ];
+
+// Rótulo curto pro badge na tabela de Controle de Compras.
+const DEST_SHORT_LABEL: Record<string, string> = {
+  ESTOQUE: "Estoque", RANCHO: "Rancho", EPI: "EPI",
+  UNIFORME: "Uniforme", MAQUINARIO: "Maquinário", OUTROS: "Outros",
+};
+function departmentLabel(dep: string | null): string {
+  if (!dep) return "";
+  return DEST_SHORT_LABEL[dep] || dep;
+}
+
+// Equipes do Rancho (comida por equipe — stock_items team=EQUIPE_x).
+const RANCHO_TEAMS: { value: string; label: string }[] = [
+  { value: "EQUIPE_1", label: "Equipe 1" },
+  { value: "EQUIPE_2", label: "Equipe 2" },
+  { value: "EQUIPE_3", label: "Equipe 3" },
+];
+// Categorias (enum StockCategory) e unidades do Rancho (carne costuma ser KG).
+const RANCHO_CATEGORIES: { value: string; label: string }[] = [
+  { value: "SUPRIMENTOS", label: "Suprimentos" },
+  { value: "CARNE", label: "Carne" },
+  { value: "FEIRA", label: "Feira" },
+];
+const RANCHO_UNITS: { value: string; label: string }[] = [
+  { value: "UN", label: "Unidade (un)" },
+  { value: "KG", label: "Quilograma (kg)" },
+  { value: "FARDO", label: "Fardo" },
+  { value: "L", label: "Litro (L)" },
+  { value: "CX", label: "Caixa (cx)" },
+  { value: "PCT", label: "Pacote (pct)" },
+  { value: "DZ", label: "Dúzia (dz)" },
+  { value: "SACO", label: "Saco" },
+];
+
+// Para onde a compra/solicitação será lançada no Almoxarifado, com os campos
+// específicos de cada setor. Compartilhado por Nova Compra, Aprovar e Armazenar.
+interface DestSpec { dest: WarehouseDest; category: string; unit: string; team: string; size: string }
+const DEFAULT_DEST_SPEC: DestSpec = { dest: "ESTOQUE", category: "", unit: "UN", team: "EQUIPE_1", size: "" };
 
 const PAYMENT_METHODS = [
   "FATURADO",
@@ -104,12 +147,17 @@ const PAYMENT_METHODS = [
 ];
 
 const DEPARTMENT_BADGE: Record<string, string> = {
+  // Destinos do Almoxarifado (atual)
+  ESTOQUE: "bg-blue-100 text-blue-700",
+  RANCHO: "bg-green-100 text-green-700",
+  EPI: "bg-amber-100 text-amber-700",
+  UNIFORME: "bg-purple-100 text-purple-700",
+  MAQUINARIO: "bg-orange-100 text-orange-700",
+  OUTROS: "bg-gray-100 text-gray-700",
+  // Departamentos legados da planilha (compras antigas continuam exibindo o rótulo)
   "MANUTENÇÃO": "bg-orange-100 text-orange-700",
   "ESCRITÓRIO": "bg-purple-100 text-purple-700",
   "OPERAÇÃO": "bg-blue-100 text-blue-700",
-  "RANCHO": "bg-green-100 text-green-700",
-  "EPI": "bg-amber-100 text-amber-700",
-  "OUTROS": "bg-gray-100 text-gray-700",
 };
 
 // Sentinela de equipe usada pelos materiais do galpão na tabela stock_items —
@@ -349,7 +397,7 @@ export default function SolicitacoesPage() {
   // lança o item no Estoque do galpão. Substitui o antigo "Aprovar → Registrar
   // Compra → Armazenar". Não há mais recusa — a solicitação ou é concluída ou
   // apagada.
-  async function handleConcludeRequest() {
+  async function handleConcludeRequest(spec: DestSpec) {
     const req = concludeRequest;
     if (!req) return;
     setSaving(true);
@@ -365,7 +413,7 @@ export default function SolicitacoesPage() {
       // 1) Registra a compra (valor estimado da solicitação vira o valor unitário).
       const { error: buyErr } = await db.from("purchase_orders").insert({
         description: req.tool_name,
-        department: null,
+        department: spec.dest === "OUTROS" ? null : spec.dest,
         supplier: req.supplier || null,
         purchase_date: todayISO,
         unit_value: unit,
@@ -387,15 +435,19 @@ export default function SolicitacoesPage() {
       } as any).eq("id", req.id);
       if (updErr) throw updErr;
 
-      // 3) Lança no Estoque do galpão (não-fatal: a compra já foi salva). Sem
-      // categoria definida na solicitação, entra como "Outros" — recategorizável
-      // depois em Almoxarifado › Estoque.
+      // 3) Lança no destino escolhido do Almoxarifado (não-fatal: a compra já
+      // foi salva). "OUTROS" = não lança em estoque nenhum.
       let stockMsg = "";
-      try {
-        const r = await storeInStock({ name: req.tool_name, quantity: qty, category: "Outros" });
-        stockMsg = ` ${r.created ? "Material criado" : "Estoque reposto"} (+${formatQty(r.quantity)}) em ${r.category}.`;
-      } catch (stockErr: any) {
-        stockMsg = ` ⚠️ Falhou ao lançar no Estoque: ${stockErr?.message || String(stockErr)}`;
+      if (spec.dest !== "OUTROS") {
+        try {
+          const r = await storeInWarehouse(spec.dest, {
+            name: req.tool_name, quantity: qty,
+            category: spec.category, unit: spec.unit, team: spec.team, size: spec.size,
+          });
+          stockMsg = ` ${r.created ? "Criado" : "Reposto"} (+${formatQty(r.quantity)}) em ${r.where}.`;
+        } catch (stockErr: any) {
+          stockMsg = ` ⚠️ Falhou ao lançar no Almoxarifado: ${stockErr?.message || String(stockErr)}`;
+        }
       }
 
       // 4) Avisa o grupo "Compras" no WhatsApp (best-effort — a conclusão já está
@@ -512,10 +564,115 @@ export default function SolicitacoesPage() {
     return { created, name, category, quantity: qty };
   }, [profile]);
 
+  // Ponte genérica Compras/Solicitações → Almoxarifado INTEIRO. Lança o item no
+  // setor escolhido (`dest`), com casamento por nome onde faz sentido (repõe a
+  // quantidade em vez de duplicar). Maquinário não tem quantidade: cada unidade
+  // comprada vira uma máquina (status Disponível). Devolve um resumo pro toast.
+  const storeInWarehouse = useCallback(async (
+    dest: WarehouseDest,
+    opts: { name: string; quantity: number; category?: string; unit?: string; team?: string; size?: string },
+  ): Promise<{ created: boolean; where: string; quantity: number }> => {
+    const actor = profile?.full_name || "Sistema";
+    const name = (opts.name || "").trim();
+    if (!name) throw new Error("Nome do item vazio");
+    const qty = opts.quantity > 0 ? opts.quantity : 1;
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    const round3 = (n: number) => Math.round(n * 1000) / 1000;
+    const teamLbl = (t: string) => RANCHO_TEAMS.find((x) => x.value === t)?.label || t;
+
+    // Estoque do galpão — reaproveita a ponte existente (stock_items team=GALPAO).
+    if (dest === "ESTOQUE") {
+      const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros" });
+      return { created: r.created, where: `Estoque${r.category ? ` · ${r.category}` : ""}`, quantity: r.quantity };
+    }
+
+    // Rancho — comida por equipe (stock_items com team=EQUIPE_x). Casa por nome
+    // dentro da equipe e soma; senão cria o item de comida.
+    if (dest === "RANCHO") {
+      const team = opts.team || "EQUIPE_1";
+      const category = opts.category || "SUPRIMENTOS";
+      const unit = opts.unit || "UN";
+      const { data, error } = await db.from("stock_items").select("id, name, quantity").eq("team", team);
+      if (error) throw new Error(error.message);
+      const existing = (data || []).find((s: any) => norm(s.name) === norm(name)) as
+        | { id: number; quantity: number } | undefined;
+      let id: number | undefined;
+      let created: boolean;
+      if (existing) {
+        created = false; id = existing.id;
+        const { error: e } = await db.from("stock_items").update({
+          quantity: round3(Number(existing.quantity || 0) + qty), updated_by: actor,
+        } as any).eq("id", id);
+        if (e) throw new Error(e.message);
+      } else {
+        created = true;
+        const { data: ins, error: e } = await db.from("stock_items").insert({
+          name, category, unit, quantity: qty, default_quantity: qty, team, min_quantity: 0, updated_by: actor,
+        } as any);
+        if (e) throw new Error(e.message);
+        id = (ins as any)?.id;
+      }
+      if (id) {
+        try {
+          await db.from("stock_movements").insert({
+            stock_item_id: id, movement_type: "ENTRADA", quantity: qty,
+            movement_date: new Date().toISOString().split("T")[0],
+            notes: "Entrada via Compras/Solicitações", created_by: actor,
+          } as any);
+        } catch { /* histórico best-effort */ }
+      }
+      return { created, where: `Rancho · ${teamLbl(team)}`, quantity: qty };
+    }
+
+    // EPI / Uniforme — tabelas próprias (epis/uniforms), quantidade INTEIRA.
+    // Casa por nome (+ tamanho) e soma o stock_qty.
+    if (dest === "EPI" || dest === "UNIFORME") {
+      const table = dest === "EPI" ? "epis" : "uniforms";
+      const size = (opts.size || "").trim() || null;
+      const addQty = Math.max(1, Math.round(qty));
+      const { data, error } = await db.from(table).select("id, name, size, stock_qty");
+      if (error) throw new Error(error.message);
+      const existing = (data || []).find(
+        (s: any) => norm(s.name) === norm(name) && norm(s.size || "") === norm(size || ""),
+      ) as { id: number; stock_qty: number } | undefined;
+      let created: boolean;
+      if (existing) {
+        created = false;
+        const { error: e } = await db.from(table).update({
+          stock_qty: Number(existing.stock_qty || 0) + addQty, updated_by: actor,
+        } as any).eq("id", existing.id);
+        if (e) throw new Error(e.message);
+      } else {
+        created = true;
+        const { error: e } = await db.from(table).insert({
+          name, size, stock_qty: addQty, min_quantity: 0, updated_by: actor,
+        } as any);
+        if (e) throw new Error(e.message);
+      }
+      return { created, where: dest === "EPI" ? "EPI" : "Uniforme", quantity: addQty };
+    }
+
+    // Maquinário — cada unidade é um registro próprio (tools, controle de
+    // empréstimo), sem quantidade. Cria N máquinas Disponíveis (limite de
+    // segurança de 50 por lançamento pra evitar acidentes).
+    if (dest === "MAQUINARIO") {
+      const units = Math.min(50, Math.max(1, Math.round(qty)));
+      for (let i = 0; i < units; i++) {
+        const { error } = await db.from("tools").insert({
+          name, asset_type: "MAQUINARIO", status: "DISPONIVEL", updated_by: actor,
+        } as any);
+        if (error) throw new Error(error.message);
+      }
+      return { created: true, where: "Maquinário", quantity: units };
+    }
+
+    throw new Error(`Destino inválido: ${dest}`);
+  }, [profile, storeInStock]);
+
   async function handleSavePurchase(
     data: Partial<PurchaseOrder>,
     fromRequestId: string | null,
-    stock?: { category: string } | null,
+    stock?: DestSpec | null,
   ) {
     setSaving(true);
     setSaveError(null);
@@ -539,20 +696,20 @@ export default function SolicitacoesPage() {
             responded_by: actor,
           } as any).eq("id", fromRequestId);
         }
-        // Lança no Estoque do galpão, se o usuário marcou a opção na compra.
-        // Falha aqui é não-fatal: a compra já foi salva, só avisamos.
-        if (stock) {
+        // Lança no destino escolhido do Almoxarifado, se houver. Falha aqui é
+        // não-fatal: a compra já foi salva, só avisamos.
+        if (stock && stock.dest !== "OUTROS") {
           try {
-            const r = await storeInStock({
+            const r = await storeInWarehouse(stock.dest, {
               name: data.description || "",
               quantity: Number(data.quantity) || 1,
-              category: stock.category,
+              category: stock.category, unit: stock.unit, team: stock.team, size: stock.size,
             });
             setSaveOk(
-              `📦 ${r.created ? "Material criado" : "Estoque reposto"}: "${r.name}" (+${formatQty(r.quantity)}) em ${r.category}.`,
+              `📦 ${r.created ? "Criado" : "Reposto"}: "${data.description}" (+${formatQty(r.quantity)}) em ${r.where}.`,
             );
           } catch (stockErr: any) {
-            setSaveError(`Compra salva, mas falhou ao lançar no Estoque: ${stockErr?.message || String(stockErr)}`);
+            setSaveError(`Compra salva, mas falhou ao lançar no Almoxarifado: ${stockErr?.message || String(stockErr)}`);
           }
         }
       }
@@ -568,25 +725,28 @@ export default function SolicitacoesPage() {
     }
   }
 
-  // "Armazenar no Estoque" a partir de uma solicitação já comprada (botão no card).
-  async function handleStoreRequest(category: string) {
+  // "Armazenar no Almoxarifado" a partir de uma solicitação já comprada (botão no
+  // card) — agora pode cair em qualquer setor (Estoque/Rancho/EPI/Uniforme/Maquinário).
+  async function handleStoreInWarehouse(spec: DestSpec) {
     if (!stockRequest) return;
+    if (spec.dest === "OUTROS") { setStockRequest(null); return; }
     setSaving(true);
     setSaveError(null);
     setSaveOk(null);
     try {
-      const r = await storeInStock({
+      const r = await storeInWarehouse(spec.dest, {
         name: stockRequest.tool_name,
         quantity: stockRequest.quantity,
-        category,
+        category: spec.category, unit: spec.unit, team: spec.team, size: spec.size,
       });
+      const itemName = stockRequest.tool_name;
       setStockRequest(null);
       setSaveOk(
-        `📦 ${r.created ? "Material criado" : "Estoque reposto"}: "${r.name}" (+${formatQty(r.quantity)}) em ${r.category}.`,
+        `📦 ${r.created ? "Criado" : "Reposto"}: "${itemName}" (+${formatQty(r.quantity)}) em ${r.where}.`,
       );
     } catch (err: any) {
-      console.error("Erro ao lançar no estoque:", err);
-      setSaveError(`Erro ao lançar no Estoque: ${err?.message || String(err)}`);
+      console.error("Erro ao lançar no Almoxarifado:", err);
+      setSaveError(`Erro ao lançar no Almoxarifado: ${err?.message || String(err)}`);
     } finally {
       setSaving(false);
     }
@@ -826,7 +986,7 @@ export default function SolicitacoesPage() {
                           <button
                             onClick={() => setConcludeRequest(req)}
                             className="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 font-medium transition"
-                            title="Registra a compra e lança no Estoque automaticamente"
+                            title="Registra a compra e lança no Almoxarifado (você escolhe o setor)"
                           >
                             Aprovar
                           </button>
@@ -835,7 +995,7 @@ export default function SolicitacoesPage() {
                           <button
                             onClick={() => setStockRequest(req)}
                             className="px-3 py-1.5 text-xs bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 font-medium transition"
-                            title="Lançar este item no Estoque do galpão"
+                            title="Lançar este item no Almoxarifado (Estoque/Rancho/EPI/Uniforme/Maquinário)"
                           >
                             📦 Armazenar
                           </button>
@@ -944,7 +1104,7 @@ export default function SolicitacoesPage() {
                         </td>
                         <td className="px-3 py-2.5">
                           {p.department ? (
-                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${DEPARTMENT_BADGE[p.department] || "bg-gray-100 text-gray-700"}`}>{p.department}</span>
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${DEPARTMENT_BADGE[p.department] || "bg-gray-100 text-gray-700"}`}>{departmentLabel(p.department)}</span>
                           ) : "—"}
                         </td>
                         <td className="px-3 py-2.5">{p.supplier || "—"}</td>
@@ -991,7 +1151,7 @@ export default function SolicitacoesPage() {
                           <span className="font-semibold text-primary whitespace-nowrap">{formatCurrency(p.total_value || 0)}</span>
                         </div>
                         <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-xs text-text-light items-center">
-                          {p.department && <span className={`px-1.5 py-0.5 rounded-full font-medium ${DEPARTMENT_BADGE[p.department] || "bg-gray-100 text-gray-700"}`}>{p.department}</span>}
+                          {p.department && <span className={`px-1.5 py-0.5 rounded-full font-medium ${DEPARTMENT_BADGE[p.department] || "bg-gray-100 text-gray-700"}`}>{departmentLabel(p.department)}</span>}
                           {p.supplier && <span>{p.supplier}</span>}
                           <span>{formatPurchaseDate(p.purchase_date)}</span>
                           <span>{formatQty(p.quantity)} × {formatCurrency(p.unit_value || 0)}</span>
@@ -1244,16 +1404,13 @@ export default function SolicitacoesPage() {
         loading={saving}
       />
 
-      {/* Aprovar = concluir: registra a compra + lança no Estoque */}
-      <ConfirmDialog
+      {/* Aprovar = concluir: registra a compra + lança no destino do Almoxarifado */}
+      <AprovarModal
         open={!!concludeRequest}
         onClose={() => setConcludeRequest(null)}
         onConfirm={handleConcludeRequest}
-        title="Aprovar e concluir"
-        message={`Aprovar "${concludeRequest?.tool_name}" (x${concludeRequest?.quantity})? A compra é registrada no Controle de Compras e o item entra no Estoque do galpão automaticamente.`}
-        confirmLabel="Aprovar e concluir"
-        variant="primary"
-        loading={saving}
+        request={concludeRequest}
+        saving={saving}
       />
 
       {/* Delete Link Confirm */}
@@ -1300,11 +1457,11 @@ export default function SolicitacoesPage() {
         loading={saving}
       />
 
-      {/* Armazenar no Estoque (a partir de uma solicitação comprada) */}
+      {/* Armazenar no Almoxarifado (a partir de uma solicitação comprada) */}
       <ArmazenarEstoqueModal
         open={!!stockRequest}
         onClose={() => setStockRequest(null)}
-        onConfirm={handleStoreRequest}
+        onConfirm={handleStoreInWarehouse}
         request={stockRequest}
         saving={saving}
       />
@@ -1603,16 +1760,104 @@ function numToInput(n: number | null | undefined): string {
   return String(n).replace(".", ",");
 }
 
+// Seletor de destino no Almoxarifado + campos específicos de cada setor.
+// Controlado (o pai guarda o DestSpec). Compartilhado por Nova Compra, Aprovar
+// e Armazenar. `stocking=false` (ex.: edição de compra) mostra só o seletor,
+// sem campos nem lançamento, pra não contar a quantidade duas vezes.
+function WarehouseDestinationFields({ value, onChange, quantity, stocking = true }: {
+  value: DestSpec; onChange: (v: DestSpec) => void; quantity?: number; stocking?: boolean;
+}) {
+  const known = WAREHOUSE_DESTINATIONS.some((d) => d.value === value.dest);
+  // Trocar de destino reseta os campos específicos pra não vazar valor de um
+  // setor pro outro (ex.: "Elétrica" do Estoque indo parar na categoria do Rancho).
+  const setDest = (dest: WarehouseDest) =>
+    onChange({ dest, category: dest === "RANCHO" ? "SUPRIMENTOS" : "", unit: "UN", team: "EQUIPE_1", size: "" });
+  const selCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+  const subCls = "w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none";
+  const boxCls = "rounded-lg border border-emerald-200 bg-emerald-50/60 p-3";
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="block text-sm font-medium mb-1">Destino no Almoxarifado</label>
+        <select value={value.dest} onChange={(e) => setDest(e.target.value as WarehouseDest)} className={selCls}>
+          {!known && value.dest && <option value={value.dest}>{value.dest} (legado)</option>}
+          {WAREHOUSE_DESTINATIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+        </select>
+      </div>
+
+      {stocking && value.dest === "ESTOQUE" && (
+        <div className={boxCls}>
+          <label className="block text-xs font-medium text-emerald-800 mb-1">Categoria no Estoque</label>
+          <input type="text" list="wh-stock-cats" value={value.category}
+            onChange={(e) => onChange({ ...value, category: e.target.value })}
+            placeholder="Ex: Elétrica, Hidrojato, Ferramentas..." className={subCls} />
+          <datalist id="wh-stock-cats">{STOCK_CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
+          <p className="text-[10px] text-emerald-700/80 mt-1">Sem categoria, entra como <strong>Outros</strong>. Mesmo nome = soma a quantidade (reposição).</p>
+        </div>
+      )}
+
+      {stocking && value.dest === "RANCHO" && (
+        <div className={`${boxCls} grid grid-cols-1 sm:grid-cols-3 gap-3`}>
+          <div>
+            <label className="block text-xs font-medium text-emerald-800 mb-1">Equipe</label>
+            <select value={value.team} onChange={(e) => onChange({ ...value, team: e.target.value })} className={subCls}>
+              {RANCHO_TEAMS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-emerald-800 mb-1">Categoria</label>
+            <select value={value.category || "SUPRIMENTOS"} onChange={(e) => onChange({ ...value, category: e.target.value })} className={subCls}>
+              {RANCHO_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-emerald-800 mb-1">Unidade</label>
+            <select value={value.unit} onChange={(e) => onChange({ ...value, unit: e.target.value })} className={subCls}>
+              {RANCHO_UNITS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+            </select>
+          </div>
+          <p className="text-[10px] text-emerald-700/80 sm:col-span-3">Mesmo nome na equipe = soma a quantidade (reposição).</p>
+        </div>
+      )}
+
+      {stocking && (value.dest === "EPI" || value.dest === "UNIFORME") && (
+        <div className={boxCls}>
+          <label className="block text-xs font-medium text-emerald-800 mb-1">Tamanho <span className="font-normal">(opcional)</span></label>
+          <input type="text" value={value.size} onChange={(e) => onChange({ ...value, size: e.target.value })}
+            placeholder="Ex: P, M, G, 42..." className={subCls} />
+          <p className="text-[10px] text-emerald-700/80 mt-1">Mesmo nome (e tamanho) = soma a quantidade. Quantidade entra como número inteiro.</p>
+        </div>
+      )}
+
+      {stocking && value.dest === "MAQUINARIO" && (
+        <p className="text-xs text-emerald-700 bg-emerald-50/60 border border-emerald-200 rounded-lg p-3">
+          ⚙️ Cada unidade vira uma máquina no Maquinário (status <strong>Disponível</strong>){quantity ? ` — ${Math.min(50, Math.max(1, Math.round(quantity)))} unidade(s)` : ""}.
+        </p>
+      )}
+
+      {stocking && value.dest === "OUTROS" && (
+        <p className="text-xs text-text-light bg-gray-50 border border-border rounded-lg p-3">
+          Não lança no Almoxarifado — só registra a compra.
+        </p>
+      )}
+
+      {!stocking && (
+        <p className="text-[11px] text-text-light">Editar não relança no Almoxarifado (evita contar a quantidade duas vezes).</p>
+      )}
+    </div>
+  );
+}
+
 function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers, saving }: {
   open: boolean; onClose: () => void;
-  onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: { category: string } | null) => void;
+  onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null) => void;
   item: PurchaseOrder | null;
   fromRequest: ToolRequest | null;
   suppliers: Supplier[];
   saving: boolean;
 }) {
   const [description, setDescription] = useState("");
-  const [department, setDepartment] = useState("");
   const [supplier, setSupplier] = useState("");
   const [purchaseDate, setPurchaseDate] = useState("");
   const [unitValue, setUnitValue] = useState("");
@@ -1620,10 +1865,10 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
   const [paymentMethod, setPaymentMethod] = useState("");
   const [notes, setNotes] = useState("");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
-  // Lançar a compra direto no Estoque do galpão (ponte com Almoxarifado › Estoque).
-  // Marcado por padrão em compras novas; some ao editar (pra não contar duas vezes).
-  const [addToStock, setAddToStock] = useState(true);
-  const [stockCategory, setStockCategory] = useState("");
+  // Destino no Almoxarifado (substitui o antigo "Departamento"). Em compras novas
+  // o item é lançado no setor escolhido; ao editar, o destino vira só rótulo (não
+  // relança, pra não contar duas vezes).
+  const [destSpec, setDestSpec] = useState<DestSpec>({ ...DEFAULT_DEST_SPEC });
 
   useEffect(() => {
     if (!open) return;
@@ -1631,7 +1876,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
     const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     if (item) {
       setDescription(item.description || "");
-      setDepartment(item.department || "");
+      // Edição: o destino salvo vira só rótulo (pode ser um valor legado da planilha).
+      setDestSpec({ ...DEFAULT_DEST_SPEC, dest: (item.department as WarehouseDest) || "OUTROS" });
       setSupplier(item.supplier || "");
       setPurchaseDate((item.purchase_date || "").slice(0, 10) || todayISO);
       setUnitValue(numToInput(item.unit_value));
@@ -1641,7 +1887,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       setImageUrl(item.image_url || null);
     } else if (fromRequest) {
       setDescription(fromRequest.tool_name || "");
-      setDepartment("");
+      setDestSpec({ ...DEFAULT_DEST_SPEC });
       setSupplier(fromRequest.supplier || "");
       setPurchaseDate(todayISO);
       setUnitValue(numToInput(parseDecimalBR(fromRequest.estimated_value)));
@@ -1650,12 +1896,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       setNotes("");
       setImageUrl(fromRequest.image_url || null);
     } else {
-      setDescription(""); setDepartment(""); setSupplier(""); setPurchaseDate(todayISO);
+      setDescription(""); setDestSpec({ ...DEFAULT_DEST_SPEC }); setSupplier(""); setPurchaseDate(todayISO);
       setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setImageUrl(null);
     }
-    // Estoque: compras novas vêm com a opção marcada e categoria em branco.
-    setAddToStock(true);
-    setStockCategory("");
   }, [item, fromRequest, open]);
 
   const unit = parseDecimalBR(unitValue);
@@ -1666,7 +1909,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
     e.preventDefault();
     onSave({
       description,
-      department: department || null,
+      department: destSpec.dest || null,
       supplier: supplier || null,
       purchase_date: purchaseDate || null,
       unit_value: unit,
@@ -1676,8 +1919,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       notes: notes || null,
       image_url: imageUrl,
     }, fromRequest?.id || null,
-      // Só lança no estoque em compras novas (não na edição) e quando marcado.
-      !item && addToStock ? { category: stockCategory } : null);
+      // Só lança no Almoxarifado em compras novas (na edição vira só rótulo).
+      !item ? destSpec : null);
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
@@ -1696,18 +1939,10 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
           <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} required
             placeholder="Ex: Fita silver tape, Água 1,5 L..." className={inputCls} />
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Departamento</label>
-            <select value={department} onChange={(e) => setDepartment(e.target.value)} className={inputCls}>
-              <option value="">Selecionar...</option>
-              {PURCHASE_DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Fornecedor</label>
-            <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
-          </div>
+        <WarehouseDestinationFields value={destSpec} onChange={setDestSpec} quantity={qty} stocking={!item} />
+        <div>
+          <label className="block text-sm font-medium mb-1">Fornecedor</label>
+          <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
@@ -1747,46 +1982,6 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
         </div>
         <ImagePicker value={imageUrl} onChange={setImageUrl} />
 
-        {/* Ponte com o Estoque: lança a compra como material no almoxarifado.
-            Só aparece em compras novas — editar não relança pra não duplicar. */}
-        {!item && (
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 space-y-2">
-            <label className="flex items-start gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={addToStock}
-                onChange={(e) => setAddToStock(e.target.checked)}
-                className="mt-0.5 w-4 h-4 accent-emerald-600"
-              />
-              <span className="text-sm">
-                <span className="font-medium text-emerald-800">📦 Lançar no Estoque do almoxarifado</span>
-                <span className="block text-xs text-emerald-700/80">
-                  Cria (ou repõe) o material no galpão com a quantidade desta compra.
-                </span>
-              </span>
-            </label>
-            {addToStock && (
-              <div>
-                <label className="block text-xs font-medium text-emerald-800 mb-1">Categoria no Estoque</label>
-                <input
-                  type="text"
-                  list="stock-categories"
-                  value={stockCategory}
-                  onChange={(e) => setStockCategory(e.target.value)}
-                  placeholder="Ex: Elétrica, Hidrojato, Ferramentas..."
-                  className="w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
-                />
-                <datalist id="stock-categories">
-                  {STOCK_CATEGORIES.map((c) => <option key={c} value={c} />)}
-                </datalist>
-                <p className="text-[10px] text-emerald-700/80 mt-1">
-                  Sem categoria, entra como <strong>Outros</strong>. Se já existir um material com esse nome, a quantidade é somada.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar Compra"}</Button>
@@ -1796,49 +1991,58 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
   );
 }
 
-// Lança uma solicitação já comprada no Estoque do galpão: o usuário só confirma
-// a categoria. Nome e quantidade vêm da própria solicitação. Usado pelo botão
-// "📦 Armazenar" dos cards COMPRADO.
+// Lança uma solicitação já comprada no Almoxarifado: o usuário escolhe o destino
+// (Estoque/Rancho/EPI/Uniforme/Maquinário) e os campos do setor. Nome e quantidade
+// vêm da própria solicitação. Usado pelo botão "📦 Armazenar" dos cards COMPRADO.
 function ArmazenarEstoqueModal({ open, onClose, onConfirm, request, saving }: {
   open: boolean; onClose: () => void;
-  onConfirm: (category: string) => void;
+  onConfirm: (spec: DestSpec) => void;
   request: ToolRequest | null;
   saving: boolean;
 }) {
-  const [category, setCategory] = useState("");
+  const [spec, setSpec] = useState<DestSpec>({ ...DEFAULT_DEST_SPEC });
 
-  useEffect(() => { if (open) setCategory(""); }, [open]);
-
-  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+  useEffect(() => { if (open) setSpec({ ...DEFAULT_DEST_SPEC }); }, [open]);
 
   return (
-    <Modal open={open} onClose={onClose} title="Armazenar no Estoque" maxWidth="max-w-md">
-      <form onSubmit={(e) => { e.preventDefault(); onConfirm(category); }} className="space-y-4">
+    <Modal open={open} onClose={onClose} title="Armazenar no Almoxarifado" maxWidth="max-w-md">
+      <form onSubmit={(e) => { e.preventDefault(); onConfirm(spec); }} className="space-y-4">
         <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-sm text-emerald-800">
-          Lançar <strong>{request?.tool_name}</strong> (x{request?.quantity}) no Estoque de materiais do galpão.
+          Lançar <strong>{request?.tool_name}</strong> (x{request?.quantity}) no Almoxarifado.
         </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Categoria no Estoque</label>
-          <input
-            type="text"
-            list="stock-categories-armazenar"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            placeholder="Ex: Elétrica, Hidrojato, Ferramentas..."
-            autoFocus
-            className={inputCls}
-          />
-          <datalist id="stock-categories-armazenar">
-            {STOCK_CATEGORIES.map((c) => <option key={c} value={c} />)}
-          </datalist>
-          <p className="text-[11px] text-text-light mt-1">
-            Sem categoria, entra como <strong>Outros</strong>. Se já existir um material com esse nome,
-            a quantidade é somada (reposição).
-          </p>
-        </div>
+        <WarehouseDestinationFields value={spec} onChange={setSpec} quantity={request?.quantity} />
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={saving}>{saving ? "Lançando..." : "Lançar no Estoque"}</Button>
+          <Button type="submit" disabled={saving}>{saving ? "Lançando..." : "Lançar"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// Aprovar e concluir uma solicitação: registra a compra no Controle de Compras e
+// lança o item no destino escolhido do Almoxarifado, num passo só.
+function AprovarModal({ open, onClose, onConfirm, request, saving }: {
+  open: boolean; onClose: () => void;
+  onConfirm: (spec: DestSpec) => void;
+  request: ToolRequest | null;
+  saving: boolean;
+}) {
+  const [spec, setSpec] = useState<DestSpec>({ ...DEFAULT_DEST_SPEC });
+
+  useEffect(() => { if (open) setSpec({ ...DEFAULT_DEST_SPEC }); }, [open]);
+
+  return (
+    <Modal open={open} onClose={onClose} title="Aprovar e concluir" maxWidth="max-w-md">
+      <form onSubmit={(e) => { e.preventDefault(); onConfirm(spec); }} className="space-y-4">
+        <p className="text-sm text-text-light">
+          Aprovar <strong>{request?.tool_name}</strong> (x{request?.quantity})? A compra é registrada no
+          Controle de Compras e o item é lançado no destino abaixo, automaticamente.
+        </p>
+        <WarehouseDestinationFields value={spec} onChange={setSpec} quantity={request?.quantity} />
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={saving}>{saving ? "Concluindo..." : "Aprovar e concluir"}</Button>
         </div>
       </form>
     </Modal>
