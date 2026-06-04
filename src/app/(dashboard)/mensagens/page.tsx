@@ -1060,12 +1060,12 @@ export default function MensagensPage() {
             <label className="block text-xs font-medium mb-1 text-text-light">
               Cabeçalho (opcional) — texto fixo antes dos dados
             </label>
-            <input
-              type="text"
+            <textarea
               value={schedForm.header_text}
               onChange={(e) => setSchedForm((f) => ({ ...f, header_text: e.target.value }))}
-              placeholder="Ex: Bom dia! Segue o boletim de hoje 👇"
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+              rows={2}
+              placeholder={"Ex: ~ Bom dia Equipe Cargo Ships Cleaning ~\nTenham todos um ótimo trabalho 👇"}
+              className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-y whitespace-pre-wrap"
             />
           </div>
 
