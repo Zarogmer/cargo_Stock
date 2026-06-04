@@ -10,8 +10,9 @@
 
 import { prisma } from "@/lib/prisma";
 import { unitSuffix } from "@/lib/utils";
+import { getPurchaseList, type PurchaseKind } from "@/lib/services/purchase-list";
 
-export type TemplateKind = "EPI" | "UNIFORME" | "PRONTIDAO";
+export type TemplateKind = "EPI" | "UNIFORME" | "PRONTIDAO" | "COMPRAS";
 export type ProntidaoTeam = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "ALL";
 
 // Equipes de rancho consideradas na prontidão (mesmo conjunto do dashboard).
@@ -46,14 +47,21 @@ function nowBrLabel(): string {
 export async function buildEpiStockMessage(): Promise<string> {
   const items = await prisma.epi.findMany({
     orderBy: { name: "asc" },
-    select: { name: true, size: true, stock_qty: true },
+    select: { name: true, size: true, stock_qty: true, min_quantity: true },
   });
   if (items.length === 0) return "*📋 Estoque de EPIs*\n\nNenhum EPI cadastrado.";
 
   const totalQty = items.reduce((s, i) => s + (i.stock_qty || 0), 0);
+  let toBuy = 0;
   const lines = items.map((i) => {
     const size = i.size?.trim() ? ` (${i.size.trim()})` : "";
-    return `• ${i.name}${size} — ${fmtQty(i.stock_qty)} un`;
+    const base = `• ${i.name}${size} — ${fmtQty(i.stock_qty)} un`;
+    if (i.min_quantity > 0 && i.stock_qty < i.min_quantity) {
+      const buy = i.min_quantity - i.stock_qty;
+      toBuy += buy;
+      return `${base}  🛒 comprar ${fmtQty(buy)}`;
+    }
+    return base;
   });
   return [
     "*📋 Estoque de EPIs*",
@@ -61,7 +69,9 @@ export async function buildEpiStockMessage(): Promise<string> {
     "",
     ...lines,
     "",
-    `_Total em estoque: ${fmtQty(totalQty)} un · ${items.length} ${items.length === 1 ? "tipo" : "tipos"}_`,
+    toBuy > 0
+      ? `_⚠️ ${fmtQty(toBuy)} un a comprar · ${items.length} ${items.length === 1 ? "tipo" : "tipos"}_`
+      : `_Total em estoque: ${fmtQty(totalQty)} un · ${items.length} ${items.length === 1 ? "tipo" : "tipos"}_`,
   ].join("\n");
 }
 
@@ -69,14 +79,21 @@ export async function buildEpiStockMessage(): Promise<string> {
 export async function buildUniformStockMessage(): Promise<string> {
   const items = await prisma.uniform.findMany({
     orderBy: { name: "asc" },
-    select: { name: true, size: true, stock_qty: true },
+    select: { name: true, size: true, stock_qty: true, min_quantity: true },
   });
   if (items.length === 0) return "*👕 Estoque de Uniformes*\n\nNenhum uniforme cadastrado.";
 
   const totalQty = items.reduce((s, i) => s + (i.stock_qty || 0), 0);
+  let toBuy = 0;
   const lines = items.map((i) => {
     const size = i.size?.trim() ? ` (${i.size.trim()})` : "";
-    return `• ${i.name}${size} — ${fmtQty(i.stock_qty)} un`;
+    const base = `• ${i.name}${size} — ${fmtQty(i.stock_qty)} un`;
+    if (i.min_quantity > 0 && i.stock_qty < i.min_quantity) {
+      const buy = i.min_quantity - i.stock_qty;
+      toBuy += buy;
+      return `${base}  🛒 comprar ${fmtQty(buy)}`;
+    }
+    return base;
   });
   return [
     "*👕 Estoque de Uniformes*",
@@ -84,7 +101,9 @@ export async function buildUniformStockMessage(): Promise<string> {
     "",
     ...lines,
     "",
-    `_Total em estoque: ${fmtQty(totalQty)} un · ${items.length} ${items.length === 1 ? "tipo" : "tipos"}_`,
+    toBuy > 0
+      ? `_⚠️ ${fmtQty(toBuy)} un a comprar · ${items.length} ${items.length === 1 ? "tipo" : "tipos"}_`
+      : `_Total em estoque: ${fmtQty(totalQty)} un · ${items.length} ${items.length === 1 ? "tipo" : "tipos"}_`,
   ].join("\n");
 }
 
@@ -161,12 +180,42 @@ export async function buildProntidaoMessage(team: ProntidaoTeam = "ALL"): Promis
   return [`_Atualizado em ${nowBrLabel()}_`, "", blocks.join("\n\n———\n\n")].join("\n");
 }
 
+// ── Lista de compras ─────────────────────────────────────────────────────────
+// Junta Estoque + EPI + Uniforme abaixo do mínimo, com quanto comprar de cada.
+// Mesma fonte da aba Compras e do Dashboard (getPurchaseList).
+const COMPRAS_GROUPS: Array<{ kind: PurchaseKind; label: string }> = [
+  { kind: "ESTOQUE", label: "🧰 Estoque" },
+  { kind: "EPI", label: "⛑️ EPI" },
+  { kind: "UNIFORME", label: "👕 Uniforme" },
+];
+
+export async function buildComprasMessage(): Promise<string> {
+  const items = await getPurchaseList();
+  if (items.length === 0) {
+    return ["*🛒 Lista de compras*", `_Atualizado em ${nowBrLabel()}_`, "", "Tudo dentro do mínimo ✅"].join("\n");
+  }
+
+  const out = ["*🛒 Lista de compras*", `_Atualizado em ${nowBrLabel()}_`];
+  for (const g of COMPRAS_GROUPS) {
+    const list = items.filter((i) => i.kind === g.kind);
+    if (list.length === 0) continue;
+    out.push("", `*${g.label}*`);
+    for (const i of list) {
+      const det = i.detail ? ` (${i.detail})` : "";
+      out.push(`• ${i.name}${det} — comprar ${fmtQty(i.buy)} ${i.unit}`);
+    }
+  }
+  out.push("", `_${items.length} ${items.length === 1 ? "item" : "itens"} pra comprar_`);
+  return out.join("\n");
+}
+
 // Dispatcher usado pelo preview e pelo scheduler.
 export async function buildTemplate(kind: TemplateKind, team?: ProntidaoTeam): Promise<string> {
   switch (kind) {
     case "EPI": return buildEpiStockMessage();
     case "UNIFORME": return buildUniformStockMessage();
     case "PRONTIDAO": return buildProntidaoMessage(team || "ALL");
+    case "COMPRAS": return buildComprasMessage();
     default: throw new Error(`Template desconhecido: ${kind}`);
   }
 }

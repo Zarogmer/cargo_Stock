@@ -7,6 +7,7 @@ import { MateriaisPanel } from "@/components/almoxarifado/materiais-panel";
 import { SimpleInventoryPanel } from "@/components/almoxarifado/inventory-simple-panel";
 import { ToolsPanel } from "@/components/almoxarifado/tools-panel";
 import { HistoricoPanel } from "@/components/almoxarifado/historico-panel";
+import { ComprasPanel } from "@/components/almoxarifado/compras-panel";
 
 // Almoxarifado: centraliza Estoque (materiais do galpão), Rancho (comida por
 // equipe), EPI, Uniforme, Maquinário em abas únicas. A troca de aba é dirigida
@@ -28,6 +29,7 @@ export default function AlmoxarifadoPage() {
     { key: "rancho", label: "Rancho", content: <EstoquePanel /> },
     { key: "epi", label: "EPI", content: <SimpleInventoryPanel kind="EPI" /> },
     { key: "uniforme", label: "Uniforme", content: <SimpleInventoryPanel kind="UNIFORME" /> },
+    { key: "compras", label: "Compras", content: <ComprasPanel /> },
     { key: "maquinario", label: "Maquinário", content: <ToolsPanel assetType="MAQUINARIO" /> },
     { key: "historico", label: "Histórico", content: <HistoricoPanel /> },
   ];

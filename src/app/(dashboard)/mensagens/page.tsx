@@ -28,7 +28,7 @@ type Mode = "colaboradores" | "manual" | "grupo";
 
 // Templates de dados ao vivo que o usuário pode inserir no texto antes de enviar
 // pro grupo. Renderizados no servidor por /api/whatsapp/templates.
-type TemplateKind = "EPI" | "UNIFORME" | "PRONTIDAO";
+type TemplateKind = "EPI" | "UNIFORME" | "PRONTIDAO" | "COMPRAS";
 type ScheduleTemplate = TemplateKind | "CUSTOM";
 type ProntidaoTeam = "ALL" | "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3";
 
@@ -79,6 +79,7 @@ const TEMPLATE_LABELS: Record<ScheduleTemplate, string> = {
   EPI: "Lista de EPIs",
   UNIFORME: "Lista de uniformes",
   PRONTIDAO: "Prontidão",
+  COMPRAS: "Lista de compras",
   CUSTOM: "Mensagem personalizada",
 };
 
@@ -771,6 +772,14 @@ export default function MensagensPage() {
                 >
                   {insertingTpl === "UNIFORME" ? "Montando..." : "👕 Lista de uniformes"}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => insertTemplate("COMPRAS")}
+                  disabled={sending || insertingTpl !== null}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white border border-border hover:bg-gray-100 disabled:opacity-50"
+                >
+                  {insertingTpl === "COMPRAS" ? "Montando..." : "🛒 Lista de compras"}
+                </button>
                 <span className="w-px h-5 bg-border" />
                 <select
                   value={prontidaoTeam}
@@ -989,6 +998,7 @@ export default function MensagensPage() {
                 <option value="EPI">Lista de EPIs</option>
                 <option value="UNIFORME">Lista de uniformes</option>
                 <option value="PRONTIDAO">Prontidão pra embarque</option>
+                <option value="COMPRAS">Lista de compras</option>
                 <option value="CUSTOM">Mensagem personalizada</option>
               </select>
             </div>

@@ -206,6 +206,7 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Rancho", href: "/almoxarifado?tab=rancho" },
       { label: "EPI", href: "/almoxarifado?tab=epi" },
       { label: "Uniforme", href: "/almoxarifado?tab=uniforme" },
+      { label: "Compras", href: "/almoxarifado?tab=compras" },
       { label: "Maquinário", href: "/almoxarifado?tab=maquinario" },
       { label: "Histórico", href: "/almoxarifado?tab=historico" },
     ],

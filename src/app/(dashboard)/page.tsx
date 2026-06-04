@@ -16,6 +16,17 @@ interface StockChartItem {
   team: string | null;
 }
 
+interface PurchaseLite {
+  kind: "ESTOQUE" | "EPI" | "UNIFORME";
+  id: number;
+  name: string;
+  detail: string | null;
+  current: number;
+  min: number;
+  buy: number;
+  unit: string;
+}
+
 interface DashboardStats {
   totalMateriais: number; // Estoque (materiais do galpão, team=GALPAO)
   totalRancho: number;    // Rancho (comida por equipe, EQUIPE_1/2/3)
@@ -74,6 +85,7 @@ export default function DashboardPage() {
   const [movements, setMovements] = useState<RecentMovement[]>([]);
   const [dollar, setDollar] = useState<DollarQuote | null>(null);
   const [stockItems, setStockItems] = useState<StockChartItem[]>([]);
+  const [purchaseItems, setPurchaseItems] = useState<PurchaseLite[]>([]);
   const [shipsByMonth, setShipsByMonth] = useState<{ month: string; count: number }[]>([]);
   const [recentPurchases, setRecentPurchases] = useState<{ id: string; tool_name: string; quantity: number; requested_by: string; responded_by: string; updated_at: string }[]>([]);
   const [trainingAlerts, setTrainingAlerts] = useState<TrainingAlert[]>([]);
@@ -121,6 +133,16 @@ export default function DashboardPage() {
       });
 
       setStockItems((stockFullRes.data || []) as StockChartItem[]);
+
+      // Lista de compras (itens abaixo do mínimo nos 3 inventários) — via API,
+      // que é a fonte única (mesma conta da aba Compras e dos templates).
+      try {
+        const compRes = await fetch("/api/almoxarifado/compras");
+        if (compRes.ok) {
+          const body = await compRes.json();
+          setPurchaseItems((body.items || []) as PurchaseLite[]);
+        }
+      } catch { /* silencioso — seção some se falhar */ }
 
       // Load ships for monthly chart (Jan-Dec of current year)
       const shipsRes = await db.from("ships").select("departure_date, created_at");
@@ -450,6 +472,19 @@ export default function DashboardPage() {
               </div>
               <EmbarqueChart items={stockItems.filter((i) => i.team === "EQUIPE_2")} />
             </div>
+          </div>
+        </CollapsibleSection>
+      )}
+
+      {/* Lista de compras (itens abaixo do mínimo) */}
+      {purchaseItems.length > 0 && (
+        <CollapsibleSection
+          storageKey="lista-compras"
+          title="Lista de compras"
+          subtitle={`${purchaseItems.length} ${purchaseItems.length === 1 ? "item abaixo do mínimo" : "itens abaixo do mínimo"}`}
+        >
+          <div className="p-6">
+            <PurchaseList items={purchaseItems} />
           </div>
         </CollapsibleSection>
       )}
@@ -893,6 +928,53 @@ function EmbarqueChart({ items }: { items: StockChartItem[] }) {
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Lista de compras no dashboard: itens abaixo do mínimo agrupados por inventário,
+// com quanto comprar. Mesma fonte da aba Compras (/api/almoxarifado/compras).
+function PurchaseList({ items }: { items: PurchaseLite[] }) {
+  const fmt = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 });
+  const GROUPS: Array<{ kind: PurchaseLite["kind"]; label: string; icon: string }> = [
+    { kind: "ESTOQUE", label: "Estoque", icon: "🧰" },
+    { kind: "EPI", label: "EPI", icon: "⛑️" },
+    { kind: "UNIFORME", label: "Uniforme", icon: "👕" },
+  ];
+  const groups = GROUPS
+    .map((g) => ({ ...g, items: items.filter((i) => i.kind === g.kind) }))
+    .filter((g) => g.items.length > 0);
+
+  return (
+    <div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-4">
+        {groups.map((g) => (
+          <div key={g.kind}>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-sm">{g.icon}</span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-text-light">{g.label}</span>
+              <span className="text-xs text-text-light">· {g.items.length}</span>
+            </div>
+            <ul className="divide-y divide-border">
+              {g.items.map((i) => (
+                <li key={`${i.kind}-${i.id}`} className="flex items-center justify-between gap-2 py-1.5">
+                  <span className="text-sm text-text truncate min-w-0">
+                    {i.name}{i.detail && <span className="text-text-light"> ({i.detail})</span>}
+                  </span>
+                  <span className="text-xs font-semibold text-red-700 tabular-nums shrink-0">
+                    comprar {fmt.format(i.buy)} {i.unit}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4">
+        <Link href="/almoxarifado?tab=compras" className="text-xs text-primary hover:underline">
+          Abrir lista completa de compras →
+        </Link>
       </div>
     </div>
   );

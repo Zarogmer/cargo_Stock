@@ -11,10 +11,10 @@ import {
 // qualquer usuário logado.
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
-const VALID_KINDS: TemplateKind[] = ["EPI", "UNIFORME", "PRONTIDAO"];
+const VALID_KINDS: TemplateKind[] = ["EPI", "UNIFORME", "PRONTIDAO", "COMPRAS"];
 const VALID_TEAMS: ProntidaoTeam[] = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_3", "ALL"];
 
-// GET /api/whatsapp/templates?kind=EPI|UNIFORME|PRONTIDAO[&team=EQUIPE_1|ALL]
+// GET /api/whatsapp/templates?kind=EPI|UNIFORME|PRONTIDAO|COMPRAS[&team=EQUIPE_1|ALL]
 // Renderiza o texto do template com os dados ao vivo. Usado pela UI de Mensagens
 // pra pré-visualizar/inserir o boletim no textarea antes de enviar pro grupo.
 export async function GET(request: NextRequest) {
@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
 
   const kind = (request.nextUrl.searchParams.get("kind") || "") as TemplateKind;
   if (!VALID_KINDS.includes(kind)) {
-    return NextResponse.json({ error: "kind inválido (use EPI, UNIFORME ou PRONTIDAO)" }, { status: 400 });
+    return NextResponse.json({ error: "kind inválido (use EPI, UNIFORME, PRONTIDAO ou COMPRAS)" }, { status: 400 });
   }
 
   const teamParam = (request.nextUrl.searchParams.get("team") || "ALL") as ProntidaoTeam;

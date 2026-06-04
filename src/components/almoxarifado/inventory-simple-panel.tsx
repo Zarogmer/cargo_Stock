@@ -18,7 +18,7 @@ import type { Employee, EpiMovementType } from "@/types/database";
 // ({ id, name, size, stock_qty }) e o mesmo fluxo de entrega/devolução, então
 // um único componente parametrizado cobre os dois. As permissões de ação usam
 // o módulo EPI (era assim no Colaboradores também).
-interface SimpleItem { id: number; name: string; size: string | null; stock_qty: number }
+interface SimpleItem { id: number; name: string; size: string | null; stock_qty: number; min_quantity: number }
 
 const CONFIG = {
   EPI: { table: "epis", movements: "epi_movements", fk: "epi_id", singular: "EPI", colLabel: "EPI", searchPlaceholder: "Buscar EPI...", newTitle: "Novo EPI", editTitle: "Editar EPI" },
@@ -62,7 +62,7 @@ export function SimpleInventoryPanel({ kind }: { kind: "EPI" | "UNIFORME" }) {
 
   useEffect(() => { loadAll(); }, [loadAll, pathname]);
 
-  async function save(data: { name: string; size: string | null; stock_qty: number }) {
+  async function save(data: { name: string; size: string | null; stock_qty: number; min_quantity: number }) {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
     const payload = { ...data, updated_by: actor } as Record<string, unknown>;
@@ -93,7 +93,11 @@ export function SimpleInventoryPanel({ kind }: { kind: "EPI" | "UNIFORME" }) {
     { key: "name", label: cfg.colLabel, render: (i: SimpleItem) => <span className="font-medium">{i.name}</span> },
     { key: "code", label: "Código", render: (i: SimpleItem) => <span className="font-mono text-xs text-text-light">{codeMap.get(i.id) || "—"}</span> },
     { key: "size", label: "Tam.", render: (i: SimpleItem) => i.size || "—" },
-    { key: "stock_qty", label: "Qtd", render: (i: SimpleItem) => <span className="font-semibold">{i.stock_qty}</span> },
+    { key: "stock_qty", label: "Qtd", render: (i: SimpleItem) => {
+      const low = i.min_quantity > 0 && i.stock_qty < i.min_quantity;
+      return <span className={`font-semibold ${low ? "text-danger" : ""}`} title={low ? `Abaixo do mínimo (${i.min_quantity})` : undefined}>{i.stock_qty}</span>;
+    } },
+    { key: "min_quantity", label: "Mín.", render: (i: SimpleItem) => <span className="text-text-light text-sm">{i.min_quantity > 0 ? i.min_quantity : "—"}</span> },
     { key: "actions", label: "", className: "w-36", render: (i: SimpleItem) => (
       <div className="flex gap-1">
         <button onClick={(ev) => { ev.stopPropagation(); setMov({ item: i, type: "ENTREGA" }); }} className="p-1.5 text-amber-600 hover:bg-amber-50 rounded text-xs" title="Entregar">📤</button>
@@ -125,7 +129,7 @@ export function SimpleInventoryPanel({ kind }: { kind: "EPI" | "UNIFORME" }) {
 function ItemFormModal({ open, onClose, onSave, item, saving, newTitle, editTitle }: {
   open: boolean;
   onClose: () => void;
-  onSave: (d: { name: string; size: string | null; stock_qty: number }) => void;
+  onSave: (d: { name: string; size: string | null; stock_qty: number; min_quantity: number }) => void;
   item: SimpleItem | null;
   saving: boolean;
   newTitle: string;
@@ -134,21 +138,23 @@ function ItemFormModal({ open, onClose, onSave, item, saving, newTitle, editTitl
   const [name, setName] = useState("");
   const [size, setSize] = useState("");
   const [stockQty, setStockQty] = useState(0);
+  const [minQty, setMinQty] = useState(0);
 
   useEffect(() => {
-    if (item) { setName(item.name); setSize(item.size || ""); setStockQty(item.stock_qty); }
-    else { setName(""); setSize(""); setStockQty(0); }
+    if (item) { setName(item.name); setSize(item.size || ""); setStockQty(item.stock_qty); setMinQty(item.min_quantity || 0); }
+    else { setName(""); setSize(""); setStockQty(0); setMinQty(0); }
   }, [item, open]);
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
   return (
     <Modal open={open} onClose={onClose} title={item ? editTitle : newTitle}>
-      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, size: size || null, stock_qty: stockQty }); }} className="space-y-4">
+      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, size: size || null, stock_qty: stockQty, min_quantity: minQty }); }} className="space-y-4">
         <div><label className="block text-sm font-medium mb-1">Nome *</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} /></div>
+        <div><label className="block text-sm font-medium mb-1">Tamanho</label><input type="text" value={size} onChange={(e) => setSize(e.target.value)} className={inputCls} /></div>
         <div className="grid grid-cols-2 gap-4">
-          <div><label className="block text-sm font-medium mb-1">Tamanho</label><input type="text" value={size} onChange={(e) => setSize(e.target.value)} className={inputCls} /></div>
           <div><label className="block text-sm font-medium mb-1">Quantidade</label><input type="number" value={stockQty} onChange={(e) => setStockQty(Number(e.target.value))} min={0} className={inputCls} /></div>
+          <div><label className="block text-sm font-medium mb-1">Qtd Mínima <span className="text-text-light font-normal">(opcional)</span></label><input type="number" value={minQty} onChange={(e) => setMinQty(Number(e.target.value))} min={0} placeholder="0 = sem mínimo" className={inputCls} /></div>
         </div>
         <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button></div>
       </form>

@@ -4,7 +4,7 @@
 
 import type { ScheduleFrequency, ScheduleTemplateKind } from "@prisma/client";
 
-const TEMPLATES: ScheduleTemplateKind[] = ["EPI", "UNIFORME", "PRONTIDAO", "CUSTOM"];
+const TEMPLATES: ScheduleTemplateKind[] = ["EPI", "UNIFORME", "PRONTIDAO", "COMPRAS", "CUSTOM"];
 const TEAMS = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_3", "ALL"];
 const FREQUENCIES: ScheduleFrequency[] = ["DAILY", "WEEKLY"];
 

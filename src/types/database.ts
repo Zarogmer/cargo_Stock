@@ -110,6 +110,7 @@ export interface Epi {
   ca_code: string | null;
   size: string | null;
   stock_qty: number;
+  min_quantity: number;
   updated_at: string;
   updated_by: string;
 }
@@ -132,6 +133,7 @@ export interface Uniform {
   name: string;
   size: string | null;
   stock_qty: number;
+  min_quantity: number;
   updated_at: string;
   updated_by: string;
 }
