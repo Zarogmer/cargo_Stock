@@ -87,7 +87,7 @@ const PRODUCT_CATEGORIES = [
 // escolhido — é a ponte entre Compras/Solicitações e o Almoxarifado inteiro.
 // Substitui o antigo "Departamento" (que era só rótulo e não batia com as abas
 // do Almoxarifado). "OUTROS" = só registra a compra, sem mexer no estoque.
-type WarehouseDest = "ESTOQUE" | "RANCHO" | "EPI" | "UNIFORME" | "MAQUINARIO" | "OUTROS";
+type WarehouseDest = "ESTOQUE" | "RANCHO" | "EPI" | "UNIFORME" | "MAQUINARIO" | "ESCRITORIO" | "OUTROS";
 
 const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
   { value: "ESTOQUE", label: "📦 Estoque (galpão)" },
@@ -95,13 +95,22 @@ const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
   { value: "EPI", label: "⛑️ EPI" },
   { value: "UNIFORME", label: "👕 Uniforme" },
   { value: "MAQUINARIO", label: "⚙️ Maquinário" },
+  { value: "ESCRITORIO", label: "🏢 Escritório (só registra a compra)" },
   { value: "OUTROS", label: "— Outros (não lançar no estoque)" },
 ];
+
+// Destinos que NÃO mexem no Almoxarifado — só registram a compra/solicitação (não
+// há setor de estoque pra eles). Escritório é o caso típico: existe compra pra
+// escritório, mas ela não vira material no galpão.
+const STOCKLESS_DESTS: WarehouseDest[] = ["ESCRITORIO", "OUTROS"];
+function destStocks(dest: WarehouseDest): boolean {
+  return !STOCKLESS_DESTS.includes(dest);
+}
 
 // Rótulo curto pro badge na tabela de Controle de Compras.
 const DEST_SHORT_LABEL: Record<string, string> = {
   ESTOQUE: "Estoque", RANCHO: "Rancho", EPI: "EPI",
-  UNIFORME: "Uniforme", MAQUINARIO: "Maquinário", OUTROS: "Outros",
+  UNIFORME: "Uniforme", MAQUINARIO: "Maquinário", ESCRITORIO: "Escritório", OUTROS: "Outros",
 };
 function departmentLabel(dep: string | null): string {
   if (!dep) return "";
@@ -153,6 +162,7 @@ const DEPARTMENT_BADGE: Record<string, string> = {
   EPI: "bg-amber-100 text-amber-700",
   UNIFORME: "bg-purple-100 text-purple-700",
   MAQUINARIO: "bg-orange-100 text-orange-700",
+  ESCRITORIO: "bg-purple-100 text-purple-700",
   OUTROS: "bg-gray-100 text-gray-700",
   // Departamentos legados da planilha (compras antigas continuam exibindo o rótulo)
   "MANUTENÇÃO": "bg-orange-100 text-orange-700",
@@ -436,9 +446,9 @@ export default function SolicitacoesPage() {
       if (updErr) throw updErr;
 
       // 3) Lança no destino escolhido do Almoxarifado (não-fatal: a compra já
-      // foi salva). "OUTROS" = não lança em estoque nenhum.
+      // foi salva). Escritório/Outros = só registra, não lança em estoque nenhum.
       let stockMsg = "";
-      if (spec.dest !== "OUTROS") {
+      if (destStocks(spec.dest)) {
         try {
           const r = await storeInWarehouse(spec.dest, {
             name: req.tool_name, quantity: qty,
@@ -698,7 +708,7 @@ export default function SolicitacoesPage() {
         }
         // Lança no destino escolhido do Almoxarifado, se houver. Falha aqui é
         // não-fatal: a compra já foi salva, só avisamos.
-        if (stock && stock.dest !== "OUTROS") {
+        if (stock && destStocks(stock.dest)) {
           try {
             const r = await storeInWarehouse(stock.dest, {
               name: data.description || "",
@@ -729,7 +739,7 @@ export default function SolicitacoesPage() {
   // card) — agora pode cair em qualquer setor (Estoque/Rancho/EPI/Uniforme/Maquinário).
   async function handleStoreInWarehouse(spec: DestSpec) {
     if (!stockRequest) return;
-    if (spec.dest === "OUTROS") { setStockRequest(null); return; }
+    if (!destStocks(spec.dest)) { setStockRequest(null); return; }
     setSaving(true);
     setSaveError(null);
     setSaveOk(null);
@@ -1836,9 +1846,11 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
         </p>
       )}
 
-      {stocking && value.dest === "OUTROS" && (
+      {stocking && !destStocks(value.dest) && (
         <p className="text-xs text-text-light bg-gray-50 border border-border rounded-lg p-3">
-          Não lança no Almoxarifado — só registra a compra.
+          {value.dest === "ESCRITORIO"
+            ? "🏢 Compra de escritório — só registra a compra, não lança no Almoxarifado."
+            : "Não lança no Almoxarifado — só registra a compra."}
         </p>
       )}
 
