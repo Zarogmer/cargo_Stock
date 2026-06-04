@@ -45,6 +45,7 @@ interface Schedule {
   hour: number;
   minute: number;
   enabled: boolean;
+  sort_order: number;
   next_run_at: string | null;
   last_run_at: string | null;
   last_status: string | null;
@@ -412,6 +413,28 @@ export default function MensagensPage() {
       loadSchedules();
     } catch (err) {
       setSchedMsg({ kind: "err", text: (err as Error).message });
+    }
+  }
+
+  // Move um agendamento pra cima (-1) ou pra baixo (+1) na sequência de disparo.
+  // Atualiza a ordem na hora (otimista) e persiste; em erro, recarrega do servidor.
+  async function moveSchedule(index: number, dir: -1 | 1) {
+    const target = index + dir;
+    if (target < 0 || target >= schedules.length) return;
+    const next = [...schedules];
+    [next[index], next[target]] = [next[target], next[index]];
+    setSchedules(next);
+    setSchedMsg(null);
+    try {
+      const res = await fetch("/api/whatsapp/scheduled/reorder", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: next.map((s) => s.id) }),
+      });
+      if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
+    } catch (err) {
+      setSchedMsg({ kind: "err", text: `Não consegui salvar a ordem: ${(err as Error).message}` });
+      loadSchedules();
     }
   }
 
@@ -845,9 +868,37 @@ export default function MensagensPage() {
         ) : schedules.length === 0 ? (
           <p className="text-sm text-text-light">Nenhum agendamento ainda.</p>
         ) : (
-          <ul className="divide-y divide-border border border-border rounded-lg">
-            {schedules.map((s) => (
+          <>
+            {schedules.length > 1 && (
+              <p className="text-[11px] text-text-light mb-2">
+                Quando vários agendamentos caem no mesmo horário, eles são enviados de cima pra baixo — use ↑/↓ pra ordenar.
+              </p>
+            )}
+            <ul className="divide-y divide-border border border-border rounded-lg">
+            {schedules.map((s, index) => (
               <li key={s.id} className={`flex items-start gap-3 px-3 py-2.5 ${editingId === s.id ? "bg-indigo-50" : ""}`}>
+                <div className="flex flex-col gap-0.5 shrink-0 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => moveSchedule(index, -1)}
+                    disabled={index === 0}
+                    title="Subir na sequência de disparo"
+                    aria-label="Subir"
+                    className="w-5 h-5 inline-flex items-center justify-center rounded text-gray-500 hover:bg-gray-200 disabled:opacity-25 disabled:cursor-not-allowed text-xs leading-none"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveSchedule(index, 1)}
+                    disabled={index === schedules.length - 1}
+                    title="Descer na sequência de disparo"
+                    aria-label="Descer"
+                    className="w-5 h-5 inline-flex items-center justify-center rounded text-gray-500 hover:bg-gray-200 disabled:opacity-25 disabled:cursor-not-allowed text-xs leading-none"
+                  >
+                    ↓
+                  </button>
+                </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">
                     👥 {s.group_label || s.group_jid.replace("@g.us", "")}
@@ -904,7 +955,8 @@ export default function MensagensPage() {
                 </div>
               </li>
             ))}
-          </ul>
+            </ul>
+          </>
         )}
 
         <form ref={schedFormRef} onSubmit={saveSchedule} className="border-t border-border pt-4 space-y-3">

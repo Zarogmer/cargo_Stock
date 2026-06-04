@@ -738,6 +738,7 @@ model ScheduledMessage {
   hour        Int // 0-23 horário local (America/Sao_Paulo)
   minute      Int // 0-59 horário local
   enabled     Boolean              @default(true)
+  sort_order  Int                  @default(0) // ordem de disparo quando vários caem no mesmo horário (menor = primeiro)
   next_run_at DateTime?            @db.Timestamptz() // próximo disparo em UTC (null quando desabilitado)
   last_run_at DateTime?            @db.Timestamptz()
   last_status String? // "ok" | "error: ..."

@@ -127,9 +127,12 @@ export async function runDueScheduledMessages(): Promise<{ claimed: number; sent
   // Uma due por vez (claim atômico). Limite de segurança pra nunca loopar
   // infinito caso algo recompute next_run_at no passado.
   for (let i = 0; i < 100; i++) {
+    // Entre as vencidas, dispara primeiro a de menor next_run_at; havendo
+    // empate (várias no mesmo horário), respeita sort_order (sequência que o
+    // usuário definiu) e, por fim, created_at pra ordem estável.
     const due = await prisma.scheduledMessage.findFirst({
       where: { enabled: true, next_run_at: { not: null, lte: now } },
-      orderBy: { next_run_at: "asc" },
+      orderBy: [{ next_run_at: "asc" }, { sort_order: "asc" }, { created_at: "asc" }],
     });
     if (!due || !due.next_run_at) break;
 
