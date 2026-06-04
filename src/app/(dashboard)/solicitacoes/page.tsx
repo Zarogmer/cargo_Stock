@@ -760,7 +760,18 @@ export default function SolicitacoesPage() {
                 };
                 const cfg = statusConfig[req.status] || statusConfig.PENDENTE;
                 return (
-                  <div key={req.id} className="bg-card border border-border rounded-xl p-4 hover:shadow-sm transition">
+                  <div
+                    key={req.id}
+                    onClick={canEditRequests ? (e) => {
+                      // Clicar no card = editar. Ignora cliques nos botões/links
+                      // internos (imagem, ver produto, Aprovar, Armazenar, editar,
+                      // excluir) — eles têm ação própria e não devem abrir a edição.
+                      if ((e.target as HTMLElement).closest("button, a")) return;
+                      setEditRequest(req);
+                      setShowRequestForm(true);
+                    } : undefined}
+                    className={`bg-card border border-border rounded-xl p-4 hover:shadow-sm transition ${canEditRequests ? "cursor-pointer" : ""}`}
+                  >
                     <div className="flex items-start justify-between gap-3">
                       {req.image_url && (
                         <button
