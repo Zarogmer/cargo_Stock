@@ -39,6 +39,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Campos 'to' e 'text' são obrigatórios" }, { status: 400 });
   }
 
+  // Cadeado da aba Conversas: recusa envio manual pra conversas travadas. `to`
+  // pode ser o JID (grupo) ou só o número (DM) — cobre as duas formas.
+  const lockedCandidates = to.includes("@") ? [to] : [to, `${to}@s.whatsapp.net`, `${to}@lid`];
+  const locked = await prisma.lockedConversation.findFirst({
+    where: { remote_jid: { in: lockedCandidates } },
+    select: { remote_jid: true },
+  });
+  if (locked) {
+    return NextResponse.json({ error: "Conversa bloqueada para envio (cadeado ativo). Destrave na aba Conversas pra mandar mensagem." }, { status: 423 });
+  }
+
   const isGroup = to.endsWith("@g.us");
 
   if (isGroup) {

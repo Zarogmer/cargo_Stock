@@ -303,6 +303,9 @@ function writeSeenMap(map: Record<string, number>) {
 export default function ConversasPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loadingConv, setLoadingConv] = useState(true);
+  // Conversas travadas pra envio manual (cadeado). Set de remote_jid.
+  const [lockedJids, setLockedJids] = useState<Set<string>>(new Set());
+  const [togglingLock, setTogglingLock] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedJid, setSelectedJid] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -462,6 +465,48 @@ export default function ConversasPage() {
   }, []);
 
   useEffect(() => { loadLidAliases(); }, [loadLidAliases]);
+
+  // Conversas travadas (cadeado) — carregadas uma vez; atualizadas no toggle.
+  const loadLocked = useCallback(async () => {
+    try {
+      const r = await fetch("/api/whatsapp/locked");
+      if (r.ok) {
+        const b = await r.json();
+        setLockedJids(new Set((b.jids || []) as string[]));
+      }
+    } catch {
+      // silent — sem a lista, nada fica travado (o backend ainda barra)
+    }
+  }, []);
+
+  useEffect(() => { loadLocked(); }, [loadLocked]);
+
+  // Trava/destrava a conversa pra envio manual (otimista + persiste no banco).
+  async function toggleLock(jid: string) {
+    const next = !lockedJids.has(jid);
+    setTogglingLock(true);
+    setLockedJids((prev) => {
+      const s = new Set(prev);
+      if (next) s.add(jid); else s.delete(jid);
+      return s;
+    });
+    try {
+      const res = await fetch("/api/whatsapp/locked", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jid, locked: next }),
+      });
+      if (!res.ok) throw new Error("falha");
+    } catch {
+      setLockedJids((prev) => {
+        const s = new Set(prev);
+        if (next) s.delete(jid); else s.add(jid);
+        return s;
+      });
+    } finally {
+      setTogglingLock(false);
+    }
+  }
 
   useEffect(() => {
     if (!selectedJid) return;
@@ -628,17 +673,18 @@ export default function ConversasPage() {
   async function handleReply(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedJid || !reply.trim()) return;
-    if (selectedJid.endsWith("@g.us")) {
-      setSendErr("Resposta para grupo ainda não suportada — abra a Mensagens e use número direto se precisar.");
+    if (lockedJids.has(selectedJid)) {
+      setSendErr("Conversa bloqueada para envio. Toque no cadeado pra destravar.");
       return;
     }
     setSending(true); setSendErr(null);
     try {
-      const to = jidToNumber(selectedJid);
+      // Grupo usa o JID completo (@g.us); DM (pessoa) usa só o número.
+      const to = selectedJid.endsWith("@g.us") ? selectedJid : jidToNumber(selectedJid);
       const res = await fetch("/api/whatsapp/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to, text: reply }),
+        body: JSON.stringify({ to, text: reply, ...(selectedConv?.is_group && selectedConv.push_name ? { label: selectedConv.push_name } : {}) }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
@@ -720,6 +766,7 @@ export default function ConversasPage() {
                         <div className="flex items-baseline justify-between gap-2">
                           <span className={`text-sm truncate flex items-center gap-1 ${unread ? "font-bold text-text" : "font-medium"}`}>
                             {c.is_group && <span className="text-xs">👥</span>}
+                            {lockedJids.has(c.remote_jid) && <span className="text-xs" title="Bloqueada para envio">🔒</span>}
                             {displayName(c)}
                           </span>
                           <span className={`text-[10px] shrink-0 ${unread ? "text-emerald-600 font-semibold" : "text-text-light"}`}>
@@ -786,6 +833,22 @@ export default function ConversasPage() {
                 <span className="text-xs text-text-light shrink-0 hidden sm:inline">
                   {messages.length} {messages.length === 1 ? "mensagem" : "mensagens"}
                 </span>
+                {selectedConv && (
+                  <button
+                    type="button"
+                    onClick={() => toggleLock(selectedJid)}
+                    disabled={togglingLock}
+                    className={`shrink-0 p-1.5 rounded transition disabled:opacity-50 ${
+                      lockedJids.has(selectedJid)
+                        ? "text-red-600 bg-red-50 hover:bg-red-100"
+                        : "text-text-light hover:text-primary hover:bg-primary/10"
+                    }`}
+                    title={lockedJids.has(selectedJid) ? "Conversa bloqueada para envio — toque pra destravar" : "Bloquear envio nesta conversa"}
+                    aria-label={lockedJids.has(selectedJid) ? "Destravar envio" : "Bloquear envio"}
+                  >
+                    <span className="text-base leading-none">{lockedJids.has(selectedJid) ? "🔒" : "🔓"}</span>
+                  </button>
+                )}
                 {selectedConv?.is_group && (
                   <button
                     type="button"
@@ -954,11 +1017,11 @@ export default function ConversasPage() {
                   type="text"
                   value={reply}
                   onChange={(e) => setReply(e.target.value)}
-                  placeholder="Escreva uma resposta..."
-                  disabled={sending}
-                  className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+                  placeholder={!!selectedJid && lockedJids.has(selectedJid) ? "🔒 Conversa bloqueada para envio" : "Escreva uma resposta..."}
+                  disabled={sending || (!!selectedJid && lockedJids.has(selectedJid))}
+                  className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none disabled:bg-gray-50 disabled:text-text-light"
                 />
-                <Button type="submit" disabled={sending || !reply.trim()}>
+                <Button type="submit" disabled={sending || !reply.trim() || (!!selectedJid && lockedJids.has(selectedJid))}>
                   {sending ? "..." : "Enviar"}
                 </Button>
               </form>

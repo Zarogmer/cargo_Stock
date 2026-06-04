@@ -306,6 +306,17 @@ model AppSetting {
   @@map("app_settings")
 }
 
+// Conversas (DM ou grupo) travadas pra NÃO permitir envio manual de mensagem —
+// o "cadeado" por conversa na aba Conversas. Presença = bloqueada. Não afeta
+// boletins agendados (o scheduler envia pela função direta, não pela rota /send).
+model LockedConversation {
+  remote_jid String   @id
+  locked_by  String?
+  locked_at  DateTime @default(now()) @db.Timestamptz()
+
+  @@map("locked_conversations")
+}
+
 // ── Mission Standard Items ───────────────────────────────────────────────────
 
 model MissionStandardItem {
