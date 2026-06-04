@@ -32,6 +32,10 @@ interface Message {
   media_filename: string | null;
   timestamp_ms: string;
   created_at: string;
+  // Só preenchidos quando message_type === "reactionMessage": o emoji da reação
+  // e o message_id da mensagem que foi reagida (resolvido pelo backend).
+  reacted_to_id?: string | null;
+  reaction_emoji?: string | null;
 }
 
 interface ShipOpt {
@@ -153,6 +157,11 @@ function previewLine(c: Conversation): string {
   // mostra direto, sem o prefixo "Você:" (não é fala de ninguém).
   if (c.last_message_type === "groupParticipantUpdate" || c.last_message_type === "systemNotice") {
     return c.last_text || "Evento do grupo";
+  }
+  // Reação como última mensagem (só quando não há nenhuma outra na conversa).
+  if (c.last_message_type === "reactionMessage") {
+    const emoji = (c.last_text || "").trim();
+    return emoji ? `Reagiu com ${emoji}` : "Reagiu a uma mensagem";
   }
   if (c.last_text) return `${prefix}${c.last_text}`;
   const typeLabels: Record<string, string> = {
@@ -533,10 +542,44 @@ export default function ConversasPage() {
 
   const selectedConv = conversations.find((c) => c.remote_jid === selectedJid) || null;
 
+  // Reações não são bolhas próprias: a gente as separa e pendura na mensagem
+  // reagida. `visibleMessages` é o que vira bolha; `reactionsByTarget` mapeia
+  // message_id -> emojis agregados.
+  const visibleMessages = useMemo(
+    () => messages.filter((m) => m.message_type !== "reactionMessage"),
+    [messages],
+  );
+
+  // Estado atual das reações por mensagem: pra cada (mensagem alvo, autor),
+  // vale a ÚLTIMA reação (trocar/remover emoji manda um novo reactionMessage).
+  // No fim, conta quantos autores usaram cada emoji.
+  const reactionsByTarget = useMemo(() => {
+    const latestByActor = new Map<string, Map<string, { emoji: string; ts: number }>>();
+    for (const m of messages) {
+      if (m.message_type !== "reactionMessage" || !m.reacted_to_id) continue;
+      const actor = m.from_me ? "__me__" : (m.push_name || "?");
+      const ts = Number(m.timestamp_ms) || 0;
+      let inner = latestByActor.get(m.reacted_to_id);
+      if (!inner) { inner = new Map(); latestByActor.set(m.reacted_to_id, inner); }
+      const prev = inner.get(actor);
+      if (!prev || ts >= prev.ts) inner.set(actor, { emoji: (m.reaction_emoji || "").trim(), ts });
+    }
+    const out = new Map<string, Array<{ emoji: string; count: number }>>();
+    for (const [target, inner] of latestByActor) {
+      const counts = new Map<string, number>();
+      for (const { emoji } of inner.values()) {
+        if (!emoji) continue; // emoji vazio = reação removida
+        counts.set(emoji, (counts.get(emoji) || 0) + 1);
+      }
+      if (counts.size) out.set(target, Array.from(counts, ([emoji, count]) => ({ emoji, count })));
+    }
+    return out;
+  }, [messages]);
+
   // Índice da 1ª mensagem recebida após o ponto de leitura — marca o divisor
   // "Mensagens novas" no thread. -1 = sem novas (ou conversa nunca aberta).
   const firstUnreadIdx = unreadBoundaryMs > 0
-    ? messages.findIndex((m) => !m.from_me && Number(m.timestamp_ms) > unreadBoundaryMs)
+    ? visibleMessages.findIndex((m) => !m.from_me && Number(m.timestamp_ms) > unreadBoundaryMs)
     : -1;
 
   async function handleDelete() {
@@ -785,10 +828,10 @@ export default function ConversasPage() {
                 ) : messages.length === 0 ? (
                   <p className="text-sm text-text-light text-center">Sem mensagens nessa conversa ainda.</p>
                 ) : (
-                  messages.map((m, idx) => {
+                  visibleMessages.map((m, idx) => {
                     // Separador de dia (Hoje / Ontem / data) quando vira o dia
                     // no fuso BR — estilo WhatsApp.
-                    const prev = idx > 0 ? messages[idx - 1] : null;
+                    const prev = idx > 0 ? visibleMessages[idx - 1] : null;
                     const showDay = !prev || brDayKey(prev.timestamp_ms) !== brDayKey(m.timestamp_ms);
                     const daySep = showDay ? (
                       <div className="flex justify-center my-2">
@@ -824,6 +867,8 @@ export default function ConversasPage() {
                     const sender = !m.from_me && selectedConv?.is_group
                       ? resolveSender(m.push_name, lidAliases)
                       : { label: null as string | null, lid: null as string | null };
+                    // Reações penduradas nesta mensagem (agregadas por emoji).
+                    const reactions = m.message_id ? reactionsByTarget.get(m.message_id) : undefined;
                     const bubble = isSystem ? (
                       <div className="flex justify-center my-1">
                         <div
@@ -842,7 +887,7 @@ export default function ConversasPage() {
                         </div>
                       </div>
                     ) : (
-                      <div className={`flex ${m.from_me ? "justify-end" : "justify-start"}`}>
+                      <div className={`flex flex-col ${m.from_me ? "items-end" : "items-start"}`}>
                         <div className={`max-w-[70%] rounded-lg px-3 py-2 shadow-sm ${
                           m.from_me ? "bg-[#d9fdd3] text-gray-900" : "bg-white text-gray-900"
                         }`}>
@@ -870,6 +915,19 @@ export default function ConversasPage() {
                             {formatMsgTime(m.timestamp_ms)}
                           </p>
                         </div>
+                        {reactions && reactions.length > 0 && (
+                          <div className={`flex flex-wrap gap-1 -mt-1.5 ${m.from_me ? "mr-2" : "ml-2"}`}>
+                            {reactions.map((r) => (
+                              <span
+                                key={r.emoji}
+                                className="inline-flex items-center gap-0.5 bg-white border border-border rounded-full px-1.5 py-0.5 text-[11px] leading-none shadow-sm"
+                              >
+                                <span>{r.emoji}</span>
+                                {r.count > 1 && <span className="text-gray-500 text-[10px]">{r.count}</span>}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
 
@@ -996,6 +1054,11 @@ function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | nul
   const [confirmingLeave, setConfirmingLeave] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [leaveErr, setLeaveErr] = useState<string | null>(null);
+  // "Editar nome do grupo": edição inline do subject (renomeia no WhatsApp).
+  const [editingSubject, setEditingSubject] = useState(false);
+  const [subjectDraft, setSubjectDraft] = useState("");
+  const [savingSubject, setSavingSubject] = useState(false);
+  const [subjectErr, setSubjectErr] = useState<string | null>(null);
 
   const loadInfo = useCallback(async () => {
     if (!jid) return;
@@ -1019,8 +1082,41 @@ function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | nul
     setConfirmRemovePhone(null); setRemoving(false); setRemoveErr(null);
     setPromotingPhone(null); setPromoteErr(null);
     setConfirmingLeave(false); setLeaving(false); setLeaveErr(null);
+    setEditingSubject(false); setSubjectDraft(""); setSavingSubject(false); setSubjectErr(null);
     loadInfo();
   }, [jid, loadInfo]);
+
+  function startEditSubject() {
+    setSubjectDraft(info?.subject || "");
+    setSubjectErr(null);
+    setEditingSubject(true);
+  }
+
+  // Renomeia o grupo no WhatsApp. Recarrega o painel (novo subject) e avisa o
+  // pai (onChanged) pra a lista de Conversas atualizar o nome exibido.
+  async function saveSubject() {
+    if (!jid) return;
+    const next = subjectDraft.trim();
+    if (!next) { setSubjectErr("Informe o nome do grupo."); return; }
+    if (next === (info?.subject || "")) { setEditingSubject(false); return; }
+    setSavingSubject(true); setSubjectErr(null);
+    try {
+      const res = await fetch(`/api/whatsapp/groups/${encodeURIComponent(jid)}/update-subject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subject: next }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setEditingSubject(false);
+      await loadInfo();
+      onChanged();
+    } catch (e) {
+      setSubjectErr((e as Error).message);
+    } finally {
+      setSavingSubject(false);
+    }
+  }
 
   // Remove um participante (terceiro) do grupo. Recarrega o painel na hora pra
   // refletir a saída; a pílula "➖ saiu do grupo" no thread vem pelo webhook.
@@ -1136,22 +1232,59 @@ function GroupInfoModal({ jid, onClose, onLeft, onChanged }: { jid: string | nul
           {/* Header card */}
           <div className="bg-gray-50 border border-border rounded-xl p-4">
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="text-xs uppercase tracking-wider text-text-light font-semibold">Nome do grupo</p>
-                <p className="font-semibold text-text mt-0.5 truncate">{info.subject || "(sem nome)"}</p>
+                {editingSubject ? (
+                  <div className="mt-1 space-y-2">
+                    <input
+                      type="text"
+                      value={subjectDraft}
+                      onChange={(e) => setSubjectDraft(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveSubject(); } }}
+                      maxLength={100}
+                      autoFocus
+                      placeholder="Nome do grupo"
+                      className="w-full px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button type="button" size="sm" onClick={saveSubject} disabled={savingSubject}>
+                        {savingSubject ? "Salvando..." : "Salvar"}
+                      </Button>
+                      <Button type="button" size="sm" variant="secondary" onClick={() => setEditingSubject(false)} disabled={savingSubject}>
+                        Cancelar
+                      </Button>
+                    </div>
+                    {subjectErr && <p className="text-xs text-red-700">{subjectErr}</p>}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 mt-0.5 min-w-0">
+                    <p className="font-semibold text-text truncate">{info.subject || "(sem nome)"}</p>
+                    <button
+                      type="button"
+                      onClick={startEditSubject}
+                      title="Editar nome do grupo"
+                      aria-label="Editar nome do grupo"
+                      className="shrink-0 text-text-light hover:text-primary transition text-sm"
+                    >
+                      ✎
+                    </button>
+                  </div>
+                )}
               </div>
-              <button
-                type="button"
-                onClick={loadInfo}
-                disabled={loading}
-                title="Atualizar"
-                className="shrink-0 inline-flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-border bg-white hover:bg-gray-100 transition disabled:opacity-50"
-              >
-                <svg className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v6h6M20 20v-6h-6M4 10a8 8 0 0114.93-3M20 14a8 8 0 01-14.93 3" />
-                </svg>
-                {loading ? "Atualizando..." : "Atualizar"}
-              </button>
+              {!editingSubject && (
+                <button
+                  type="button"
+                  onClick={loadInfo}
+                  disabled={loading}
+                  title="Atualizar"
+                  className="shrink-0 inline-flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-border bg-white hover:bg-gray-100 transition disabled:opacity-50"
+                >
+                  <svg className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v6h6M20 20v-6h-6M4 10a8 8 0 0114.93-3M20 14a8 8 0 01-14.93 3" />
+                  </svg>
+                  {loading ? "Atualizando..." : "Atualizar"}
+                </button>
+              )}
             </div>
             {info.description && (
               <>

@@ -295,6 +295,21 @@ export async function setWhatsappGroupDescription(groupJid: string, description:
   );
 }
 
+// Renomeia um grupo — muda o "subject" (o nome que aparece no WhatsApp). Requer
+// que o número conectado seja admin/dono do grupo; senão o WhatsApp recusa.
+export async function updateWhatsappGroupSubject(groupJid: string, subject: string): Promise<unknown> {
+  const cfg = readConfig();
+  if (!groupJid.endsWith("@g.us")) throw new Error("JID de grupo inválido.");
+  const trimmed = subject.trim();
+  if (!trimmed) throw new Error("Nome do grupo é obrigatório.");
+  const token = await getInstanceToken();
+  return evolutionFetch(
+    `/group/updateGroupSubject/${encodeURIComponent(cfg.instance)}?groupJid=${encodeURIComponent(groupJid)}`,
+    { method: "POST", body: JSON.stringify({ subject: trimmed }) },
+    token,
+  );
+}
+
 // Promote (or demote) participants in a group. `action` is "promote" to give
 // admin rights, "demote" to remove them. Participants are normalized BR phone
 // numbers — Evolution accepts the same format used when creating the group.

@@ -46,6 +46,9 @@ export async function GET() {
         ORDER BY
           remote_jid,
           (from_me = true AND message_type = 'systemNotice') ASC,
+          -- Reações não viram o "preview" da conversa (igual ao WhatsApp): só
+          -- caem aqui se não houver nenhuma outra mensagem no grupo.
+          (message_type = 'reactionMessage') ASC,
           timestamp_ms DESC
       ),
       contact_name AS (
