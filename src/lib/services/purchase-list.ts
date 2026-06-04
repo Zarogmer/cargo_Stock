@@ -3,10 +3,9 @@
 // Fonte ÚNICA — usada pela aba Compras, pela seção do Dashboard (via
 // /api/almoxarifado/compras) e pelo template de WhatsApp (buildComprasMessage).
 //
-// Regra de reposição (definida com o cliente):
-//   • Estoque: repõe até a Qtd Padrão (ou, se não houver padrão, até o mínimo).
-//   • EPI e Uniforme: repõem até o mínimo (não têm padrão).
-//   • min_quantity = 0 significa "sem mínimo" → o item nunca entra na lista.
+// Regra de reposição: todo item abaixo do mínimo entra na lista, com o quanto
+// comprar pra voltar ao mínimo (mesma conta nos três inventários).
+// min_quantity = 0 significa "sem mínimo" → o item nunca entra na lista.
 
 import { prisma } from "@/lib/prisma";
 import { unitSuffix } from "@/lib/utils";
@@ -32,7 +31,7 @@ export async function getPurchaseList(): Promise<PurchaseItem[]> {
   const [stock, epis, uniforms] = await Promise.all([
     prisma.stockItem.findMany({
       where: { team: "GALPAO", min_quantity: { gt: 0 } },
-      select: { id: true, name: true, location: true, quantity: true, default_quantity: true, min_quantity: true, unit: true },
+      select: { id: true, name: true, location: true, quantity: true, min_quantity: true, unit: true },
     }),
     prisma.epi.findMany({
       where: { min_quantity: { gt: 0 } },
@@ -48,10 +47,7 @@ export async function getPurchaseList(): Promise<PurchaseItem[]> {
 
   for (const s of stock) {
     if (s.quantity >= s.min_quantity) continue; // dentro do mínimo
-    // Repõe até a Qtd Padrão; nunca abaixo do mínimo (caso o padrão seja menor
-    // ou não esteja definido, usa o mínimo como alvo).
-    const target = Math.max(s.default_quantity, s.min_quantity);
-    const buy = round3(target - s.quantity);
+    const buy = round3(s.min_quantity - s.quantity);
     if (buy <= 0) continue;
     out.push({
       kind: "ESTOQUE", id: s.id, name: s.name, detail: s.location || null,

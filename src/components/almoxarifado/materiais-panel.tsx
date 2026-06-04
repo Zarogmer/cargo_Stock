@@ -100,14 +100,13 @@ export function MateriaisPanel() {
     return matchesSearch && matchesGroup;
   });
 
-  async function handleSave(formData: { name: string; location: string; quantity: number; default_quantity: number; min_quantity: number }) {
+  async function handleSave(formData: { name: string; location: string; quantity: number; min_quantity: number }) {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
     const payload = {
       name: formData.name,
       location: formData.location,
       quantity: formData.quantity,
-      default_quantity: formData.default_quantity,
       category: "OUTROS",
       team: TEAM,
       min_quantity: formData.min_quantity,
@@ -184,13 +183,10 @@ export function MateriaisPanel() {
       key: "quantity",
       label: "Qtd",
       render: (i: StockItem) => {
-        const def = i.default_quantity || 0;
         const belowMin = i.min_quantity > 0 && i.quantity < i.min_quantity;
         const isEmpty = i.quantity <= 0;
-        const isLow = def > 0 && i.quantity < def * 0.5;
-        const cls = isEmpty || belowMin ? "text-danger" : isLow ? "text-amber-500" : "text-success";
         return (
-          <span className={`font-semibold ${cls}`} title={belowMin ? `Abaixo do mínimo (${formatQty(i.min_quantity)})` : undefined}>
+          <span className={`font-semibold ${isEmpty || belowMin ? "text-danger" : ""}`} title={belowMin ? `Abaixo do mínimo (${formatQty(i.min_quantity)})` : undefined}>
             {formatQty(i.quantity)}
           </span>
         );
@@ -324,7 +320,7 @@ export function MateriaisPanel() {
 function MaterialFormModal({ open, onClose, onSave, item, groups, saving }: {
   open: boolean;
   onClose: () => void;
-  onSave: (data: { name: string; location: string; quantity: number; default_quantity: number; min_quantity: number }) => void;
+  onSave: (data: { name: string; location: string; quantity: number; min_quantity: number }) => void;
   item: StockItem | null;
   groups: string[];
   saving: boolean;
@@ -333,7 +329,6 @@ function MaterialFormModal({ open, onClose, onSave, item, groups, saving }: {
   const [group, setGroup] = useState("");
   // Strings para aceitar vírgula (ex.: "1,5"); convertidas no submit.
   const [quantity, setQuantity] = useState("");
-  const [defaultQuantity, setDefaultQuantity] = useState("");
   const [minQuantity, setMinQuantity] = useState("");
 
   useEffect(() => {
@@ -341,13 +336,11 @@ function MaterialFormModal({ open, onClose, onSave, item, groups, saving }: {
       setName(item.name);
       setGroup(item.location || "");
       setQuantity(formatQty(item.quantity));
-      setDefaultQuantity(item.default_quantity ? formatQty(item.default_quantity) : "");
       setMinQuantity(item.min_quantity ? formatQty(item.min_quantity) : "");
     } else {
       setName("");
       setGroup("");
       setQuantity("");
-      setDefaultQuantity("");
       setMinQuantity("");
     }
   }, [item, open]);
@@ -358,8 +351,8 @@ function MaterialFormModal({ open, onClose, onSave, item, groups, saving }: {
       name,
       location: group.trim() || "Outros",
       quantity: parseDecimalBR(quantity),
-      default_quantity: parseDecimalBR(defaultQuantity),
-      min_quantity: parseDecimalBR(minQuantity),
+      // Mínimo é inteiro (coluna Int); arredonda caso digitem decimal.
+      min_quantity: Math.round(parseDecimalBR(minQuantity)),
     });
   }
 
@@ -386,18 +379,14 @@ function MaterialFormModal({ open, onClose, onSave, item, groups, saving }: {
             {groups.map((g) => <option key={g} value={g} />)}
           </datalist>
         </div>
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-text mb-1">Qtd Padrão</label>
-            <input type="text" inputMode="decimal" value={defaultQuantity} onChange={(e) => setDefaultQuantity(e.target.value)} placeholder="Ex: 10" className={inputCls} />
-          </div>
+        <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-text mb-1">Qtd Atual</label>
             <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 8" className={inputCls} />
           </div>
           <div>
-            <label className="block text-sm font-medium text-text mb-1">Qtd Mínima</label>
-            <input type="text" inputMode="decimal" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} placeholder="opcional" className={inputCls} />
+            <label className="block text-sm font-medium text-text mb-1">Qtd Mínima <span className="text-text-light font-normal">(opcional)</span></label>
+            <input type="text" inputMode="numeric" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} placeholder="0 = sem mínimo" className={inputCls} />
           </div>
         </div>
         <div className="flex gap-3 justify-end pt-2">
