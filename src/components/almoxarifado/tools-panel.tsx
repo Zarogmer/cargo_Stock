@@ -100,6 +100,8 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
 
   // Código derivado do nome (prefixo de iniciais + sequência), por item.
   const codeMap = useMemo(() => buildCodeMap(tools, (t) => t.id, (t) => t.name), [tools]);
+  // Máquinas prontas pra uso (status Disponível) — base do alerta de mínimo.
+  const availableCount = useMemo(() => tools.filter((t) => t.status === "DISPONIVEL").length, [tools]);
 
   const columns = [
     { key: "name", label: "Nome", render: (t: Tool) => <span className="font-medium">{t.name}</span> },
@@ -142,6 +144,11 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
 
   return (
     <>
+      {assetType === "MAQUINARIO" && (
+        <div className="mb-4">
+          <MachineMinAlert available={availableCount} canEdit={canEdit} />
+        </div>
+      )}
       <DataTable columns={columns} data={filtered} loading={loading}
         keyExtractor={(t) => t.id} searchValue={search} onSearchChange={setSearch}
         mobileCards
@@ -217,5 +224,87 @@ function TeamActionModal({ open, mode, toolName, onClose, onConfirm, saving }: {
         <div className="flex gap-3 justify-end pt-2"><Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? "Registrando..." : "Confirmar"}</Button></div>
       </form>
     </Modal>
+  );
+}
+
+// Aviso de mínimo de máquinas disponíveis. Lê/grava o número em app_settings
+// via /api/almoxarifado/maquinario-min. Fica vermelho quando as disponíveis
+// (status DISPONIVEL) caem abaixo do mínimo configurado.
+function MachineMinAlert({ available, canEdit }: { available: number; canEdit: boolean }) {
+  const [min, setMin] = useState(0);
+  const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/almoxarifado/maquinario-min")
+      .then((r) => r.json())
+      .then((b) => { if (alive) setMin(Number(b.min) || 0); })
+      .catch(() => {})
+      .finally(() => { if (alive) setLoaded(true); });
+    return () => { alive = false; };
+  }, []);
+
+  async function save() {
+    const v = Math.max(0, Math.floor(Number(draft) || 0));
+    setSaving(true);
+    try {
+      const res = await fetch("/api/almoxarifado/maquinario-min", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ min: v }),
+      });
+      const b = await res.json();
+      if (res.ok) { setMin(Number(b.min) || 0); setEditing(false); }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!loaded) return null;
+  const below = min > 0 && available < min;
+
+  return (
+    <div className={`rounded-xl border p-3 flex items-center justify-between gap-3 flex-wrap ${below ? "bg-red-50 border-red-200" : "bg-card border-border"}`}>
+      <div className="text-sm">
+        {below ? (
+          <span className="text-red-700 font-medium">
+            ⚠️ Só {available} {available === 1 ? "máquina disponível" : "máquinas disponíveis"} — mínimo {min}.
+          </span>
+        ) : min > 0 ? (
+          <span className="text-text-light">
+            <strong className="text-text">{available}</strong> {available === 1 ? "disponível" : "disponíveis"} · mínimo {min} ✅
+          </span>
+        ) : (
+          <span className="text-text-light">
+            <strong className="text-text">{available}</strong> {available === 1 ? "disponível" : "disponíveis"} · sem mínimo definido
+          </span>
+        )}
+      </div>
+      {canEdit && (
+        editing ? (
+          <div className="flex items-center gap-2">
+            <input
+              type="number" min={0} value={draft} autoFocus
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(); } }}
+              className="w-20 px-2 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+            />
+            <Button size="sm" onClick={save} disabled={saving}>{saving ? "..." : "Salvar"}</Button>
+            <Button size="sm" variant="secondary" onClick={() => setEditing(false)} disabled={saving}>Cancelar</Button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => { setDraft(min ? String(min) : ""); setEditing(true); }}
+            className="text-xs px-2.5 py-1.5 rounded-lg border border-border bg-white hover:bg-gray-100 transition shrink-0"
+          >
+            {min > 0 ? "Editar mínimo" : "Definir mínimo"}
+          </button>
+        )
+      )}
+    </div>
   );
 }

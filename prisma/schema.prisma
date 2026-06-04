@@ -294,6 +294,18 @@ model ToolMovement {
   @@map("tool_movements")
 }
 
+// Configurações simples chave/valor do sistema. Primeiro uso: o mínimo de
+// máquinas que devem estar disponíveis no Maquinário (key="maquinario_min_disponivel").
+// value é texto livre — quem lê interpreta (número, JSON, etc.).
+model AppSetting {
+  key        String   @id
+  value      String
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz()
+  updated_by String?
+
+  @@map("app_settings")
+}
+
 // ── Mission Standard Items ───────────────────────────────────────────────────
 
 model MissionStandardItem {
