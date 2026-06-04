@@ -19,7 +19,48 @@ interface EmployeeLite {
   status: string | null;
 }
 
-type Mode = "colaboradores" | "manual";
+interface GroupLite {
+  remote_jid: string;
+  push_name: string | null;
+}
+
+type Mode = "colaboradores" | "manual" | "grupo";
+
+// Templates de dados ao vivo que o usuário pode inserir no texto antes de enviar
+// pro grupo. Renderizados no servidor por /api/whatsapp/templates.
+type TemplateKind = "EPI" | "UNIFORME" | "PRONTIDAO";
+type ScheduleTemplate = TemplateKind | "CUSTOM";
+type ProntidaoTeam = "ALL" | "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3";
+
+interface Schedule {
+  id: string;
+  group_jid: string;
+  group_label: string | null;
+  template: ScheduleTemplate;
+  team: string | null;
+  header_text: string | null;
+  body_text: string | null;
+  frequency: "DAILY" | "WEEKLY";
+  weekday: number | null;
+  hour: number;
+  minute: number;
+  enabled: boolean;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_status: string | null;
+}
+
+interface SchedForm {
+  group_jid: string;
+  template: ScheduleTemplate;
+  team: ProntidaoTeam;
+  header_text: string;
+  body_text: string;
+  frequency: "DAILY" | "WEEKLY";
+  weekday: number;
+  hour: number;
+  minute: number;
+}
 
 interface SendResult {
   name: string;
@@ -27,6 +68,18 @@ interface SendResult {
   ok: boolean;
   error?: string;
 }
+
+const WEEKDAY_NAMES = [
+  "Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira",
+  "Quinta-feira", "Sexta-feira", "Sábado",
+];
+
+const TEMPLATE_LABELS: Record<ScheduleTemplate, string> = {
+  EPI: "Lista de EPIs",
+  UNIFORME: "Lista de uniformes",
+  PRONTIDAO: "Prontidão",
+  CUSTOM: "Mensagem personalizada",
+};
 
 export default function MensagensPage() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -48,6 +101,31 @@ export default function MensagensPage() {
   const [empSearch, setEmpSearch] = useState("");
   const [empTeam, setEmpTeam] = useState<string>("Todos");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  // Grupo mode
+  const [groups, setGroups] = useState<GroupLite[]>([]);
+  const [loadingGroups, setLoadingGroups] = useState(true);
+  const [groupSearch, setGroupSearch] = useState("");
+  const [selectedGroupJid, setSelectedGroupJid] = useState<string | null>(null);
+  const [prontidaoTeam, setProntidaoTeam] = useState<ProntidaoTeam>("ALL");
+  const [insertingTpl, setInsertingTpl] = useState<TemplateKind | null>(null);
+
+  // Agendamentos
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [loadingSchedules, setLoadingSchedules] = useState(true);
+  const [savingSched, setSavingSched] = useState(false);
+  const [schedMsg, setSchedMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [schedForm, setSchedForm] = useState<SchedForm>({
+    group_jid: "",
+    template: "EPI",
+    team: "ALL",
+    header_text: "",
+    body_text: "",
+    frequency: "WEEKLY",
+    weekday: 1,
+    hour: 8,
+    minute: 0,
+  });
 
   const loadStatus = useCallback(async () => {
     setLoadingStatus(true);
@@ -79,12 +157,46 @@ export default function MensagensPage() {
     }
   }, []);
 
+  const loadGroups = useCallback(async () => {
+    setLoadingGroups(true);
+    try {
+      const res = await fetch("/api/whatsapp/conversations");
+      const body = await res.json();
+      const convos = (body.conversations || []) as Array<{ remote_jid: string; push_name: string | null; is_group: boolean }>;
+      const onlyGroups = convos
+        .filter((c) => c.is_group)
+        .map((c) => ({ remote_jid: c.remote_jid, push_name: c.push_name }))
+        .sort((a, b) => (a.push_name || a.remote_jid).localeCompare(b.push_name || b.remote_jid, "pt-BR"));
+      setGroups(onlyGroups);
+    } catch (err) {
+      console.error("Erro ao carregar grupos:", err);
+    } finally {
+      setLoadingGroups(false);
+    }
+  }, []);
+
+  const loadSchedules = useCallback(async () => {
+    setLoadingSchedules(true);
+    try {
+      const res = await fetch("/api/whatsapp/scheduled");
+      if (!res.ok) { setSchedules([]); return; }
+      const body = await res.json();
+      setSchedules((body.schedules || []) as Schedule[]);
+    } catch (err) {
+      console.error("Erro ao carregar agendamentos:", err);
+    } finally {
+      setLoadingSchedules(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadStatus();
     loadEmployees();
+    loadGroups();
+    loadSchedules();
     const interval = setInterval(loadStatus, 10000);
     return () => clearInterval(interval);
-  }, [loadStatus, loadEmployees]);
+  }, [loadStatus, loadEmployees, loadGroups, loadSchedules]);
 
   const teams = useMemo(() => {
     const set = new Set<string>();
@@ -122,12 +234,138 @@ export default function MensagensPage() {
 
   const selectedCount = selectedIds.size;
 
-  async function sendOne(to: string, name: string): Promise<SendResult> {
+  const filteredGroups = useMemo(() => {
+    if (!groupSearch.trim()) return groups;
+    return groups.filter((g) => matchSearch(g.push_name || g.remote_jid, groupSearch));
+  }, [groups, groupSearch]);
+
+  const selectedGroup = useMemo(
+    () => groups.find((g) => g.remote_jid === selectedGroupJid) || null,
+    [groups, selectedGroupJid],
+  );
+
+  // Busca o texto do template no servidor (dados ao vivo) e anexa ao final do
+  // que já estiver escrito, separado por linha em branco.
+  async function insertTemplate(kind: TemplateKind) {
+    setInsertingTpl(kind);
+    setMessage(null);
+    try {
+      const params = new URLSearchParams({ kind });
+      if (kind === "PRONTIDAO") params.set("team", prontidaoTeam);
+      const res = await fetch(`/api/whatsapp/templates?${params.toString()}`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      const tpl = (body.text || "").trim();
+      if (tpl) setText((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n${tpl}` : tpl));
+    } catch (err) {
+      setMessage({ kind: "err", text: `Não consegui montar o template: ${(err as Error).message}` });
+    } finally {
+      setInsertingTpl(null);
+    }
+  }
+
+  function recurrenceLabel(s: { frequency: "DAILY" | "WEEKLY"; weekday: number | null; hour: number; minute: number }): string {
+    const time = `${String(s.hour).padStart(2, "0")}h${String(s.minute).padStart(2, "0")}`;
+    if (s.frequency === "DAILY") return `Todo dia às ${time}`;
+    return `${WEEKDAY_NAMES[s.weekday ?? 0]} às ${time}`;
+  }
+
+  function fmtBrDateTime(iso: string | null): string {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "—";
+    return new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
+    }).format(d);
+  }
+
+  function scheduleSummary(s: Schedule): string {
+    const tpl = TEMPLATE_LABELS[s.template];
+    if (s.template !== "PRONTIDAO") return tpl;
+    if (s.team && s.team !== "ALL") {
+      const label = s.team === "EQUIPE_1" ? "Equipe 1" : s.team === "EQUIPE_2" ? "Equipe 2" : "Equipe 3";
+      return `${tpl} (${label})`;
+    }
+    return `${tpl} (todas as equipes)`;
+  }
+
+  async function createSchedule(e: React.FormEvent) {
+    e.preventDefault();
+    setSchedMsg(null);
+    if (!schedForm.group_jid) {
+      setSchedMsg({ kind: "err", text: "Escolha um grupo pro agendamento." });
+      return;
+    }
+    if (schedForm.template === "CUSTOM" && !schedForm.body_text.trim()) {
+      setSchedMsg({ kind: "err", text: "A mensagem personalizada precisa de um texto." });
+      return;
+    }
+    setSavingSched(true);
+    try {
+      const grp = groups.find((g) => g.remote_jid === schedForm.group_jid);
+      const payload = {
+        group_jid: schedForm.group_jid,
+        group_label: grp?.push_name || null,
+        template: schedForm.template,
+        team: schedForm.template === "PRONTIDAO" ? schedForm.team : null,
+        header_text: schedForm.header_text.trim() || null,
+        body_text: schedForm.template === "CUSTOM" ? schedForm.body_text.trim() : null,
+        frequency: schedForm.frequency,
+        weekday: schedForm.frequency === "WEEKLY" ? schedForm.weekday : null,
+        hour: schedForm.hour,
+        minute: schedForm.minute,
+      };
+      const res = await fetch("/api/whatsapp/scheduled", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setSchedMsg({ kind: "ok", text: "Agendamento criado." });
+      setSchedForm((f) => ({ ...f, header_text: "", body_text: "" }));
+      loadSchedules();
+    } catch (err) {
+      setSchedMsg({ kind: "err", text: (err as Error).message });
+    } finally {
+      setSavingSched(false);
+    }
+  }
+
+  async function toggleSchedule(s: Schedule) {
+    setSchedMsg(null);
+    try {
+      const res = await fetch(`/api/whatsapp/scheduled/${s.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !s.enabled }),
+      });
+      if (!res.ok) { const b = await res.json(); throw new Error(b.error || `HTTP ${res.status}`); }
+      loadSchedules();
+    } catch (err) {
+      setSchedMsg({ kind: "err", text: (err as Error).message });
+    }
+  }
+
+  async function deleteSchedule(s: Schedule) {
+    if (!window.confirm(`Excluir o agendamento de "${s.group_label || s.group_jid}"?`)) return;
+    setSchedMsg(null);
+    try {
+      const res = await fetch(`/api/whatsapp/scheduled/${s.id}`, { method: "DELETE" });
+      if (!res.ok) { const b = await res.json(); throw new Error(b.error || `HTTP ${res.status}`); }
+      loadSchedules();
+    } catch (err) {
+      setSchedMsg({ kind: "err", text: (err as Error).message });
+    }
+  }
+
+  async function sendOne(to: string, name: string, label?: string): Promise<SendResult> {
     try {
       const res = await fetch("/api/whatsapp/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to, text }),
+        body: JSON.stringify({ to, text, ...(label ? { label } : {}) }),
       });
       const body = await res.json();
       if (res.ok) return { name, phone: to, ok: true };
@@ -142,13 +380,22 @@ export default function MensagensPage() {
     setMessage(null);
     setResults(null);
 
-    const targets: { name: string; phone: string }[] = [];
+    const targets: { name: string; phone: string; label?: string }[] = [];
     if (mode === "manual") {
       if (!manualTo.trim()) {
         setMessage({ kind: "err", text: "Informe um número." });
         return;
       }
       targets.push({ name: "Manual", phone: manualTo.trim() });
+    } else if (mode === "grupo") {
+      if (!selectedGroupJid) {
+        setMessage({ kind: "err", text: "Selecione um grupo." });
+        return;
+      }
+      const label = selectedGroup?.push_name || "Grupo";
+      // No modo grupo o "phone" carrega o JID (...@g.us) e o label rotula o
+      // stub que aparece em Conversas.
+      targets.push({ name: label, phone: selectedGroupJid, label });
     } else {
       const selected = employees.filter((e) => selectedIds.has(e.id));
       if (selected.length === 0) {
@@ -170,7 +417,7 @@ export default function MensagensPage() {
     const all: SendResult[] = [];
     for (let i = 0; i < targets.length; i++) {
       const t = targets[i];
-      const r = await sendOne(t.phone, t.name);
+      const r = await sendOne(t.phone, t.name, t.label);
       all.push(r);
       setProgress({ done: i + 1, total: targets.length });
       // small pause between sends to be gentle with WhatsApp
@@ -251,6 +498,18 @@ export default function MensagensPage() {
           </button>
           <button
             type="button"
+            onClick={() => setMode("grupo")}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+              mode === "grupo"
+                ? "bg-primary text-white"
+                : "bg-gray-100 text-text-light hover:bg-gray-200"
+            }`}
+            disabled={sending}
+          >
+            Para grupo
+          </button>
+          <button
+            type="button"
             onClick={() => setMode("manual")}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
               mode === "manual"
@@ -280,6 +539,53 @@ export default function MensagensPage() {
               <p className="text-xs text-text-light mt-1">
                 O +55 do Brasil é adicionado automaticamente.
               </p>
+            </div>
+          ) : mode === "grupo" ? (
+            <div className="space-y-2">
+              <label className="block text-sm font-medium">
+                Grupo {selectedGroup ? `· ${selectedGroup.push_name || "sem nome"}` : "(nenhum selecionado)"}
+              </label>
+              <input
+                type="text"
+                value={groupSearch}
+                onChange={(e) => setGroupSearch(e.target.value)}
+                placeholder="🔍 Buscar grupo..."
+                disabled={sending}
+                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+              />
+              <div className="border border-border rounded-lg max-h-64 overflow-y-auto">
+                {loadingGroups ? (
+                  <p className="text-sm text-text-light p-3">Carregando grupos...</p>
+                ) : filteredGroups.length === 0 ? (
+                  <p className="text-sm text-text-light p-3">
+                    Nenhum grupo encontrado. Sincronize os grupos na aba Conversas.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-border">
+                    {filteredGroups.map((g) => {
+                      const checked = selectedGroupJid === g.remote_jid;
+                      return (
+                        <li key={g.remote_jid}>
+                          <label className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="group-pick"
+                              checked={checked}
+                              onChange={() => setSelectedGroupJid(g.remote_jid)}
+                              disabled={sending}
+                              className="w-4 h-4"
+                            />
+                            <span className="flex-1 text-sm truncate">👥 {g.push_name || "(sem nome)"}</span>
+                            <span className="text-[10px] text-text-light font-mono truncate max-w-[140px]">
+                              {g.remote_jid.replace("@g.us", "")}
+                            </span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
             </div>
           ) : (
             <div className="space-y-2">
@@ -365,6 +671,55 @@ export default function MensagensPage() {
             </div>
           )}
 
+          {mode === "grupo" && (
+            <div className="bg-gray-50 border border-border rounded-lg p-3 space-y-2">
+              <p className="text-xs font-semibold text-text-light uppercase tracking-wider">
+                Inserir dados ao vivo
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => insertTemplate("EPI")}
+                  disabled={sending || insertingTpl !== null}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white border border-border hover:bg-gray-100 disabled:opacity-50"
+                >
+                  {insertingTpl === "EPI" ? "Montando..." : "📋 Lista de EPIs"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => insertTemplate("UNIFORME")}
+                  disabled={sending || insertingTpl !== null}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white border border-border hover:bg-gray-100 disabled:opacity-50"
+                >
+                  {insertingTpl === "UNIFORME" ? "Montando..." : "👕 Lista de uniformes"}
+                </button>
+                <span className="w-px h-5 bg-border" />
+                <select
+                  value={prontidaoTeam}
+                  onChange={(e) => setProntidaoTeam(e.target.value as typeof prontidaoTeam)}
+                  disabled={sending || insertingTpl !== null}
+                  className="px-2 py-1.5 border border-border rounded-lg text-xs focus:ring-2 focus:ring-primary outline-none"
+                >
+                  <option value="ALL">Todas as equipes</option>
+                  <option value="EQUIPE_1">Equipe 1</option>
+                  <option value="EQUIPE_2">Equipe 2</option>
+                  <option value="EQUIPE_3">Equipe 3</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => insertTemplate("PRONTIDAO")}
+                  disabled={sending || insertingTpl !== null}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white border border-border hover:bg-gray-100 disabled:opacity-50"
+                >
+                  {insertingTpl === "PRONTIDAO" ? "Montando..." : "⚓ Prontidão"}
+                </button>
+              </div>
+              <p className="text-[11px] text-text-light">
+                O texto entra no campo abaixo com os números atuais — você pode editar antes de enviar.
+              </p>
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium mb-1">Mensagem</label>
             <textarea
@@ -393,7 +748,7 @@ export default function MensagensPage() {
             <Button
               type="button"
               variant="secondary"
-              onClick={() => { setText(""); setManualTo(""); clearSelection(); setMessage(null); setResults(null); }}
+              onClick={() => { setText(""); setManualTo(""); clearSelection(); setSelectedGroupJid(null); setMessage(null); setResults(null); }}
               disabled={sending}
             >
               Limpar
@@ -403,7 +758,217 @@ export default function MensagensPage() {
                 ? "Enviando..."
                 : mode === "colaboradores"
                   ? `Enviar para ${selectedCount} colaborador${selectedCount === 1 ? "" : "es"}`
-                  : "Enviar"}
+                  : mode === "grupo"
+                    ? "Enviar para grupo"
+                    : "Enviar"}
+            </Button>
+          </div>
+        </form>
+      </section>
+
+      {/* Mensagens agendadas */}
+      <section className="bg-card rounded-2xl border border-border p-6 space-y-4">
+        <div>
+          <h2 className="text-lg font-bold text-text">Mensagens agendadas 🕒</h2>
+          <p className="text-sm text-text-light">
+            Dispare boletins recorrentes (estoque, prontidão ou texto livre) num grupo, no horário que escolher.
+          </p>
+        </div>
+
+        {schedMsg && (
+          <div className={`rounded-lg px-3 py-2 text-sm border ${
+            schedMsg.kind === "ok"
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : "bg-red-50 border-red-200 text-red-900"
+          }`}>
+            {schedMsg.text}
+          </div>
+        )}
+
+        {loadingSchedules ? (
+          <p className="text-sm text-text-light">Carregando agendamentos...</p>
+        ) : schedules.length === 0 ? (
+          <p className="text-sm text-text-light">Nenhum agendamento ainda.</p>
+        ) : (
+          <ul className="divide-y divide-border border border-border rounded-lg">
+            {schedules.map((s) => (
+              <li key={s.id} className="flex items-start gap-3 px-3 py-2.5">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">
+                    👥 {s.group_label || s.group_jid.replace("@g.us", "")}
+                  </p>
+                  <p className="text-xs text-text-light">
+                    {scheduleSummary(s)} · {recurrenceLabel(s)}
+                  </p>
+                  <p className="text-[11px] text-text-light mt-0.5">
+                    {s.enabled ? (
+                      <>Próximo: <span className="font-medium">{fmtBrDateTime(s.next_run_at)}</span></>
+                    ) : (
+                      <span className="text-amber-700">Pausado</span>
+                    )}
+                    {s.last_status && (
+                      <span className={`ml-2 ${s.last_status.startsWith("error") ? "text-red-700" : "text-emerald-700"}`}>
+                        · último envio: {s.last_status.startsWith("error") ? "erro" : "ok"}
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => toggleSchedule(s)}
+                    className={`text-xs px-2 py-1 rounded-lg font-medium ${
+                      s.enabled
+                        ? "bg-amber-100 text-amber-800 hover:bg-amber-200"
+                        : "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                    }`}
+                  >
+                    {s.enabled ? "Pausar" : "Ativar"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteSchedule(s)}
+                    className="text-xs px-2 py-1 rounded-lg font-medium bg-gray-100 text-gray-700 hover:bg-red-100 hover:text-red-700"
+                  >
+                    Excluir
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <form onSubmit={createSchedule} className="border-t border-border pt-4 space-y-3">
+          <p className="text-sm font-semibold">Novo agendamento</p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium mb-1 text-text-light">Grupo</label>
+              <select
+                value={schedForm.group_jid}
+                onChange={(e) => setSchedForm((f) => ({ ...f, group_jid: e.target.value }))}
+                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+              >
+                <option value="">Selecione um grupo...</option>
+                {groups.map((g) => (
+                  <option key={g.remote_jid} value={g.remote_jid}>
+                    {g.push_name || g.remote_jid.replace("@g.us", "")}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium mb-1 text-text-light">Conteúdo</label>
+              <select
+                value={schedForm.template}
+                onChange={(e) => setSchedForm((f) => ({ ...f, template: e.target.value as ScheduleTemplate }))}
+                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+              >
+                <option value="EPI">Lista de EPIs</option>
+                <option value="UNIFORME">Lista de uniformes</option>
+                <option value="PRONTIDAO">Prontidão pra embarque</option>
+                <option value="CUSTOM">Mensagem personalizada</option>
+              </select>
+            </div>
+
+            {schedForm.template === "PRONTIDAO" && (
+              <div>
+                <label className="block text-xs font-medium mb-1 text-text-light">Equipe</label>
+                <select
+                  value={schedForm.team}
+                  onChange={(e) => setSchedForm((f) => ({ ...f, team: e.target.value as ProntidaoTeam }))}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+                >
+                  <option value="ALL">Todas as equipes</option>
+                  <option value="EQUIPE_1">Equipe 1</option>
+                  <option value="EQUIPE_2">Equipe 2</option>
+                  <option value="EQUIPE_3">Equipe 3</option>
+                </select>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-medium mb-1 text-text-light">Frequência</label>
+              <select
+                value={schedForm.frequency}
+                onChange={(e) => setSchedForm((f) => ({ ...f, frequency: e.target.value as "DAILY" | "WEEKLY" }))}
+                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+              >
+                <option value="DAILY">Todo dia</option>
+                <option value="WEEKLY">Toda semana</option>
+              </select>
+            </div>
+
+            {schedForm.frequency === "WEEKLY" && (
+              <div>
+                <label className="block text-xs font-medium mb-1 text-text-light">Dia da semana</label>
+                <select
+                  value={schedForm.weekday}
+                  onChange={(e) => setSchedForm((f) => ({ ...f, weekday: Number(e.target.value) }))}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+                >
+                  {WEEKDAY_NAMES.map((w, i) => <option key={i} value={i}>{w}</option>)}
+                </select>
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <label className="block text-xs font-medium mb-1 text-text-light">Hora</label>
+                <input
+                  type="number" min={0} max={23}
+                  value={schedForm.hour}
+                  onChange={(e) => setSchedForm((f) => ({ ...f, hour: Math.max(0, Math.min(23, Number(e.target.value) || 0)) }))}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="block text-xs font-medium mb-1 text-text-light">Minuto</label>
+                <input
+                  type="number" min={0} max={59}
+                  value={schedForm.minute}
+                  onChange={(e) => setSchedForm((f) => ({ ...f, minute: Math.max(0, Math.min(59, Number(e.target.value) || 0)) }))}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium mb-1 text-text-light">
+              Cabeçalho (opcional) — texto fixo antes dos dados
+            </label>
+            <input
+              type="text"
+              value={schedForm.header_text}
+              onChange={(e) => setSchedForm((f) => ({ ...f, header_text: e.target.value }))}
+              placeholder="Ex: Bom dia! Segue o boletim de hoje 👇"
+              className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+            />
+          </div>
+
+          {schedForm.template === "CUSTOM" && (
+            <div>
+              <label className="block text-xs font-medium mb-1 text-text-light">Mensagem personalizada</label>
+              <textarea
+                value={schedForm.body_text}
+                onChange={(e) => setSchedForm((f) => ({ ...f, body_text: e.target.value }))}
+                rows={3}
+                placeholder="Texto que será enviado..."
+                className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none resize-none"
+              />
+            </div>
+          )}
+
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-xs text-text-light">
+              {schedForm.template === "CUSTOM"
+                ? "O texto vai exatamente como digitado."
+                : "O conteúdo é montado com os números atuais no momento do envio."}
+            </p>
+            <Button type="submit" disabled={savingSched}>
+              {savingSched ? "Salvando..." : "Salvar agendamento"}
             </Button>
           </div>
         </form>

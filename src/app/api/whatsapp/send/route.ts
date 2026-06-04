@@ -1,11 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { isEvolutionConfigured, sendWhatsappText } from "@/lib/services/evolution-api";
+import { prisma } from "@/lib/prisma";
+import {
+  isEvolutionConfigured,
+  sendWhatsappText,
+  sendWhatsappTextToGroup,
+} from "@/lib/services/evolution-api";
 import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 
-// POST { to: string, text: string } — sends a WhatsApp text via Evolution API.
-// Requires authentication. Returns 503 when Evolution is not configured so the
-// caller can fall back gracefully.
+// Enviar pra grupo expõe operação interna (boletins de estoque/prontidão) e
+// segue o mesmo gate das outras rotas de grupo. DM continua liberado pra
+// qualquer usuário logado (comportamento histórico).
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+
+// POST { to: string, text: string, label?: string } — envia um texto via Evolution.
+// Se `to` termina em "@g.us" é um grupo (exige papel em ALLOWED_ROLES e grava
+// stub pra aparecer em Conversas); senão é DM pra um número.
+// Requer autenticação. Retorna 503 quando a Evolution não está configurada.
 export async function POST(request: NextRequest) {
   const session = await auth();
   if (!session?.user) {
@@ -15,7 +26,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Evolution API não configurada" }, { status: 503 });
   }
 
-  let body: { to?: string; text?: string };
+  let body: { to?: string; text?: string; label?: string };
   try {
     body = await request.json();
   } catch {
@@ -26,6 +37,41 @@ export async function POST(request: NextRequest) {
   const text = body.text?.trim();
   if (!to || !text) {
     return NextResponse.json({ error: "Campos 'to' e 'text' são obrigatórios" }, { status: 400 });
+  }
+
+  const isGroup = to.endsWith("@g.us");
+
+  if (isGroup) {
+    if (!ALLOWED_ROLES.includes(session.user.role)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    try {
+      const result = await sendWhatsappTextToGroup(to, text);
+      // Persiste a mensagem pra aparecer em Conversas (mesmo padrão de
+      // groups/route.ts e escalacao/notify). Falha aqui é não-fatal: a
+      // mensagem já saiu pro grupo.
+      try {
+        await prisma.whatsappMessage.create({
+          data: {
+            message_id: `mensagens-group-${to}-${Date.now()}`,
+            instance_name: process.env.EVOLUTION_INSTANCE || "default",
+            remote_jid: to,
+            from_me: true,
+            push_name: body.label?.trim() || null,
+            message_type: "conversation",
+            text,
+            timestamp_ms: BigInt(Date.now()),
+            sent_by_user_id: session.user.id || null,
+            raw_event: { source: "mensagens-group" },
+          },
+        });
+      } catch (stubErr) {
+        console.warn("[send] group stub insert failed:", (stubErr as Error).message);
+      }
+      return NextResponse.json({ success: true, result });
+    } catch (err) {
+      return NextResponse.json({ error: friendlyEvolutionError((err as Error).message) }, { status: 502 });
+    }
   }
 
   try {

@@ -25,6 +25,7 @@ export const authConfig = {
         path.startsWith("/api/seed") ||
         path.startsWith("/api/seed-stock") ||
         path.startsWith("/api/whatsapp/webhook") ||
+        path.startsWith("/api/cron/") ||
         path.startsWith("/debug");
 
       if (isPublic) return true;

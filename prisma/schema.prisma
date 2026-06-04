@@ -705,3 +705,44 @@ model MarketingClient {
 
   @@map("marketing_clients")
 }
+
+// ── Mensagens agendadas: boletins recorrentes enviados a grupos do WhatsApp ───
+// Cada linha é uma mensagem que o scheduler (src/lib/services/scheduler.ts)
+// dispara num grupo em horário recorrente (DIÁRIO/SEMANAL, fuso America/Sao_Paulo).
+// O conteúdo é montado com dados AO VIVO no momento do envio (estoque de EPI/
+// uniforme ou prontidão) — por isso guardamos o "tipo de template", não o texto.
+enum ScheduleTemplateKind {
+  EPI
+  UNIFORME
+  PRONTIDAO
+  CUSTOM
+}
+
+enum ScheduleFrequency {
+  DAILY
+  WEEKLY
+}
+
+model ScheduledMessage {
+  id          String               @id @default(uuid()) @db.Uuid
+  group_jid   String // grupo destino (...@g.us)
+  group_label String? // nome do grupo no cadastro (exibição + push_name do stub)
+  template    ScheduleTemplateKind
+  team        String? // PRONTIDAO: EQUIPE_1/EQUIPE_2/EQUIPE_3/ALL; senão null
+  header_text String? // texto fixo prefixado antes do template ao vivo
+  body_text   String? // CUSTOM: corpo completo; ignorado nos demais
+  frequency   ScheduleFrequency
+  weekday     Int? // 0=Dom..6=Sáb (obrigatório em WEEKLY)
+  hour        Int // 0-23 horário local (America/Sao_Paulo)
+  minute      Int // 0-59 horário local
+  enabled     Boolean              @default(true)
+  next_run_at DateTime?            @db.Timestamptz() // próximo disparo em UTC (null quando desabilitado)
+  last_run_at DateTime?            @db.Timestamptz()
+  last_status String? // "ok" | "error: ..."
+  created_by  String?
+  created_at  DateTime             @default(now()) @db.Timestamptz()
+  updated_at  DateTime             @default(now()) @updatedAt @db.Timestamptz()
+
+  @@index([enabled, next_run_at])
+  @@map("scheduled_messages")
+}
