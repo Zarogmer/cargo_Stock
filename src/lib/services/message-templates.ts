@@ -49,6 +49,7 @@ export async function buildEpiStockMessage(): Promise<string> {
   });
   if (items.length === 0) return "*📋 Estoque de EPIs*\n\nNenhum EPI cadastrado.";
 
+  const totalQty = items.reduce((s, i) => s + (i.stock_qty || 0), 0);
   const lines = items.map((i) => {
     const size = i.size?.trim() ? ` (${i.size.trim()})` : "";
     return `• ${i.name}${size} — ${fmtQty(i.stock_qty)} un`;
@@ -59,7 +60,7 @@ export async function buildEpiStockMessage(): Promise<string> {
     "",
     ...lines,
     "",
-    `_Total de itens: ${items.length}_`,
+    `_Total em estoque: ${fmtQty(totalQty)} un · ${items.length} ${items.length === 1 ? "tipo" : "tipos"}_`,
   ].join("\n");
 }
 
@@ -71,6 +72,7 @@ export async function buildUniformStockMessage(): Promise<string> {
   });
   if (items.length === 0) return "*👕 Estoque de Uniformes*\n\nNenhum uniforme cadastrado.";
 
+  const totalQty = items.reduce((s, i) => s + (i.stock_qty || 0), 0);
   const lines = items.map((i) => {
     const size = i.size?.trim() ? ` (${i.size.trim()})` : "";
     return `• ${i.name}${size} — ${fmtQty(i.stock_qty)} un`;
@@ -81,16 +83,19 @@ export async function buildUniformStockMessage(): Promise<string> {
     "",
     ...lines,
     "",
-    `_Total de itens: ${items.length}_`,
+    `_Total em estoque: ${fmtQty(totalQty)} un · ${items.length} ${items.length === 1 ? "tipo" : "tipos"}_`,
   ].join("\n");
 }
 
 // ── Prontidão ────────────────────────────────────────────────────────────────
 interface StockRow { name: string; quantity: number; default_quantity: number; team: string | null }
 
-// Bloco de prontidão de UMA equipe (sem cabeçalho de "atualizado em" — isso fica
-// no envelope `buildProntidaoMessage`). Replica EmbarqueChart.
-function prontidaoBlock(team: string, rows: StockRow[]): string {
+// Bloco de prontidão de UMA equipe (sem cabeçalho "atualizado em" — fica no
+// envelope `buildProntidaoMessage`). % e totais replicam o EmbarqueChart.
+//   full=true  → lista COMPLETA: cada item com atual/padrão e quanto falta repor.
+//   full=false → resumo (só "em falta"), usado em "todas as equipes" pra não
+//                virar um textão de 3 equipes.
+function prontidaoBlock(team: string, rows: StockRow[], full: boolean): string {
   const teamLabel = TEAM_LABELS[team] || team;
   const withDefault = rows.filter((i) => i.default_quantity > 0);
   if (withDefault.length === 0) {
@@ -101,16 +106,37 @@ function prontidaoBlock(team: string, rows: StockRow[]): string {
   const totalCurrent = withDefault.reduce((s, i) => s + Math.min(i.quantity, i.default_quantity), 0);
   const pct = totalDefault > 0 ? Math.round((totalCurrent / totalDefault) * 100) : 0;
   const emoji = pct >= 90 ? "🟢" : pct >= 60 ? "🟡" : "🔴";
-
-  const missing = withDefault
-    .filter((i) => i.quantity < i.default_quantity)
-    .map((i) => ({ name: i.name, falta: i.default_quantity - i.quantity }))
-    .sort((a, b) => b.falta - a.falta);
+  const totalFalta = withDefault.reduce((s, i) => s + Math.max(0, i.default_quantity - i.quantity), 0);
 
   const head = [
     `*⚓ Prontidão para embarque — ${teamLabel}*`,
     `${emoji} *${pct}% pronto*  (${fmtQty(totalCurrent)}/${fmtQty(totalDefault)} itens)`,
   ];
+
+  if (full) {
+    // Lista completa: faltando primeiro (mais crítico no topo, por falta desc),
+    // depois os completos por nome. Cada linha mostra atual/padrão.
+    const sorted = [...withDefault].sort((a, b) => {
+      const fa = Math.max(0, a.default_quantity - a.quantity);
+      const fb = Math.max(0, b.default_quantity - b.quantity);
+      if (fa !== fb) return fb - fa;
+      return a.name.localeCompare(b.name, "pt-BR");
+    });
+    if (totalFalta > 0) head.push(`_Faltam ${fmtQty(totalFalta)} itens para completar_`);
+    head.push("");
+    for (const i of sorted) {
+      const falta = i.default_quantity - i.quantity;
+      const base = `• ${i.name} — ${fmtQty(i.quantity)}/${fmtQty(i.default_quantity)}`;
+      head.push(falta > 0 ? `${base} (faltam ${fmtQty(falta)})` : `${base} ✅`);
+    }
+    return head.join("\n");
+  }
+
+  // Resumo (todas as equipes): só os itens em falta.
+  const missing = withDefault
+    .filter((i) => i.quantity < i.default_quantity)
+    .map((i) => ({ name: i.name, falta: i.default_quantity - i.quantity }))
+    .sort((a, b) => b.falta - a.falta);
   if (missing.length === 0) {
     head.push("_Rancho completo ✅_");
     return head.join("\n");
@@ -126,8 +152,10 @@ export async function buildProntidaoMessage(team: ProntidaoTeam = "ALL"): Promis
     select: { name: true, quantity: true, default_quantity: true, team: true },
   })) as StockRow[];
 
+  // Equipe específica → lista completa; "Todas" → resumo por equipe.
+  const full = team !== "ALL";
   const teams: string[] = team === "ALL" ? [...FOOD_TEAMS] : [team];
-  const blocks = teams.map((t) => prontidaoBlock(t, rows.filter((r) => r.team === t)));
+  const blocks = teams.map((t) => prontidaoBlock(t, rows.filter((r) => r.team === t), full));
   return [`_Atualizado em ${nowBrLabel()}_`, "", blocks.join("\n\n———\n\n")].join("\n");
 }
 
