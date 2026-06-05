@@ -997,8 +997,13 @@ export default function SolicitacoesPage() {
                           </span>
                         </div>
                         <p className="text-sm text-text-light mt-1.5">{req.reason}</p>
-                        {(req.estimated_value != null || req.supplier || req.product_url || req.department) && (
+                        {(req.estimated_value != null || req.supplier || req.product_url || req.department || req.code) && (
                           <div className="flex gap-2 mt-2 flex-wrap items-center">
+                            {req.code && (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-mono font-medium" title="Código no Almoxarifado">
+                                🏷️ {req.code}
+                              </span>
+                            )}
                             {req.department && (
                               <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium" title="Destino sugerido no Almoxarifado">
                                 📍 {departmentLabel(req.department)}
@@ -1814,7 +1819,7 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
           </select>
           <p className="text-[10px] text-text-light mt-1">Sugestão de onde guardar — o gestor confirma ao aprovar.</p>
         </div>
-        <CodeField dest={dest} team="EQUIPE_1" value={code} onChange={setCode} onResolveName={setToolName} open={open} />
+        <CodeField dest={dest} team="EQUIPE_1" value={code} onChange={setCode} onResolveName={setToolName} open={open} required />
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium mb-1">Quantidade</label>
@@ -1893,11 +1898,12 @@ function useWarehouseCodes(dest: WarehouseDest, team: string, open: boolean) {
 // escolhido. Escolher um código repõe EXATAMENTE aquele item ao abastecer (em vez de
 // casar pelo nome) e preenche o nome com o do item, pra ficar consistente com a aba
 // do Almoxarifado. Em branco = comportamento antigo (casa pelo nome / item novo).
-function CodeField({ dest, team, value, onChange, onResolveName, open }: {
+function CodeField({ dest, team, value, onChange, onResolveName, open, required = false }: {
   dest: WarehouseDest; team: string; value: string;
   onChange: (v: string) => void;
   onResolveName?: (name: string) => void;
   open: boolean;
+  required?: boolean;
 }) {
   const codes = useWarehouseCodes(dest, team, open);
   if (!CODED_DESTS.includes(dest)) return null;
@@ -1912,19 +1918,22 @@ function CodeField({ dest, team, value, onChange, onResolveName, open }: {
   return (
     <div>
       <label className="block text-sm font-medium mb-1">
-        Código no Almoxarifado <span className="font-normal text-text-light">(opcional)</span>
+        Código no Almoxarifado{" "}
+        {required ? "*" : <span className="font-normal text-text-light">(opcional)</span>}
       </label>
-      <input type="text" list={listId} value={value}
+      <input type="text" list={listId} value={value} required={required}
         onChange={(e) => handleChange(e.target.value)}
-        placeholder="Ex: AR01 — escolha pra repor o item certo"
+        placeholder="Ex: AR01 — escolha o item no Almoxarifado"
         className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" />
       <datalist id={listId}>
         {codes.map((c) => <option key={c.code} value={c.code} label={c.name} />)}
       </datalist>
       <p className="text-[10px] text-text-light mt-1">
-        {codes.length > 0
-          ? "Escolha um código pra repor exatamente aquele item. Em branco = casa pelo nome (item novo)."
-          : "Informe o código do item se for reposição. Em branco = casa pelo nome (item novo)."}
+        {required
+          ? "Escolha o código do item que será reposto. Item novo? Cadastre antes no Almoxarifado."
+          : (codes.length > 0
+              ? "Escolha um código pra repor exatamente aquele item. Em branco = casa pelo nome (item novo)."
+              : "Informe o código do item se for reposição. Em branco = casa pelo nome (item novo).")}
       </p>
     </div>
   );
@@ -2131,7 +2140,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
             placeholder="Ex: Fita silver tape, Água 1,5 L..." className={inputCls} />
         </div>
         <WarehouseDestinationFields value={destSpec} onChange={(v) => { if (v.dest !== destSpec.dest) setCode(""); setDestSpec(v); }} quantity={qty} stocking={!item} />
-        {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} onChange={setCode} onResolveName={setDescription} open={open} />}
+        {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} onChange={setCode} onResolveName={setDescription} open={open} required />}
         <div>
           <label className="block text-sm font-medium mb-1">Fornecedor</label>
           <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
