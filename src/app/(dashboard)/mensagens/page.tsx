@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { db } from "@/lib/db";
 import { formatPhone, matchSearch } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
+import { hasModuleAccess } from "@/lib/rbac";
 
 interface StatusResponse {
   configured?: boolean;
@@ -25,6 +27,18 @@ interface GroupLite {
 }
 
 type Mode = "colaboradores" | "manual" | "grupo";
+
+// Configuração dos avisos de Solicitações/Compras. Espelha o NotifyConfig do
+// servidor (src/lib/services/solicitacoes-notify-config.ts); tipado localmente
+// pra não importar o módulo de servidor (que puxa o Prisma) no bundle do client.
+interface NotifyTarget { groupJid: string | null; groupLabel: string | null; functions: string[] }
+interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget }
+interface FunctionLite { id: number; name: string; active?: boolean }
+interface EmployeeRoleLite { id: number; name: string; phone: string | null; role: string | null; status: string | null }
+interface MemberLite { id: number; name: string; phone: string | null }
+
+// Normaliza nome de função pra comparar com Employee.role (trim + maiúsculas).
+const normFn = (s: string) => (s || "").trim().toUpperCase();
 
 // Templates de dados ao vivo que o usuário pode inserir no texto antes de enviar
 // pro grupo. Renderizados no servidor por /api/whatsapp/templates.
@@ -95,7 +109,153 @@ const INITIAL_SCHED_FORM: SchedForm = {
   minute: 0,
 };
 
+// Editor de um "destino" de aviso: um grupo (opcional) + um conjunto de funções
+// que recebem DM. Cada função mostra a contagem de pessoas e um "ver quem está"
+// que lista os colaboradores (marcando quem está sem telefone).
+function NotifyTargetEditor({
+  target,
+  onChange,
+  functions,
+  membersByFn,
+  groups,
+  groupFirst,
+  funcLabel,
+  funcHint,
+  groupLabel,
+  groupHint,
+  disabled,
+}: {
+  target: NotifyTarget;
+  onChange: (t: NotifyTarget) => void;
+  functions: FunctionLite[];
+  membersByFn: Map<string, MemberLite[]>;
+  groups: GroupLite[];
+  groupFirst: boolean;
+  funcLabel: string;
+  funcHint: string;
+  groupLabel: string;
+  groupHint: string;
+  disabled: boolean;
+}) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const selected = new Set(target.functions.map(normFn));
+
+  function toggleFn(name: string) {
+    const norm = normFn(name);
+    const next = selected.has(norm)
+      ? target.functions.filter((f) => normFn(f) !== norm)
+      : [...target.functions, name];
+    onChange({ ...target, functions: next });
+  }
+
+  function toggleExpand(name: string) {
+    const norm = normFn(name);
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(norm)) next.delete(norm); else next.add(norm);
+      return next;
+    });
+  }
+
+  function setGroup(jid: string) {
+    if (!jid) { onChange({ ...target, groupJid: null, groupLabel: null }); return; }
+    const g = groups.find((x) => x.remote_jid === jid);
+    onChange({ ...target, groupJid: jid, groupLabel: g?.push_name || null });
+  }
+
+  const groupBlock = (
+    <div key="grp">
+      <label className="block text-xs font-medium mb-1 text-text-light">{groupLabel}</label>
+      <select
+        value={target.groupJid || ""}
+        onChange={(e) => setGroup(e.target.value)}
+        disabled={disabled}
+        className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+      >
+        <option value="">Nenhum grupo</option>
+        {groups.map((g) => (
+          <option key={g.remote_jid} value={g.remote_jid}>
+            {g.push_name || g.remote_jid.replace("@g.us", "")}
+          </option>
+        ))}
+      </select>
+      <p className="text-[11px] text-text-light mt-1">{groupHint}</p>
+    </div>
+  );
+
+  const funcBlock = (
+    <div key="fns">
+      <label className="block text-xs font-medium mb-1 text-text-light">{funcLabel}</label>
+      <div className="border border-border rounded-lg max-h-56 overflow-y-auto divide-y divide-border">
+        {functions.length === 0 ? (
+          <p className="text-xs text-text-light p-3">Nenhuma função cadastrada.</p>
+        ) : (
+          functions.map((fn) => {
+            const members = membersByFn.get(normFn(fn.name)) || [];
+            const checked = selected.has(normFn(fn.name));
+            const isOpen = expanded.has(normFn(fn.name));
+            return (
+              <div key={fn.id}>
+                <div className="flex items-center gap-2 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleFn(fn.name)}
+                    disabled={disabled}
+                    className="w-4 h-4"
+                  />
+                  <span className="flex-1 text-sm">{fn.name}</span>
+                  <span className="text-[11px] text-text-light">
+                    {members.length} pessoa{members.length === 1 ? "" : "s"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => toggleExpand(fn.name)}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    {isOpen ? "ocultar" : "ver quem está"}
+                  </button>
+                </div>
+                {isOpen && (
+                  <div className="px-3 pb-2 pl-9 space-y-1 bg-gray-50">
+                    {members.length === 0 ? (
+                      <p className="text-xs text-text-light pt-1">Ninguém com essa função.</p>
+                    ) : (
+                      members.map((m) => {
+                        const hasPhone = !!m.phone && m.phone.trim().length >= 10;
+                        return (
+                          <div key={m.id} className="flex items-center gap-2 text-xs pt-1">
+                            <span className="flex-1">{m.name}</span>
+                            {hasPhone ? (
+                              <span className="font-mono text-text-light">{formatPhone(m.phone || "")}</span>
+                            ) : (
+                              <span className="text-amber-700">sem telefone</span>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+      <p className="text-[11px] text-text-light mt-1">{funcHint}</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-3">
+      {groupFirst ? [groupBlock, funcBlock] : [funcBlock, groupBlock]}
+    </div>
+  );
+}
+
 export default function MensagensPage() {
+  const { profile } = useAuth();
+  const canView = !!profile && hasModuleAccess(profile.role, "MENSAGENS");
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
 
@@ -132,6 +292,14 @@ export default function MensagensPage() {
   const [schedForm, setSchedForm] = useState<SchedForm>(INITIAL_SCHED_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
   const schedFormRef = useRef<HTMLFormElement>(null);
+
+  // Configuração dos avisos de Solicitações/Compras
+  const [notifyCfg, setNotifyCfg] = useState<NotifyConfig | null>(null);
+  const [loadingCfg, setLoadingCfg] = useState(true);
+  const [savingCfg, setSavingCfg] = useState(false);
+  const [cfgMsg, setCfgMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [cfgFunctions, setCfgFunctions] = useState<FunctionLite[]>([]);
+  const [cfgEmployees, setCfgEmployees] = useState<EmployeeRoleLite[]>([]);
 
   const loadStatus = useCallback(async () => {
     setLoadingStatus(true);
@@ -195,14 +363,46 @@ export default function MensagensPage() {
     }
   }, []);
 
+  const loadNotifyConfig = useCallback(async () => {
+    setLoadingCfg(true);
+    try {
+      const res = await fetch("/api/solicitacoes/notify-config");
+      const body = await res.json();
+      if (res.ok && body.config) setNotifyCfg(body.config as NotifyConfig);
+    } catch (err) {
+      console.error("Erro ao carregar config de avisos:", err);
+    } finally {
+      setLoadingCfg(false);
+    }
+  }, []);
+
+  // Funções (job_functions ativas) + colaboradores (com função) pra montar o
+  // seletor e o "ver quem está na função".
+  const loadFunctions = useCallback(async () => {
+    try {
+      const [fnRes, empRes] = await Promise.all([
+        db.from("job_functions").select("id, name, active").order("name"),
+        db.from("employees").select("id, name, phone, role, status").order("name"),
+      ]);
+      const fns = ((fnRes.data || []) as FunctionLite[]).filter((f) => f.active !== false);
+      setCfgFunctions(fns);
+      setCfgEmployees((empRes.data || []) as EmployeeRoleLite[]);
+    } catch (err) {
+      console.error("Erro ao carregar funções:", err);
+    }
+  }, []);
+
   useEffect(() => {
+    if (!canView) return;
     loadStatus();
     loadEmployees();
     loadGroups();
     loadSchedules();
+    loadNotifyConfig();
+    loadFunctions();
     const interval = setInterval(loadStatus, 10000);
     return () => clearInterval(interval);
-  }, [loadStatus, loadEmployees, loadGroups, loadSchedules]);
+  }, [canView, loadStatus, loadEmployees, loadGroups, loadSchedules, loadNotifyConfig, loadFunctions]);
 
   const teams = useMemo(() => {
     const set = new Set<string>();
@@ -249,6 +449,40 @@ export default function MensagensPage() {
     () => groups.find((g) => g.remote_jid === selectedGroupJid) || null,
     [groups, selectedGroupJid],
   );
+
+  // Mapa função (normalizada) → colaboradores ativos. Alimenta o "ver quem está".
+  const membersByFn = useMemo(() => {
+    const map = new Map<string, MemberLite[]>();
+    for (const e of cfgEmployees) {
+      if (e.status === "INATIVO") continue;
+      const key = normFn(e.role || "");
+      if (!key) continue;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push({ id: e.id, name: e.name, phone: e.phone });
+    }
+    return map;
+  }, [cfgEmployees]);
+
+  async function saveNotifyConfig() {
+    if (!notifyCfg) return;
+    setSavingCfg(true);
+    setCfgMsg(null);
+    try {
+      const res = await fetch("/api/solicitacoes/notify-config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config: notifyCfg }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      if (body.config) setNotifyCfg(body.config as NotifyConfig);
+      setCfgMsg({ kind: "ok", text: "Configuração salva." });
+    } catch (err) {
+      setCfgMsg({ kind: "err", text: (err as Error).message });
+    } finally {
+      setSavingCfg(false);
+    }
+  }
 
   // Busca o texto do template no servidor (dados ao vivo) e anexa ao final do
   // que já estiver escrito, separado por linha em branco.
@@ -522,6 +756,18 @@ export default function MensagensPage() {
   const isConnected = stateRaw === "open";
   const isConfigured = status?.configured !== false;
   const canSend = isConnected && !sending;
+
+  // Acesso restrito a Tecnologia, Executivo e Financeiro (ver MENSAGENS no rbac).
+  // O menu já esconde a aba; isto barra o acesso por URL direta.
+  if (profile && !canView) {
+    return (
+      <div className="max-w-2xl mx-auto mt-10">
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-900">
+          Você não tem acesso à página de Mensagens. Fale com a equipe de Tecnologia se precisar.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 max-w-4xl mx-auto">
@@ -851,6 +1097,80 @@ export default function MensagensPage() {
             </Button>
           </div>
         </form>
+      </section>
+
+      {/* Avisos de Solicitações e Compras */}
+      <section className="bg-card rounded-2xl border border-border p-6 space-y-4">
+        <div>
+          <h2 className="text-lg font-bold text-text">Avisos de Solicitações e Compras 🛒</h2>
+          <p className="text-sm text-text-light">
+            Escolha pra onde vão os avisos automáticos: o grupo e as funções que recebem quando uma
+            solicitação é criada e quando uma compra é concluída. Clique em &ldquo;ver quem está&rdquo; pra
+            conferir os colaboradores de cada função.
+          </p>
+        </div>
+
+        {cfgMsg && (
+          <div className={`rounded-lg px-3 py-2 text-sm border ${
+            cfgMsg.kind === "ok"
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : "bg-red-50 border-red-200 text-red-900"
+          }`}>
+            {cfgMsg.text}
+          </div>
+        )}
+
+        {loadingCfg || !notifyCfg ? (
+          <p className="text-sm text-text-light">Carregando configuração...</p>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div className="border border-border rounded-xl p-4 space-y-3">
+              <div>
+                <p className="text-sm font-semibold">🛒 Nova solicitação</p>
+                <p className="text-[11px] text-text-light">Disparado quando alguém cria uma solicitação de compra.</p>
+              </div>
+              <NotifyTargetEditor
+                target={notifyCfg.novaSolicitacao}
+                onChange={(t) => setNotifyCfg((c) => (c ? { ...c, novaSolicitacao: t } : c))}
+                functions={cfgFunctions}
+                membersByFn={membersByFn}
+                groups={groups}
+                groupFirst={false}
+                funcLabel="Funções que recebem o aviso (no WhatsApp particular)"
+                funcHint="Cada pessoa dessas funções recebe a mensagem no WhatsApp dela."
+                groupLabel="Grupo (opcional)"
+                groupHint="Se escolher um grupo, o aviso também é postado nele."
+                disabled={savingCfg}
+              />
+            </div>
+
+            <div className="border border-border rounded-xl p-4 space-y-3">
+              <div>
+                <p className="text-sm font-semibold">✅ Compra concluída</p>
+                <p className="text-[11px] text-text-light">Disparado quando a solicitação é aprovada e a compra registrada.</p>
+              </div>
+              <NotifyTargetEditor
+                target={notifyCfg.compraConcluida}
+                onChange={(t) => setNotifyCfg((c) => (c ? { ...c, compraConcluida: t } : c))}
+                functions={cfgFunctions}
+                membersByFn={membersByFn}
+                groups={groups}
+                groupFirst={true}
+                groupLabel="Grupo de destino"
+                groupHint="Sem grupo escolhido, usamos o grupo “Compras” padrão."
+                funcLabel="Funções que também recebem (opcional)"
+                funcHint="Além do grupo, cada pessoa dessas funções recebe no WhatsApp dela."
+                disabled={savingCfg}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="flex justify-end">
+          <Button type="button" onClick={saveNotifyConfig} disabled={savingCfg || loadingCfg || !notifyCfg}>
+            {savingCfg ? "Salvando..." : "Salvar configuração"}
+          </Button>
+        </div>
       </section>
 
       {/* Mensagens agendadas */}

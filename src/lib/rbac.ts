@@ -43,7 +43,8 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     NAVIOS: ["view", "create", "edit", "delete"],
     MARKETING: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
-    MENSAGENS: ["view", "create"],
+    // Mensagens fica restrito a Tecnologia, Executivo e Financeiro (pedido do
+    // usuário) — Gestor e RH não enxergam mais a aba.
     CONVERSAS: ["view", "create"],
   },
   EXECUTIVO: {
@@ -99,7 +100,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view"],
-    MENSAGENS: ["view", "create"],
+    // Mensagens restrito a Tecnologia, Executivo e Financeiro — RH fica de fora.
     CONVERSAS: ["view", "create"],
   },
   TECNOLOGIA: {

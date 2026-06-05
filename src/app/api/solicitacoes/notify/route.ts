@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { isEvolutionConfigured, sendWhatsappText, sendWhatsappMediaToNumber } from "@/lib/services/evolution-api";
+import {
+  isEvolutionConfigured,
+  sendWhatsappText,
+  sendWhatsappMediaToNumber,
+  sendWhatsappTextToGroup,
+  sendWhatsappMediaToGroup,
+} from "@/lib/services/evolution-api";
+import { readNotifyConfig, normalizeFunctionName } from "@/lib/services/solicitacoes-notify-config";
 
 interface NotifyBody {
   toolName: string;
@@ -18,8 +25,8 @@ function formatBRL(value: number): string {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-// Mensagem enviada (pelo número da Cargo no WhatsApp) aos supervisores quando
-// uma nova solicitação de compra é registrada.
+// Mensagem enviada (pelo número da Cargo no WhatsApp) quando uma nova solicitação
+// de compra é registrada.
 function buildMessage(b: NotifyBody): string {
   const qty = b.quantity && b.quantity > 1 ? ` (x${b.quantity})` : "";
   const reason = b.reason?.trim() ? `📝 Motivo: ${b.reason.trim()}\n` : "";
@@ -39,12 +46,14 @@ function buildMessage(b: NotifyBody): string {
 }
 
 // POST /api/solicitacoes/notify
-// Best-effort: avisa por WhatsApp todos os colaboradores com função SUPERVISOR
-// quando uma nova solicitação é criada. Nunca bloqueia a criação da solicitação
-// — devolve 200 com um resumo por destinatário (igual ao /api/escalacao/notify).
+// Best-effort: avisa por WhatsApp quando uma nova solicitação é criada. Os
+// destinos (funções que recebem DM e/ou um grupo) vêm da configuração em
+// app_settings — ver src/lib/services/solicitacoes-notify-config.ts. O default
+// preserva o comportamento antigo: DM pra todo colaborador com função SUPERVISOR.
+// Nunca bloqueia a criação da solicitação — devolve 200 com um resumo por destino.
 //
 // Qualquer usuário autenticado pode disparar: a solicitação pode ser feita até
-// por um funcionário, e mesmo assim os supervisores precisam ser avisados.
+// por um funcionário, e mesmo assim os destinos precisam ser avisados.
 export async function POST(request: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -64,42 +73,86 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Campos obrigatórios faltando" }, { status: 400 });
   }
 
-  // Função "SUPERVISOR" em case-insensitive — dados importados da planilha do RH
-  // podem vir como "Supervisor". O filtro de status fica em JS (e não no Prisma)
-  // pra não depender da semântica de null do `not` e nunca pular um supervisor
-  // com status nulo.
-  const supervisors = (
-    await prisma.employee.findMany({
-      where: { role: { equals: "SUPERVISOR", mode: "insensitive" } },
-      select: { id: true, name: true, phone: true, status: true },
-    })
-  ).filter((s) => s.status !== "INATIVO");
-
+  const { novaSolicitacao: cfg } = await readNotifyConfig();
   const message = buildMessage(body);
   const image = body.imageUrl?.trim() || null;
   const results: { target: string; ok: boolean; error?: string }[] = [];
 
-  for (const sup of supervisors) {
-    if (!sup.phone || sup.phone.trim().length < 10) {
-      results.push({ target: `dm:${sup.name}`, ok: false, error: "sem telefone válido" });
-      continue;
+  // 1) DM pros colaboradores das funções configuradas. O filtro de status fica em
+  // JS (e não no Prisma) pra não depender da semântica de null do `not` e nunca
+  // pular um colaborador com status nulo. Match de função case-insensitive
+  // (dados do RH podem vir como "Supervisor").
+  const wantedFns = new Set(cfg.functions.map(normalizeFunctionName));
+  if (wantedFns.size > 0) {
+    const employees = (
+      await prisma.employee.findMany({
+        where: { role: { not: null } },
+        select: { id: true, name: true, phone: true, role: true, status: true },
+      })
+    ).filter((e) => e.status !== "INATIVO" && wantedFns.has(normalizeFunctionName(e.role || "")));
+
+    for (const emp of employees) {
+      if (!emp.phone || emp.phone.trim().length < 10) {
+        results.push({ target: `dm:${emp.name}`, ok: false, error: "sem telefone válido" });
+        continue;
+      }
+      try {
+        // Com imagem: manda a foto com a mensagem como legenda; se a mídia falhar,
+        // cai pro texto puro. Sem imagem: texto direto.
+        if (image) {
+          try {
+            await sendWhatsappMediaToNumber(emp.phone, image, message);
+          } catch (mediaErr) {
+            console.warn(`[solicitacoes/notify] foto falhou pra ${emp.name}, fallback texto:`, (mediaErr as Error).message);
+            await sendWhatsappText(emp.phone, message);
+          }
+        } else {
+          await sendWhatsappText(emp.phone, message);
+        }
+        results.push({ target: `dm:${emp.name}`, ok: true });
+      } catch (err) {
+        results.push({ target: `dm:${emp.name}`, ok: false, error: (err as Error).message });
+      }
     }
+  }
+
+  // 2) Se um grupo foi configurado, também avisa o grupo (mesmo fallback foto→texto).
+  if (cfg.groupJid) {
+    const groupTarget = `group:${cfg.groupLabel || cfg.groupJid}`;
     try {
-      // Com imagem: manda a foto com a mensagem como legenda; se a mídia falhar,
-      // cai pro texto puro. Sem imagem: texto direto.
       if (image) {
         try {
-          await sendWhatsappMediaToNumber(sup.phone, image, message);
+          await sendWhatsappMediaToGroup(cfg.groupJid, image, message);
         } catch (mediaErr) {
-          console.warn(`[solicitacoes/notify] foto falhou pra ${sup.name}, fallback texto:`, (mediaErr as Error).message);
-          await sendWhatsappText(sup.phone, message);
+          console.warn("[solicitacoes/notify] foto falhou pro grupo, fallback texto:", (mediaErr as Error).message);
+          await sendWhatsappTextToGroup(cfg.groupJid, message);
         }
       } else {
-        await sendWhatsappText(sup.phone, message);
+        await sendWhatsappTextToGroup(cfg.groupJid, message);
       }
-      results.push({ target: `dm:${sup.name}`, ok: true });
+      results.push({ target: groupTarget, ok: true });
+
+      // Stub no histórico pra aparecer na aba Conversas do grupo (best-effort).
+      try {
+        await prisma.whatsappMessage.create({
+          data: {
+            message_id: `solicitacao-nova-${cfg.groupJid}-${Date.now()}`,
+            instance_name: process.env.EVOLUTION_INSTANCE || "default",
+            remote_jid: cfg.groupJid,
+            from_me: true,
+            push_name: cfg.groupLabel || null,
+            message_type: "conversation",
+            text: message,
+            timestamp_ms: BigInt(Date.now()),
+            sent_by_user_id: session.user.id || null,
+            raw_event: { source: "solicitacoes-nova", toolName: body.toolName },
+          },
+        });
+      } catch (stubErr) {
+        console.warn("[solicitacoes/notify] stub insert failed:", (stubErr as Error).message);
+      }
     } catch (err) {
-      results.push({ target: `dm:${sup.name}`, ok: false, error: (err as Error).message });
+      results.push({ target: groupTarget, ok: false, error: (err as Error).message });
     }
   }
 
