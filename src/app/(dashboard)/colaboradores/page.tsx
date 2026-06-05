@@ -206,12 +206,18 @@ export default function ColaboradoresPage() {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
     const payload = { ...data, updated_by: actor } as any;
-    if (editEmp) {
-      await db.from("employees").update(payload).eq("id", editEmp.id);
-    } else {
-      await db.from("employees").insert(payload);
+    const { error } = editEmp
+      ? await db.from("employees").update(payload).eq("id", editEmp.id)
+      : await db.from("employees").insert(payload);
+    setSaving(false);
+    if (error) {
+      // Antes o erro era engolido e o modal fechava como se tivesse salvado —
+      // por isso "alterar a função" parecia não funcionar. Agora avisa e mantém
+      // o modal aberto pra não perder o que foi digitado.
+      alert(`Não foi possível salvar o colaborador: ${error.message}`);
+      return;
     }
-    setSaving(false); setEmpForm(false); setEditEmp(null); loadAll();
+    setEmpForm(false); setEditEmp(null); loadAll();
   }
 
   // --- COLUMNS ---

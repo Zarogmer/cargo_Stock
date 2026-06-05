@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -169,13 +170,42 @@ function getModel(tableName: string): any {
   return (prisma as any)[modelName];
 }
 
-// Convert date-like strings to Date objects for Prisma
-function convertDates(data: Record<string, unknown>): Record<string, unknown> {
+// Quais campos de cada model são realmente DateTime no schema. Cacheado por
+// tabela. Retorna null quando não dá pra resolver o model (fallback abaixo).
+const dateTimeFieldsCache = new Map<string, Set<string> | null>();
+function getDateTimeFields(tableName: string): Set<string> | null {
+  if (dateTimeFieldsCache.has(tableName)) return dateTimeFieldsCache.get(tableName)!;
+  const accessor = TABLE_MAP[tableName]; // ex.: "employee"
+  let result: Set<string> | null = null;
+  if (accessor) {
+    // O accessor do Prisma é o nome do model com a 1ª letra minúscula —
+    // reverter é só capitalizar (employee → Employee, jobAllocation → JobAllocation).
+    const modelName = accessor.charAt(0).toUpperCase() + accessor.slice(1);
+    const model = Prisma.dmmf.datamodel.models.find((m) => m.name === modelName);
+    if (model) {
+      result = new Set(
+        model.fields.filter((f) => f.type === "DateTime").map((f) => f.name),
+      );
+    }
+  }
+  dateTimeFieldsCache.set(tableName, result);
+  return result;
+}
+
+// Converte strings "YYYY-MM-DD" em Date — MAS só para colunas que são DateTime
+// no schema. Sem isso, colunas String que guardam data como texto (ex.:
+// employees.last_aso_date, meio_ambiente_training) virariam Date e o Prisma
+// rejeitaria o write inteiro. Quando o model não é resolvível, cai no
+// comportamento antigo (converte tudo que parece data) pra não regredir.
+function convertDates(tableName: string, data: Record<string, unknown>): Record<string, unknown> {
+  const dtFields = getDateTimeFields(tableName);
   const result = { ...data };
   for (const key of Object.keys(result)) {
     const val = result[key];
     if (typeof val === "string" && /^\d{4}-\d{2}-\d{2}(T.*)?$/.test(val)) {
-      result[key] = new Date(val);
+      if (!dtFields || dtFields.has(key)) {
+        result[key] = new Date(val);
+      }
     }
   }
   return result;
@@ -242,7 +272,7 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const insertData = convertDates(spec.data);
+        const insertData = convertDates(spec.table, spec.data);
 
         const data = await model.create({ data: insertData });
         return NextResponse.json({ data, error: null, count: null });
@@ -263,7 +293,7 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const updateData = convertDates(spec.data);
+        const updateData = convertDates(spec.table, spec.data);
         // Auto-set updated_at for tables that have it
         const TABLES_WITH_UPDATED_AT = [
           "stock_items", "users", "employees", "epis", "uniforms",
