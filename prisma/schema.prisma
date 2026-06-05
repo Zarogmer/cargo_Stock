@@ -604,6 +604,10 @@ model ToolRequest {
   // Destino sugerido no Almoxarifado (ESTOQUE/RANCHO/EPI/UNIFORME/MAQUINARIO/
   // ESCRITORIO/OUTROS). O gestor confirma/ajusta ao aprovar.
   department      String?
+  // Código do item no Almoxarifado (ex.: "AR01") — quando informado, o abastecimento
+  // repõe exatamente aquele item do setor de destino, em vez de casar pelo nome. O
+  // código é derivado (gerado por setor a partir do nome); ver buildCodeMap em utils.ts.
+  code            String?
   created_at     DateTime @default(now()) @db.Timestamptz()
   updated_at     DateTime @default(now()) @db.Timestamptz()
 
@@ -622,6 +626,7 @@ model PurchaseOrder {
   id             String    @id @default(uuid()) @db.Uuid
   description    String // DESCRIÇÃO
   department     String? // DEPARTAMENTO: MANUTENÇÃO, ESCRITÓRIO, OPERAÇÃO, RANCHO, EPI, OUTROS
+  code           String? // CÓDIGO do item no Almoxarifado (ex.: "AR01") — repõe exatamente aquele item ao abastecer (derivado; ver buildCodeMap em utils.ts)
   supplier       String? // FORNECEDOR
   purchase_date  DateTime? @db.Date // DATA DA COMPRA
   unit_value     Float     @default(0) // VALOR unit. (R$)
