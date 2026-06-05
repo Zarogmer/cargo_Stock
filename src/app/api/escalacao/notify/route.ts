@@ -136,10 +136,14 @@ export async function POST(request: NextRequest) {
         },
       })
     : [];
-  const fnByEmployee = new Map<number, string>();
+  // Um colaborador pode ter mais de uma função no mesmo navio (raro, mas
+  // acontece — ex.: AJUDANTE + SUPERVISOR). Agrega todas pra mostrar no texto.
+  const fnByEmployee = new Map<number, string[]>();
   for (const a of allocations) {
     if (a.employee_id != null && a.job_functions?.name) {
-      fnByEmployee.set(a.employee_id, a.job_functions.name);
+      const list = fnByEmployee.get(a.employee_id) ?? [];
+      if (!list.includes(a.job_functions.name)) list.push(a.job_functions.name);
+      fnByEmployee.set(a.employee_id, list);
     }
   }
 
@@ -159,9 +163,11 @@ export async function POST(request: NextRequest) {
       costadoMentions.push(normalized);
       return `• @${normalized}`;
     }
-    // Embarque: nome + função (formato original).
-    const fn = fnByEmployee.get(emp.id);
-    return fn ? `• ${emp.name} — *${fn}*` : `• ${emp.name}`;
+    // Embarque: nome + função(ões). Duas funções saem como "AJUDANTE + SUPERVISOR".
+    const fns = fnByEmployee.get(emp.id);
+    return fns && fns.length > 0
+      ? `• ${emp.name} — *${fns.join(" + ")}*`
+      : `• ${emp.name}`;
   }
   const namesList = employees.map(lineFor).join("\n");
 

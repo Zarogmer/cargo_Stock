@@ -217,6 +217,11 @@ export default function NaviosPage() {
   const [groupWarning, setGroupWarning] = useState<string | null>(null);
   // Per-employee function chosen by the user (employeeId → functionId as string)
   const [groupPerEmpFn, setGroupPerEmpFn] = useState<Map<number, string>>(new Map());
+  // OPCIONAL: 2ª função do mesmo colaborador (employeeId → functionId). Raro, mas
+  // acontece (ex.: vai como AJUDANTE e também como SUPERVISOR no mesmo navio).
+  // Quando preenchida, gera uma 2ª job_allocation → o colaborador recebe as duas
+  // pagas. A chave só existe quando o usuário clicou em "+ 2ª função".
+  const [groupPerEmpFn2, setGroupPerEmpFn2] = useState<Map<number, string>>(new Map());
   // Active job functions, loaded once for the function selector
   const [jobFunctions, setJobFunctions] = useState<{ id: number; name: string; active: boolean; default_rate: string | number }[]>([]);
   // Costado-only: shift date + period for the bulk-allocated rows
@@ -438,6 +443,7 @@ export default function NaviosPage() {
     setGroupSearch("");
     setGroupWarning(null);
     setGroupPerEmpFn(new Map());
+    setGroupPerEmpFn2(new Map());
     // Default shift date = today (the form's arrival_date is empty at this point).
     setCostadoShiftDate(new Date().toISOString().slice(0, 10));
     setCostadoShiftPeriod("07-13");
@@ -452,6 +458,7 @@ export default function NaviosPage() {
     setGroupSearch("");
     setGroupWarning(null);
     setGroupPerEmpFn(new Map());
+    setGroupPerEmpFn2(new Map());
     setCostadoShiftDate(new Date().toISOString().slice(0, 10));
     setCostadoShiftPeriod("07-13");
     const opType = getOperationType(ship.services);
@@ -607,9 +614,14 @@ export default function NaviosPage() {
         // — assim funcionários com valor especial cadastrado em "Valores
         // especiais" já entram com o rate correto, sem precisar editar.
         const fnIdsInUse = Array.from(new Set(
-          Array.from(groupPerEmpFn.values()).map((v) => parseInt(v, 10))
+          [
+            ...Array.from(groupPerEmpFn.values()),
+            ...Array.from(groupPerEmpFn2.values()), // 2ª função (pode estar vazia)
+          ]
+            .map((v) => parseInt(v, 10))
+            .filter((n) => Number.isFinite(n)),
         ));
-        let overridesMap = new Map<string, number>(); // chave: `${empId}-${fnId}`
+        const overridesMap = new Map<string, number>(); // chave: `${empId}-${fnId}`
         if (fnIdsInUse.length > 0) {
           const { data: ovData } = await db
             .from("employee_function_rates")
@@ -619,13 +631,10 @@ export default function NaviosPage() {
             overridesMap.set(`${o.employee_id}-${o.function_id}`, Number(o.rate));
           }
         }
-        for (const empId of Array.from(groupParticipants)) {
-          const fnId = groupPerEmpFn.get(empId);
-          if (!fnId) continue; // já validado, mas defensivo
-          const fnIdNum = parseInt(fnId, 10);
-          // Prioridade: override por funcionário > default_rate da função.
-          // Sem isso o Pagamento de Embarque abriria com R$ 0,00 até alguém
-          // ajustar manualmente.
+        // Cria uma job_allocation pra um par (colaborador, função), já com o
+        // rate certo: override por pessoa > default_rate da função. Sem isso o
+        // Pagamento de Embarque abriria com R$ 0,00 até alguém ajustar à mão.
+        const insertAlloc = async (empId: number, fnIdNum: number) => {
           const fnRow = jobFunctions.find((f) => f.id === fnIdNum);
           const fnDefaultRate = Number(
             overridesMap.get(`${empId}-${fnIdNum}`) ?? fnRow?.default_rate ?? 0,
@@ -651,6 +660,24 @@ export default function NaviosPage() {
             if (allocRes.error) allocationErrors.push(allocRes.error.message);
           } catch (err) {
             allocationErrors.push((err as Error).message);
+          }
+        };
+
+        for (const empId of Array.from(groupParticipants)) {
+          const fnId = groupPerEmpFn.get(empId);
+          if (!fnId) continue; // já validado, mas defensivo
+          const fnIdNum = parseInt(fnId, 10);
+          await insertAlloc(empId, fnIdNum);
+
+          // 2ª função OPCIONAL: só gera quando foi escolhida e é diferente da
+          // principal. Vira uma 2ª linha no Pagamento de Embarque (mesmo navio,
+          // mesmo colaborador, outra função) → o colaborador recebe as duas pagas.
+          const fnId2 = groupPerEmpFn2.get(empId);
+          if (fnId2) {
+            const fnId2Num = parseInt(fnId2, 10);
+            if (Number.isFinite(fnId2Num) && fnId2Num !== fnIdNum) {
+              await insertAlloc(empId, fnId2Num);
+            }
           }
         }
         if (allocationErrors.length > 0) {
@@ -1743,6 +1770,11 @@ export default function NaviosPage() {
                                     for (const e of available) nm.delete(e.id);
                                     return nm;
                                   });
+                                  setGroupPerEmpFn2((m) => {
+                                    const nm = new Map(m);
+                                    for (const e of available) nm.delete(e.id);
+                                    return nm;
+                                  });
                                   return;
                                 }
                                 setGroupParticipants((prev) => {
@@ -1812,45 +1844,108 @@ export default function NaviosPage() {
                               {selectedList.map((emp) => {
                                 const curFn = groupPerEmpFn.get(emp.id) || "";
                                 const fnMissing = !curFn;
+                                // 2ª função: a chave só existe depois que o usuário
+                                // clica em "+ 2ª função". Vazia = ainda escolhendo.
+                                const has2nd = groupPerEmpFn2.has(emp.id);
+                                const curFn2 = groupPerEmpFn2.get(emp.id) || "";
+                                const fn2Missing = has2nd && !curFn2;
                                 return (
                                   <div
                                     key={emp.id}
-                                    className="flex items-center gap-2 bg-white border border-emerald-100 rounded-md px-2 py-1.5"
+                                    className="bg-white border border-emerald-100 rounded-md px-2 py-1.5 space-y-1.5"
                                   >
-                                    <span className="flex-1 min-w-0 text-xs font-medium truncate">{emp.name}</span>
-                                    <select
-                                      value={curFn}
-                                      onChange={(ev) =>
-                                        setGroupPerEmpFn((m) => new Map(m).set(emp.id, ev.target.value))
-                                      }
-                                      className={`text-xs px-2 py-1 border rounded ${
-                                        fnMissing ? "border-red-300 bg-red-50" : "border-border"
-                                      }`}
-                                    >
-                                      <option value="">Função...</option>
-                                      {jobFunctions.map((f) => (
-                                        <option key={f.id} value={f.id}>{f.name}</option>
-                                      ))}
-                                    </select>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setGroupParticipants((prev) => {
-                                          const next = new Set(prev);
-                                          next.delete(emp.id);
-                                          return next;
-                                        });
-                                        setGroupPerEmpFn((m) => {
-                                          const nm = new Map(m);
-                                          nm.delete(emp.id);
-                                          return nm;
-                                        });
-                                      }}
-                                      className="text-xs text-red-600 hover:bg-red-50 rounded p-1"
-                                      title="Remover"
-                                    >
-                                      ✕
-                                    </button>
+                                    {/* Função principal */}
+                                    <div className="flex items-center gap-2">
+                                      <span className="flex-1 min-w-0 text-xs font-medium truncate">{emp.name}</span>
+                                      <select
+                                        value={curFn}
+                                        onChange={(ev) =>
+                                          setGroupPerEmpFn((m) => new Map(m).set(emp.id, ev.target.value))
+                                        }
+                                        className={`text-xs px-2 py-1 border rounded ${
+                                          fnMissing ? "border-red-300 bg-red-50" : "border-border"
+                                        }`}
+                                      >
+                                        <option value="">Função...</option>
+                                        {jobFunctions.map((f) => (
+                                          <option key={f.id} value={String(f.id)}>{f.name}</option>
+                                        ))}
+                                      </select>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setGroupParticipants((prev) => {
+                                            const next = new Set(prev);
+                                            next.delete(emp.id);
+                                            return next;
+                                          });
+                                          setGroupPerEmpFn((m) => {
+                                            const nm = new Map(m);
+                                            nm.delete(emp.id);
+                                            return nm;
+                                          });
+                                          setGroupPerEmpFn2((m) => {
+                                            const nm = new Map(m);
+                                            nm.delete(emp.id);
+                                            return nm;
+                                          });
+                                        }}
+                                        className="text-xs text-red-600 hover:bg-red-50 rounded p-1"
+                                        title="Remover"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+
+                                    {/* 2ª função OPCIONAL — rara, mas acontece. Gera uma
+                                        2ª escalação/pagamento separado pro mesmo colaborador. */}
+                                    {has2nd ? (
+                                      <div className="flex items-center gap-2 pl-2 border-l-2 border-emerald-200">
+                                        <span className="flex-1 min-w-0 text-[10px] font-medium text-emerald-800">
+                                          2ª função <span className="font-normal text-text-light">(paga à parte)</span>
+                                        </span>
+                                        <select
+                                          value={curFn2}
+                                          onChange={(ev) =>
+                                            setGroupPerEmpFn2((m) => new Map(m).set(emp.id, ev.target.value))
+                                          }
+                                          className={`text-xs px-2 py-1 border rounded ${
+                                            fn2Missing ? "border-red-300 bg-red-50" : "border-border"
+                                          }`}
+                                        >
+                                          <option value="">Função...</option>
+                                          {jobFunctions
+                                            .filter((f) => String(f.id) !== curFn)
+                                            .map((f) => (
+                                              <option key={f.id} value={String(f.id)}>{f.name}</option>
+                                            ))}
+                                        </select>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setGroupPerEmpFn2((m) => {
+                                              const nm = new Map(m);
+                                              nm.delete(emp.id);
+                                              return nm;
+                                            })
+                                          }
+                                          className="text-xs text-red-600 hover:bg-red-50 rounded p-1"
+                                          title="Remover 2ª função"
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setGroupPerEmpFn2((m) => new Map(m).set(emp.id, ""))
+                                        }
+                                        className="text-[10px] font-medium text-emerald-700 hover:bg-emerald-50 rounded px-1.5 py-0.5"
+                                      >
+                                        + 2ª função (opcional)
+                                      </button>
+                                    )}
                                   </div>
                                 );
                               })}
@@ -1940,8 +2035,13 @@ export default function NaviosPage() {
                                         return next;
                                       });
                                       if (wasChecked) {
-                                        // Desmarcou → limpa a função selecionada.
+                                        // Desmarcou → limpa a função (e a 2ª, se houver).
                                         setGroupPerEmpFn((m) => {
+                                          const nm = new Map(m);
+                                          nm.delete(emp.id);
+                                          return nm;
+                                        });
+                                        setGroupPerEmpFn2((m) => {
                                           const nm = new Map(m);
                                           nm.delete(emp.id);
                                           return nm;
