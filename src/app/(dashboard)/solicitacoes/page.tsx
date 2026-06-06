@@ -1666,13 +1666,16 @@ function ProductLinkField({ link, onLinkChange, onData, open }: {
 }) {
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  // Palavras-chave oficiais do Mercado Livre (só quando a conta está conectada) —
+  // informativo: ajuda a equipe a reencontrar/buscar o produto. Não vira campo.
+  const [keywords, setKeywords] = useState<string | null>(null);
   const lastFetchedRef = useRef<string>("");
   const isUrl = (s: string) => /^https?:\/\/.+/i.test(s.trim());
 
   // Ao (re)abrir, marca o link atual como "já buscado" pra não auto-buscar um
   // link que já veio salvo (edição), e limpa o estado de busca.
   useEffect(() => {
-    if (open) { lastFetchedRef.current = link.trim(); setFetching(false); setFetchError(null); }
+    if (open) { lastFetchedRef.current = link.trim(); setFetching(false); setFetchError(null); setKeywords(null); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -1684,6 +1687,7 @@ function ProductLinkField({ link, onLinkChange, onData, open }: {
     lastFetchedRef.current = u;
     setFetching(true);
     setFetchError(null);
+    setKeywords(null);
     try {
       const res = await fetch("/api/solicitacoes/link-preview", {
         method: "POST",
@@ -1696,6 +1700,7 @@ function ProductLinkField({ link, onLinkChange, onData, open }: {
         return;
       }
       onData({ name: data.name, value: data.value, supplier: data.supplier, image: data.image }, force);
+      setKeywords(typeof data.keywords === "string" && data.keywords.trim() ? data.keywords.trim() : null);
       if (!data.name && data.value == null && !data.image) {
         setFetchError("Não achei dados nessa página. Preencha manualmente.");
       }
@@ -1734,6 +1739,9 @@ function ProductLinkField({ link, onLinkChange, onData, open }: {
         <p className="text-xs text-amber-600 mt-1">⚠️ {fetchError}</p>
       ) : (
         <p className="text-[10px] text-text-light mt-1">Cole o link e o nome, valor, imagem e fornecedor são preenchidos automaticamente.</p>
+      )}
+      {keywords && !fetching && (
+        <p className="text-[11px] text-emerald-700 mt-1 break-words">🔑 Palavras-chave: {keywords}</p>
       )}
     </div>
   );

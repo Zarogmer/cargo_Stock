@@ -10,6 +10,7 @@ import {
 } from "@/lib/services/evolution-api";
 import { getComprasGroupJid, comprasGroupName } from "@/lib/services/compras-group";
 import { readNotifyConfig, normalizeFunctionName } from "@/lib/services/solicitacoes-notify-config";
+import { isMercadoLivreLink, fetchMlItem } from "@/lib/services/mercado-livre";
 
 interface NotifyBody {
   toolName: string;
@@ -27,9 +28,11 @@ function formatBRL(value: number): string {
 }
 
 // Mensagem enviada quando uma solicitação é concluída (aprovada) — a compra já
-// foi registrada e o item lançado no Estoque.
-function buildMessage(b: NotifyBody): string {
+// foi registrada e o item lançado no Estoque. `keywords` (palavras-chave oficiais
+// do Mercado Livre) entra logo abaixo do produto quando disponível.
+function buildMessage(b: NotifyBody, keywords?: string | null): string {
   const qty = b.quantity && b.quantity > 1 ? ` (x${b.quantity})` : "";
+  const kw = keywords?.trim() ? `🔑 Palavras-chave: ${keywords.trim()}\n` : "";
   const value = b.value != null && Number(b.value) > 0 ? `💰 Valor: ${formatBRL(Number(b.value))}\n` : "";
   const supplier = b.supplier?.trim() ? `🏬 Fornecedor: ${b.supplier.trim()}\n` : "";
   const requestedBy = b.requestedBy?.trim() ? `👤 Solicitado por: ${b.requestedBy.trim()}\n` : "";
@@ -38,6 +41,7 @@ function buildMessage(b: NotifyBody): string {
   return (
     `✅ *Compra aprovada*\n\n` +
     `📦 Produto: *${b.toolName}*${qty}\n` +
+    kw +
     value +
     supplier +
     requestedBy +
@@ -74,7 +78,21 @@ export async function POST(request: NextRequest) {
   }
 
   const { compraConcluida: cfg } = await readNotifyConfig();
-  const message = buildMessage(body);
+
+  // Palavras-chave oficiais do Mercado Livre (best-effort): só quando o link é do
+  // ML e a conta está conectada. Qualquer erro (não configurado, sem token, item
+  // removido, timeout) é ignorado — o aviso sai sem a linha de palavras-chave.
+  let keywords: string | null = null;
+  if (isMercadoLivreLink(body.productUrl)) {
+    try {
+      const item = await fetchMlItem(body.productUrl!.trim());
+      if (item?.keywords) keywords = item.keywords;
+    } catch (err) {
+      console.warn("[notify-compras] palavras-chave do ML indisponíveis:", (err as Error).message);
+    }
+  }
+
+  const message = buildMessage(body, keywords);
   const image = body.imageUrl?.trim() || null;
 
   // Resolve o grupo-alvo: o configurado pelo usuário ou, na falta, o resolvedor
