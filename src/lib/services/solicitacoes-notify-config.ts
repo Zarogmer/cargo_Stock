@@ -11,13 +11,18 @@ import { prisma } from "@/lib/prisma";
 
 export const NOTIFY_CONFIG_KEY = "solicitacoes_notify_config";
 
-// Um "destino" de aviso: um grupo do WhatsApp (opcional) e/ou um conjunto de
-// funções (os colaboradores cuja função bate recebem DM). Nomes de função são
-// guardados como vêm de job_functions; o casamento com Employee.role é
-// case-insensitive (ver normalizeFunctionName).
+// Um grupo do WhatsApp que recebe o aviso (jid + nome pra exibir/histórico).
+export interface NotifyGroup {
+  jid: string;
+  label: string | null;
+}
+
+// Um "destino" de aviso: zero+ grupos do WhatsApp e/ou um conjunto de funções
+// (os colaboradores cuja função bate recebem DM). Nomes de função são guardados
+// como vêm de job_functions; o casamento com Employee.role é case-insensitive
+// (ver normalizeFunctionName).
 export interface NotifyTarget {
-  groupJid: string | null;
-  groupLabel: string | null;
+  groups: NotifyGroup[];
   functions: string[];
 }
 
@@ -32,8 +37,8 @@ export interface NotifyConfig {
 // compra concluída cai no resolvedor por nome ("Compras") quando groupJid é null.
 export function defaultNotifyConfig(): NotifyConfig {
   return {
-    novaSolicitacao: { groupJid: null, groupLabel: null, functions: ["SUPERVISOR"] },
-    compraConcluida: { groupJid: null, groupLabel: null, functions: [] },
+    novaSolicitacao: { groups: [], functions: ["SUPERVISOR"] },
+    compraConcluida: { groups: [], functions: [] },
   };
 }
 
@@ -42,19 +47,39 @@ export function normalizeFunctionName(name: string): string {
   return (name || "").trim().toUpperCase();
 }
 
+// Grupos: aceita o formato novo (array `groups` de {jid,label}) e migra o antigo
+// (`groupJid`/`groupLabel`, um grupo só) pra não perder config já salva. Só JIDs
+// de grupo (...@g.us), sem duplicar.
+function sanitizeGroups(r: Record<string, unknown>): NotifyGroup[] {
+  const out: NotifyGroup[] = [];
+  const seen = new Set<string>();
+  const push = (jidRaw: unknown, labelRaw: unknown) => {
+    if (typeof jidRaw !== "string") return;
+    const jid = jidRaw.trim();
+    if (!jid.endsWith("@g.us") || seen.has(jid)) return;
+    seen.add(jid);
+    const label = typeof labelRaw === "string" && labelRaw.trim() ? labelRaw.trim() : null;
+    out.push({ jid, label });
+  };
+  if (Array.isArray(r.groups)) {
+    for (const g of r.groups) {
+      if (g && typeof g === "object") {
+        const o = g as Record<string, unknown>;
+        push(o.jid, o.label);
+      }
+    }
+  }
+  if (out.length === 0) push(r.groupJid, r.groupLabel); // legado: 1 grupo
+  return out;
+}
+
 function sanitizeTarget(raw: unknown, fallback: NotifyTarget): NotifyTarget {
-  if (!raw || typeof raw !== "object") return { ...fallback };
+  if (!raw || typeof raw !== "object") {
+    return { groups: [...fallback.groups], functions: [...fallback.functions] };
+  }
   const r = raw as Record<string, unknown>;
 
-  // Grupo: só aceita JID de grupo (...@g.us); qualquer outra coisa vira null.
-  let groupJid: string | null = null;
-  if (typeof r.groupJid === "string" && r.groupJid.trim().endsWith("@g.us")) {
-    groupJid = r.groupJid.trim();
-  }
-  const groupLabel =
-    groupJid && typeof r.groupLabel === "string" && r.groupLabel.trim()
-      ? r.groupLabel.trim()
-      : null;
+  const groups = sanitizeGroups(r);
 
   // Funções: lista de strings não-vazias, sem duplicar (por nome normalizado),
   // preservando o texto original pra exibição.
@@ -72,7 +97,7 @@ function sanitizeTarget(raw: unknown, fallback: NotifyTarget): NotifyTarget {
     }
   }
 
-  return { groupJid, groupLabel, functions };
+  return { groups, functions };
 }
 
 // Valida/normaliza um payload arbitrário no formato NotifyConfig, caindo nos

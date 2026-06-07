@@ -117,20 +117,20 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // 2) Se um grupo foi configurado, também avisa o grupo (mesmo fallback foto→texto).
-  if (cfg.groupJid) {
-    const groupTarget = `group:${cfg.groupLabel || cfg.groupJid}`;
+  // 2) Avisa cada grupo configurado (mesmo fallback foto→texto).
+  for (const g of cfg.groups) {
+    const groupTarget = `group:${g.label || g.jid}`;
     try {
       let sent: unknown;
       if (image) {
         try {
-          sent = await sendWhatsappMediaToGroup(cfg.groupJid, image, message);
+          sent = await sendWhatsappMediaToGroup(g.jid, image, message);
         } catch (mediaErr) {
-          console.warn("[solicitacoes/notify] foto falhou pro grupo, fallback texto:", (mediaErr as Error).message);
-          sent = await sendWhatsappTextToGroup(cfg.groupJid, message);
+          console.warn(`[solicitacoes/notify] foto falhou pro grupo ${g.label || g.jid}, fallback texto:`, (mediaErr as Error).message);
+          sent = await sendWhatsappTextToGroup(g.jid, message);
         }
       } else {
-        sent = await sendWhatsappTextToGroup(cfg.groupJid, message);
+        sent = await sendWhatsappTextToGroup(g.jid, message);
       }
       results.push({ target: groupTarget, ok: true });
 
@@ -139,11 +139,11 @@ export async function POST(request: NextRequest) {
         await prisma.whatsappMessage.create({
           data: {
             // id REAL do WhatsApp (key.id) → permite "apagar para todos" depois.
-            message_id: extractSentMessageId(sent) ?? `solicitacao-nova-${cfg.groupJid}-${Date.now()}`,
+            message_id: extractSentMessageId(sent) ?? `solicitacao-nova-${g.jid}-${Date.now()}`,
             instance_name: process.env.EVOLUTION_INSTANCE || "default",
-            remote_jid: cfg.groupJid,
+            remote_jid: g.jid,
             from_me: true,
-            push_name: cfg.groupLabel || null,
+            push_name: g.label,
             message_type: "conversation",
             text: message,
             timestamp_ms: BigInt(Date.now()),

@@ -510,9 +510,10 @@ export default function SolicitacoesPage() {
         });
         const data = await res.json().catch(() => null);
         if (data?.sent) {
+          const where = data.group ? `no(s) grupo(s) ${data.group}` : "no grupo";
           groupMsg = data.withPhoto
-            ? " 📨 Avisado no grupo Compras (com foto)."
-            : ` 📨 Avisado no grupo Compras${data.photoError ? ` (foto falhou: ${data.photoError})` : ""}.`;
+            ? ` 📨 Avisado ${where} (com foto).`
+            : ` 📨 Avisado ${where}${data.photoError ? ` (foto falhou: ${data.photoError})` : ""}.`;
         } else if (data?.warning) {
           groupMsg = ` ⚠️ ${data.warning}`;
         }

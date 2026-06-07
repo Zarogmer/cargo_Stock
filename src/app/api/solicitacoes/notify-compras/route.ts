@@ -96,71 +96,67 @@ export async function POST(request: NextRequest) {
   const message = buildMessage(body, keywords);
   const image = body.imageUrl?.trim() || null;
 
-  // Resolve o grupo-alvo: o configurado pelo usuário ou, na falta, o resolvedor
-  // por nome (default "Compras"). Se nenhum estiver disponível, não dá pra mirar.
-  let jid = cfg.groupJid;
-  let groupLabel = cfg.groupLabel || "";
-  if (!jid) {
-    jid = await getComprasGroupJid();
-    groupLabel = comprasGroupName();
-    if (!jid) {
-      const name = comprasGroupName();
-      return NextResponse.json({
-        status: "skipped",
-        sent: 0,
-        warning: `Grupo "${name}" não encontrado. Crie/abra o grupo no WhatsApp e rode "Sincronizar grupos" na aba Conversas.`,
-      }, { status: 200 });
-    }
+  // Resolve os grupos-alvo: os configurados pelo usuário ou, na falta, o
+  // resolvedor por nome (default "Compras"). Sem nenhum, não dá pra mirar.
+  let targetGroups = cfg.groups;
+  if (targetGroups.length === 0) {
+    const fallbackJid = await getComprasGroupJid();
+    if (fallbackJid) targetGroups = [{ jid: fallbackJid, label: comprasGroupName() }];
   }
-  const groupName = groupLabel || jid;
+  if (targetGroups.length === 0) {
+    const name = comprasGroupName();
+    return NextResponse.json({
+      status: "skipped",
+      sent: 0,
+      warning: `Nenhum grupo configurado. Escolha um ou mais grupos em Mensagens › Avisos de Solicitações e Compras, ou crie o grupo "${name}" no WhatsApp e rode "Sincronizar grupos" na aba Conversas.`,
+    }, { status: 200 });
+  }
 
-  // Envio pro grupo. Com imagem: manda a FOTO com a mensagem como legenda; se a
-  // mídia falhar (Evolution rejeita o base64, etc.), cai pro texto puro pra pelo
-  // menos a info chegar. Sem imagem: texto direto.
+  // Envia pra CADA grupo. Com imagem: manda a FOTO com a mensagem como legenda;
+  // se a mídia falhar (Evolution rejeita o base64, etc.), cai pro texto puro pra
+  // pelo menos a info chegar. Sem imagem: texto direto. Cada grupo ganha também
+  // um stub no histórico (aba Conversas). Tudo não-fatal.
   let withPhoto = false;
   let photoError: string | null = null;
-  let groupOk = false;
-  let groupError: string | null = null;
-  let sentResult: unknown;
-  try {
-    if (image) {
-      try {
-        sentResult = await sendWhatsappMediaToGroup(jid, image, message);
-        withPhoto = true;
-      } catch (mediaErr) {
-        photoError = (mediaErr as Error).message;
-        console.warn("[notify-compras] envio de foto falhou, caindo pro texto:", photoError);
-        sentResult = await sendWhatsappTextToGroup(jid, message);
-      }
-    } else {
-      sentResult = await sendWhatsappTextToGroup(jid, message);
-    }
-    groupOk = true;
-  } catch (err) {
-    groupError = (err as Error).message;
-  }
-
-  // Persiste a mensagem no histórico pra aparecer na aba Conversas do grupo
-  // (mesmo padrão das mensagens de boas-vindas/escala). Não-fatal.
-  if (groupOk) {
+  const groupResults: { name: string; ok: boolean; error?: string }[] = [];
+  for (const g of targetGroups) {
+    const groupName = g.label || g.jid;
+    let sentResult: unknown;
     try {
-      await prisma.whatsappMessage.create({
-        data: {
-          // id REAL do WhatsApp (key.id) → permite "apagar para todos" depois.
-          message_id: extractSentMessageId(sentResult) ?? `compras-concluida-${jid}-${Date.now()}`,
-          instance_name: process.env.EVOLUTION_INSTANCE || "default",
-          remote_jid: jid,
-          from_me: true,
-          push_name: groupName,
-          message_type: "conversation",
-          text: message,
-          timestamp_ms: BigInt(Date.now()),
-          sent_by_user_id: session.user.id || null,
-          raw_event: { source: "solicitacoes-concluida", toolName: body.toolName },
-        },
-      });
-    } catch (stubErr) {
-      console.warn("[notify-compras] stub insert failed:", (stubErr as Error).message);
+      if (image) {
+        try {
+          sentResult = await sendWhatsappMediaToGroup(g.jid, image, message);
+          withPhoto = true;
+        } catch (mediaErr) {
+          photoError = (mediaErr as Error).message;
+          console.warn(`[notify-compras] foto falhou pro grupo ${groupName}, caindo pro texto:`, photoError);
+          sentResult = await sendWhatsappTextToGroup(g.jid, message);
+        }
+      } else {
+        sentResult = await sendWhatsappTextToGroup(g.jid, message);
+      }
+      groupResults.push({ name: groupName, ok: true });
+      try {
+        await prisma.whatsappMessage.create({
+          data: {
+            // id REAL do WhatsApp (key.id) → permite "apagar para todos" depois.
+            message_id: extractSentMessageId(sentResult) ?? `compras-concluida-${g.jid}-${Date.now()}`,
+            instance_name: process.env.EVOLUTION_INSTANCE || "default",
+            remote_jid: g.jid,
+            from_me: true,
+            push_name: groupName,
+            message_type: "conversation",
+            text: message,
+            timestamp_ms: BigInt(Date.now()),
+            sent_by_user_id: session.user.id || null,
+            raw_event: { source: "solicitacoes-concluida", toolName: body.toolName },
+          },
+        });
+      } catch (stubErr) {
+        console.warn("[notify-compras] stub insert failed:", (stubErr as Error).message);
+      }
+    } catch (err) {
+      groupResults.push({ name: groupName, ok: false, error: (err as Error).message });
     }
   }
 
@@ -200,27 +196,28 @@ export async function POST(request: NextRequest) {
   }
 
   const dmSent = dmResults.filter((r) => r.ok).length;
+  const okGroups = groupResults.filter((r) => r.ok);
+  const failedGroups = groupResults.filter((r) => !r.ok);
 
-  if (!groupOk) {
-    // Grupo falhou: mantém o formato de aviso que o frontend já exibe no toast.
-    // (sent = 0 pro toast continuar mostrando o warning; as DMs, se houver, vão
-    // em dmResults.)
+  if (okGroups.length === 0) {
+    // Todos os grupos falharam: mantém o formato que o frontend exibe no toast
+    // (sent = 0 + warning). As DMs, se houver, vão em dmResults.
     return NextResponse.json({
       status: "error",
       sent: 0,
-      warning: `Falha ao enviar pro grupo "${groupName}": ${groupError}`,
+      warning: `Falha ao enviar pro(s) grupo(s): ${failedGroups.map((g) => `${g.name} (${g.error})`).join("; ")}`,
       ...(dmResults.length ? { dmSent, dmResults } : {}),
     }, { status: 200 });
   }
 
-  // `sent` segue representando o aviso ao GRUPO (o toast do frontend é centrado
-  // no grupo). As DMs opcionais vão em campos próprios.
+  // `sent` = quantos grupos receberam; `group` lista os nomes (o toast usa isso).
   return NextResponse.json({
     status: "ok",
-    sent: 1,
-    group: groupName,
+    sent: okGroups.length,
+    group: okGroups.map((g) => g.name).join(", "),
     withPhoto,
     ...(photoError && { photoError }),
+    ...(failedGroups.length ? { groupErrors: failedGroups.map((g) => `${g.name} (${g.error})`) } : {}),
     ...(dmResults.length ? { dmSent, dmResults } : {}),
   });
 }

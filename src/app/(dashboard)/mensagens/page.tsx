@@ -39,7 +39,8 @@ type Mode = "colaboradores" | "manual" | "grupo";
 // Configuração dos avisos de Solicitações/Compras. Espelha o NotifyConfig do
 // servidor (src/lib/services/solicitacoes-notify-config.ts); tipado localmente
 // pra não importar o módulo de servidor (que puxa o Prisma) no bundle do client.
-interface NotifyTarget { groupJid: string | null; groupLabel: string | null; functions: string[] }
+interface NotifyGroup { jid: string; label: string | null }
+interface NotifyTarget { groups: NotifyGroup[]; functions: string[] }
 interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget }
 interface FunctionLite { id: number; name: string; active?: boolean }
 interface EmployeeRoleLite { id: number; name: string; phone: string | null; role: string | null; status: string | null }
@@ -165,28 +166,38 @@ function NotifyTargetEditor({
     });
   }
 
-  function setGroup(jid: string) {
-    if (!jid) { onChange({ ...target, groupJid: null, groupLabel: null }); return; }
-    const g = groups.find((x) => x.remote_jid === jid);
-    onChange({ ...target, groupJid: jid, groupLabel: g?.push_name || null });
+  function toggleGroup(g: GroupLite) {
+    const exists = target.groups.some((x) => x.jid === g.remote_jid);
+    const next = exists
+      ? target.groups.filter((x) => x.jid !== g.remote_jid)
+      : [...target.groups, { jid: g.remote_jid, label: g.push_name || null }];
+    onChange({ ...target, groups: next });
   }
 
   const groupBlock = (
     <div key="grp">
       <label className="block text-xs font-medium mb-1 text-text-light">{groupLabel}</label>
-      <select
-        value={target.groupJid || ""}
-        onChange={(e) => setGroup(e.target.value)}
-        disabled={disabled}
-        className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
-      >
-        <option value="">Nenhum grupo</option>
-        {groups.map((g) => (
-          <option key={g.remote_jid} value={g.remote_jid}>
-            {g.push_name || g.remote_jid.replace("@g.us", "")}
-          </option>
-        ))}
-      </select>
+      <div className="border border-border rounded-lg max-h-56 overflow-y-auto divide-y divide-border">
+        {groups.length === 0 ? (
+          <p className="text-xs text-text-light p-3">Nenhum grupo encontrado. Rode &ldquo;Sincronizar grupos&rdquo; na aba Conversas.</p>
+        ) : (
+          groups.map((g) => {
+            const checked = target.groups.some((x) => x.jid === g.remote_jid);
+            return (
+              <label key={g.remote_jid} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggleGroup(g)}
+                  disabled={disabled}
+                  className="w-4 h-4"
+                />
+                <span className="flex-1 text-sm">{g.push_name || g.remote_jid.replace("@g.us", "")}</span>
+              </label>
+            );
+          })
+        )}
+      </div>
       <p className="text-[11px] text-text-light mt-1">{groupHint}</p>
     </div>
   );
@@ -1204,8 +1215,8 @@ export default function MensagensPage() {
                 groupFirst={false}
                 funcLabel="Funções que recebem o aviso (no WhatsApp particular)"
                 funcHint="Cada pessoa dessas funções recebe a mensagem no WhatsApp dela."
-                groupLabel="Grupo (opcional)"
-                groupHint="Se escolher um grupo, o aviso também é postado nele."
+                groupLabel="Grupos (opcional)"
+                groupHint="Marque um ou mais grupos pra postar o aviso neles."
                 disabled={savingCfg}
               />
             </div>
@@ -1222,8 +1233,8 @@ export default function MensagensPage() {
                 membersByFn={membersByFn}
                 groups={groups}
                 groupFirst={true}
-                groupLabel="Grupo de destino"
-                groupHint="Sem grupo escolhido, usamos o grupo “Compras” padrão."
+                groupLabel="Grupos de destino"
+                groupHint="Marque um ou mais grupos. Sem nenhum marcado, usamos o grupo “Compras” padrão."
                 funcLabel="Funções que também recebem (opcional)"
                 funcHint="Além do grupo, cada pessoa dessas funções recebe no WhatsApp dela."
                 disabled={savingCfg}
@@ -1247,6 +1258,9 @@ export default function MensagensPage() {
             Conecte a conta do Mercado Livre da empresa pra puxar as <strong>palavras-chave</strong> oficiais
             do produto pelo link. Elas entram no aviso de <strong>compra concluída</strong> no WhatsApp e
             aparecem ao colar o link em Solicitações/Compras. Autorize uma vez — o acesso se renova sozinho.
+          </p>
+          <p className="text-[11px] text-text-light mt-1">
+            📍 Os grupos e funções que recebem esse aviso são os de <strong>&ldquo;Avisos de Solicitações e Compras → Compra concluída&rdquo;</strong> (logo acima).
           </p>
         </div>
 
