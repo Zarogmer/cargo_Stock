@@ -5,6 +5,7 @@ import {
   isEvolutionConfigured,
   sendWhatsappText,
   sendWhatsappTextToGroup,
+  extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 
@@ -64,7 +65,9 @@ export async function POST(request: NextRequest) {
       try {
         await prisma.whatsappMessage.create({
           data: {
-            message_id: `mensagens-group-${to}-${Date.now()}`,
+            // id REAL do WhatsApp (key.id) → permite "apagar para todos" depois;
+            // cai num id sintético só se o Evolution não devolver o id.
+            message_id: extractSentMessageId(result) ?? `mensagens-group-${to}-${Date.now()}`,
             instance_name: process.env.EVOLUTION_INSTANCE || "default",
             remote_jid: to,
             from_me: true,

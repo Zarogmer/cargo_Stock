@@ -5,6 +5,7 @@ import {
   isEvolutionConfigured,
   sendWhatsappText,
   sendWhatsappTextToGroup,
+  extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { getTeamGroupJid } from "@/lib/services/team-groups";
 import { BOARDING_SAFETY_REMINDER } from "@/lib/services/whatsapp-copy";
@@ -240,12 +241,13 @@ export async function POST(request: NextRequest) {
         try {
           // Passa as menções (preenchidas em lineFor) pra Evolution marcar
           // cada @numero como mention de verdade no WhatsApp.
-          await sendWhatsappTextToGroup(ship.whatsapp_group_jid, groupMessage, costadoMentions);
+          const sent = await sendWhatsappTextToGroup(ship.whatsapp_group_jid, groupMessage, costadoMentions);
           results.push({ target: `grupo:${ship.whatsapp_group_jid}`, ok: true });
           try {
             await prisma.whatsappMessage.create({
               data: {
-                message_id: `escala-${ship.whatsapp_group_jid}-${Date.now()}`,
+                // id REAL do WhatsApp (key.id) → permite "apagar para todos" depois.
+                message_id: extractSentMessageId(sent) ?? `escala-${ship.whatsapp_group_jid}-${Date.now()}`,
                 instance_name: process.env.EVOLUTION_INSTANCE || "default",
                 remote_jid: ship.whatsapp_group_jid,
                 from_me: true,
@@ -293,12 +295,13 @@ export async function POST(request: NextRequest) {
           });
         } else {
           try {
-            await sendWhatsappTextToGroup(jid, groupMessage);
+            const sent = await sendWhatsappTextToGroup(jid, groupMessage);
             results.push({ target: `grupo:${team}`, ok: true });
             try {
               await prisma.whatsappMessage.create({
                 data: {
-                  message_id: `escala-${jid}-${Date.now()}`,
+                  // id REAL do WhatsApp (key.id) → permite "apagar para todos" depois.
+                  message_id: extractSentMessageId(sent) ?? `escala-${jid}-${Date.now()}`,
                   instance_name: process.env.EVOLUTION_INSTANCE || "default",
                   remote_jid: jid,
                   from_me: true,

@@ -415,6 +415,15 @@ export async function POST(req: NextRequest) {
       message_id: messageId || `noid-${Date.now()}-${Math.random()}`,
       remote_jid: remoteJid,
     };
+    // Não ressuscita mensagem já apagada para todos (tombstone): se o Evolution
+    // reenviar o mesmo evento (replay no reconnect), mantém ela apagada.
+    const existing = await prisma.whatsappMessage.findUnique({
+      where: { unique_message: unique },
+      select: { message_type: true },
+    });
+    if (existing?.message_type === "deletedMessage") {
+      return NextResponse.json({ status: "ok", skipped: "deleted-tombstone" });
+    }
     await prisma.whatsappMessage.upsert({
       where: { unique_message: unique },
       update: {

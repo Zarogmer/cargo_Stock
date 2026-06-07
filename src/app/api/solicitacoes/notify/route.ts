@@ -7,6 +7,7 @@ import {
   sendWhatsappMediaToNumber,
   sendWhatsappTextToGroup,
   sendWhatsappMediaToGroup,
+  extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { readNotifyConfig, normalizeFunctionName } from "@/lib/services/solicitacoes-notify-config";
 
@@ -120,15 +121,16 @@ export async function POST(request: NextRequest) {
   if (cfg.groupJid) {
     const groupTarget = `group:${cfg.groupLabel || cfg.groupJid}`;
     try {
+      let sent: unknown;
       if (image) {
         try {
-          await sendWhatsappMediaToGroup(cfg.groupJid, image, message);
+          sent = await sendWhatsappMediaToGroup(cfg.groupJid, image, message);
         } catch (mediaErr) {
           console.warn("[solicitacoes/notify] foto falhou pro grupo, fallback texto:", (mediaErr as Error).message);
-          await sendWhatsappTextToGroup(cfg.groupJid, message);
+          sent = await sendWhatsappTextToGroup(cfg.groupJid, message);
         }
       } else {
-        await sendWhatsappTextToGroup(cfg.groupJid, message);
+        sent = await sendWhatsappTextToGroup(cfg.groupJid, message);
       }
       results.push({ target: groupTarget, ok: true });
 
@@ -136,7 +138,8 @@ export async function POST(request: NextRequest) {
       try {
         await prisma.whatsappMessage.create({
           data: {
-            message_id: `solicitacao-nova-${cfg.groupJid}-${Date.now()}`,
+            // id REAL do WhatsApp (key.id) → permite "apagar para todos" depois.
+            message_id: extractSentMessageId(sent) ?? `solicitacao-nova-${cfg.groupJid}-${Date.now()}`,
             instance_name: process.env.EVOLUTION_INSTANCE || "default",
             remote_jid: cfg.groupJid,
             from_me: true,

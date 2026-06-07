@@ -244,6 +244,53 @@ export async function sendWhatsappMediaToNumber(
   return sendMediaRaw(number, dataUrlOrBase64, caption, fileName);
 }
 
+// Extrai o id REAL da mensagem (key.id) da resposta de um envio do Evolution.
+// sendText/sendMedia retornam `{ key: { id, remoteJid, fromMe }, ... }`. Esse id
+// é o que o WhatsApp usa pra revogar ("apagar para todos") depois — por isso os
+// senders guardam ele no message_id (em vez de um id sintético). Devolve null se
+// a resposta não trouxer, e o caller cai no id sintético de fallback.
+export function extractSentMessageId(result: unknown): string | null {
+  if (!result || typeof result !== "object") return null;
+  const key = (result as Record<string, unknown>).key;
+  if (key && typeof key === "object") {
+    const id = (key as Record<string, unknown>).id;
+    if (typeof id === "string" && id.trim()) return id.trim();
+  }
+  return null;
+}
+
+// Apaga uma mensagem PARA TODOS (revoke) — some do WhatsApp de todo mundo na
+// conversa/grupo, igual ao "Apagar para todos" do app oficial. Endpoint
+// DELETE /chat/deleteMessageForEveryone do Evolution v2.
+//
+// Limitações do PRÓPRIO WhatsApp (não dá pra contornar):
+//   - Só funciona em mensagens que VOCÊ enviou (fromMe), OU em mensagens de
+//     outra pessoa num grupo quando o número conectado é ADMIN.
+//   - Mensagem de outra pessoa numa conversa individual (DM) nunca dá.
+//   - Precisa do id REAL da mensagem (key.id) — ids sintéticos não funcionam.
+// `participant` é o JID de quem enviou (necessário pra revogar msg de terceiro
+// num grupo). Lança se o Evolution/WhatsApp recusar — o caller decide a mensagem.
+export async function deleteWhatsappMessageForEveryone(opts: {
+  remoteJid: string;
+  messageId: string;
+  fromMe: boolean;
+  participant?: string | null;
+}): Promise<unknown> {
+  const cfg = readConfig();
+  const token = await getInstanceToken();
+  const body: Record<string, unknown> = {
+    id: opts.messageId,
+    remoteJid: opts.remoteJid,
+    fromMe: opts.fromMe,
+  };
+  if (opts.participant) body.participant = opts.participant;
+  return evolutionFetch(
+    `/chat/deleteMessageForEveryone/${encodeURIComponent(cfg.instance)}`,
+    { method: "DELETE", body: JSON.stringify(body) },
+    token,
+  );
+}
+
 interface CreateGroupResult {
   // Evolution returns { id: "12036...@g.us", subject, ... }
   id?: string;

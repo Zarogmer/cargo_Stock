@@ -7,6 +7,7 @@ import {
   sendWhatsappTextToGroup,
   setWhatsappGroupDescription,
   updateGroupParticipants,
+  extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 import { clearTeamGroupCache, getTeamGroupJid } from "@/lib/services/team-groups";
@@ -305,11 +306,12 @@ async function broadcastEmbarqueToTeams(args: {
   }
 
   try {
-    await sendWhatsappTextToGroup(jid, message);
+    const sent = await sendWhatsappTextToGroup(jid, message);
     try {
       await prisma.whatsappMessage.create({
         data: {
-          message_id: `embarque-broadcast-${jid}-${Date.now()}`,
+          // id REAL do WhatsApp (key.id) → permite "apagar para todos" depois.
+          message_id: extractSentMessageId(sent) ?? `embarque-broadcast-${jid}-${Date.now()}`,
           instance_name: instance,
           remote_jid: jid,
           from_me: true,
@@ -520,14 +522,15 @@ export async function POST(request: NextRequest) {
           } catch (descErr) {
             console.warn("[groups] set description failed:", (descErr as Error).message);
           }
-          await sendWhatsappTextToGroup(jid, message);
+          const sentWelcome = await sendWhatsappTextToGroup(jid, message);
           // Persiste a mensagem rica de boas-vindas no histórico do app —
           // sem isso a aba Conversas só mostra o stub "Grupo criado" e o
           // usuário não vê no app o que foi enviado pro WhatsApp.
           try {
             await prisma.whatsappMessage.create({
               data: {
-                message_id: `welcome-${jid}-${Date.now()}`,
+                // id REAL do WhatsApp (key.id) → permite "apagar para todos" depois.
+                message_id: extractSentMessageId(sentWelcome) ?? `welcome-${jid}-${Date.now()}`,
                 instance_name: process.env.EVOLUTION_INSTANCE || "default",
                 remote_jid: jid,
                 from_me: true,

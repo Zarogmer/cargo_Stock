@@ -7,6 +7,7 @@ import {
   sendWhatsappMediaToGroup,
   sendWhatsappText,
   sendWhatsappMediaToNumber,
+  extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { getComprasGroupJid, comprasGroupName } from "@/lib/services/compras-group";
 import { readNotifyConfig, normalizeFunctionName } from "@/lib/services/solicitacoes-notify-config";
@@ -120,18 +121,19 @@ export async function POST(request: NextRequest) {
   let photoError: string | null = null;
   let groupOk = false;
   let groupError: string | null = null;
+  let sentResult: unknown;
   try {
     if (image) {
       try {
-        await sendWhatsappMediaToGroup(jid, image, message);
+        sentResult = await sendWhatsappMediaToGroup(jid, image, message);
         withPhoto = true;
       } catch (mediaErr) {
         photoError = (mediaErr as Error).message;
         console.warn("[notify-compras] envio de foto falhou, caindo pro texto:", photoError);
-        await sendWhatsappTextToGroup(jid, message);
+        sentResult = await sendWhatsappTextToGroup(jid, message);
       }
     } else {
-      await sendWhatsappTextToGroup(jid, message);
+      sentResult = await sendWhatsappTextToGroup(jid, message);
     }
     groupOk = true;
   } catch (err) {
@@ -144,7 +146,8 @@ export async function POST(request: NextRequest) {
     try {
       await prisma.whatsappMessage.create({
         data: {
-          message_id: `compras-concluida-${jid}-${Date.now()}`,
+          // id REAL do WhatsApp (key.id) → permite "apagar para todos" depois.
+          message_id: extractSentMessageId(sentResult) ?? `compras-concluida-${jid}-${Date.now()}`,
           instance_name: process.env.EVOLUTION_INSTANCE || "default",
           remote_jid: jid,
           from_me: true,

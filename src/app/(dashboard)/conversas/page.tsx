@@ -153,6 +153,10 @@ function formatFullDateTime(ms: string | number): string {
 
 function previewLine(c: Conversation): string {
   const prefix = c.last_from_me ? "Você: " : "";
+  // Mensagem apagada para todos — placeholder estilo WhatsApp, sem prefixo.
+  if (c.last_message_type === "deletedMessage") {
+    return "🚫 Mensagem apagada";
+  }
   // Sistemas (groupParticipantUpdate, systemNotice) já vêm com texto humano —
   // mostra direto, sem o prefixo "Você:" (não é fala de ninguém).
   if (c.last_message_type === "groupParticipantUpdate" || c.last_message_type === "systemNotice") {
@@ -332,6 +336,15 @@ export default function ConversasPage() {
   const [confirmDelete, setConfirmDelete] = useState<Conversation | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
+
+  // Apagar UMA mensagem (estilo WhatsApp): menu por bolha + confirmação.
+  // `msgMenuId` = id da mensagem com o menu aberto; `confirmMsgDelete` guarda a
+  // mensagem alvo e o escopo ("everyone" = pra todos no WhatsApp / "me" = só
+  // tira do sistema, sem mexer no WhatsApp de ninguém).
+  const [msgMenuId, setMsgMenuId] = useState<string | null>(null);
+  const [confirmMsgDelete, setConfirmMsgDelete] = useState<{ msg: Message; scope: "everyone" | "me" } | null>(null);
+  const [deletingMsg, setDeletingMsg] = useState(false);
+  const [msgDeleteErr, setMsgDeleteErr] = useState<string | null>(null);
 
   const [showNewGroup, setShowNewGroup] = useState(false);
 
@@ -650,6 +663,38 @@ export default function ConversasPage() {
     }
   }
 
+  // Apaga UMA mensagem. scope "everyone" revoga no WhatsApp (some pra todos) e
+  // a bolha vira "Mensagem apagada"; scope "me" só remove do sistema.
+  async function handleDeleteMessage() {
+    if (!confirmMsgDelete) return;
+    const { msg, scope } = confirmMsgDelete;
+    setDeletingMsg(true); setMsgDeleteErr(null);
+    try {
+      const res = await fetch(
+        `/api/whatsapp/messages/${encodeURIComponent(msg.id)}?scope=${scope}`,
+        { method: "DELETE" },
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      if (scope === "everyone") {
+        // Vira tombstone na hora (sem esperar o reload).
+        setMessages((prev) => prev.map((x) =>
+          x.id === msg.id
+            ? { ...x, message_type: "deletedMessage", text: null, media_mimetype: null, media_filename: null }
+            : x,
+        ));
+      } else {
+        setMessages((prev) => prev.filter((x) => x.id !== msg.id));
+      }
+      setConfirmMsgDelete(null);
+      loadConversations();
+    } catch (err) {
+      setMsgDeleteErr((err as Error).message);
+    } finally {
+      setDeletingMsg(false);
+    }
+  }
+
   async function handleSync() {
     setSyncing(true);
     setSyncMsg(null);
@@ -932,6 +977,13 @@ export default function ConversasPage() {
                       : { label: null as string | null, lid: null as string | null };
                     // Reações penduradas nesta mensagem (agregadas por emoji).
                     const reactions = m.message_id ? reactionsByTarget.get(m.message_id) : undefined;
+                    // Mensagem apagada para todos: vira o placeholder "Mensagem
+                    // apagada" (igual ao WhatsApp), sem conteúdo nem menu.
+                    const isDeleted = m.message_type === "deletedMessage";
+                    // Quem pode "apagar para todos": as próprias mensagens sempre;
+                    // mensagem de terceiro só em grupo (e se o número for admin —
+                    // quem valida é o WhatsApp). Em DM, msg do contato não dá.
+                    const canForEveryone = m.from_me || !!selectedConv?.is_group;
                     const bubble = isSystem ? (
                       <div className="flex justify-center my-1">
                         <div
@@ -949,11 +1001,59 @@ export default function ConversasPage() {
                           </p>
                         </div>
                       </div>
+                    ) : isDeleted ? (
+                      <div className={`flex ${m.from_me ? "justify-end" : "justify-start"}`}>
+                        <div className="max-w-[70%] rounded-lg px-3 py-2 bg-white/60 border border-dashed border-gray-300 flex items-center gap-2">
+                          <span className="text-sm text-gray-400 italic">🚫 Mensagem apagada</span>
+                          <span className="text-[10px] text-gray-400" title={formatFullDateTime(m.timestamp_ms)}>
+                            {formatMsgTime(m.timestamp_ms)}
+                          </span>
+                        </div>
+                      </div>
                     ) : (
-                      <div className={`flex flex-col ${m.from_me ? "items-end" : "items-start"}`}>
-                        <div className={`max-w-[70%] rounded-lg px-3 py-2 shadow-sm ${
+                      <div className={`group/msg flex flex-col ${m.from_me ? "items-end" : "items-start"}`}>
+                        <div className={`relative max-w-[70%] rounded-lg px-3 py-2 shadow-sm ${
                           m.from_me ? "bg-[#d9fdd3] text-gray-900" : "bg-white text-gray-900"
                         }`}>
+                          {/* Menu da mensagem (aparece no hover): apagar pra todos / só do sistema */}
+                          <button
+                            type="button"
+                            onClick={() => setMsgMenuId(msgMenuId === m.id ? null : m.id)}
+                            className={`absolute -top-2 ${m.from_me ? "-left-2" : "-right-2"} opacity-0 group-hover/msg:opacity-100 focus:opacity-100 transition w-6 h-6 rounded-full bg-white border border-border shadow text-gray-500 hover:text-gray-700 flex items-center justify-center z-10`}
+                            aria-label="Opções da mensagem"
+                            title="Apagar mensagem"
+                          >
+                            <span className="text-sm leading-none">⋯</span>
+                          </button>
+                          {msgMenuId === m.id && (
+                            <>
+                              <button
+                                type="button"
+                                aria-hidden
+                                tabIndex={-1}
+                                onClick={() => setMsgMenuId(null)}
+                                className="fixed inset-0 z-10 cursor-default"
+                              />
+                              <div className={`absolute z-20 top-5 ${m.from_me ? "left-0" : "right-0"} bg-white border border-border rounded-lg shadow-lg py-1 min-w-[190px] text-left`}>
+                                {canForEveryone && (
+                                  <button
+                                    type="button"
+                                    onClick={() => { setMsgMenuId(null); setConfirmMsgDelete({ msg: m, scope: "everyone" }); }}
+                                    className="w-full text-left px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 flex items-center gap-2"
+                                  >
+                                    <TrashIcon className="w-3.5 h-3.5" /> Apagar para todos
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => { setMsgMenuId(null); setConfirmMsgDelete({ msg: m, scope: "me" }); }}
+                                  className="w-full text-left px-3 py-1.5 text-xs text-text-light hover:bg-gray-50"
+                                >
+                                  Apagar só do sistema
+                                </button>
+                              </div>
+                            </>
+                          )}
                           {sender.label && (
                             sender.lid ? (
                               <button
@@ -1050,6 +1150,26 @@ export default function ConversasPage() {
       {deleteErr && (
         <p className="fixed bottom-4 right-4 bg-red-600 text-white text-sm px-3 py-2 rounded shadow-lg">
           {deleteErr}
+        </p>
+      )}
+
+      <ConfirmDialog
+        open={!!confirmMsgDelete}
+        onClose={() => { setConfirmMsgDelete(null); setMsgDeleteErr(null); }}
+        onConfirm={handleDeleteMessage}
+        title={confirmMsgDelete?.scope === "everyone" ? "Apagar para todos?" : "Apagar só do sistema?"}
+        message={
+          confirmMsgDelete?.scope === "everyone"
+            ? "A mensagem será apagada PARA TODOS no WhatsApp (igual ao \"Apagar para todos\" do app) e fica marcada como apagada aqui. Funciona em mensagens enviadas pelo sistema; em grupo, mensagem de outra pessoa só se o número for admin."
+            : "A mensagem some apenas do sistema. Ela continua no WhatsApp de todo mundo."
+        }
+        confirmLabel={confirmMsgDelete?.scope === "everyone" ? "Apagar para todos" : "Apagar do sistema"}
+        variant="danger"
+        loading={deletingMsg}
+      />
+      {msgDeleteErr && (
+        <p className="fixed bottom-4 right-4 bg-red-600 text-white text-sm px-3 py-2 rounded shadow-lg z-[60] max-w-sm">
+          {msgDeleteErr}
         </p>
       )}
 

@@ -10,7 +10,7 @@
 //      e envia pro grupo. Um erro numa agenda nunca trava as outras.
 
 import { prisma } from "@/lib/prisma";
-import { isEvolutionConfigured, sendWhatsappTextToGroup } from "@/lib/services/evolution-api";
+import { isEvolutionConfigured, sendWhatsappTextToGroup, extractSentMessageId } from "@/lib/services/evolution-api";
 import {
   buildTemplate,
   type ProntidaoTeam,
@@ -154,12 +154,13 @@ export async function runDueScheduledMessages(): Promise<{ claimed: number; sent
     try {
       if (!isEvolutionConfigured()) throw new Error("Evolution API não configurada");
       const text = await renderScheduled(due);
-      await sendWhatsappTextToGroup(due.group_jid, text);
+      const sentMsg = await sendWhatsappTextToGroup(due.group_jid, text);
       // Stub pra aparecer em Conversas (não-fatal).
       try {
         await prisma.whatsappMessage.create({
           data: {
-            message_id: `scheduled-${due.id}-${Date.now()}`,
+            // id REAL do WhatsApp (key.id) → permite "apagar para todos" depois.
+            message_id: extractSentMessageId(sentMsg) ?? `scheduled-${due.id}-${Date.now()}`,
             instance_name: process.env.EVOLUTION_INSTANCE || "default",
             remote_jid: due.group_jid,
             from_me: true,
