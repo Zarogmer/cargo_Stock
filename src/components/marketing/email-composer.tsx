@@ -7,7 +7,28 @@ import { useSearchParams } from "next/navigation";
 // Texto puro: os deeplinks do Outlook / mailto não suportam HTML de forma
 // confiável. O usuário pode editar tudo na tela antes de abrir o Outlook.
 
-const SITE_URL = "https://cargoships.com.br";
+const SITE_URL = "https://cargoshipscleaning.com";
+
+// Anexos hospedados em /public/materiais. O deeplink do Outlook NÃO carrega
+// anexos (aceita só to/subject/body), então o botão "Baixar anexos" baixa os 3
+// PDFs e o usuário arrasta para a janela do Outlook antes de enviar.
+const ATTACHMENTS = [
+  {
+    label: "Apresentação institucional (PT)",
+    href: "/materiais/apresentacao-cargo-ships-cleaning-pt.pdf",
+    filename: "Cargo Ships Cleaning - Apresentacao.pdf",
+  },
+  {
+    label: "Company presentation (EN)",
+    href: "/materiais/cargo-ships-cleaning-company-presentation-en.pdf",
+    filename: "Cargo Ships Cleaning - Company Presentation.pdf",
+  },
+  {
+    label: "Proposta — limpeza de porão (Santos)",
+    href: "/materiais/proposta-limpeza-de-porao-santos.pdf",
+    filename: "Cargo Ships Cleaning - Proposta Limpeza de Porao.pdf",
+  },
+];
 
 const DEFAULT_SUBJECT = "Cargo Ships Cleaning — Lavagem de porão e serviços a bordo";
 
@@ -16,17 +37,24 @@ function buildDefaultBody(clientName: string): string {
   const greeting = trimmed ? `Prezados (${trimmed}),` : "Prezados,";
   return `${greeting}
 
-Somos a Cargo Ships Cleaning, especializada em limpeza e lavagem de porão de navios de carga nos portos brasileiros.
+A Cargo Ships Cleaning é especializada em limpeza e lavagem de porão de navios de carga (bulk carriers), com mais de 30 anos de atuação nos principais portos do Brasil e da América do Sul.
+
+Por que trabalhar conosco:
+• No Cure, No Pay — se o porão não for aprovado na inspeção, o risco financeiro é 100% nosso
+• Produtos 100% biodegradáveis, sem risco de contaminação para o navio, a carga e o mar
+• Equipe própria, certificada e com seguro de responsabilidade civil
+• Liberação e autorização junto à Autoridade Portuária inclusas
 
 Nossos serviços:
-• Lavagem de porão
+• Lavagem e limpeza de porão (cargo hold cleaning)
 • Limpeza de costado
+• Remoção de ferrugem e pintura de porão (sob demanda)
 • Serviços a bordo durante a estadia no porto
 
-Conheça nosso trabalho e saiba mais em nosso site:
+Em anexo enviamos nossa apresentação institucional e uma proposta modelo. Conheça mais em nosso site:
 ${SITE_URL}
 
-Estamos à disposição para atender a sua embarcação com agilidade e segurança.
+Estamos à disposição para atender a sua embarcação com agilidade, segurança e resultado garantido.
 
 Atenciosamente,
 Equipe Cargo Ships Cleaning
@@ -65,6 +93,22 @@ export function EmailComposer() {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
+  // O deeplink do Outlook não carrega anexos — então baixamos os 3 PDFs para a
+  // máquina do usuário, que arrasta os arquivos para a janela do Outlook.
+  function baixarAnexos() {
+    ATTACHMENTS.forEach((att, i) => {
+      // Pequeno atraso entre downloads para o navegador não agrupar/bloquear.
+      setTimeout(() => {
+        const a = document.createElement("a");
+        a.href = att.href;
+        a.download = att.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }, i * 400);
+    });
+  }
+
   function restoreTemplate() {
     setSubject(DEFAULT_SUBJECT);
     setBody(buildDefaultBody(clientName));
@@ -76,7 +120,7 @@ export function EmailComposer() {
   return (
     <div className="space-y-6 max-w-3xl">
       <p className="text-text-light text-sm">
-        Convide clientes a conhecer a Cargo Ships Cleaning e o site cargoships.com.br.
+        Convide clientes a conhecer a Cargo Ships Cleaning e o site cargoshipscleaning.com.
       </p>
 
       {/* Formulário */}
@@ -131,6 +175,26 @@ export function EmailComposer() {
           />
         </div>
 
+        {/* Anexos */}
+        <div className="rounded-lg border border-border bg-gray-50 p-3">
+          <p className="text-xs font-medium text-text mb-2">Anexos (3 PDFs)</p>
+          <ul className="space-y-1">
+            {ATTACHMENTS.map((att) => (
+              <li key={att.href} className="flex items-center gap-1.5 text-xs text-text-light">
+                <span aria-hidden>📄</span>
+                <a
+                  href={att.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-primary hover:underline"
+                >
+                  {att.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+
         {/* Ações */}
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <button
@@ -139,6 +203,13 @@ export function EmailComposer() {
           >
             <span aria-hidden>✉️</span>
             Enviar
+          </button>
+          <button
+            onClick={baixarAnexos}
+            className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg hover:bg-gray-50 transition text-sm font-medium text-text"
+          >
+            <span aria-hidden>📎</span>
+            Baixar anexos (3 PDFs)
           </button>
           <button
             onClick={restoreTemplate}
@@ -153,9 +224,11 @@ export function EmailComposer() {
       <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-800">
         <p className="font-medium mb-1">Como funciona</p>
         <p>
-          O botão <strong>Enviar</strong> abre o Outlook no navegador já com o email preenchido
-          (destinatário, assunto e texto). Confira e clique em <strong>Enviar</strong> no Outlook —
-          o email sai da sua conta normal. Nada é enviado automaticamente pelo sistema.
+          Clique em <strong>Baixar anexos</strong> para salvar os 3 PDFs no seu computador. Depois
+          clique em <strong>Enviar</strong>: o Outlook abre no navegador já com o email preenchido
+          (destinatário, assunto e texto). Arraste os 3 PDFs para a janela do Outlook, confira tudo e
+          clique em <strong>Enviar</strong> no Outlook — o email sai da sua conta normal. Nada é
+          enviado automaticamente pelo sistema.
         </p>
       </div>
     </div>
