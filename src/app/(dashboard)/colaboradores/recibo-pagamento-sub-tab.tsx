@@ -63,6 +63,24 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
   const periodoPreview = formatPeriodoAnterior(data);
   const dataPreview = formatDataExtenso(data);
 
+  // Máscara de centavos: os dígitos entram da direita pra esquerda e o campo
+  // mostra sempre duas casas (0,00 → 0,01 → ... → 10,00). Ex.: digitar "1000"
+  // vira "10,00". O texto formatado continua compatível com parseDecimalBR.
+  function handleValorChange(raw: string) {
+    const digits = raw.replace(/\D/g, "");
+    if (!digits) {
+      setValor("");
+      return;
+    }
+    const cents = parseInt(digits, 10);
+    setValor(
+      (cents / 100).toLocaleString("pt-BR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })
+    );
+  }
+
   function handlePickEmployee(idStr: string) {
     setEmployeeId(idStr);
     if (!idStr) {
@@ -191,9 +209,9 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
             <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Valor (R$)</label>
             <input
               type="text"
-              inputMode="decimal"
+              inputMode="numeric"
               value={valor}
-              onChange={(e) => setValor(e.target.value)}
+              onChange={(e) => handleValorChange(e.target.value)}
               placeholder="0,00"
               className={fieldCls}
             />
