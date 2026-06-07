@@ -16,8 +16,9 @@ function appBaseUrl(req: NextRequest): string {
 // salva. Sempre redireciona pra /mensagens?ml=<status> pra UI mostrar o aviso.
 export async function GET(req: NextRequest) {
   const base = appBaseUrl(req);
-  const dest = (status: string) => {
-    const res = NextResponse.redirect(`${base}/mensagens?ml=${status}`);
+  const dest = (status: string, reason?: string) => {
+    const qs = reason ? `?ml=${status}&reason=${encodeURIComponent(reason.slice(0, 180))}` : `?ml=${status}`;
+    const res = NextResponse.redirect(`${base}/mensagens${qs}`);
     res.cookies.delete(ML_STATE_COOKIE);
     return res;
   };
@@ -29,20 +30,27 @@ export async function GET(req: NextRequest) {
   if (!hasModuleAccess(role, "MENSAGENS")) return dest("forbidden");
 
   const url = req.nextUrl;
-  if (url.searchParams.get("error")) return dest("denied"); // usuário recusou no ML
+  const oauthError = url.searchParams.get("error");
+  if (oauthError) return dest("denied", url.searchParams.get("error_description") || oauthError);
 
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const cookieState = req.cookies.get(ML_STATE_COOKIE)?.value;
   if (!code || !state || !cookieState || state !== cookieState) {
-    return dest("error");
+    // "state" inválido: o cookie de segurança não voltou (cookies bloqueados,
+    // janela anônima, sessão expirada) ou não bateu — não é erro de credencial.
+    console.error("[mercado-livre callback] state inválido", {
+      hasCode: !!code, hasState: !!state, hasCookie: !!cookieState, match: state === cookieState,
+    });
+    return dest("state");
   }
 
   try {
     await exchangeMlCode(code, session.user.id || null);
     return dest("ok");
   } catch (err) {
-    console.error("[mercado-livre callback] troca de code falhou:", err);
-    return dest("error");
+    const msg = (err as Error).message || "erro desconhecido";
+    console.error("[mercado-livre callback] troca de code falhou:", msg);
+    return dest("error", msg);
   }
 }

@@ -166,38 +166,28 @@ function NotifyTargetEditor({
     });
   }
 
-  function toggleGroup(g: GroupLite) {
-    const exists = target.groups.some((x) => x.jid === g.remote_jid);
-    const next = exists
-      ? target.groups.filter((x) => x.jid !== g.remote_jid)
-      : [...target.groups, { jid: g.remote_jid, label: g.push_name || null }];
-    onChange({ ...target, groups: next });
+  function setGroup(jid: string) {
+    if (!jid) { onChange({ ...target, groups: [] }); return; }
+    const g = groups.find((x) => x.remote_jid === jid);
+    onChange({ ...target, groups: [{ jid, label: g?.push_name || null }] });
   }
 
   const groupBlock = (
     <div key="grp">
       <label className="block text-xs font-medium mb-1 text-text-light">{groupLabel}</label>
-      <div className="border border-border rounded-lg max-h-56 overflow-y-auto divide-y divide-border">
-        {groups.length === 0 ? (
-          <p className="text-xs text-text-light p-3">Nenhum grupo encontrado. Rode &ldquo;Sincronizar grupos&rdquo; na aba Conversas.</p>
-        ) : (
-          groups.map((g) => {
-            const checked = target.groups.some((x) => x.jid === g.remote_jid);
-            return (
-              <label key={g.remote_jid} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => toggleGroup(g)}
-                  disabled={disabled}
-                  className="w-4 h-4"
-                />
-                <span className="flex-1 text-sm">{g.push_name || g.remote_jid.replace("@g.us", "")}</span>
-              </label>
-            );
-          })
-        )}
-      </div>
+      <select
+        value={target.groups[0]?.jid || ""}
+        onChange={(e) => setGroup(e.target.value)}
+        disabled={disabled}
+        className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+      >
+        <option value="">Nenhum grupo</option>
+        {groups.map((g) => (
+          <option key={g.remote_jid} value={g.remote_jid}>
+            {g.push_name || g.remote_jid.replace("@g.us", "")}
+          </option>
+        ))}
+      </select>
       <p className="text-[11px] text-text-light mt-1">{groupHint}</p>
     </div>
   );
@@ -467,15 +457,18 @@ export default function MensagensPage() {
     const params = new URLSearchParams(window.location.search);
     const ml = params.get("ml");
     if (!ml) return;
+    const reason = params.get("reason");
     const map: Record<string, { kind: "ok" | "err"; text: string }> = {
       ok: { kind: "ok", text: "Mercado Livre conectado com sucesso! 🎉 As palavras-chave dos produtos já vão sair nos avisos." },
-      error: { kind: "err", text: "Não consegui concluir a conexão com o Mercado Livre. Tente de novo." },
-      denied: { kind: "err", text: "Conexão cancelada — o acesso não foi autorizado no Mercado Livre." },
+      error: { kind: "err", text: `Não consegui concluir a conexão com o Mercado Livre${reason ? `: ${reason}` : "."}` },
+      state: { kind: "err", text: "A conexão expirou ou o navegador bloqueou o cookie de segurança. Tente de novo na mesma janela (sem aba anônima) e sem bloquear cookies do site." },
+      denied: { kind: "err", text: `Conexão cancelada — o acesso não foi autorizado no Mercado Livre${reason ? `: ${reason}` : "."}` },
       config_missing: { kind: "err", text: "Mercado Livre não configurado no servidor (faltam as credenciais). Avise a tecnologia." },
       forbidden: { kind: "err", text: "Você não tem permissão para conectar o Mercado Livre." },
     };
     setMlMsg(map[ml] || null);
     params.delete("ml");
+    params.delete("reason");
     const qs = params.toString();
     window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
     loadMlStatus();
@@ -1215,8 +1208,8 @@ export default function MensagensPage() {
                 groupFirst={false}
                 funcLabel="Funções que recebem o aviso (no WhatsApp particular)"
                 funcHint="Cada pessoa dessas funções recebe a mensagem no WhatsApp dela."
-                groupLabel="Grupos (opcional)"
-                groupHint="Marque um ou mais grupos pra postar o aviso neles."
+                groupLabel="Grupo (opcional)"
+                groupHint="Se escolher um grupo, o aviso também é postado nele."
                 disabled={savingCfg}
               />
             </div>
@@ -1233,8 +1226,8 @@ export default function MensagensPage() {
                 membersByFn={membersByFn}
                 groups={groups}
                 groupFirst={true}
-                groupLabel="Grupos de destino"
-                groupHint="Marque um ou mais grupos. Sem nenhum marcado, usamos o grupo “Compras” padrão."
+                groupLabel="Grupo de destino"
+                groupHint="Sem grupo escolhido, usamos o grupo “Compras” padrão."
                 funcLabel="Funções que também recebem (opcional)"
                 funcHint="Além do grupo, cada pessoa dessas funções recebe no WhatsApp dela."
                 disabled={savingCfg}
@@ -1260,7 +1253,7 @@ export default function MensagensPage() {
             aparecem ao colar o link em Solicitações/Compras. Autorize uma vez — o acesso se renova sozinho.
           </p>
           <p className="text-[11px] text-text-light mt-1">
-            📍 Os grupos e funções que recebem esse aviso são os de <strong>&ldquo;Avisos de Solicitações e Compras → Compra concluída&rdquo;</strong> (logo acima).
+            📍 O grupo e as funções que recebem esse aviso são os de <strong>&ldquo;Avisos de Solicitações e Compras → Compra concluída&rdquo;</strong> (logo acima).
           </p>
         </div>
 

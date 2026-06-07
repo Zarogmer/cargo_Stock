@@ -186,15 +186,18 @@ async function postToken(body: Record<string, string>): Promise<TokenResponse> {
     /* resposta não-JSON */
   }
   if (!res.ok) {
-    const msg =
-      json && typeof json === "object" && "message" in json
-        ? String((json as { message: unknown }).message)
-        : `HTTP ${res.status}`;
-    // 400 invalid_grant / 401 = código ou refresh token inválido → reconectar.
+    // ML devolve { error: "invalid_client", message: "...", ... }. Junta os dois
+    // pra mensagem ficar diagnóstica ("invalid_client" = segredo errado;
+    // "invalid_grant" = código/redirect_uri; "forbidden" = PKCE etc.).
+    const o = json && typeof json === "object" ? (json as Record<string, unknown>) : {};
+    const errCode = typeof o.error === "string" ? o.error : "";
+    const errMsg = typeof o.message === "string" ? o.message : "";
+    const detail = [errCode, errMsg].filter(Boolean).join(" — ") || `HTTP ${res.status}`;
+    // 400 invalid_grant / 401 invalid_client = código ou segredo inválido.
     if (res.status === 400 || res.status === 401) {
-      throw new MercadoLivreAuthError(`Mercado Livre recusou a autorização: ${msg}`);
+      throw new MercadoLivreAuthError(`Mercado Livre recusou: ${detail}`);
     }
-    throw new MercadoLivreApiError(`Falha no token do Mercado Livre: ${msg}`, res.status);
+    throw new MercadoLivreApiError(`Falha no token do Mercado Livre: ${detail}`, res.status);
   }
   return json as TokenResponse;
 }
