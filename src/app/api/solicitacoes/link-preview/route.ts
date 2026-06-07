@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { isMercadoLivreLink, fetchMlItem } from "@/lib/services/mercado-livre";
 
 // Precisa de Buffer (base64 da imagem) e fetch sem edge limits → Node runtime.
 export const runtime = "nodejs";
@@ -11,7 +10,6 @@ interface PreviewResult {
   image: string | null; // data URL (base64 inline) ou, em último caso, a URL remota
   supplier: string | null;
   url: string; // URL final após redirecionamentos
-  keywords?: string | null; // palavras-chave oficiais (só Mercado Livre conectado)
 }
 
 const UA =
@@ -349,29 +347,6 @@ export async function POST(request: NextRequest) {
   const u = safeUrl(url || "");
   if (!u) return NextResponse.json({ error: "Link inválido ou não permitido." }, { status: 200 });
 
-  // Mercado Livre conectado: tenta a API OFICIAL primeiro (nome/preço/foto limpos
-  // + palavras-chave). Qualquer falha (não configurado, sem token, item removido,
-  // timeout) cai na raspagem abaixo — que segue funcionando sem a conta conectada.
-  if (isMercadoLivreLink(u.toString())) {
-    try {
-      const item = await fetchMlItem(u.toString());
-      if (item && (item.title || item.price != null || item.picture)) {
-        const image = item.picture ? (await imageToDataUrl(item.picture)) || item.picture : null;
-        const result: PreviewResult = {
-          name: item.title || null,
-          value: item.price,
-          image,
-          supplier: "Mercado Livre",
-          url: item.permalink || u.toString(),
-          keywords: item.keywords || null,
-        };
-        return NextResponse.json(result);
-      }
-    } catch (err) {
-      console.warn("[link-preview] API oficial do ML indisponível, usando raspagem:", (err as Error).message);
-    }
-  }
-
   // ML (e afins) só entregam a página completa — com o preço — pro Googlebot.
   const htmlUa = prefersGooglebot(u.hostname) ? GOOGLEBOT_UA : UA;
   let html: string;
@@ -420,6 +395,6 @@ export async function POST(request: NextRequest) {
   const supplier =
     friendlySupplier(u.hostname) || siteName || u.hostname.replace(/^www\./, "");
 
-  const result: PreviewResult = { name, value, image, supplier, url: finalUrl, keywords: null };
+  const result: PreviewResult = { name, value, image, supplier, url: finalUrl };
   return NextResponse.json(result);
 }

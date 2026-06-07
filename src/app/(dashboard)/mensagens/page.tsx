@@ -13,14 +13,6 @@ interface StatusResponse {
   error?: string;
 }
 
-// Estado da integração com o Mercado Livre (GET /api/integrations/mercado-livre/status).
-interface MlStatusLite {
-  configured: boolean;
-  connected: boolean;
-  userId: number | null;
-  expiresAt: number | null;
-}
-
 interface EmployeeLite {
   id: number;
   name: string;
@@ -310,12 +302,6 @@ export default function MensagensPage() {
   const [cfgFunctions, setCfgFunctions] = useState<FunctionLite[]>([]);
   const [cfgEmployees, setCfgEmployees] = useState<EmployeeRoleLite[]>([]);
 
-  // Integração Mercado Livre (OAuth oficial → palavras-chave dos produtos)
-  const [mlStatus, setMlStatus] = useState<MlStatusLite | null>(null);
-  const [mlLoading, setMlLoading] = useState(true);
-  const [mlDisconnecting, setMlDisconnecting] = useState(false);
-  const [mlMsg, setMlMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-
   const loadStatus = useCallback(async () => {
     setLoadingStatus(true);
     try {
@@ -391,36 +377,6 @@ export default function MensagensPage() {
     }
   }, []);
 
-  const loadMlStatus = useCallback(async () => {
-    setMlLoading(true);
-    try {
-      const res = await fetch("/api/integrations/mercado-livre/status");
-      setMlStatus(res.ok ? ((await res.json()) as MlStatusLite) : null);
-    } catch {
-      setMlStatus(null);
-    } finally {
-      setMlLoading(false);
-    }
-  }, []);
-
-  const disconnectMl = useCallback(async () => {
-    setMlDisconnecting(true);
-    setMlMsg(null);
-    try {
-      const res = await fetch("/api/integrations/mercado-livre/disconnect", { method: "POST" });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error || "Falha ao desconectar.");
-      }
-      setMlMsg({ kind: "ok", text: "Conta do Mercado Livre desconectada." });
-      await loadMlStatus();
-    } catch (err) {
-      setMlMsg({ kind: "err", text: (err as Error).message });
-    } finally {
-      setMlDisconnecting(false);
-    }
-  }, [loadMlStatus]);
-
   // Funções (job_functions ativas) + colaboradores (com função) pra montar o
   // seletor e o "ver quem está na função".
   const loadFunctions = useCallback(async () => {
@@ -445,34 +401,9 @@ export default function MensagensPage() {
     loadSchedules();
     loadNotifyConfig();
     loadFunctions();
-    loadMlStatus();
     const interval = setInterval(loadStatus, 10000);
     return () => clearInterval(interval);
-  }, [canView, loadStatus, loadEmployees, loadGroups, loadSchedules, loadNotifyConfig, loadFunctions, loadMlStatus]);
-
-  // Aviso de volta do OAuth do Mercado Livre: a rota /callback redireciona pra cá
-  // com ?ml=ok|error|denied|... Mostra a mensagem e limpa o parâmetro da URL.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const ml = params.get("ml");
-    if (!ml) return;
-    const reason = params.get("reason");
-    const map: Record<string, { kind: "ok" | "err"; text: string }> = {
-      ok: { kind: "ok", text: "Mercado Livre conectado com sucesso! 🎉 As palavras-chave dos produtos já vão sair nos avisos." },
-      error: { kind: "err", text: `Não consegui concluir a conexão com o Mercado Livre${reason ? `: ${reason}` : "."}` },
-      state: { kind: "err", text: "A conexão expirou ou o navegador bloqueou o cookie de segurança. Tente de novo na mesma janela (sem aba anônima) e sem bloquear cookies do site." },
-      denied: { kind: "err", text: `Conexão cancelada — o acesso não foi autorizado no Mercado Livre${reason ? `: ${reason}` : "."}` },
-      config_missing: { kind: "err", text: "Mercado Livre não configurado no servidor (faltam as credenciais). Avise a tecnologia." },
-      forbidden: { kind: "err", text: "Você não tem permissão para conectar o Mercado Livre." },
-    };
-    setMlMsg(map[ml] || null);
-    params.delete("ml");
-    params.delete("reason");
-    const qs = params.toString();
-    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
-    loadMlStatus();
-  }, [loadMlStatus]);
+  }, [canView, loadStatus, loadEmployees, loadGroups, loadSchedules, loadNotifyConfig, loadFunctions]);
 
   const teams = useMemo(() => {
     const set = new Set<string>();
@@ -1241,73 +1172,6 @@ export default function MensagensPage() {
             {savingCfg ? "Salvando..." : "Salvar configuração"}
           </Button>
         </div>
-      </section>
-
-      {/* Integração Mercado Livre */}
-      <section className="bg-card rounded-2xl border border-border p-6 space-y-4">
-        <div>
-          <h2 className="text-lg font-bold text-text">Integração Mercado Livre 🛒</h2>
-          <p className="text-sm text-text-light">
-            Conecte a conta do Mercado Livre da empresa pra puxar as <strong>palavras-chave</strong> oficiais
-            do produto pelo link. Elas entram no aviso de <strong>compra concluída</strong> no WhatsApp e
-            aparecem ao colar o link em Solicitações/Compras. Autorize uma vez — o acesso se renova sozinho.
-          </p>
-          <p className="text-[11px] text-text-light mt-1">
-            📍 O grupo e as funções que recebem esse aviso são os de <strong>&ldquo;Avisos de Solicitações e Compras → Compra concluída&rdquo;</strong> (logo acima).
-          </p>
-        </div>
-
-        {mlMsg && (
-          <div className={`rounded-lg px-3 py-2 text-sm border ${
-            mlMsg.kind === "ok"
-              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
-              : "bg-red-50 border-red-200 text-red-900"
-          }`}>
-            {mlMsg.text}
-          </div>
-        )}
-
-        {mlLoading ? (
-          <p className="text-sm text-text-light">Verificando conexão...</p>
-        ) : !mlStatus?.configured ? (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-sm text-amber-900">
-            Não configurado no servidor — faltam as credenciais do Mercado Livre
-            (<code>MERCADO_LIVRE_CLIENT_ID</code> e <code>MERCADO_LIVRE_CLIENT_SECRET</code>). Avise a equipe de tecnologia.
-          </div>
-        ) : mlStatus.connected ? (
-          <div className="space-y-3">
-            <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-sm text-emerald-900 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              <span>
-                Conectado{mlStatus.userId ? ` (conta ${mlStatus.userId})` : ""}.
-                {mlStatus.expiresAt ? ` Token válido até ${new Date(mlStatus.expiresAt).toLocaleString("pt-BR")} — renova sozinho.` : ""}
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <a
-                href="/api/integrations/mercado-livre/connect"
-                className="inline-flex items-center justify-center gap-2 font-medium rounded-lg transition bg-gray-100 hover:bg-gray-200 text-text px-4 py-2.5 text-sm"
-              >
-                Reconectar
-              </a>
-              <Button type="button" variant="danger" onClick={disconnectMl} disabled={mlDisconnecting}>
-                {mlDisconnecting ? "Desconectando..." : "Desconectar"}
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="bg-gray-50 border border-border rounded-lg px-3 py-2 text-sm text-text-light">
-              Ainda não conectado. Clique em conectar e autorize com a conta do Mercado Livre da empresa.
-            </div>
-            <a
-              href="/api/integrations/mercado-livre/connect"
-              className="inline-flex items-center justify-center gap-2 font-medium rounded-lg transition bg-primary hover:bg-primary-dark text-white px-4 py-2.5 text-sm"
-            >
-              Conectar Mercado Livre
-            </a>
-          </div>
-        )}
       </section>
 
       {/* Mensagens agendadas */}
