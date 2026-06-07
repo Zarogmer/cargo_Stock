@@ -238,17 +238,11 @@ function formatPurchaseDate(value: string | null): string {
   return `${d}/${m}/${y}`;
 }
 
-// "YYYY-MM" -> "Junho de 2026"
+// Nomes dos meses (pt-BR), usados nos filtros e no rótulo do período.
 const MONTH_NAMES = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
 ];
-function formatMonthLabel(ym: string): string {
-  const [y, m] = ym.split("-");
-  const idx = Number(m) - 1;
-  if (idx < 0 || idx > 11) return ym;
-  return `${MONTH_NAMES[idx]} de ${y}`;
-}
 
 // Resolve qual item de um setor deve ser reposto ao abastecer: se veio um código
 // (ex.: "AR01"), casa por ele — o código é derivado da lista inteira (buildCodeMap),
@@ -301,9 +295,14 @@ export default function SolicitacoesPage() {
   // "Armazenar no Estoque": lança uma solicitação já comprada no estoque do galpão.
   const [stockRequest, setStockRequest] = useState<ToolRequest | null>(null);
   const now = new Date();
-  const [purchaseMonth, setPurchaseMonth] = useState(
-    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
-  );
+  // Filtros do Controle de Compras — também alimentam o relatório em Excel.
+  const [filterYear, setFilterYear] = useState(String(now.getFullYear()));
+  const [filterMonth, setFilterMonth] = useState(String(now.getMonth() + 1)); // "1".."12" | "" = ano inteiro
+  const [filterDept, setFilterDept] = useState("");
+  const [filterSupplier, setFilterSupplier] = useState("");
+  const [filterPayment, setFilterPayment] = useState("");
+  const [generatingReport, setGeneratingReport] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   // Fornecedores
   const [showSupplierForm, setShowSupplierForm] = useState(false);
@@ -922,12 +921,65 @@ export default function SolicitacoesPage() {
 
   const pendingCount = requests.filter((r) => r.status === "PENDENTE").length;
 
-  // --- Controle de Compras: dados derivados ---
-  const purchasesForMonth = purchases.filter(
-    (p) => (p.purchase_date || "").slice(0, 7) === purchaseMonth
-  );
-  const monthTotal = purchasesForMonth.reduce((sum, p) => sum + (p.total_value || 0), 0);
-  const monthCount = purchasesForMonth.length;
+  // --- Controle de Compras: filtros + dados derivados ---
+  // Os mesmos filtros valem pra lista em tela e pro relatório em Excel.
+  const filteredPurchases = purchases.filter((p) => {
+    const iso = (p.purchase_date || "").slice(0, 10);
+    if (!iso) return false; // sem data não entra num relatório por período
+    const [y, m] = iso.split("-");
+    if (filterYear && y !== filterYear) return false;
+    if (filterMonth && String(Number(m)) !== filterMonth) return false;
+    if (filterDept && (p.department || "") !== filterDept) return false;
+    if (filterSupplier && (p.supplier || "") !== filterSupplier) return false;
+    if (filterPayment && (p.payment_method || "") !== filterPayment) return false;
+    return true;
+  });
+  const filteredTotal = filteredPurchases.reduce((sum, p) => sum + (p.total_value || 0), 0);
+  const filteredCount = filteredPurchases.length;
+  const periodLabel = filterMonth
+    ? `${MONTH_NAMES[Number(filterMonth) - 1]} de ${filterYear}`
+    : `Ano de ${filterYear}`;
+
+  // Opções dos selects, derivadas das compras já carregadas (só valores reais).
+  const purchaseYears = Array.from(
+    new Set([String(now.getFullYear()), ...purchases.map((p) => (p.purchase_date || "").slice(0, 4)).filter(Boolean)])
+  ).sort((a, b) => b.localeCompare(a));
+  const purchaseDepts = Array.from(new Set(purchases.map((p) => p.department).filter(Boolean) as string[])).sort();
+  const purchaseSuppliers = Array.from(new Set(purchases.map((p) => p.supplier).filter(Boolean) as string[]))
+    .sort((a, b) => a.localeCompare(b, "pt-BR"));
+  const purchasePayments = Array.from(new Set(purchases.map((p) => p.payment_method).filter(Boolean) as string[])).sort();
+  const selCls = "px-3 py-2 border border-border rounded-lg text-sm bg-card focus:ring-2 focus:ring-primary outline-none";
+
+  // Baixa o relatório em Excel do período/filtros atuais (layout da planilha oficial).
+  async function handleGenerateReport() {
+    setReportError(null);
+    setGeneratingReport(true);
+    try {
+      const params = new URLSearchParams({ year: filterYear });
+      if (filterMonth) params.set("month", filterMonth);
+      if (filterDept) params.set("department", filterDept);
+      if (filterSupplier) params.set("supplier", filterSupplier);
+      if (filterPayment) params.set("payment_method", filterPayment);
+      const res = await fetch(`/api/documents/controle-compras?${params.toString()}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Erro ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Controle de Compras - ${periodLabel}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setReportError(err instanceof Error ? err.message : "Falha ao gerar relatório.");
+    } finally {
+      setGeneratingReport(false);
+    }
+  }
 
   // Group product links by category
   const linksByCategory = productLinks.reduce<Record<string, ProductLink[]>>((acc, link) => {
@@ -1097,30 +1149,73 @@ export default function SolicitacoesPage() {
             )}
           </div>
 
-          {/* Seletor de mês + total */}
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="flex items-center gap-2 text-sm">
-              <span className="text-text-light">Mês:</span>
-              <input
-                type="month"
-                value={purchaseMonth}
-                onChange={(e) => setPurchaseMonth(e.target.value)}
-                className="px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
-              />
-            </label>
-            <div className="flex-1" />
-            <div className="bg-primary/5 border border-primary/20 rounded-xl px-4 py-2.5 text-right">
-              <p className="text-[11px] uppercase tracking-wide text-text-light">Total de {formatMonthLabel(purchaseMonth)}</p>
-              <p className="text-lg font-bold text-primary">{formatCurrency(monthTotal)}</p>
-              <p className="text-[11px] text-text-light">{monthCount} {monthCount === 1 ? "compra" : "compras"}</p>
+          {/* Filtros + total + relatório */}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex flex-col gap-1 text-xs">
+                <span className="text-text-light font-medium uppercase tracking-wide">Ano</span>
+                <select value={filterYear} onChange={(e) => setFilterYear(e.target.value)} className={selCls}>
+                  {purchaseYears.map((y) => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs">
+                <span className="text-text-light font-medium uppercase tracking-wide">Mês</span>
+                <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className={selCls}>
+                  <option value="">Ano inteiro</option>
+                  {MONTH_NAMES.map((nm, i) => <option key={i} value={String(i + 1)}>{nm}</option>)}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs">
+                <span className="text-text-light font-medium uppercase tracking-wide">Destino</span>
+                <select value={filterDept} onChange={(e) => setFilterDept(e.target.value)} className={selCls}>
+                  <option value="">Todos</option>
+                  {purchaseDepts.map((d) => <option key={d} value={d}>{departmentLabel(d)}</option>)}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs">
+                <span className="text-text-light font-medium uppercase tracking-wide">Fornecedor</span>
+                <select value={filterSupplier} onChange={(e) => setFilterSupplier(e.target.value)} className={`${selCls} max-w-[200px]`}>
+                  <option value="">Todos</option>
+                  {purchaseSuppliers.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs">
+                <span className="text-text-light font-medium uppercase tracking-wide">Pagamento</span>
+                <select value={filterPayment} onChange={(e) => setFilterPayment(e.target.value)} className={selCls}>
+                  <option value="">Todas</option>
+                  {purchasePayments.map((pm) => <option key={pm} value={pm}>{pm}</option>)}
+                </select>
+              </label>
+              {(filterMonth || filterDept || filterSupplier || filterPayment) && (
+                <button
+                  type="button"
+                  onClick={() => { setFilterMonth(""); setFilterDept(""); setFilterSupplier(""); setFilterPayment(""); }}
+                  className="text-xs text-text-light underline hover:text-text pb-2.5"
+                >
+                  Limpar filtros
+                </button>
+              )}
+
+              <div className="flex-1" />
+
+              <Button size="sm" variant="secondary" onClick={handleGenerateReport} disabled={generatingReport || filteredCount === 0}>
+                {generatingReport ? "Gerando..." : "📊 Gerar Relatório (Excel)"}
+              </Button>
+
+              <div className="bg-primary/5 border border-primary/20 rounded-xl px-4 py-2.5 text-right">
+                <p className="text-[11px] uppercase tracking-wide text-text-light">Total · {periodLabel}</p>
+                <p className="text-lg font-bold text-primary">{formatCurrency(filteredTotal)}</p>
+                <p className="text-[11px] text-text-light">{filteredCount} {filteredCount === 1 ? "compra" : "compras"}</p>
+              </div>
             </div>
+            {reportError && <p className="text-xs text-danger">⚠️ {reportError}</p>}
           </div>
 
           {/* Lista de compras do mês */}
-          {purchasesForMonth.length === 0 ? (
+          {filteredPurchases.length === 0 ? (
             <div className="text-center py-12 text-text-light">
               <span className="text-4xl block mb-3">🧾</span>
-              <p className="font-medium">Nenhuma compra em {formatMonthLabel(purchaseMonth)}</p>
+              <p className="font-medium">Nenhuma compra em {periodLabel}</p>
               <p className="text-xs mt-1">Clique em &quot;Nova Compra&quot; para registrar</p>
             </div>
           ) : (
@@ -1142,7 +1237,7 @@ export default function SolicitacoesPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {purchasesForMonth.map((p) => (
+                    {filteredPurchases.map((p) => (
                       <tr key={p.id} className="hover:bg-gray-50/60">
                         <td className="px-3 py-2.5">
                           <div className="flex items-center gap-2">
@@ -1183,7 +1278,7 @@ export default function SolicitacoesPage() {
                   <tfoot>
                     <tr className="bg-gray-50 font-semibold">
                       <td className="px-3 py-2.5" colSpan={6}>Total</td>
-                      <td className="px-3 py-2.5 text-right text-primary whitespace-nowrap">{formatCurrency(monthTotal)}</td>
+                      <td className="px-3 py-2.5 text-right text-primary whitespace-nowrap">{formatCurrency(filteredTotal)}</td>
                       <td className="px-3 py-2.5" colSpan={canManagePurchases ? 2 : 1}></td>
                     </tr>
                   </tfoot>
@@ -1192,7 +1287,7 @@ export default function SolicitacoesPage() {
 
               {/* Cards (mobile) */}
               <div className="md:hidden space-y-3">
-                {purchasesForMonth.map((p) => (
+                {filteredPurchases.map((p) => (
                   <div key={p.id} className="bg-card border border-border rounded-xl p-3">
                     <div className="flex items-start gap-3">
                       {p.image_url && (
