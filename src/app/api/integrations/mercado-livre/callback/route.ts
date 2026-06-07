@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { hasModuleAccess } from "@/lib/rbac";
 import type { Role } from "@/types/database";
-import { exchangeMlCode, ML_STATE_COOKIE } from "@/lib/services/mercado-livre";
+import { exchangeMlCode, ML_STATE_COOKIE, ML_VERIFIER_COOKIE } from "@/lib/services/mercado-livre";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +20,7 @@ export async function GET(req: NextRequest) {
     const qs = reason ? `?ml=${status}&reason=${encodeURIComponent(reason.slice(0, 180))}` : `?ml=${status}`;
     const res = NextResponse.redirect(`${base}/mensagens${qs}`);
     res.cookies.delete(ML_STATE_COOKIE);
+    res.cookies.delete(ML_VERIFIER_COOKIE);
     return res;
   };
 
@@ -36,17 +37,18 @@ export async function GET(req: NextRequest) {
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const cookieState = req.cookies.get(ML_STATE_COOKIE)?.value;
-  if (!code || !state || !cookieState || state !== cookieState) {
-    // "state" inválido: o cookie de segurança não voltou (cookies bloqueados,
-    // janela anônima, sessão expirada) ou não bateu — não é erro de credencial.
-    console.error("[mercado-livre callback] state inválido", {
-      hasCode: !!code, hasState: !!state, hasCookie: !!cookieState, match: state === cookieState,
+  const verifier = req.cookies.get(ML_VERIFIER_COOKIE)?.value;
+  if (!code || !state || !cookieState || state !== cookieState || !verifier) {
+    // Cookie de segurança não voltou (cookies bloqueados, janela anônima, sessão
+    // expirada) ou não bateu — não é erro de credencial.
+    console.error("[mercado-livre callback] state/verifier inválido", {
+      hasCode: !!code, hasState: !!state, hasCookie: !!cookieState, match: state === cookieState, hasVerifier: !!verifier,
     });
     return dest("state");
   }
 
   try {
-    await exchangeMlCode(code, session.user.id || null);
+    await exchangeMlCode(code, verifier, session.user.id || null);
     return dest("ok");
   } catch (err) {
     const msg = (err as Error).message || "erro desconhecido";

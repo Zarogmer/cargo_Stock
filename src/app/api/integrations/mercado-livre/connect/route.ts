@@ -3,7 +3,14 @@ import { randomUUID } from "crypto";
 import { auth } from "@/lib/auth";
 import { hasModuleAccess } from "@/lib/rbac";
 import type { Role } from "@/types/database";
-import { isMercadoLivreConfigured, buildMlAuthUrl, ML_STATE_COOKIE } from "@/lib/services/mercado-livre";
+import {
+  isMercadoLivreConfigured,
+  buildMlAuthUrl,
+  generateCodeVerifier,
+  codeChallengeFromVerifier,
+  ML_STATE_COOKIE,
+  ML_VERIFIER_COOKIE,
+} from "@/lib/services/mercado-livre";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,13 +37,17 @@ export async function GET(req: NextRequest) {
   }
 
   const state = randomUUID();
-  const res = NextResponse.redirect(buildMlAuthUrl(state));
-  res.cookies.set(ML_STATE_COOKIE, state, {
+  const verifier = generateCodeVerifier();
+  const res = NextResponse.redirect(buildMlAuthUrl(state, codeChallengeFromVerifier(verifier)));
+  // `lax` permite os cookies voltarem no redirect de topo vindo do ML.
+  const cookieOpts = {
     httpOnly: true,
     secure: base.startsWith("https://"),
-    sameSite: "lax", // permite o cookie voltar no redirect de topo vindo do ML
+    sameSite: "lax" as const,
     path: "/",
     maxAge: 600, // 10 min
-  });
+  };
+  res.cookies.set(ML_STATE_COOKIE, state, cookieOpts);
+  res.cookies.set(ML_VERIFIER_COOKIE, verifier, cookieOpts);
   return res;
 }

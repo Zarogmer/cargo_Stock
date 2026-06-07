@@ -16,11 +16,14 @@
  * sem conta conectada, MercadoLivreAuthError. Os callers degradam graciosamente
  * (ex.: a raspagem do link-preview continua funcionando).
  *
- * PKCE: o app é confidencial (tem client_secret), então NÃO usamos PKCE. Deixe a
- * opção "PKCE" desativada na configuração do app no painel do Mercado Livre.
+ * PKCE: enviamos SEMPRE (code_challenge na autorização + code_verifier na troca,
+ * método S256). Funciona com a opção "PKCE necessário" do app ligada OU desligada,
+ * então não depende dessa config no painel. Cliente confidencial (client_secret)
+ * + PKCE.
  */
 
 import { prisma } from "@/lib/prisma";
+import { createHash, randomBytes } from "crypto";
 
 // ── Endpoints (Brasil) ───────────────────────────────────────────────────────
 const AUTH_BASE = "https://auth.mercadolivre.com.br/authorization";
@@ -30,9 +33,11 @@ const API_BASE = "https://api.mercadolibre.com";
 // Chave única em app_settings com o JSON dos tokens.
 const TOKENS_KEY = "mercado_livre_oauth";
 
-// Cookie curto com o `state` do OAuth — setado no /connect e validado no
-// /callback contra CSRF. Mora aqui pra ser fonte única das duas rotas.
+// Cookies curtos do OAuth — setados no /connect e lidos no /callback. `state`
+// protege contra CSRF; `verifier` é o segredo do PKCE (par do code_challenge).
+// Moram aqui pra ser fonte única das duas rotas.
 export const ML_STATE_COOKIE = "ml_oauth_state";
+export const ML_VERIFIER_COOKIE = "ml_oauth_verifier";
 
 // Renova um pouco antes de expirar pra nunca usar token vencido numa chamada.
 const EXPIRY_SKEW_MS = 5 * 60_000; // 5 min
@@ -146,12 +151,23 @@ export async function clearMlTokens(): Promise<void> {
 }
 
 // ── OAuth ────────────────────────────────────────────────────────────────────
-export function buildMlAuthUrl(state: string): string {
+// PKCE: gera o verifier (segredo guardado num cookie) e o challenge (vai na URL
+// de autorização). 43 chars base64url.
+export function generateCodeVerifier(): string {
+  return randomBytes(32).toString("base64url");
+}
+export function codeChallengeFromVerifier(verifier: string): string {
+  return createHash("sha256").update(verifier).digest("base64url");
+}
+
+export function buildMlAuthUrl(state: string, codeChallenge: string): string {
   const params = new URLSearchParams({
     response_type: "code",
     client_id: clientId(),
     redirect_uri: mlRedirectUri(),
     state,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
   });
   return `${AUTH_BASE}?${params.toString()}`;
 }
@@ -214,14 +230,20 @@ function toTokens(r: TokenResponse): MlTokens {
   };
 }
 
-// Troca o `code` do callback por tokens e salva. Quem chama: a rota /callback.
-export async function exchangeMlCode(code: string, actor?: string | null): Promise<MlTokens> {
+// Troca o `code` do callback por tokens e salva. `codeVerifier` é o segredo PKCE
+// guardado no cookie pelo /connect. Quem chama: a rota /callback.
+export async function exchangeMlCode(
+  code: string,
+  codeVerifier: string,
+  actor?: string | null,
+): Promise<MlTokens> {
   const r = await postToken({
     grant_type: "authorization_code",
     client_id: clientId(),
     client_secret: clientSecret(),
     code,
     redirect_uri: mlRedirectUri(),
+    code_verifier: codeVerifier,
   });
   const tokens = toTokens(r);
   await saveMlTokens(tokens, actor);
