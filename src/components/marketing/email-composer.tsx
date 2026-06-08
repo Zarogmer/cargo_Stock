@@ -202,7 +202,7 @@ export function EmailComposer() {
             className="flex items-center gap-2 px-5 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark transition text-sm font-medium shadow-sm"
           >
             <span aria-hidden>✉️</span>
-            Enviar
+            Preparar Envio
           </button>
           <button
             onClick={baixarAnexos}
@@ -225,7 +225,7 @@ export function EmailComposer() {
         <p className="font-medium mb-1">Como funciona</p>
         <p>
           Clique em <strong>Baixar anexos</strong> para salvar os 3 PDFs no seu computador. Depois
-          clique em <strong>Enviar</strong>: o Outlook abre no navegador já com o email preenchido
+          clique em <strong>Preparar Envio</strong>: o Outlook abre no navegador já com o email preenchido
           (destinatário, assunto e texto). Arraste os 3 PDFs para a janela do Outlook, confira tudo e
           clique em <strong>Enviar</strong> no Outlook — o email sai da sua conta normal. Nada é
           enviado automaticamente pelo sistema.
