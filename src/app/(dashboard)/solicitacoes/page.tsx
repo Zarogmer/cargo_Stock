@@ -105,9 +105,10 @@ const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
 ];
 
 // Destinos que NÃO mexem no Almoxarifado — só registram a compra/solicitação (não
-// há setor de estoque pra eles). Escritório é o caso típico: existe compra pra
-// escritório, mas ela não vira material no galpão.
-const STOCKLESS_DESTS: WarehouseDest[] = ["ESCRITORIO", "OUTROS"];
+// há setor de estoque pra eles). Escritório é o caso típico. Rancho (card #46)
+// também entra aqui: a compra de comida só soma o gasto na aba de Compras, sem
+// virar item de estoque nem usar código.
+const STOCKLESS_DESTS: WarehouseDest[] = ["RANCHO", "ESCRITORIO", "OUTROS"];
 function destStocks(dest: WarehouseDest): boolean {
   return !STOCKLESS_DESTS.includes(dest);
 }
@@ -126,24 +127,11 @@ function departmentLabel(dep: string | null): string {
 const RANCHO_TEAMS: { value: string; label: string }[] = [
   { value: "EQUIPE_1", label: "Equipe 1" },
   { value: "EQUIPE_2", label: "Equipe 2" },
-  { value: "EQUIPE_3", label: "Equipe 3" },
+  { value: "EQUIPE_3", label: "Reserva" },
 ];
-// Categorias (enum StockCategory) e unidades do Rancho (carne costuma ser KG).
-const RANCHO_CATEGORIES: { value: string; label: string }[] = [
-  { value: "SUPRIMENTOS", label: "Suprimentos" },
-  { value: "CARNE", label: "Carne" },
-  { value: "FEIRA", label: "Feira" },
-];
-const RANCHO_UNITS: { value: string; label: string }[] = [
-  { value: "UN", label: "Unidade (un)" },
-  { value: "KG", label: "Quilograma (kg)" },
-  { value: "FARDO", label: "Fardo" },
-  { value: "L", label: "Litro (L)" },
-  { value: "CX", label: "Caixa (cx)" },
-  { value: "PCT", label: "Pacote (pct)" },
-  { value: "DZ", label: "Dúzia (dz)" },
-  { value: "SACO", label: "Saco" },
-];
+// As categorias/unidades do Rancho saíram com o card #46 (Rancho agora só
+// registra a compra na aba, sem campos de estoque). RANCHO_TEAMS continua em uso
+// no rótulo curto do destino.
 
 // Para onde a compra/solicitação será lançada no Almoxarifado, com os campos
 // específicos de cada setor. Compartilhado por Nova Compra, Aprovar e Armazenar.
@@ -1953,9 +1941,10 @@ function numToInput(n: number | null | undefined): string {
 }
 
 // Destinos cujos itens têm "Código" no Almoxarifado (gerado por setor a partir do
-// nome — buildCodeMap). Maquinário (cada unidade é um registro próprio), Escritório
-// e Outros não têm código, então o campo não aparece pra eles.
-const CODED_DESTS: WarehouseDest[] = ["ESTOQUE", "RANCHO", "EPI", "UNIFORME"];
+// nome — buildCodeMap). Maquinário (cada unidade é um registro próprio), Rancho
+// (card #46: só registra a compra, sem mexer no estoque), Escritório e Outros não
+// têm código, então o campo não aparece pra eles.
+const CODED_DESTS: WarehouseDest[] = ["ESTOQUE", "EPI", "UNIFORME"];
 
 // Carrega os itens do setor de destino e devolve a lista [{ code, name }] já com o
 // código derivado (mesma regra da tabela do Almoxarifado). Rancho é por equipe; os
@@ -2072,27 +2061,12 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
         </div>
       )}
 
+      {/* Rancho (card #46): só registra o gasto na aba de Compras — não lança no
+          Almoxarifado nem usa código, então não mostramos Equipe/Categoria/Unidade. */}
       {stocking && value.dest === "RANCHO" && (
-        <div className={`${boxCls} grid grid-cols-1 sm:grid-cols-3 gap-3`}>
-          <div>
-            <label className="block text-xs font-medium text-emerald-800 mb-1">Equipe</label>
-            <select value={value.team} onChange={(e) => onChange({ ...value, team: e.target.value })} className={subCls}>
-              {RANCHO_TEAMS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-emerald-800 mb-1">Categoria</label>
-            <select value={value.category || "SUPRIMENTOS"} onChange={(e) => onChange({ ...value, category: e.target.value })} className={subCls}>
-              {RANCHO_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-emerald-800 mb-1">Unidade</label>
-            <select value={value.unit} onChange={(e) => onChange({ ...value, unit: e.target.value })} className={subCls}>
-              {RANCHO_UNITS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
-            </select>
-          </div>
-          <p className="text-[10px] text-emerald-700/80 sm:col-span-3">Mesmo nome na equipe = soma a quantidade (reposição).</p>
+        <div className="rounded-lg border border-border bg-gray-50 p-3 text-[11px] text-text-light">
+          🍽️ Compras de <strong>Rancho</strong> apenas registram o gasto nesta aba — não entram no
+          estoque do Almoxarifado nem usam código.
         </div>
       )}
 

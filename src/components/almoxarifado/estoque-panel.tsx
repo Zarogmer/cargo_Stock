@@ -51,6 +51,8 @@ export function EstoquePanel() {
   const [baixaItem, setBaixaItem] = useState<StockItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<StockItem | null>(null);
   const [saving, setSaving] = useState(false);
+  const [showPreparar, setShowPreparar] = useState(false);
+  const [preparing, setPreparing] = useState(false);
 
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, "ESTOQUE", "create");
@@ -95,6 +97,9 @@ export function EstoquePanel() {
     const matchesTeam = i.team === activeTeam;
     return matchesSearch && matchesCategory && matchesTeam;
   });
+
+  // Itens cadastrados na Reserva (ex-Equipe 3) — base do botão "Preparar".
+  const reservaCount = items.filter((i) => i.team === "EQUIPE_3").length;
 
   function getCategoryLabel(cat: string) {
     return STOCK_CATEGORIES.find((c) => c.value === cat)?.label || cat;
@@ -163,6 +168,39 @@ export function EstoquePanel() {
     setSaving(false);
     setShowBaixa(false);
     setBaixaItem(null);
+    loadItems();
+  }
+
+  // "Preparar": copia os itens da Reserva (EQUIPE_3) para a equipe escolhida,
+  // usando a quantidade padrão de cada um (a qtd de suprimentos é sempre a mesma).
+  // Casa por nome: item existente na equipe é atualizado; o que falta é criado.
+  async function handlePreparar(targetTeam: "EQUIPE_1" | "EQUIPE_2") {
+    setPreparing(true);
+    const actor = profile?.full_name || "Sistema";
+    const reservaItems = items.filter((i) => i.team === "EQUIPE_3");
+    const destItems = items.filter((i) => i.team === targetTeam);
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    for (const it of reservaItems) {
+      const qty = it.default_quantity || 0;
+      const existing = destItems.find((d) => norm(d.name) === norm(it.name));
+      const payload = {
+        name: it.name,
+        category: it.category,
+        unit: it.unit,
+        quantity: qty,
+        default_quantity: it.default_quantity,
+        min_quantity: 0,
+        team: targetTeam,
+        updated_by: actor,
+      } as Record<string, unknown>;
+      if (existing) {
+        await db.from("stock_items").update(payload).eq("id", existing.id);
+      } else {
+        await db.from("stock_items").insert(payload);
+      }
+    }
+    setPreparing(false);
+    setShowPreparar(false);
     loadItems();
   }
 
@@ -287,7 +325,7 @@ export function EstoquePanel() {
           onClick={() => setActiveTeam("EQUIPE_3")}
           className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTeam === "EQUIPE_3" ? "bg-teal-600 text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
         >
-          🚢 Equipe 3
+          📦 Reserva
         </button>
       </div>
 
@@ -315,12 +353,21 @@ export function EstoquePanel() {
         searchValue={search}
         onSearchChange={setSearch}
         searchPlaceholder="Buscar por nome ou código..."
-        actions={canCreate ? (
-          <Button onClick={() => { setEditItem(null); setShowForm(true); }} size="sm">
-            <PlusIcon className="w-4 h-4" />
-            Adicionar
-          </Button>
-        ) : undefined}
+        actions={
+          <div className="flex items-center gap-2">
+            {activeTeam === "EQUIPE_3" && canCreate && (
+              <Button variant="secondary" size="sm" onClick={() => setShowPreparar(true)} disabled={reservaCount === 0}>
+                📦 Preparar
+              </Button>
+            )}
+            {canCreate && (
+              <Button onClick={() => { setEditItem(null); setShowForm(true); }} size="sm">
+                <PlusIcon className="w-4 h-4" />
+                Adicionar
+              </Button>
+            )}
+          </div>
+        }
       />
 
       <StockFormModal
@@ -337,6 +384,14 @@ export function EstoquePanel() {
         onConfirm={handleBaixa}
         item={baixaItem}
         saving={saving}
+      />
+
+      <PrepararModal
+        open={showPreparar}
+        onClose={() => setShowPreparar(false)}
+        onConfirm={handlePreparar}
+        count={reservaCount}
+        saving={preparing}
       />
 
       <ConfirmDialog
@@ -484,6 +539,47 @@ function BaixaModal({ open, onClose, onConfirm, item, saving }: {
           <Button variant="warning" type="submit" disabled={saving}>{saving ? "Registrando..." : "Confirmar Baixa"}</Button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+// Modal do botão "Preparar" da Reserva: escolhe a equipe destino (1 ou 2) e
+// copia os itens da Reserva com a quantidade padrão.
+function PrepararModal({ open, onClose, onConfirm, count, saving }: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: (team: "EQUIPE_1" | "EQUIPE_2") => void;
+  count: number;
+  saving: boolean;
+}) {
+  const [team, setTeam] = useState<"EQUIPE_1" | "EQUIPE_2">("EQUIPE_1");
+
+  useEffect(() => { if (open) setTeam("EQUIPE_1"); }, [open]);
+
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
+
+  return (
+    <Modal open={open} onClose={onClose} title="Preparar suprimentos da Reserva">
+      <div className="space-y-4">
+        <p className="text-sm text-text-light">
+          Copia os <strong>{count}</strong> {count === 1 ? "item" : "itens"} da Reserva para a equipe escolhida,
+          usando a <strong>quantidade padrão</strong> de cada um. Itens com o mesmo nome na equipe são atualizados;
+          os que faltam são criados.
+        </p>
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Equipe destino</label>
+          <select value={team} onChange={(e) => setTeam(e.target.value as "EQUIPE_1" | "EQUIPE_2")} className={inputCls}>
+            <option value="EQUIPE_1">Equipe 1</option>
+            <option value="EQUIPE_2">Equipe 2</option>
+          </select>
+        </div>
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="button" onClick={() => onConfirm(team)} disabled={saving || count === 0}>
+            {saving ? "Preparando..." : "Preparar"}
+          </Button>
+        </div>
+      </div>
     </Modal>
   );
 }
