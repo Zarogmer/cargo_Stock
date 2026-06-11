@@ -84,6 +84,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     FERRAMENTAS: ["view"],
     MAQUINARIO: ["view"],
     NAVIOS: ["view", "create", "edit", "delete"],
+    MARKETING: ["view", "create", "edit", "delete"],
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
     MENSAGENS: ["view", "create"],
