@@ -690,8 +690,8 @@ function AddCostadoCrewModal({
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  // "Avisar no WhatsApp ao escalar?" — LIGADO por padrão; desligado salva a
-  // escala sem postar no grupo (teste real sem mensagem). Ver escala-whatsapp-pref.
+  // "Avisar no WhatsApp ao escalar?" — DESLIGADO por padrão. Por padrão salva a
+  // escala sem postar no grupo; marcado, posta. Avisar é opt-in. Ver escala-whatsapp-pref.
   const { send: sendWhats, setSend: setSendWhats } = useSendWhatsappPref();
   // Costado sempre avisa SÓ no grupo do navio (a pedido do RH — o picker
   // anterior foi removido). DMs individuais ficam pro fluxo de Embarque,

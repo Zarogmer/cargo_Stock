@@ -3,26 +3,26 @@
 import { useState, useEffect, useCallback } from "react";
 
 // Preferência compartilhada "ao escalar, também avisar no WhatsApp?".
-// Fica LIGADA por padrão (comportamento normal de produção). O usuário pode
-// desligar pra fazer teste real de escalação SEM disparar mensagem pros
-// funcionários — a escolha é lembrada (localStorage) e vale em TODAS as telas
-// de escala (modal de Navios, Escalação > Embarque e Escalação > Costado) até
-// religar. Desacopla "salvar a escala" de "avisar no WhatsApp".
+// Fica DESLIGADA por padrão: escalar NÃO manda mensagem. Avisar no WhatsApp é
+// OPT-IN — o usuário marca a caixa quando quiser que os escalados sejam
+// avisados. A escolha é lembrada (localStorage) e vale em TODAS as telas de
+// escala (modal de Navios, Escalação > Embarque e Escalação > Costado) até
+// desmarcar. Desacopla "salvar a escala" de "avisar no WhatsApp".
 const KEY = "cargo:escala:enviarWhatsapp";
 
 export function useSendWhatsappPref(): {
   send: boolean;
   setSend: (v: boolean) => void;
 } {
-  // Default LIGADO. Não lê o localStorage no 1º render pra não dar hydration
-  // mismatch no Next — sincroniza logo após montar, no useEffect.
-  const [send, setSendState] = useState(true);
+  // Default DESLIGADO (escalar sem avisar). Não lê o localStorage no 1º render
+  // pra não dar hydration mismatch no Next — sincroniza logo após montar.
+  const [send, setSendState] = useState(false);
 
   useEffect(() => {
     try {
-      if (localStorage.getItem(KEY) === "0") setSendState(false);
+      if (localStorage.getItem(KEY) === "1") setSendState(true);
     } catch {
-      // localStorage indisponível (SSR/preview) — mantém o padrão ligado.
+      // localStorage indisponível (SSR/preview) — mantém o padrão desligado.
     }
   }, []);
 
@@ -38,9 +38,9 @@ export function useSendWhatsappPref(): {
   return { send, setSend };
 }
 
-// Checkbox reutilizável usada nos 3 pontos de escala. Quando desligada fica
-// âmbar, deixando explícito que nenhuma mensagem vai sair (evita esquecer no
-// modo teste e achar que avisou).
+// Checkbox reutilizável usada nos 3 pontos de escala. Avisar é OPT-IN: por
+// padrão fica desmarcada (só escala). Quando marcada fica verde, sinalizando a
+// ação extra de disparar a mensagem pros escalados.
 export function EnviarWhatsappToggle({
   send,
   setSend,
@@ -53,7 +53,7 @@ export function EnviarWhatsappToggle({
   return (
     <label
       className={`flex items-start gap-2 cursor-pointer rounded-lg border px-3 py-2 transition ${
-        send ? "border-border bg-white" : "border-amber-300 bg-amber-50"
+        send ? "border-emerald-300 bg-emerald-50" : "border-border bg-white"
       } ${className}`}
     >
       <input
@@ -63,11 +63,11 @@ export function EnviarWhatsappToggle({
         className="h-4 w-4 mt-0.5 accent-emerald-600"
       />
       <span className="text-sm leading-snug">
-        <span className="font-medium text-text">📲 Avisar no WhatsApp ao escalar</span>
+        <span className="font-medium text-text">📲 Também avisar no WhatsApp ao escalar</span>
         <span className="block text-[11px] text-text-light">
           {send
             ? "Os escalados serão avisados no WhatsApp."
-            : "⚠️ Modo teste: a escala é salva, mas ninguém é avisado."}
+            : "Apenas escala — ninguém será avisado no WhatsApp."}
         </span>
       </span>
     </label>

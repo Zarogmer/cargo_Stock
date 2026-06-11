@@ -210,9 +210,10 @@ export default function NaviosPage() {
 
   // WhatsApp group + scale creation (only when creating a new ship)
   const [createGroup, setCreateGroup] = useState(false);
-  // "Avisar no WhatsApp ao escalar?" — LIGADO por padrão. Desligado, o navio é
-  // criado e os colaboradores são escalados (allocations), mas NÃO sai grupo
-  // nem DM. Permite teste real de escalação sem mensagem. Ver escala-whatsapp-pref.
+  // "Avisar no WhatsApp ao escalar?" — DESLIGADO por padrão. Por padrão o navio
+  // é criado e os colaboradores escalados (allocations) SEM sair grupo nem DM.
+  // Marcado, além de escalar, cria o grupo e dispara os avisos. Avisar é opt-in.
+  // Ver escala-whatsapp-pref.
   const { send: sendWhats, setSend: setSendWhats } = useSendWhatsappPref();
   const [groupParticipants, setGroupParticipants] = useState<Set<number>>(new Set());
   // Quando marcado, todo funcionário ATIVO do setor ADMINISTRATIVO com telefone
@@ -1562,9 +1563,7 @@ export default function NaviosPage() {
                       className="h-4 w-4 accent-emerald-600"
                     />
                     <span className="text-sm font-medium text-text">
-                      {form.operation_type === "EMBARQUE"
-                        ? "💬 Avisar grupo da equipe designada + escalar colaboradores"
-                        : "💬 Criar grupo no WhatsApp + escalar colaboradores"}
+                      👥 Escalar colaboradores
                     </span>
                   </label>
 

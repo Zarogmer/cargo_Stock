@@ -536,8 +536,8 @@ function CrewFormModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [showQuickAdd, setShowQuickAdd] = useState(false);
-  // "Avisar no WhatsApp ao escalar?" — LIGADO por padrão. Desligado, a escala é
-  // salva mas o notify não dispara (teste real sem mensagem). Ver escala-whatsapp-pref.
+  // "Avisar no WhatsApp ao escalar?" — DESLIGADO por padrão. Por padrão a escala
+  // é salva sem disparar o notify; marcado, dispara. Avisar é opt-in. Ver escala-whatsapp-pref.
   const { send: sendWhats, setSend: setSendWhats } = useSendWhatsappPref();
 
   const isEditing = !!item;
