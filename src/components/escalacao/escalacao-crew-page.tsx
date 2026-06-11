@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EditIcon, TrashIcon } from "@/components/icons";
 import { formatDate } from "@/lib/utils";
+import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import type {
   JobFunction,
   Job,
@@ -535,6 +536,9 @@ function CrewFormModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+  // "Avisar no WhatsApp ao escalar?" — LIGADO por padrão. Desligado, a escala é
+  // salva mas o notify não dispara (teste real sem mensagem). Ver escala-whatsapp-pref.
+  const { send: sendWhats, setSend: setSendWhats } = useSendWhatsappPref();
 
   const isEditing = !!item;
 
@@ -699,7 +703,7 @@ function CrewFormModal({
       // Fire-and-forget WhatsApp notification — only kicks in for EMBARQUE kind
       // here (COSTADO has its own modal in escalacao-costado-page that already
       // posts with shift info).
-      if (kind === "EMBARQUE" && shipId) {
+      if (sendWhats && kind === "EMBARQUE" && shipId) {
         fetch("/api/escalacao/notify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -938,6 +942,10 @@ function CrewFormModal({
               </button>
             </div>
           </>
+        )}
+
+        {!isEditing && (
+          <EnviarWhatsappToggle send={sendWhats} setSend={setSendWhats} />
         )}
 
         {error && (

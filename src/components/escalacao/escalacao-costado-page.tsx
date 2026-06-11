@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { TrashIcon } from "@/components/icons";
 import { ShipSelector, type Ship } from "@/components/escalacao/ship-selector";
+import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import { SHIFT_PERIODS } from "@/types/database";
 import type {
   JobFunction,
@@ -689,6 +690,9 @@ function AddCostadoCrewModal({
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // "Avisar no WhatsApp ao escalar?" — LIGADO por padrão; desligado salva a
+  // escala sem postar no grupo (teste real sem mensagem). Ver escala-whatsapp-pref.
+  const { send: sendWhats, setSend: setSendWhats } = useSendWhatsappPref();
   // Costado sempre avisa SÓ no grupo do navio (a pedido do RH — o picker
   // anterior foi removido). DMs individuais ficam pro fluxo de Embarque,
   // onde fazem sentido. Aqui o grupo é específico do navio e todos os
@@ -797,7 +801,7 @@ function AddCostadoCrewModal({
       // Fire-and-forget WhatsApp notification (DMs + group post). Errors don't
       // block the save — they're logged for the admin to check on the Conversas
       // side if a recipient claims they didn't get the message.
-      fetch("/api/escalacao/notify", {
+      if (sendWhats) fetch("/api/escalacao/notify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -932,10 +936,13 @@ function AddCostadoCrewModal({
             do RH: o grupo é específico do navio, todos os escalados são
             membros, então a DM individual fica redundante. Picker antigo
             (Grupo+Privado / Só Grupo / Só Privado) foi removido. */}
-        <div className="border-t border-border pt-3">
-          <p className="text-[11px] text-text-light bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
-            📲 Avisará apenas o <strong>grupo do navio</strong> no WhatsApp. Sem DM individual.
-          </p>
+        <div className="border-t border-border pt-3 space-y-2">
+          <EnviarWhatsappToggle send={sendWhats} setSend={setSendWhats} />
+          {sendWhats && (
+            <p className="text-[11px] text-text-light bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+              📲 Avisará apenas o <strong>grupo do navio</strong> no WhatsApp. Sem DM individual.
+            </p>
+          )}
         </div>
 
         {error && (

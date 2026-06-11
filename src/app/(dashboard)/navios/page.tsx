@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { hasPermission } from "@/lib/rbac";
 import { db } from "@/lib/db";
 import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
+import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -209,6 +210,10 @@ export default function NaviosPage() {
 
   // WhatsApp group + scale creation (only when creating a new ship)
   const [createGroup, setCreateGroup] = useState(false);
+  // "Avisar no WhatsApp ao escalar?" — LIGADO por padrão. Desligado, o navio é
+  // criado e os colaboradores são escalados (allocations), mas NÃO sai grupo
+  // nem DM. Permite teste real de escalação sem mensagem. Ver escala-whatsapp-pref.
+  const { send: sendWhats, setSend: setSendWhats } = useSendWhatsappPref();
   const [groupParticipants, setGroupParticipants] = useState<Set<number>>(new Set());
   // Quando marcado, todo funcionário ATIVO do setor ADMINISTRATIVO com telefone
   // entra no grupo do WhatsApp (mas NÃO é escalado — admin não trabalha no navio).
@@ -697,7 +702,7 @@ export default function NaviosPage() {
       //               porque já são membros dos grupos das equipes).
       //    COSTADO  → cria grupo do navio com colaboradores selecionados
       //               (admin sector entra se a caixinha marcou).
-      if (createGroup && groupParticipants.size > 0) {
+      if (sendWhats && createGroup && groupParticipants.size > 0) {
         if (isCostado) {
           // ── Costado: cria grupo no WhatsApp com os mesmos colaboradores ──
           const adminMemberIds = includeAdminSector
@@ -797,7 +802,7 @@ export default function NaviosPage() {
       //    COSTADO: targets="DM" + mode="PREVIEW" (aviso "vai ter limpeza";
       //    a escalação real ocorre depois em Escalação > Costado).
       //    Falha aqui é só warning — escala e grupo já foram criados.
-      if (createGroup && groupParticipants.size > 0 && newShipId) {
+      if (sendWhats && createGroup && groupParticipants.size > 0 && newShipId) {
         try {
           const notifyBody: Record<string, unknown> = {
             shipId: newShipId,
@@ -1562,6 +1567,10 @@ export default function NaviosPage() {
                         : "💬 Criar grupo no WhatsApp + escalar colaboradores"}
                     </span>
                   </label>
+
+                  {createGroup && (
+                    <EnviarWhatsappToggle send={sendWhats} setSend={setSendWhats} />
+                  )}
 
                   {createGroup && form.operation_type === "EMBARQUE" && (
                     <div>
