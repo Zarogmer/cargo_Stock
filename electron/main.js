@@ -102,23 +102,51 @@ function createTray() {
   });
 }
 
-app.whenReady().then(() => {
-  // Abre o Cargo Stock automaticamente ao ligar o computador (login do Windows).
-  // Só no app instalado (nao no modo dev). Reaplicado a cada inicializacao
-  // para se autocorrigir caso o caminho do executavel mude apos uma atualizacao.
-  if (app.isPackaged) {
-    app.setLoginItemSettings({ openAtLogin: true });
-  }
+// Garante INSTANCIA UNICA. Sem isto, cada vez que o app e aberto (atalho na
+// barra de tarefas, auto-start no login, etc.) o Electron cria uma janela/
+// processo novo, enquanto o anterior continua escondido na bandeja — acumulando
+// varias instancias do Cargo Stock.
+const gotTheLock = app.requestSingleInstanceLock();
 
-  createWindow();
-  createTray();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+if (!gotTheLock) {
+  // Ja existe uma instancia rodando: encerra esta silenciosamente. A que esta
+  // aberta recebe o evento "second-instance" abaixo e aparece para o usuario.
+  app.quit();
+} else {
+  // Tentaram abrir o app de novo: em vez de criar outra janela, traz a janela
+  // que ja existe para frente (mostra se estava na bandeja, desminimiza e foca).
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (!mainWindow.isVisible()) mainWindow.show();
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    } else {
       createWindow();
     }
   });
-});
+
+  app.whenReady().then(() => {
+    // Agrupa todas as janelas sob UM unico icone na barra de tarefas do Windows
+    // (como abas de um navegador). Precisa bater com o appId do electron-builder.
+    app.setAppUserModelId("com.cargostock.app");
+
+    // Abre o Cargo Stock automaticamente ao ligar o computador (login do Windows).
+    // Só no app instalado (nao no modo dev). Reaplicado a cada inicializacao
+    // para se autocorrigir caso o caminho do executavel mude apos uma atualizacao.
+    if (app.isPackaged) {
+      app.setLoginItemSettings({ openAtLogin: true });
+    }
+
+    createWindow();
+    createTray();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      }
+    });
+  });
+}
 
 // Qualquer pedido real de encerramento (ex.: menu "Sair", desligar o Windows)
 // marca a flag para a janela poder fechar de fato em vez de so esconder.
