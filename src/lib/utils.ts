@@ -263,6 +263,15 @@ export const TOOL_STATUS_LABELS: Record<string, string> = {
   MANUTENCAO: "Manutenção",
 };
 
+// Tipos de ativo da tabela `tools` (asset_type). Cada um vira uma aba própria no
+// Almoxarifado e um destino na compra. Rótulos com emoji compartilhados pelo
+// seletor de Tipo e pelo destino da compra.
+export const ASSET_TYPE_LABELS: Record<string, string> = {
+  MAQUINARIO: "⚙️ Maquinário",
+  FERRAMENTA: "🔧 Ferramenta",
+  ELETRICA: "⚡ Elétrica",
+};
+
 export const MOVEMENT_TYPE_LABELS: Record<string, string> = {
   ENTRADA: "Entrada",
   BAIXA: "Baixa",

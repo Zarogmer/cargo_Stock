@@ -14,7 +14,7 @@ export type ToolMovementType =
   | "DEVOLUCAO"
   | "MANUTENCAO";
 
-export type AssetType = "FERRAMENTA" | "MAQUINARIO";
+export type AssetType = "FERRAMENTA" | "MAQUINARIO" | "ELETRICA";
 
 export interface Profile {
   id: string;

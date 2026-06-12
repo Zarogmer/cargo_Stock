@@ -9,6 +9,7 @@ export type Module =
   | "EPI"
   | "FERRAMENTAS"
   | "MAQUINARIO"
+  | "ELETRICA"
   | "NAVIOS"
   | "MARKETING"
   | "FINANCEIRO_MOD"
@@ -40,6 +41,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
+    ELETRICA: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
     MARKETING: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
@@ -55,6 +57,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
+    ELETRICA: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
     MARKETING: ["view", "create", "edit", "delete"],
     // Financeiro é só leitura pra Executivo — quem edita valores é Financeiro
@@ -72,6 +75,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
+    ELETRICA: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
   },
@@ -83,6 +87,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     EPI: ["view"],
     FERRAMENTAS: ["view"],
     MAQUINARIO: ["view"],
+    ELETRICA: ["view"],
     NAVIOS: ["view", "create", "edit", "delete"],
     MARKETING: ["view", "create", "edit", "delete"],
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
@@ -99,6 +104,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
+    ELETRICA: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view"],
     // Mensagens restrito a Tecnologia, Executivo e Financeiro — RH fica de fora.
@@ -112,6 +118,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
+    ELETRICA: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     NAVIOS: ["view", "create", "edit", "delete"],
     MARKETING: ["view", "create", "edit", "delete"],
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
@@ -210,6 +217,8 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Uniforme", href: "/almoxarifado?tab=uniforme" },
       { label: "Compras", href: "/almoxarifado?tab=compras" },
       { label: "Maquinário", href: "/almoxarifado?tab=maquinario" },
+      { label: "Ferramenta", href: "/almoxarifado?tab=ferramenta" },
+      { label: "Elétrica", href: "/almoxarifado?tab=eletrica" },
       { label: "Histórico", href: "/almoxarifado?tab=historico" },
     ],
   },

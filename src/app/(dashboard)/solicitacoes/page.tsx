@@ -92,7 +92,7 @@ const PRODUCT_CATEGORIES = [
 // escolhido — é a ponte entre Compras/Solicitações e o Almoxarifado inteiro.
 // Substitui o antigo "Departamento" (que era só rótulo e não batia com as abas
 // do Almoxarifado). "OUTROS" = só registra a compra, sem mexer no estoque.
-type WarehouseDest = "ESTOQUE" | "RANCHO" | "EPI" | "UNIFORME" | "MAQUINARIO" | "ESCRITORIO" | "OUTROS";
+type WarehouseDest = "ESTOQUE" | "RANCHO" | "EPI" | "UNIFORME" | "MAQUINARIO" | "FERRAMENTA" | "ELETRICA" | "ESCRITORIO" | "OUTROS";
 
 const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
   { value: "ESTOQUE", label: "📦 Estoque (galpão)" },
@@ -100,6 +100,8 @@ const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
   { value: "EPI", label: "⛑️ EPI" },
   { value: "UNIFORME", label: "👕 Uniforme" },
   { value: "MAQUINARIO", label: "⚙️ Maquinário" },
+  { value: "FERRAMENTA", label: "🔧 Ferramenta" },
+  { value: "ELETRICA", label: "⚡ Elétrica" },
   { value: "ESCRITORIO", label: "🏢 Escritório (só registra a compra)" },
   { value: "OUTROS", label: "— Outros (não lançar no estoque)" },
 ];
@@ -116,7 +118,7 @@ function destStocks(dest: WarehouseDest): boolean {
 // Rótulo curto pro badge na tabela de Controle de Compras.
 const DEST_SHORT_LABEL: Record<string, string> = {
   ESTOQUE: "Estoque", RANCHO: "Rancho", EPI: "EPI",
-  UNIFORME: "Uniforme", MAQUINARIO: "Maquinário", ESCRITORIO: "Escritório", OUTROS: "Outros",
+  UNIFORME: "Uniforme", MAQUINARIO: "Maquinário", FERRAMENTA: "Ferramenta", ELETRICA: "Elétrica", ESCRITORIO: "Escritório", OUTROS: "Outros",
 };
 function departmentLabel(dep: string | null): string {
   if (!dep) return "";
@@ -155,6 +157,8 @@ const DEPARTMENT_BADGE: Record<string, string> = {
   EPI: "bg-amber-100 text-amber-700",
   UNIFORME: "bg-purple-100 text-purple-700",
   MAQUINARIO: "bg-orange-100 text-orange-700",
+  FERRAMENTA: "bg-slate-100 text-slate-700",
+  ELETRICA: "bg-yellow-100 text-yellow-700",
   ESCRITORIO: "bg-purple-100 text-purple-700",
   OUTROS: "bg-gray-100 text-gray-700",
   // Departamentos legados da planilha (compras antigas continuam exibindo o rótulo)
@@ -682,18 +686,19 @@ export default function SolicitacoesPage() {
       return { created, where: dest === "EPI" ? "EPI" : "Uniforme", quantity: addQty };
     }
 
-    // Maquinário — cada unidade é um registro próprio (tools, controle de
-    // empréstimo), sem quantidade. Cria N máquinas Disponíveis (limite de
-    // segurança de 50 por lançamento pra evitar acidentes).
-    if (dest === "MAQUINARIO") {
+    // Maquinário / Ferramenta / Elétrica — tabela `tools` (asset_type), cada
+    // unidade é um registro próprio (controle de empréstimo), sem quantidade.
+    // Cria N itens Disponíveis (limite de segurança de 50 por lançamento).
+    if (dest === "MAQUINARIO" || dest === "FERRAMENTA" || dest === "ELETRICA") {
+      const where = dest === "FERRAMENTA" ? "Ferramenta" : dest === "ELETRICA" ? "Elétrica" : "Maquinário";
       const units = Math.min(50, Math.max(1, Math.round(qty)));
       for (let i = 0; i < units; i++) {
         const { error } = await db.from("tools").insert({
-          name, asset_type: "MAQUINARIO", status: "DISPONIVEL", updated_by: actor,
+          name, asset_type: dest, status: "DISPONIVEL", updated_by: actor,
         } as any);
         if (error) throw new Error(error.message);
       }
-      return { created: true, where: "Maquinário", quantity: units };
+      return { created: true, where, quantity: units };
     }
 
     throw new Error(`Destino inválido: ${dest}`);
@@ -2079,9 +2084,11 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
         </div>
       )}
 
-      {stocking && value.dest === "MAQUINARIO" && (
+      {stocking && (value.dest === "MAQUINARIO" || value.dest === "FERRAMENTA" || value.dest === "ELETRICA") && (
         <p className="text-xs text-emerald-700 bg-emerald-50/60 border border-emerald-200 rounded-lg p-3">
-          ⚙️ Cada unidade vira uma máquina no Maquinário (status <strong>Disponível</strong>){quantity ? ` — ${Math.min(50, Math.max(1, Math.round(quantity)))} unidade(s)` : ""}.
+          {value.dest === "FERRAMENTA" ? "🔧" : value.dest === "ELETRICA" ? "⚡" : "⚙️"} Cada unidade vira um item em{" "}
+          <strong>{value.dest === "FERRAMENTA" ? "Ferramenta" : value.dest === "ELETRICA" ? "Elétrica" : "Maquinário"}</strong>{" "}
+          (status <strong>Disponível</strong>){quantity ? ` — ${Math.min(50, Math.max(1, Math.round(quantity)))} unidade(s)` : ""}.
         </p>
       )}
 

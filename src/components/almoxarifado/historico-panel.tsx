@@ -55,7 +55,7 @@ export function HistoricoPanel() {
       });
       (toolRes.data || []).forEach((m: Record<string, unknown>) => {
         const tool = m.tools as Record<string, unknown> | null;
-        const source = tool?.asset_type === "MAQUINARIO" ? "Maquinário" : "Ferramentas";
+        const source = tool?.asset_type === "MAQUINARIO" ? "Maquinário" : tool?.asset_type === "ELETRICA" ? "Elétrica" : "Ferramenta";
         combined.push({ ...m, item_name: (tool?.name as string) || "—", source } as HistRow);
       });
       combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());

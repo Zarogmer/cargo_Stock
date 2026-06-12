@@ -55,6 +55,7 @@ enum ToolMovementType {
 enum AssetType {
   FERRAMENTA
   MAQUINARIO
+  ELETRICA
 }
 
 enum ShipStatus {

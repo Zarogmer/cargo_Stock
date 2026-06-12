@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { TOOL_STATUS_LABELS, buildCodeMap } from "@/lib/utils";
+import { TOOL_STATUS_LABELS, ASSET_TYPE_LABELS, buildCodeMap } from "@/lib/utils";
 import type { Tool, ToolStatus, AssetType, ToolMovementType } from "@/types/database";
 
 // Painel de Maquinário (tabela `tools`, asset_type=MAQUINARIO). Mesmo conjunto
@@ -28,8 +28,8 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
   const { profile } = useAuth();
   const pathname = usePathname();
   const role = profile?.role || "RH";
-  const moduleName = assetType === "FERRAMENTA" ? "FERRAMENTAS" : "MAQUINARIO";
-  const singular = assetType === "FERRAMENTA" ? "Ferramenta" : "Maquinário";
+  const moduleName = assetType === "FERRAMENTA" ? "FERRAMENTAS" : assetType === "ELETRICA" ? "ELETRICA" : "MAQUINARIO";
+  const singular = assetType === "FERRAMENTA" ? "Ferramenta" : assetType === "ELETRICA" ? "Elétrica" : "Maquinário";
 
   const canCreate = hasPermission(role, moduleName, "create");
   const canEdit = hasPermission(role, moduleName, "edit");
@@ -61,7 +61,9 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
   async function saveTool(data: Partial<Tool>) {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
-    const payload = { ...data, asset_type: assetType, updated_by: actor } as Record<string, unknown>;
+    // O Tipo vem do formulário (permite reclassificar entre Maquinário /
+    // Ferramenta / Elétrica); na criação cai no assetType da aba atual.
+    const payload = { ...data, asset_type: data.asset_type ?? assetType, updated_by: actor } as Record<string, unknown>;
     if (editTool) {
       await db.from("tools").update(payload).eq("id", editTool.id);
     } else {
@@ -157,7 +159,7 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
         actions={canCreate ? <Button size="sm" onClick={() => { setEditTool(null); setShowForm(true); }}><PlusIcon className="w-4 h-4" />Adicionar</Button> : undefined}
       />
 
-      <ToolFormModal open={showForm} onClose={() => { setShowForm(false); setEditTool(null); }} onSave={saveTool} item={editTool} singular={singular} saving={saving} />
+      <ToolFormModal open={showForm} onClose={() => { setShowForm(false); setEditTool(null); }} onSave={saveTool} item={editTool} singular={singular} defaultType={assetType} saving={saving} />
 
       <ConfirmDialog open={!!deleteTool} onClose={() => setDeleteTool(null)}
         onConfirm={async () => { setSaving(true); await db.from("tools").delete().eq("id", deleteTool!.id); setSaving(false); setDeleteTool(null); loadAll(); }}
@@ -169,22 +171,30 @@ export function ToolsPanel({ assetType }: { assetType: AssetType }) {
   );
 }
 
-function ToolFormModal({ open, onClose, onSave, item, singular, saving }: {
-  open: boolean; onClose: () => void; onSave: (d: Partial<Tool>) => void; item: Tool | null; singular: string; saving: boolean;
+function ToolFormModal({ open, onClose, onSave, item, singular, defaultType, saving }: {
+  open: boolean; onClose: () => void; onSave: (d: Partial<Tool>) => void; item: Tool | null; singular: string; defaultType: AssetType; saving: boolean;
 }) {
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState<ToolStatus>("DISPONIVEL");
+  const [type, setType] = useState<AssetType>(defaultType);
 
   useEffect(() => {
-    if (item) { setName(item.name); setNotes(item.notes || ""); setStatus(item.status); }
-    else { setName(""); setNotes(""); setStatus("DISPONIVEL"); }
-  }, [item, open]);
+    if (item) { setName(item.name); setNotes(item.notes || ""); setStatus(item.status); setType(item.asset_type); }
+    else { setName(""); setNotes(""); setStatus("DISPONIVEL"); setType(defaultType); }
+  }, [item, open, defaultType]);
 
   return (
     <Modal open={open} onClose={onClose} title={item ? `Editar ${singular}` : `Novo ${singular}`}>
-      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, notes: notes || null, status }); }} className="space-y-4">
+      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, notes: notes || null, status, asset_type: type }); }} className="space-y-4">
         <div><label className="block text-sm font-medium mb-1">Nome *</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} required className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" /></div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Tipo</label>
+          <select value={type} onChange={(e) => setType(e.target.value as AssetType)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none">
+            {Object.entries(ASSET_TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+          <p className="text-[10px] text-text-light mt-1">Mudar o tipo move o item para a aba correspondente (Maquinário / Ferramenta / Elétrica).</p>
+        </div>
         <div>
           <label className="block text-sm font-medium mb-1">Status</label>
           <select value={status} onChange={(e) => setStatus(e.target.value as ToolStatus)} className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none">

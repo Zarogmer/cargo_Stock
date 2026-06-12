@@ -31,6 +31,8 @@ export default function AlmoxarifadoPage() {
     { key: "uniforme", label: "Uniforme", content: <SimpleInventoryPanel kind="UNIFORME" /> },
     { key: "compras", label: "Compras", content: <ComprasPanel /> },
     { key: "maquinario", label: "Maquinário", content: <ToolsPanel assetType="MAQUINARIO" /> },
+    { key: "ferramenta", label: "Ferramenta", content: <ToolsPanel assetType="FERRAMENTA" /> },
+    { key: "eletrica", label: "Elétrica", content: <ToolsPanel assetType="ELETRICA" /> },
     { key: "historico", label: "Histórico", content: <HistoricoPanel /> },
   ];
 
