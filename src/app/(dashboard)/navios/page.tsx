@@ -1787,11 +1787,13 @@ export default function NaviosPage() {
                         )}
 
                         {/* Embarque: badge mostrando qual equipe receberá a
-                            mensagem (card Trello #39). Cores combinam com o
-                            badge da equipe na lista de navios (linha ~977):
+                            mensagem no WhatsApp (card Trello #39). Só aparece
+                            quando "Avisar no WhatsApp" está marcado — sem aviso,
+                            ninguém é notificado e o badge não faz sentido. Cores
+                            combinam com o badge da equipe na lista de navios:
                             Equipe 1 = azul, Equipe 2 = roxo. Sem equipe =
                             âmbar de alerta. */}
-                        {!isCostadoForm && (
+                        {!isCostadoForm && sendWhats && (
                           form.assigned_team === "EQUIPE_1" ? (
                             <div className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-blue-100 text-blue-700 border border-blue-200">
                               🎯 Equipe 1 será notificada
