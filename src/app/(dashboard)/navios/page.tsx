@@ -493,6 +493,57 @@ export default function NaviosPage() {
     setShowModal(true);
   }
 
+  // Ao escolher Equipe 1 / Equipe 2 no formulário, já marca os colaboradores
+  // daquela equipe pra escalar e preenche a função de cada um pelo cargo. Pula
+  // quem está preso em outra operação ativa. Trocar de equipe (ou voltar pra
+  // "Sem equipe") limpa os membros de equipe antes, pra seleção refletir só a
+  // equipe atual. Não faz nada na edição — lá não se escala ninguém.
+  function selectTeamMembersForForm(team: string) {
+    if (editingShip) return;
+    const validTeam = team === "EQUIPE_1" || team === "EQUIPE_2";
+    // Elegíveis pra Embarque: ATIVO/PENDENCIA com telefone (Administrativo
+    // incluso), da equipe escolhida e livres (não presos em outra operação).
+    const teamAvailable = validTeam
+      ? employees.filter((e) => {
+          const status = e.status ?? "ATIVO";
+          return (
+            e.team === team &&
+            (status === "ATIVO" || status === "PENDENCIA") &&
+            (e.phone || "").trim().length > 0 &&
+            !occupiedEmployeeKind.has(e.id)
+          );
+        })
+      : [];
+
+    setGroupParticipants((prev) => {
+      const next = new Set(prev);
+      for (const e of employees) {
+        if (e.team === "EQUIPE_1" || e.team === "EQUIPE_2") next.delete(e.id);
+      }
+      for (const e of teamAvailable) next.add(e.id);
+      return next;
+    });
+    setGroupPerEmpFn((m) => {
+      const nm = new Map(m);
+      for (const e of employees) {
+        if (e.team === "EQUIPE_1" || e.team === "EQUIPE_2") nm.delete(e.id);
+      }
+      for (const e of teamAvailable) {
+        const role = (e.role || "").trim().toUpperCase();
+        const fn = role ? jobFunctions.find((f) => f.name.toUpperCase() === role) : null;
+        if (fn) nm.set(e.id, String(fn.id));
+      }
+      return nm;
+    });
+    setGroupPerEmpFn2((m) => {
+      const nm = new Map(m);
+      for (const e of employees) {
+        if (e.team === "EQUIPE_1" || e.team === "EQUIPE_2") nm.delete(e.id);
+      }
+      return nm;
+    });
+  }
+
   async function handleSave() {
     if (!form.name.trim()) {
       setFormError("Nome do navio é obrigatório.");
@@ -1481,7 +1532,11 @@ export default function NaviosPage() {
                   <label className="block text-sm font-medium text-text mb-1">Equipe Designada</label>
                   <select
                     value={form.assigned_team}
-                    onChange={(e) => setForm({ ...form, assigned_team: e.target.value })}
+                    onChange={(e) => {
+                      const team = e.target.value;
+                      setForm({ ...form, assigned_team: team });
+                      selectTeamMembersForForm(team);
+                    }}
                     className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm bg-white"
                   >
                     <option value="">Sem equipe</option>
@@ -1571,7 +1626,7 @@ export default function NaviosPage() {
                     <EnviarWhatsappToggle send={sendWhats} setSend={setSendWhats} />
                   )}
 
-                  {createGroup && form.operation_type === "EMBARQUE" && (
+                  {createGroup && sendWhats && form.operation_type === "EMBARQUE" && (
                     <div>
                       <label className="block text-sm font-medium text-text mb-1">Situação do Embarque</label>
                       <div className="grid grid-cols-1 gap-2">
@@ -1752,70 +1807,9 @@ export default function NaviosPage() {
                           )
                         )}
 
-                        {/* Atalho: marca todos os colaboradores da equipe
-                            designada de uma vez. Pula quem já está em outra
-                            operação ativa (cinza/badge). Auto-preenche a
-                            função pelo role do colaborador, igual ao toggle
-                            individual. */}
-                        {!isCostadoForm && form.assigned_team && (() => {
-                          const teamLabel = form.assigned_team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2";
-                          const teamMembers = eligible.filter((e) => e.team === form.assigned_team);
-                          const available = teamMembers.filter((e) => !occupiedEmployeeKind.has(e.id));
-                          const blocked = teamMembers.length - available.length;
-                          const allSelected = available.length > 0 && available.every((e) => groupParticipants.has(e.id));
-                          return (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (allSelected) {
-                                  setGroupParticipants((prev) => {
-                                    const next = new Set(prev);
-                                    for (const e of available) next.delete(e.id);
-                                    return next;
-                                  });
-                                  setGroupPerEmpFn((m) => {
-                                    const nm = new Map(m);
-                                    for (const e of available) nm.delete(e.id);
-                                    return nm;
-                                  });
-                                  setGroupPerEmpFn2((m) => {
-                                    const nm = new Map(m);
-                                    for (const e of available) nm.delete(e.id);
-                                    return nm;
-                                  });
-                                  return;
-                                }
-                                setGroupParticipants((prev) => {
-                                  const next = new Set(prev);
-                                  for (const e of available) next.add(e.id);
-                                  return next;
-                                });
-                                setGroupPerEmpFn((m) => {
-                                  const nm = new Map(m);
-                                  for (const e of available) {
-                                    if (nm.has(e.id)) continue;
-                                    const role = (e.role || "").trim().toUpperCase();
-                                    const fn = role
-                                      ? jobFunctions.find((f) => f.name.toUpperCase() === role)
-                                      : null;
-                                    if (fn) nm.set(e.id, String(fn.id));
-                                  }
-                                  return nm;
-                                });
-                              }}
-                              disabled={available.length === 0}
-                              className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium rounded-lg border border-emerald-200 bg-white hover:bg-emerald-50 text-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                            >
-                              <span className="flex items-center gap-1.5">
-                                {allSelected ? "↩️" : "👥"} {allSelected ? `Desmarcar ${teamLabel}` : `Escalar toda a ${teamLabel}`}
-                              </span>
-                              <span className="text-[10px] text-text-light font-normal">
-                                {available.length} disponíve{available.length === 1 ? "l" : "is"}
-                                {blocked > 0 && ` · ${blocked} em outra operação`}
-                              </span>
-                            </button>
-                          );
-                        })()}
+                        {/* O botão "Escalar toda a Equipe" foi removido: agora
+                            escolher a Equipe Designada acima já marca os
+                            colaboradores da equipe automaticamente. */}
 
                         {/* Setor Administrativo só faz sentido no Costado, onde
                             criamos um grupo novo. No Embarque a mensagem vai
