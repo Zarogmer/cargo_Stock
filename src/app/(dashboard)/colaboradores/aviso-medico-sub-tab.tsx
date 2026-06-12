@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { printPdfBlob } from "@/lib/print";
 import type { Employee } from "@/types/database";
 
 const EXAM_TYPES = [
@@ -44,7 +45,7 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
   const [data, setData] = useState<string>(todayInput);
   const [tipoExame, setTipoExame] = useState<ExamType>("ADMISSIONAL");
 
-  const [generating, setGenerating] = useState<"docx" | "pdf" | null>(null);
+  const [generating, setGenerating] = useState<"docx" | "pdf" | "print" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const sortedEmployees = useMemo(() => {
@@ -69,13 +70,14 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
     // Função stays as "Auxiliar Operacional" — don't overwrite from e.role.
   }
 
-  async function handleGenerate(format: "docx" | "pdf") {
+  async function handleGenerate(action: "docx" | "pdf" | "print") {
     setError(null);
     if (!nome.trim()) {
       setError("Selecione um funcionário ou informe o nome.");
       return;
     }
-    setGenerating(format);
+    const format = action === "docx" ? "docx" : "pdf";
+    setGenerating(action);
     try {
       const res = await fetch(`/api/documents/aviso-medico?format=${format}`, {
         method: "POST",
@@ -95,15 +97,19 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
         throw new Error(body.detail ? `${main}\n\nDetalhe tecnico: ${body.detail}` : main);
       }
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const safeName = nome.trim().replace(/[\\/:*?"<>|]+/g, "").trim() || "FUNCIONARIO";
-      a.download = `Aviso Medico ${safeName}.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      if (action === "print") {
+        printPdfBlob(blob);
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        const safeName = nome.trim().replace(/[\\/:*?"<>|]+/g, "").trim() || "FUNCIONARIO";
+        a.download = `Aviso Medico ${safeName}.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Falha ao gerar aviso.";
       setError(msg);
@@ -230,6 +236,13 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
           disabled={!!generating || !nome.trim()}
         >
           {generating === "pdf" ? "Gerando..." : "Gerar PDF (.pdf)"}
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => handleGenerate("print")}
+          disabled={!!generating || !nome.trim()}
+        >
+          {generating === "print" ? "Imprimindo..." : "🖨️ Imprimir"}
         </Button>
       </div>
     </div>

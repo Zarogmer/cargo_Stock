@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { printPdfBlob } from "@/lib/print";
 import { db } from "@/lib/db";
 import { parseDecimalBR } from "@/lib/utils";
 import {
@@ -57,7 +58,7 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
   const [poroes, setPoroes] = useState(1);
 
   const [ships, setShips] = useState<Ship[]>([]);
-  const [generating, setGenerating] = useState<"docx" | "pdf" | null>(null);
+  const [generating, setGenerating] = useState<"docx" | "pdf" | "print" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Navios cadastrados pro dropdown (com opção de digitar um avulso).
@@ -156,7 +157,7 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
     return [{ nome: nome.trim(), cpf: cpf.trim() }];
   }
 
-  async function handleGenerate(format: "docx" | "pdf") {
+  async function handleGenerate(action: "docx" | "pdf" | "print") {
     setError(null);
     const recipients = buildRecipients();
     if (recipients.length === 0 || recipients.some((r) => !r.nome)) {
@@ -171,7 +172,8 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
       setError("Selecione ou informe o navio.");
       return;
     }
-    setGenerating(format);
+    const format = action === "docx" ? "docx" : "pdf";
+    setGenerating(action);
     try {
       const res = await fetch(`/api/documents/recibo-pagamento?format=${format}`, {
         method: "POST",
@@ -190,14 +192,18 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
         throw new Error(b.detail ? `${main}\n\nDetalhe tecnico: ${b.detail}` : main);
       }
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filenameFromResponse(res, recipients.length, format, recipients[0]?.nome || "");
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      if (action === "print") {
+        printPdfBlob(blob);
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filenameFromResponse(res, recipients.length, format, recipients[0]?.nome || "");
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Falha ao gerar recibo.";
       setError(msg);
@@ -407,6 +413,14 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
         </Button>
         <Button variant="danger" onClick={() => handleGenerate("pdf")} disabled={!canGenerate}>
           {generating === "pdf" ? "Gerando..." : isLote ? "Gerar lote PDF (.zip)" : "Gerar PDF (.pdf)"}
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => handleGenerate("print")}
+          disabled={!canGenerate || isLote}
+          title={isLote ? "Impressão disponível para 1 recibo (lotes geram .zip)" : undefined}
+        >
+          {generating === "print" ? "Imprimindo..." : "🖨️ Imprimir"}
         </Button>
       </div>
     </div>
