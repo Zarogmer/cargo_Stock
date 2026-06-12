@@ -32,6 +32,18 @@ const STOCK_UNITS = [
   { value: "SACO", label: "Saco" },
 ];
 
+// Item já cadastrado nas Equipes 1/2 oferecido no seletor de código ao
+// adicionar na Reserva (deduplicado por nome).
+type CodeSourceItem = {
+  id: number;
+  name: string;
+  category: string;
+  unit: string;
+  default_quantity: number;
+  code: string;
+  teams: ("EQUIPE_1" | "EQUIPE_2")[];
+};
+
 // Painel de Rancho (comida/suprimentos por equipe, stock_items filtrados por
 // EQUIPE_1/2/3) — corpo da antiga página /estoque, hoje renderizado como a aba
 // "Rancho" do Almoxarifado. (O nome do componente segue EstoquePanel por
@@ -44,7 +56,8 @@ export function EstoquePanel() {
   const [dbError, setDbError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("TODOS");
-  const [activeTeam, setActiveTeam] = useState<"EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3">("EQUIPE_1");
+  // Reserva (EQUIPE_3) é a aba padrão — é a lista-mãe que abastece as equipes.
+  const [activeTeam, setActiveTeam] = useState<"EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3">("EQUIPE_3");
   const [editItem, setEditItem] = useState<StockItem | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [showBaixa, setShowBaixa] = useState(false);
@@ -87,6 +100,47 @@ export function EstoquePanel() {
 
   // Código derivado do nome (prefixo de iniciais + sequência), por item.
   const codeMap = useMemo(() => buildCodeMap(items, (i) => i.id, (i) => i.name), [items]);
+
+  // Itens já cadastrados nas Equipes 1/2, deduplicados por nome — fonte do
+  // seletor de código ao adicionar um item na Reserva. O representante é a
+  // Equipe 1 quando existe, pra o código casar com o que aparece na aba dela.
+  const codeSourceItems = useMemo<CodeSourceItem[]>(() => {
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    const byName = new Map<string, CodeSourceItem>();
+    const repTeam = new Map<string, string>();
+    for (const it of items) {
+      if (it.team !== "EQUIPE_1" && it.team !== "EQUIPE_2") continue;
+      const team = it.team as "EQUIPE_1" | "EQUIPE_2";
+      const key = norm(it.name);
+      const existing = byName.get(key);
+      if (existing) {
+        if (!existing.teams.includes(team)) existing.teams.push(team);
+        // Equipe 1 vira o representante (código + atributos puxados).
+        if (team === "EQUIPE_1" && repTeam.get(key) !== "EQUIPE_1") {
+          existing.id = it.id;
+          existing.category = it.category;
+          existing.unit = it.unit || "UN";
+          existing.default_quantity = it.default_quantity;
+          existing.code = codeMap.get(it.id) || "";
+          repTeam.set(key, "EQUIPE_1");
+        }
+      } else {
+        byName.set(key, {
+          id: it.id,
+          name: it.name,
+          category: it.category,
+          unit: it.unit || "UN",
+          default_quantity: it.default_quantity,
+          code: codeMap.get(it.id) || "",
+          teams: [team],
+        });
+        repTeam.set(key, team);
+      }
+    }
+    return Array.from(byName.values())
+      .map((v) => ({ ...v, teams: [...v.teams].sort() as ("EQUIPE_1" | "EQUIPE_2")[] }))
+      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, [items, codeMap]);
 
   const filteredItems = items.filter((i) => {
     const matchesSearch =
@@ -307,8 +361,14 @@ export function EstoquePanel() {
         </div>
       )}
 
-      {/* Team selector */}
+      {/* Team selector — Reserva primeiro (lista-mãe que abastece as equipes). */}
       <div className="flex gap-2">
+        <button
+          onClick={() => setActiveTeam("EQUIPE_3")}
+          className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTeam === "EQUIPE_3" ? "bg-teal-600 text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+        >
+          📦 Reserva
+        </button>
         <button
           onClick={() => setActiveTeam("EQUIPE_1")}
           className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTeam === "EQUIPE_1" ? "bg-blue-600 text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
@@ -320,12 +380,6 @@ export function EstoquePanel() {
           className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTeam === "EQUIPE_2" ? "bg-purple-600 text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
         >
           🚢 Equipe 2
-        </button>
-        <button
-          onClick={() => setActiveTeam("EQUIPE_3")}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTeam === "EQUIPE_3" ? "bg-teal-600 text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-        >
-          📦 Reserva
         </button>
       </div>
 
@@ -376,6 +430,8 @@ export function EstoquePanel() {
         onSave={handleSave}
         item={editItem}
         saving={saving}
+        team={activeTeam}
+        sourceItems={codeSourceItems}
       />
 
       <BaixaModal
@@ -407,12 +463,14 @@ export function EstoquePanel() {
   );
 }
 
-function StockFormModal({ open, onClose, onSave, item, saving }: {
+function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems }: {
   open: boolean;
   onClose: () => void;
   onSave: (data: Partial<StockItem>) => void;
   item: StockItem | null;
   saving: boolean;
+  team: "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3";
+  sourceItems: CodeSourceItem[];
 }) {
   const [name, setName] = useState("");
   const [category, setCategory] = useState("SUPRIMENTOS");
@@ -421,6 +479,8 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
   const [quantity, setQuantity] = useState("");
   const [defaultQuantity, setDefaultQuantity] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
+  // Item de origem escolhido no seletor de código (só na Reserva).
+  const [sourceId, setSourceId] = useState("");
 
   useEffect(() => {
     if (item) {
@@ -438,7 +498,23 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
       setDefaultQuantity("");
       setExpiryDate("");
     }
+    setSourceId("");
   }, [item, open]);
+
+  // Ao adicionar na Reserva, puxar um item já cadastrado na Equipe 1/2 pelo
+  // código preenche nome, categoria, unidade e qtd padrão automaticamente.
+  const showCodePicker = !item && team === "EQUIPE_3" && sourceItems.length > 0;
+  const selectedSource = sourceItems.find((s) => String(s.id) === sourceId) || null;
+
+  function handlePickSource(id: string) {
+    setSourceId(id);
+    const src = sourceItems.find((s) => String(s.id) === id);
+    if (!src) return;
+    setName(src.name);
+    setCategory(src.category);
+    setUnit(src.unit || "UN");
+    setDefaultQuantity(src.default_quantity ? formatQty(src.default_quantity) : "");
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -458,6 +534,32 @@ function StockFormModal({ open, onClose, onSave, item, saving }: {
   return (
     <Modal open={open} onClose={onClose} title={item ? "Editar Item" : "Novo Item"}>
       <form onSubmit={handleSubmit} className="space-y-4">
+        {showCodePicker && (
+          <div className="rounded-lg border border-teal-200 bg-teal-50/60 p-3">
+            <label className="block text-sm font-medium text-text mb-1">
+              Puxar item já cadastrado (Equipe 1/2)
+            </label>
+            <select value={sourceId} onChange={(e) => handlePickSource(e.target.value)} className={inputCls}>
+              <option value="">— Item novo (digitar manualmente) —</option>
+              {sourceItems.map((s) => (
+                <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
+              ))}
+            </select>
+            {selectedSource ? (
+              <p className="text-[11px] text-text-light mt-1.5">
+                <span className="font-mono">{selectedSource.code}</span> · {selectedSource.name} — já em{" "}
+                {selectedSource.teams.map((t) => (t === "EQUIPE_1" ? "Equipe 1" : "Equipe 2")).join(", ")}
+                {selectedSource.default_quantity
+                  ? ` · padrão ${formatQty(selectedSource.default_quantity)} ${unitSuffix(selectedSource.unit)}`
+                  : ""}
+              </p>
+            ) : (
+              <p className="text-[11px] text-text-light mt-1.5">
+                Selecione um código das equipes para puxar nome, categoria e unidade — ou deixe em branco para cadastrar um item novo.
+              </p>
+            )}
+          </div>
+        )}
         <div>
           <label className="block text-sm font-medium text-text mb-1">Nome *</label>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} />
