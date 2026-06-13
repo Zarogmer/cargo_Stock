@@ -32,6 +32,8 @@ interface DashboardStats {
   totalRancho: number;    // Rancho (comida por equipe, EQUIPE_1/2/3)
   totalEmployees: number;
   totalMaquinario: number;
+  totalFerramentas: number; // Ferramenta (inventário, team=FERRAMENTA)
+  totalEletrica: number;    // Elétrica (inventário, team=ELETRICA)
   totalEpis: number;
   totalUniforms: number;
   totalConversations: number;
@@ -81,7 +83,7 @@ export default function DashboardPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
 
-  const [stats, setStats] = useState<DashboardStats>({ totalMateriais: 0, totalRancho: 0, totalEmployees: 0, totalMaquinario: 0, totalEpis: 0, totalUniforms: 0, totalConversations: 0, totalSolicitacoes: 0 });
+  const [stats, setStats] = useState<DashboardStats>({ totalMateriais: 0, totalRancho: 0, totalEmployees: 0, totalMaquinario: 0, totalFerramentas: 0, totalEletrica: 0, totalEpis: 0, totalUniforms: 0, totalConversations: 0, totalSolicitacoes: 0 });
   const [movements, setMovements] = useState<RecentMovement[]>([]);
   const [dollar, setDollar] = useState<DollarQuote | null>(null);
   const [stockItems, setStockItems] = useState<StockChartItem[]>([]);
@@ -102,12 +104,14 @@ export default function DashboardPage() {
       // "Estoque" = materiais do galpão (team=GALPAO). "Rancho" = comida por
       // equipe (EQUIPE_1/2/3). Ambos vivem em stock_items, separados pelo team.
       const FOOD_TEAMS = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_3"];
-      const [materiaisRes, ranchoRes, stockFullRes, employeesRes, maquinarioRes, episRes, uniformsRes, solicitacoesRes, unreadRes] = await Promise.all([
+      const [materiaisRes, ranchoRes, stockFullRes, employeesRes, maquinarioRes, ferramentasRes, eletricaRes, episRes, uniformsRes, solicitacoesRes, unreadRes] = await Promise.all([
         db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "GALPAO"),
         db.from("stock_items").select("id", { count: "exact", head: true }).in("team", FOOD_TEAMS),
         db.from("stock_items").select("name, quantity, default_quantity, category, team").in("team", FOOD_TEAMS),
         db.from("employees").select("id", { count: "exact", head: true }),
         db.from("tools").select("id", { count: "exact", head: true }).eq("asset_type", "MAQUINARIO"),
+        db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "FERRAMENTA"),
+        db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "ELETRICA"),
         db.from("epis").select("id", { count: "exact", head: true }),
         // Uniformes: soma das quantidades em estoque (total de peças), não o nº de tipos.
         db.from("uniforms").select("stock_qty"),
@@ -126,6 +130,8 @@ export default function DashboardPage() {
         totalRancho: ranchoRes.count || 0,
         totalEmployees: employeesRes.count || 0,
         totalMaquinario: maquinarioRes.count || 0,
+        totalFerramentas: ferramentasRes.count || 0,
+        totalEletrica: eletricaRes.count || 0,
         totalEpis: episRes.count || 0,
         totalUniforms,
         totalConversations: unreadRes.count || 0,
@@ -393,6 +399,8 @@ export default function DashboardPage() {
         <StatCard label="Rancho" value={stats.totalRancho} icon="🛒" tone="amber" href="/almoxarifado?tab=rancho" />
         <StatCard label="RH" value={stats.totalEmployees} icon="👷" tone="emerald" href="/colaboradores" />
         <StatCard label="Maquinário" value={stats.totalMaquinario} icon="⚙️" tone="teal" href="/almoxarifado?tab=maquinario" />
+        <StatCard label="Ferramenta" value={stats.totalFerramentas} icon="🔧" tone="slate" href="/almoxarifado?tab=ferramenta" />
+        <StatCard label="Elétrica" value={stats.totalEletrica} icon="⚡" tone="yellow" href="/almoxarifado?tab=eletrica" />
         <StatCard label="EPIs" value={stats.totalEpis} icon="⛑️" tone="violet" href="/almoxarifado?tab=epi" />
         <StatCard label="Uniformes" value={stats.totalUniforms} icon="👕" tone="rose" href="/almoxarifado?tab=uniforme" />
         <StatCard label="Conversas" value={stats.totalConversations} icon="💬" tone="cyan" href="/conversas" />
@@ -664,7 +672,7 @@ export default function DashboardPage() {
 
 // --- Helper Components ---
 
-type StatTone = "blue" | "emerald" | "amber" | "violet" | "rose" | "teal" | "cyan" | "indigo";
+type StatTone = "blue" | "emerald" | "amber" | "violet" | "rose" | "teal" | "cyan" | "indigo" | "slate" | "yellow";
 
 const STAT_TONE: Record<StatTone, { chip: string; accent: string }> = {
   blue:    { chip: "bg-blue-50 text-blue-600",       accent: "bg-blue-500" },
@@ -675,6 +683,8 @@ const STAT_TONE: Record<StatTone, { chip: string; accent: string }> = {
   teal:    { chip: "bg-teal-50 text-teal-600",       accent: "bg-teal-500" },
   cyan:    { chip: "bg-cyan-50 text-cyan-600",       accent: "bg-cyan-500" },
   indigo:  { chip: "bg-indigo-50 text-indigo-600",   accent: "bg-indigo-500" },
+  slate:   { chip: "bg-slate-100 text-slate-600",    accent: "bg-slate-500" },
+  yellow:  { chip: "bg-yellow-50 text-yellow-600",   accent: "bg-yellow-500" },
 };
 
 function StatCard({
