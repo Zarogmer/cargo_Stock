@@ -127,7 +127,7 @@ async function main() {
   for (const [cpf, p] of sheetByCpf) {
     const e = dbByCpf.get(cpf);
     if (e && e.status !== p.status) {
-      statusDiff.push({ name: p.name, cpf, sheet: p.status, system: e.status });
+      statusDiff.push({ name: p.name, cpf, sheet: p.status, system: e.status ?? "(sem status)" });
     }
   }
 
