@@ -7,8 +7,9 @@ import { DataTable } from "@/components/ui/data-table";
 import { formatDateTime, matchSearch, MOVEMENT_TYPE_LABELS } from "@/lib/utils";
 
 // Histórico unificado de movimentações do Almoxarifado: entregas/devoluções de
-// EPI e Uniforme (epi_movements / uniform_movements) + movimentações de
-// Ferramentas/Maquinário (tool_movements). Filtro por tipo no topo.
+// EPI e Uniforme (epi_movements / uniform_movements) + empréstimos de Maquinário
+// (tool_movements). Estoque/Ferramenta/Elétrica são inventário (baixa em
+// stock_movements) e não aparecem aqui. Filtro por tipo no topo.
 type HistRow = Record<string, unknown> & {
   id: number;
   source: "EPI" | "Uniforme" | "Ferramentas" | "Maquinário";
@@ -19,7 +20,7 @@ type HistRow = Record<string, unknown> & {
   created_at: string;
 };
 
-const FILTERS = ["Todos", "EPI", "Uniforme", "Ferramentas", "Maquinário"] as const;
+const FILTERS = ["Todos", "EPI", "Uniforme", "Maquinário"] as const;
 
 const SOURCE_COLORS: Record<HistRow["source"], string> = {
   EPI: "bg-blue-100 text-blue-700",

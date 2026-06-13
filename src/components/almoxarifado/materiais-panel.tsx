@@ -4,39 +4,63 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
-import { hasPermission } from "@/lib/rbac";
+import { hasPermission, type Module } from "@/lib/rbac";
 import { DataTable } from "@/components/ui/data-table";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ImagePicker, ImageLightbox } from "@/components/ui/image-picker";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatDateTime, matchSearch, parseDecimalBR, formatQty, buildCodeMap } from "@/lib/utils";
 import type { StockItem } from "@/types/database";
 
-// Materiais do galpão (almoxarifado). Reaproveita a tabela `stock_items` com a
-// sentinela team="GALPAO" pra separar do Rancho (comida, EQUIPE_1/2/3) e do
-// Estoque para Embarque — ambos filtram por equipe e ignoram GALPAO. O grupo da
-// planilha (Elétrica, Hidrojato, Cozinha...) fica em `location`; `category` é
-// sempre OUTROS (enum fixo, não usado aqui).
-const TEAM = "GALPAO";
+// Inventário genérico do Almoxarifado: itens com QUANTIDADE, mínimo, baixa (⬇️) e
+// foto. Reaproveita a tabela `stock_items` usando o campo `team` como sentinela
+// pra separar cada setor:
+//   GALPAO     → aba "Estoque" (materiais do galpão)
+//   FERRAMENTA → aba "Ferramenta"
+//   ELETRICA   → aba "Elétrica"
+// (Rancho usa EQUIPE_1/2/3 e o Embarque filtra por equipe — todos ignoram estes
+// sentinelas.) O grupo/categoria do item fica em `location`; `category` é sempre
+// OUTROS (enum fixo, não usado aqui). Maquinário NÃO usa este painel — é
+// empréstimo por equipe (tabela `tools`, ToolsPanel).
+export type InventoryKind = "GALPAO" | "FERRAMENTA" | "ELETRICA";
 
-// Grupos conhecidos (vindos da planilha). O select aceita texto livre via
-// datalist, então novos grupos podem ser criados na hora.
-const KNOWN_GROUPS = [
-  "Elétrica",
-  "EPI e Químicos",
-  "Hidrojato",
-  "Pistola e Caneta",
-  "Rodas",
-  "Líquidos",
-  "Ferramentas",
-  "Mangueiras e Conexões",
-  "Varões",
-  "Cozinha",
-  "Outros",
+interface KindConfig {
+  module: Module;
+  singular: string;        // "Material", "Ferramenta", "Elétrica"
+  newTitle: string;
+  editTitle: string;
+  emptyMsg: string;
+  searchPlaceholder: string;
+  groups: string[];        // sugestões de categoria (datalist)
+}
+
+// Grupos conhecidos por setor. O campo aceita texto livre via datalist, então
+// novas categorias podem ser criadas na hora.
+const STOCK_GROUPS = [
+  "Elétrica", "EPI e Químicos", "Hidrojato", "Pistola e Caneta", "Rodas",
+  "Líquidos", "Ferramentas", "Mangueiras e Conexões", "Varões", "Cozinha", "Outros",
 ];
 
-export function MateriaisPanel() {
+const KIND_CONFIG: Record<InventoryKind, KindConfig> = {
+  GALPAO: {
+    module: "ESTOQUE", singular: "Material", newTitle: "Novo Material", editTitle: "Editar Material",
+    emptyMsg: "Nenhum material encontrado", searchPlaceholder: "Buscar por nome ou código...", groups: STOCK_GROUPS,
+  },
+  FERRAMENTA: {
+    module: "FERRAMENTAS", singular: "Ferramenta", newTitle: "Nova Ferramenta", editTitle: "Editar Ferramenta",
+    emptyMsg: "Nenhuma ferramenta encontrada", searchPlaceholder: "Buscar ferramenta...", groups: ["Manual", "Elétrica", "Medição", "Corte", "Outros"],
+  },
+  ELETRICA: {
+    module: "ELETRICA", singular: "Item elétrico", newTitle: "Novo item elétrico", editTitle: "Editar item elétrico",
+    emptyMsg: "Nenhum item encontrado", searchPlaceholder: "Buscar item elétrico...", groups: ["Cabos", "Conectores", "Disjuntores", "Lâmpadas", "Tomadas", "Outros"],
+  },
+};
+
+export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
+  const cfg = KIND_CONFIG[kind];
+  const TEAM = kind; // o sentinela em stock_items.team é o próprio kind
   const { profile } = useAuth();
   const pathname = usePathname();
   const [items, setItems] = useState<StockItem[]>([]);
@@ -49,13 +73,14 @@ export function MateriaisPanel() {
   const [showBaixa, setShowBaixa] = useState(false);
   const [baixaItem, setBaixaItem] = useState<StockItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<StockItem | null>(null);
+  const [lightbox, setLightbox] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const role = profile?.role || "RH";
-  const canCreate = hasPermission(role, "ESTOQUE", "create");
-  const canEdit = hasPermission(role, "ESTOQUE", "edit");
-  const canDelete = hasPermission(role, "ESTOQUE", "delete");
-  const canBaixar = hasPermission(role, "ESTOQUE", "baixar");
+  const canCreate = hasPermission(role, cfg.module, "create");
+  const canEdit = hasPermission(role, cfg.module, "edit");
+  const canDelete = hasPermission(role, cfg.module, "delete");
+  const canBaixar = hasPermission(role, cfg.module, "baixar");
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -67,17 +92,17 @@ export function MateriaisPanel() {
         .eq("team", TEAM)
         .order("name", { ascending: true });
       if (error) {
-        console.error("DB stock_items (materiais) error:", error);
+        console.error("DB stock_items error:", error);
         setDbError(`${error.code}: ${error.message} — ${error.hint || ""}`);
       }
       setItems(data || []);
     } catch (err) {
-      console.error("Erro ao carregar materiais:", err);
+      console.error("Erro ao carregar itens:", err);
       setDbError(String(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [TEAM]);
 
   useEffect(() => {
     loadItems();
@@ -100,7 +125,7 @@ export function MateriaisPanel() {
     return matchesSearch && matchesGroup;
   });
 
-  async function handleSave(formData: { name: string; location: string; quantity: number; min_quantity: number }) {
+  async function handleSave(formData: { name: string; location: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null }) {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
     const payload = {
@@ -110,6 +135,8 @@ export function MateriaisPanel() {
       category: "OUTROS",
       team: TEAM,
       min_quantity: formData.min_quantity,
+      image_url: formData.image_url,
+      notes: formData.notes,
       updated_by: actor,
     } as Record<string, unknown>;
 
@@ -161,6 +188,21 @@ export function MateriaisPanel() {
 
   const columns = [
     {
+      key: "image",
+      label: "",
+      className: "w-12",
+      render: (i: StockItem) => i.image_url ? (
+        <button type="button" onClick={(e) => { e.stopPropagation(); setLightbox(i.image_url); }} className="shrink-0" title="Ver foto">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={i.image_url} alt={i.name} className="w-9 h-9 rounded object-cover border border-border" />
+        </button>
+      ) : (
+        <div className="w-9 h-9 rounded bg-gray-100 border border-border flex items-center justify-center text-text-light" title="Sem foto">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+        </div>
+      ),
+    },
+    {
       key: "name",
       label: "Nome",
       render: (i: StockItem) => <span className="font-medium">{i.name}</span>,
@@ -198,6 +240,14 @@ export function MateriaisPanel() {
       render: (i: StockItem) => (
         <span className="text-text-light text-sm">{i.min_quantity > 0 ? formatQty(i.min_quantity) : "—"}</span>
       ),
+    },
+    {
+      key: "notes",
+      label: "Obs",
+      hideOnMobile: true,
+      render: (i: StockItem) => i.notes ? (
+        <span className="text-xs text-text-light max-w-[200px] truncate block" title={i.notes}>{i.notes}</span>
+      ) : <span className="text-text-light">—</span>,
     },
     {
       key: "updated_at",
@@ -273,12 +323,12 @@ export function MateriaisPanel() {
         data={filteredItems}
         loading={loading}
         keyExtractor={(i) => i.id}
-        emptyMessage="Nenhum material encontrado"
+        emptyMessage={cfg.emptyMsg}
         mobileCards
         onRowClick={canEdit ? (i) => { setEditItem(i); setShowForm(true); } : undefined}
         searchValue={search}
         onSearchChange={setSearch}
-        searchPlaceholder="Buscar por nome ou código..."
+        searchPlaceholder={cfg.searchPlaceholder}
         actions={canCreate ? (
           <Button onClick={() => { setEditItem(null); setShowForm(true); }} size="sm">
             <PlusIcon className="w-4 h-4" />
@@ -292,7 +342,9 @@ export function MateriaisPanel() {
         onClose={() => { setShowForm(false); setEditItem(null); }}
         onSave={handleSave}
         item={editItem}
-        groups={groups.length > 0 ? groups : KNOWN_GROUPS}
+        groups={groups.length > 0 ? groups : cfg.groups}
+        newTitle={cfg.newTitle}
+        editTitle={cfg.editTitle}
         saving={saving}
       />
 
@@ -308,21 +360,25 @@ export function MateriaisPanel() {
         open={!!deleteItem}
         onClose={() => setDeleteItem(null)}
         onConfirm={handleDelete}
-        title="Excluir Material"
+        title={`Excluir ${cfg.singular}`}
         message={`Tem certeza que deseja excluir "${deleteItem?.name}"?`}
         confirmLabel="Excluir"
         loading={saving}
       />
+
+      <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />
     </div>
   );
 }
 
-function MaterialFormModal({ open, onClose, onSave, item, groups, saving }: {
+function MaterialFormModal({ open, onClose, onSave, item, groups, newTitle, editTitle, saving }: {
   open: boolean;
   onClose: () => void;
-  onSave: (data: { name: string; location: string; quantity: number; min_quantity: number }) => void;
+  onSave: (data: { name: string; location: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null }) => void;
   item: StockItem | null;
   groups: string[];
+  newTitle: string;
+  editTitle: string;
   saving: boolean;
 }) {
   const [name, setName] = useState("");
@@ -330,6 +386,8 @@ function MaterialFormModal({ open, onClose, onSave, item, groups, saving }: {
   // Strings para aceitar vírgula (ex.: "1,5"); convertidas no submit.
   const [quantity, setQuantity] = useState("");
   const [minQuantity, setMinQuantity] = useState("");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [notes, setNotes] = useState("");
 
   useEffect(() => {
     if (item) {
@@ -337,11 +395,15 @@ function MaterialFormModal({ open, onClose, onSave, item, groups, saving }: {
       setGroup(item.location || "");
       setQuantity(formatQty(item.quantity));
       setMinQuantity(item.min_quantity ? formatQty(item.min_quantity) : "");
+      setImageUrl(item.image_url || null);
+      setNotes(item.notes || "");
     } else {
       setName("");
       setGroup("");
       setQuantity("");
       setMinQuantity("");
+      setImageUrl(null);
+      setNotes("");
     }
   }, [item, open]);
 
@@ -353,13 +415,15 @@ function MaterialFormModal({ open, onClose, onSave, item, groups, saving }: {
       quantity: parseDecimalBR(quantity),
       // Mínimo é inteiro (coluna Int); arredonda caso digitem decimal.
       min_quantity: Math.round(parseDecimalBR(minQuantity)),
+      image_url: imageUrl,
+      notes: notes.trim() || null,
     });
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
 
   return (
-    <Modal open={open} onClose={onClose} title={item ? "Editar Material" : "Novo Material"}>
+    <Modal open={open} onClose={onClose} title={item ? editTitle : newTitle}>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-text mb-1">Nome *</label>
@@ -389,6 +453,11 @@ function MaterialFormModal({ open, onClose, onSave, item, groups, saving }: {
             <input type="text" inputMode="numeric" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} placeholder="0 = sem mínimo" className={inputCls} />
           </div>
         </div>
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Observações <span className="text-text-light font-normal">(opcional)</span></label>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Ex: specs técnicas, localização..." className={`${inputCls} resize-none`} />
+        </div>
+        <ImagePicker value={imageUrl} onChange={setImageUrl} label="Foto do produto (opcional)" />
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>
@@ -418,7 +487,7 @@ function BaixaModal({ open, onClose, onConfirm, item, saving }: {
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
 
   return (
-    <Modal open={open} onClose={onClose} title="Baixar Material">
+    <Modal open={open} onClose={onClose} title="Baixar item">
       <form onSubmit={handleSubmit} className="space-y-4">
         <p className="text-sm text-text-light">
           Item: <strong>{item?.name}</strong> (disponível: {formatQty(item?.quantity)})

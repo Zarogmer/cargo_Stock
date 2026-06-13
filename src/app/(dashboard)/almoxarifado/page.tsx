@@ -3,7 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { Tabs } from "@/components/ui/tabs";
 import { EstoquePanel } from "@/components/almoxarifado/estoque-panel";
-import { MateriaisPanel } from "@/components/almoxarifado/materiais-panel";
+import { StockInventoryPanel } from "@/components/almoxarifado/materiais-panel";
 import { SimpleInventoryPanel } from "@/components/almoxarifado/inventory-simple-panel";
 import { ToolsPanel } from "@/components/almoxarifado/tools-panel";
 import { HistoricoPanel } from "@/components/almoxarifado/historico-panel";
@@ -16,8 +16,9 @@ import { ComprasPanel } from "@/components/almoxarifado/compras-panel";
 //
 // Histórico de nomes (jun/2026): a antiga aba "Estoque" (comida) virou "Rancho"
 // e a antiga aba "Ferramentas" (controle de empréstimo) deu lugar à nova aba
-// "Estoque" — inventário de materiais com quantidade. O maquinário continua com
-// o controle de empréstimo (tabela `tools`).
+// "Estoque" — inventário de materiais com quantidade. Ferramenta e Elétrica
+// também são inventário (StockInventoryPanel, team sentinela em stock_items).
+// Só o Maquinário segue com o controle de empréstimo por equipe (tabela `tools`).
 export default function AlmoxarifadoPage() {
   const searchParams = useSearchParams();
   // Aceita ?tab=ferramentas (link antigo) como atalho pro novo Estoque.
@@ -25,14 +26,14 @@ export default function AlmoxarifadoPage() {
   const initialTab = rawTab === "ferramentas" ? "estoque" : rawTab;
 
   const tabs = [
-    { key: "estoque", label: "Estoque", content: <MateriaisPanel /> },
+    { key: "estoque", label: "Estoque", content: <StockInventoryPanel kind="GALPAO" /> },
     { key: "rancho", label: "Rancho", content: <EstoquePanel /> },
     { key: "epi", label: "EPI", content: <SimpleInventoryPanel kind="EPI" /> },
     { key: "uniforme", label: "Uniforme", content: <SimpleInventoryPanel kind="UNIFORME" /> },
     { key: "compras", label: "Compras", content: <ComprasPanel /> },
     { key: "maquinario", label: "Maquinário", content: <ToolsPanel assetType="MAQUINARIO" /> },
-    { key: "ferramenta", label: "Ferramenta", content: <ToolsPanel assetType="FERRAMENTA" /> },
-    { key: "eletrica", label: "Elétrica", content: <ToolsPanel assetType="ELETRICA" /> },
+    { key: "ferramenta", label: "Ferramenta", content: <StockInventoryPanel kind="FERRAMENTA" /> },
+    { key: "eletrica", label: "Elétrica", content: <StockInventoryPanel kind="ELETRICA" /> },
     { key: "historico", label: "Histórico", content: <HistoricoPanel /> },
   ];
 

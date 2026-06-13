@@ -11,6 +11,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatDateTime, formatCurrency, formatQty, parseDecimalBR, buildCodeMap } from "@/lib/utils";
+import { ImagePicker } from "@/components/ui/image-picker";
 
 interface ToolRequest {
   id: string;
@@ -188,37 +189,6 @@ const STOCK_CATEGORIES = [
   "Varões",
   "Outros",
 ];
-
-// Comprime/redimensiona uma imagem escolhida pelo usuário para um data URL
-// (base64) pequeno antes de guardar no banco — a infra é só Railway/Postgres,
-// sem storage externo, então a foto vai inline. Máx. ~1024px, JPEG qualidade 0.72.
-function fileToCompressedDataUrl(file: File, maxSize = 1024, quality = 0.72): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Falha ao ler o arquivo"));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error("Arquivo de imagem inválido"));
-      img.onload = () => {
-        let { width, height } = img;
-        if (width > maxSize || height > maxSize) {
-          const ratio = Math.min(maxSize / width, maxSize / height);
-          width = Math.round(width * ratio);
-          height = Math.round(height * ratio);
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return reject(new Error("Canvas indisponível"));
-        ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL("image/jpeg", quality));
-      };
-      img.src = reader.result as string;
-    };
-    reader.readAsDataURL(file);
-  });
-}
 
 // Converte um valor de data do banco (ISO ou Date) para dd/mm/aaaa sem sofrer
 // o deslocamento de fuso (datas @db.Date voltam como meia-noite UTC).
@@ -528,11 +498,13 @@ export default function SolicitacoesPage() {
   // mesmo nome, soma a quantidade (reposição); senão cria um material novo com a
   // categoria escolhida. Também registra um movimento de ENTRADA pro histórico.
   // É a "ponte" entre Solicitações de compra e o Estoque.
-  const storeInStock = useCallback(async (opts: { name: string; quantity: number; category: string; code?: string | null }) => {
+  const storeInStock = useCallback(async (opts: { name: string; quantity: number; category: string; code?: string | null; team?: string }) => {
     const actor = profile?.full_name || "Sistema";
     const name = (opts.name || "").trim();
     const qty = opts.quantity > 0 ? opts.quantity : 1;
     const category = (opts.category || "").trim() || "Outros";
+    // Sentinela do inventário: GALPAO (Estoque) por padrão, ou FERRAMENTA/ELETRICA.
+    const team = opts.team || STOCK_TEAM;
     if (!name) throw new Error("Nome do material vazio");
 
     // Procura o material existente no galpão pelo CÓDIGO (se informado) ou pelo nome
@@ -541,7 +513,7 @@ export default function SolicitacoesPage() {
     const { data: galpao, error: loadErr } = await db
       .from("stock_items")
       .select("id, name, quantity, location")
-      .eq("team", STOCK_TEAM);
+      .eq("team", team);
     if (loadErr) throw new Error(loadErr.message);
     const items = (galpao || []) as { id: number; name: string; quantity: number; location: string | null }[];
     const existing = findItemByCodeOrName(items, opts.code, name);
@@ -569,7 +541,7 @@ export default function SolicitacoesPage() {
         quantity: qty,
         default_quantity: qty,
         category: "OUTROS",
-        team: STOCK_TEAM,
+        team,
         min_quantity: 0,
         updated_by: actor,
       } as any);
@@ -686,11 +658,19 @@ export default function SolicitacoesPage() {
       return { created, where: dest === "EPI" ? "EPI" : "Uniforme", quantity: addQty };
     }
 
-    // Maquinário / Ferramenta / Elétrica — tabela `tools` (asset_type), cada
-    // unidade é um registro próprio (controle de empréstimo), sem quantidade.
-    // Cria N itens Disponíveis (limite de segurança de 50 por lançamento).
-    if (dest === "MAQUINARIO" || dest === "FERRAMENTA" || dest === "ELETRICA") {
-      const where = dest === "FERRAMENTA" ? "Ferramenta" : dest === "ELETRICA" ? "Elétrica" : "Maquinário";
+    // Ferramenta / Elétrica — inventário com quantidade (stock_items com o team
+    // sentinela do setor). Mesma ponte do Estoque: casa por código/nome e soma a
+    // quantidade (reposição) em vez de criar uma linha por unidade.
+    if (dest === "FERRAMENTA" || dest === "ELETRICA") {
+      const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code, team: dest });
+      const label = dest === "FERRAMENTA" ? "Ferramenta" : "Elétrica";
+      return { created: r.created, where: `${label}${r.category && r.category !== "Outros" ? ` · ${r.category}` : ""}`, quantity: r.quantity };
+    }
+
+    // Maquinário — tabela `tools` (asset_type), cada unidade é um registro próprio
+    // (controle de empréstimo), sem quantidade. Cria N itens Disponíveis (limite
+    // de segurança de 50 por lançamento).
+    if (dest === "MAQUINARIO") {
       const units = Math.min(50, Math.max(1, Math.round(qty)));
       for (let i = 0; i < units; i++) {
         const { error } = await db.from("tools").insert({
@@ -698,7 +678,7 @@ export default function SolicitacoesPage() {
         } as any);
         if (error) throw new Error(error.message);
       }
-      return { created: true, where, quantity: units };
+      return { created: true, where: "Maquinário", quantity: units };
     }
 
     throw new Error(`Destino inválido: ${dest}`);
@@ -1647,60 +1627,6 @@ function getCategoryIcon(category: string): string {
   return icons[category] || "📦";
 }
 
-// Seletor de imagem reutilizável (solicitação e compra). Comprime no cliente
-// e devolve um data URL (base64), ou null quando removida.
-function ImagePicker({ value, onChange, label = "Imagem do produto (opcional)" }: {
-  value: string | null; onChange: (dataUrl: string | null) => void; label?: string;
-}) {
-  const [error, setError] = useState<string | null>(null);
-  const [processing, setProcessing] = useState(false);
-
-  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // permite re-selecionar o mesmo arquivo
-    if (!file) return;
-    if (!file.type.startsWith("image/")) { setError("Selecione um arquivo de imagem"); return; }
-    setError(null);
-    setProcessing(true);
-    try {
-      const dataUrl = await fileToCompressedDataUrl(file);
-      onChange(dataUrl);
-    } catch (err: any) {
-      setError(err?.message || "Falha ao processar imagem");
-    } finally {
-      setProcessing(false);
-    }
-  }
-
-  return (
-    <div>
-      <label className="block text-sm font-medium mb-1">{label}</label>
-      {value ? (
-        <div className="flex items-center gap-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={value} alt="Pré-visualização" className="w-20 h-20 rounded-lg object-cover border border-border" />
-          <div className="flex flex-col gap-1.5">
-            <label className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 rounded-lg cursor-pointer transition text-center">
-              Trocar
-              <input type="file" accept="image/*" onChange={handleFile} className="hidden" />
-            </label>
-            <button type="button" onClick={() => onChange(null)} className="px-3 py-1.5 text-xs font-medium text-danger hover:bg-red-50 rounded-lg transition">
-              Remover
-            </button>
-          </div>
-        </div>
-      ) : (
-        <label className="flex flex-col items-center justify-center gap-1 w-full py-6 border-2 border-dashed border-border rounded-lg cursor-pointer hover:border-primary/50 hover:bg-gray-50 transition text-text-light">
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-          <span className="text-xs font-medium">{processing ? "Processando..." : "Adicionar foto"}</span>
-          <input type="file" accept="image/*" onChange={handleFile} className="hidden" disabled={processing} />
-        </label>
-      )}
-      {error && <p className="text-xs text-danger mt-1">{error}</p>}
-    </div>
-  );
-}
-
 // Campo de fornecedor reutilizável: dropdown com os fornecedores cadastrados +
 // a opção "Outro" para digitar um novo. Não usa <datalist> de propósito — o
 // navegador filtra a datalist pelo texto já preenchido, escondendo os demais
@@ -1949,7 +1875,7 @@ function numToInput(n: number | null | undefined): string {
 // nome — buildCodeMap). Maquinário (cada unidade é um registro próprio), Rancho
 // (card #46: só registra a compra, sem mexer no estoque), Escritório e Outros não
 // têm código, então o campo não aparece pra eles.
-const CODED_DESTS: WarehouseDest[] = ["ESTOQUE", "EPI", "UNIFORME"];
+const CODED_DESTS: WarehouseDest[] = ["ESTOQUE", "EPI", "UNIFORME", "FERRAMENTA", "ELETRICA"];
 
 // Carrega os itens do setor de destino e devolve a lista [{ code, name }] já com o
 // código derivado (mesma regra da tabela do Almoxarifado). Rancho é por equipe; os
@@ -1963,6 +1889,9 @@ function useWarehouseCodes(dest: WarehouseDest, team: string, open: boolean) {
       let items: { id: number; name: string }[] = [];
       if (dest === "ESTOQUE") {
         const { data } = await db.from("stock_items").select("id, name").eq("team", STOCK_TEAM);
+        items = (data as any) || [];
+      } else if (dest === "FERRAMENTA" || dest === "ELETRICA") {
+        const { data } = await db.from("stock_items").select("id, name").eq("team", dest);
         items = (data as any) || [];
       } else if (dest === "RANCHO") {
         const { data } = await db.from("stock_items").select("id, name").eq("team", team || "EQUIPE_1");
@@ -2055,9 +1984,9 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
         </select>
       </div>
 
-      {stocking && value.dest === "ESTOQUE" && (
+      {stocking && (value.dest === "ESTOQUE" || value.dest === "FERRAMENTA" || value.dest === "ELETRICA") && (
         <div className={boxCls}>
-          <label className="block text-xs font-medium text-emerald-800 mb-1">Categoria no Estoque</label>
+          <label className="block text-xs font-medium text-emerald-800 mb-1">Categoria</label>
           <input type="text" list="wh-stock-cats" value={value.category}
             onChange={(e) => onChange({ ...value, category: e.target.value })}
             placeholder="Ex: Elétrica, Hidrojato, Ferramentas..." className={subCls} />
@@ -2084,10 +2013,9 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
         </div>
       )}
 
-      {stocking && (value.dest === "MAQUINARIO" || value.dest === "FERRAMENTA" || value.dest === "ELETRICA") && (
+      {stocking && value.dest === "MAQUINARIO" && (
         <p className="text-xs text-emerald-700 bg-emerald-50/60 border border-emerald-200 rounded-lg p-3">
-          {value.dest === "FERRAMENTA" ? "🔧" : value.dest === "ELETRICA" ? "⚡" : "⚙️"} Cada unidade vira um item em{" "}
-          <strong>{value.dest === "FERRAMENTA" ? "Ferramenta" : value.dest === "ELETRICA" ? "Elétrica" : "Maquinário"}</strong>{" "}
+          ⚙️ Cada unidade vira uma máquina em <strong>Maquinário</strong>{" "}
           (status <strong>Disponível</strong>){quantity ? ` — ${Math.min(50, Math.max(1, Math.round(quantity)))} unidade(s)` : ""}.
         </p>
       )}

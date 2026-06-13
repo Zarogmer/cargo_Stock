@@ -36,6 +36,8 @@ export interface StockItem {
   team: string | null;
   expiry_date: string | null;
   min_quantity: number;
+  image_url: string | null;
+  notes: string | null;
   updated_at: string;
   updated_by: string;
 }

@@ -47,7 +47,7 @@ type CodeSourceItem = {
 // Painel de Rancho (comida/suprimentos por equipe, stock_items filtrados por
 // EQUIPE_1/2/3) — corpo da antiga página /estoque, hoje renderizado como a aba
 // "Rancho" do Almoxarifado. (O nome do componente segue EstoquePanel por
-// histórico; a aba "Estoque" agora é o MateriaisPanel.)
+// histórico; a aba "Estoque" agora é o StockInventoryPanel.)
 export function EstoquePanel() {
   const { profile } = useAuth();
   const pathname = usePathname();

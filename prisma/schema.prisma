@@ -95,6 +95,12 @@ model StockItem {
   team             String?
   expiry_date      DateTime?       @db.Date
   min_quantity     Int             @default(0)
+  // Foto opcional do produto (data URL base64 comprimida no cliente). Inline no
+  // banco — infra só Railway/Postgres, sem storage externo (igual tool_requests).
+  image_url        String?
+  // Observação livre do item (ex.: specs técnicas de itens elétricos). Antes
+  // ficava em `tools.notes` (Ferramenta/Elétrica eram empréstimo).
+  notes            String?
   updated_at       DateTime        @default(now()) @db.Timestamptz()
   updated_by       String
   stock_movements  StockMovement[]
