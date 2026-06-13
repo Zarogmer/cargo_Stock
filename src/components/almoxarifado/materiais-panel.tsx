@@ -67,7 +67,6 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   const [loading, setLoading] = useState(true);
   const [dbError, setDbError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [filterGroup, setFilterGroup] = useState("TODOS");
   const [editItem, setEditItem] = useState<StockItem | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [showBaixa, setShowBaixa] = useState(false);
@@ -111,19 +110,17 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   // Código derivado do nome (prefixo de iniciais + sequência), por item.
   const codeMap = useMemo(() => buildCodeMap(items, (i) => i.id, (i) => i.name), [items]);
 
-  // Categorias (grupos) presentes nos dados, pra montar os filtros.
+  // Categorias (grupos) presentes nos dados — usadas só como sugestões (datalist)
+  // no formulário; o filtro por categoria foi removido (cada setor já é uma aba).
   const groups = useMemo(() => {
     const set = new Set<string>();
     for (const i of items) set.add(i.location || "Outros");
     return [...set].sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [items]);
 
-  const filteredItems = items.filter((i) => {
-    const matchesSearch =
-      matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search);
-    const matchesGroup = filterGroup === "TODOS" || (i.location || "Outros") === filterGroup;
-    return matchesSearch && matchesGroup;
-  });
+  const filteredItems = items.filter((i) =>
+    matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search),
+  );
 
   async function handleSave(formData: { name: string; location: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null }) {
     setSaving(true);
@@ -304,19 +301,6 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
           ⚠️ Erro ao carregar dados: {dbError}
         </div>
       )}
-
-      {/* Category (group) filter */}
-      <div className="flex flex-wrap gap-2">
-        {["TODOS", ...groups].map((g) => (
-          <button
-            key={g}
-            onClick={() => setFilterGroup(g)}
-            className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${filterGroup === g ? "bg-primary text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-          >
-            {g === "TODOS" ? "Todos" : g}
-          </button>
-        ))}
-      </div>
 
       <DataTable
         columns={columns}
