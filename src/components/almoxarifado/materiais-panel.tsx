@@ -21,9 +21,10 @@ import type { StockItem } from "@/types/database";
 //   FERRAMENTA → aba "Ferramenta"
 //   ELETRICA   → aba "Elétrica"
 // (Rancho usa EQUIPE_1/2/3 e o Embarque filtra por equipe — todos ignoram estes
-// sentinelas.) O grupo/categoria do item fica em `location`; `category` é sempre
-// OUTROS (enum fixo, não usado aqui). Maquinário NÃO usa este painel — é
-// empréstimo por equipe (tabela `tools`, ToolsPanel).
+// sentinelas.) Estes setores NÃO usam categoria — cada um já é uma aba; só o
+// Rancho mantém categoria. `category` é sempre OUTROS (enum fixo) e `location`
+// fica sem uso aqui. Maquinário NÃO usa este painel — é empréstimo por equipe
+// (tabela `tools`, ToolsPanel).
 export type InventoryKind = "GALPAO" | "FERRAMENTA" | "ELETRICA";
 
 interface KindConfig {
@@ -33,28 +34,20 @@ interface KindConfig {
   editTitle: string;
   emptyMsg: string;
   searchPlaceholder: string;
-  groups: string[];        // sugestões de categoria (datalist)
 }
-
-// Grupos conhecidos por setor. O campo aceita texto livre via datalist, então
-// novas categorias podem ser criadas na hora.
-const STOCK_GROUPS = [
-  "Elétrica", "EPI e Químicos", "Hidrojato", "Pistola e Caneta", "Rodas",
-  "Líquidos", "Ferramentas", "Mangueiras e Conexões", "Varões", "Cozinha", "Outros",
-];
 
 const KIND_CONFIG: Record<InventoryKind, KindConfig> = {
   GALPAO: {
     module: "ESTOQUE", singular: "Material", newTitle: "Novo Material", editTitle: "Editar Material",
-    emptyMsg: "Nenhum material encontrado", searchPlaceholder: "Buscar por nome ou código...", groups: STOCK_GROUPS,
+    emptyMsg: "Nenhum material encontrado", searchPlaceholder: "Buscar por nome ou código...",
   },
   FERRAMENTA: {
     module: "FERRAMENTAS", singular: "Ferramenta", newTitle: "Nova Ferramenta", editTitle: "Editar Ferramenta",
-    emptyMsg: "Nenhuma ferramenta encontrada", searchPlaceholder: "Buscar ferramenta...", groups: ["Manual", "Elétrica", "Medição", "Corte", "Outros"],
+    emptyMsg: "Nenhuma ferramenta encontrada", searchPlaceholder: "Buscar ferramenta...",
   },
   ELETRICA: {
     module: "ELETRICA", singular: "Item elétrico", newTitle: "Novo item elétrico", editTitle: "Editar item elétrico",
-    emptyMsg: "Nenhum item encontrado", searchPlaceholder: "Buscar item elétrico...", groups: ["Cabos", "Conectores", "Disjuntores", "Lâmpadas", "Tomadas", "Outros"],
+    emptyMsg: "Nenhum item encontrado", searchPlaceholder: "Buscar item elétrico...",
   },
 };
 
@@ -110,24 +103,15 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   // Código derivado do nome (prefixo de iniciais + sequência), por item.
   const codeMap = useMemo(() => buildCodeMap(items, (i) => i.id, (i) => i.name), [items]);
 
-  // Categorias (grupos) presentes nos dados — usadas só como sugestões (datalist)
-  // no formulário; o filtro por categoria foi removido (cada setor já é uma aba).
-  const groups = useMemo(() => {
-    const set = new Set<string>();
-    for (const i of items) set.add(i.location || "Outros");
-    return [...set].sort((a, b) => a.localeCompare(b, "pt-BR"));
-  }, [items]);
-
   const filteredItems = items.filter((i) =>
     matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search),
   );
 
-  async function handleSave(formData: { name: string; location: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null }) {
+  async function handleSave(formData: { name: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null }) {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
     const payload = {
       name: formData.name,
-      location: formData.location,
       quantity: formData.quantity,
       category: "OUTROS",
       team: TEAM,
@@ -208,15 +192,6 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
       key: "code",
       label: "Código",
       render: (i: StockItem) => <span className="font-mono text-xs text-text-light">{codeMap.get(i.id) || "—"}</span>,
-    },
-    {
-      key: "location",
-      label: "Categoria",
-      render: (i: StockItem) => (
-        <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-          {i.location || "Outros"}
-        </span>
-      ),
     },
     {
       key: "quantity",
@@ -326,7 +301,6 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         onClose={() => { setShowForm(false); setEditItem(null); }}
         onSave={handleSave}
         item={editItem}
-        groups={groups.length > 0 ? groups : cfg.groups}
         newTitle={cfg.newTitle}
         editTitle={cfg.editTitle}
         saving={saving}
@@ -355,18 +329,16 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   );
 }
 
-function MaterialFormModal({ open, onClose, onSave, item, groups, newTitle, editTitle, saving }: {
+function MaterialFormModal({ open, onClose, onSave, item, newTitle, editTitle, saving }: {
   open: boolean;
   onClose: () => void;
-  onSave: (data: { name: string; location: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null }) => void;
+  onSave: (data: { name: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null }) => void;
   item: StockItem | null;
-  groups: string[];
   newTitle: string;
   editTitle: string;
   saving: boolean;
 }) {
   const [name, setName] = useState("");
-  const [group, setGroup] = useState("");
   // Strings para aceitar vírgula (ex.: "1,5"); convertidas no submit.
   const [quantity, setQuantity] = useState("");
   const [minQuantity, setMinQuantity] = useState("");
@@ -376,14 +348,12 @@ function MaterialFormModal({ open, onClose, onSave, item, groups, newTitle, edit
   useEffect(() => {
     if (item) {
       setName(item.name);
-      setGroup(item.location || "");
       setQuantity(formatQty(item.quantity));
       setMinQuantity(item.min_quantity ? formatQty(item.min_quantity) : "");
       setImageUrl(item.image_url || null);
       setNotes(item.notes || "");
     } else {
       setName("");
-      setGroup("");
       setQuantity("");
       setMinQuantity("");
       setImageUrl(null);
@@ -395,7 +365,6 @@ function MaterialFormModal({ open, onClose, onSave, item, groups, newTitle, edit
     e.preventDefault();
     onSave({
       name,
-      location: group.trim() || "Outros",
       quantity: parseDecimalBR(quantity),
       // Mínimo é inteiro (coluna Int); arredonda caso digitem decimal.
       min_quantity: Math.round(parseDecimalBR(minQuantity)),
@@ -412,20 +381,6 @@ function MaterialFormModal({ open, onClose, onSave, item, groups, newTitle, edit
         <div>
           <label className="block text-sm font-medium text-text mb-1">Nome *</label>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-text mb-1">Categoria</label>
-          <input
-            type="text"
-            list="material-groups"
-            value={group}
-            onChange={(e) => setGroup(e.target.value)}
-            placeholder="Ex: Elétrica, Hidrojato, Cozinha..."
-            className={inputCls}
-          />
-          <datalist id="material-groups">
-            {groups.map((g) => <option key={g} value={g} />)}
-          </datalist>
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
