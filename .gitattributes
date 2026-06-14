@@ -1,0 +1,20 @@
+# Arquivos binários — nunca aplicar conversão de fim de linha (CRLF/LF), que
+# corromperia o arquivo. O repo usa core.autocrlf=true em algumas máquinas
+# Windows; sem isto, PDFs/planilhas/imagens podem quebrar ao clonar ou no deploy.
+*.pdf   binary
+*.xlsx  binary
+*.xls   binary
+*.docx  binary
+*.doc   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.eot   binary
+*.zip   binary
