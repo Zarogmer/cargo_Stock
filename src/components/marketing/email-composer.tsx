@@ -4,8 +4,10 @@ import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 // ─── Modelo de email ───────────────────────────────────────────────────────
-// Texto puro: os deeplinks do Outlook / mailto não suportam HTML de forma
-// confiável. O usuário pode editar tudo na tela antes de abrir o Outlook.
+// O corpo é editável como texto puro na tela. Ao enviar, geramos uma versão HTML
+// (com o link do site clicável) e copiamos pra área de transferência — o deeplink
+// do Outlook não aceita HTML, então o usuário cola (Ctrl+V) no corpo do email no
+// Outlook, onde o hyperlink é preservado.
 
 const SITE_URL = "https://cargoshipscleaning.com";
 
@@ -61,6 +63,50 @@ Equipe Cargo Ships Cleaning
 ${SITE_URL}`;
 }
 
+// Converte o corpo (texto puro) em HTML pro clipboard: escapa o texto, transforma
+// os links http(s) em <a> clicáveis e troca quebras de linha por <br>.
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function bodyToHtml(text: string): string {
+  const urlRe = /(https?:\/\/[^\s<]+)/g;
+  const inner = text
+    .split(urlRe)
+    .map((part) =>
+      /^https?:\/\//.test(part)
+        ? `<a href="${escapeHtml(part)}">${escapeHtml(part)}</a>`
+        : escapeHtml(part),
+    )
+    .join("")
+    .replace(/\n/g, "<br>");
+  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#1a1a1a">${inner}</div>`;
+}
+
+// Copia HTML (rich text) pra área de transferência via seleção temporária. É
+// SÍNCRONO (execCommand), então roda dentro do clique e não perde o foco antes de
+// abrir o Outlook — o navigator.clipboard.write é async e quebraria isso. Ao colar
+// no Outlook, os <a> viram hyperlinks de verdade. Retorna false se falhar.
+function copyRichText(html: string): boolean {
+  const el = document.createElement("div");
+  el.contentEditable = "true";
+  el.innerHTML = html;
+  el.style.position = "fixed";
+  el.style.left = "-9999px";
+  el.style.top = "0";
+  document.body.appendChild(el);
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = window.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { ok = false; }
+  sel?.removeAllRanges();
+  document.body.removeChild(el);
+  return ok;
+}
+
 // ─── Compositor ───────────────────────────────────────────────────────────────
 // Valores iniciais de "to" e "nome" vêm da URL (?to=...&nome=...) — é assim que o
 // botão "Enviar email" da aba Clientes chega aqui já preenchido.
@@ -71,6 +117,8 @@ export function EmailComposer() {
   const [clientName, setClientName] = useState(() => searchParams.get("nome") || "");
   const [subject, setSubject] = useState(DEFAULT_SUBJECT);
   const [body, setBody] = useState(() => buildDefaultBody(searchParams.get("nome") || ""));
+  // Feedback do "Preparar Envio": indica que a mensagem foi copiada pra colar.
+  const [copied, setCopied] = useState(false);
 
   // Aceita vários destinatários separados por vírgula ou ponto-e-vírgula e
   // devolve uma string limpa separada por vírgula (padrão dos clientes de email).
@@ -82,14 +130,17 @@ export function EmailComposer() {
       .join(",");
   }
 
-  // Abre o compose do Outlook na web com tudo já preenchido. O usuário confere e
-  // clica em Enviar — o email sai da conta Outlook em que ele estiver logado.
+  // Copia a mensagem como HTML (com o link clicável) e abre o compose do Outlook
+  // só com destinatário e assunto — o usuário cola o corpo (Ctrl+V), preservando o
+  // hyperlink. Se a cópia falhar, cai no preenchimento antigo (corpo como texto).
   function enviar() {
+    const ok = copyRichText(bodyToHtml(body));
+    setCopied(ok);
     const url =
       "https://outlook.office.com/mail/deeplink/compose" +
       `?to=${encodeURIComponent(recipientList())}` +
       `&subject=${encodeURIComponent(subject)}` +
-      `&body=${encodeURIComponent(body)}`;
+      (ok ? "" : `&body=${encodeURIComponent(body)}`);
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
@@ -169,7 +220,7 @@ export function EmailComposer() {
           <label className="block text-sm font-medium text-text mb-1">Mensagem</label>
           <textarea
             value={body}
-            onChange={(e) => setBody(e.target.value)}
+            onChange={(e) => { setBody(e.target.value); setCopied(false); }}
             rows={16}
             className={`${inputClass} resize-y leading-relaxed`}
           />
@@ -218,6 +269,13 @@ export function EmailComposer() {
             Restaurar modelo
           </button>
         </div>
+
+        {copied && (
+          <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+            ✓ Mensagem copiada! No Outlook que abriu, clique no corpo do email e cole com{" "}
+            <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link do site já vem clicável. Depois arraste os 3 PDFs.
+          </p>
+        )}
       </div>
 
       {/* Dica */}
@@ -225,10 +283,10 @@ export function EmailComposer() {
         <p className="font-medium mb-1">Como funciona</p>
         <p>
           Clique em <strong>Baixar anexos</strong> para salvar os 3 PDFs no seu computador. Depois
-          clique em <strong>Preparar Envio</strong>: o Outlook abre no navegador já com o email preenchido
-          (destinatário, assunto e texto). Arraste os 3 PDFs para a janela do Outlook, confira tudo e
-          clique em <strong>Enviar</strong> no Outlook — o email sai da sua conta normal. Nada é
-          enviado automaticamente pelo sistema.
+          clique em <strong>Preparar Envio</strong>: a mensagem é copiada (com o link clicável) e o
+          Outlook abre no navegador com destinatário e assunto preenchidos. No corpo do email, cole
+          com <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link vem clicável. Arraste os 3 PDFs, confira
+          tudo e clique em <strong>Enviar</strong> no Outlook. Nada é enviado automaticamente pelo sistema.
         </p>
       </div>
     </div>
