@@ -208,16 +208,12 @@ export const NAV_ITEMS: NavItem[] = [
     icon: "estoque",
     module: "ALMOXARIFADO",
     children: [
-      // "Estoque" = materiais do galpão (inventário com quantidade). "Rancho" =
-      // comida por equipe (antiga aba "Estoque"). A antiga aba "Ferramentas"
-      // (empréstimo) foi substituída pelo Estoque; o empréstimo segue em Maquinário.
+      // Rancho, EPI, Uniforme, Maquinário, Ferramenta e Elétrica deixaram de ser
+      // itens do menu: viraram abas internas da própria aba "Estoque" (barra de
+      // abas no topo da página). Links antigos (?tab=rancho, ?tab=epi, …) seguem
+      // válidos — a página os abre já na aba interna certa. Aqui ficam só os
+      // níveis externos: Estoque (que agrupa o inventário), Compras e Histórico.
       { label: "Estoque", href: "/almoxarifado?tab=estoque" },
-      { label: "Rancho", href: "/almoxarifado?tab=rancho" },
-      { label: "EPI", href: "/almoxarifado?tab=epi" },
-      { label: "Uniforme", href: "/almoxarifado?tab=uniforme" },
-      { label: "Maquinário", href: "/almoxarifado?tab=maquinario" },
-      { label: "Ferramenta", href: "/almoxarifado?tab=ferramenta" },
-      { label: "Elétrica", href: "/almoxarifado?tab=eletrica" },
       { label: "Compras", href: "/almoxarifado?tab=compras" },
       { label: "Histórico", href: "/almoxarifado?tab=historico" },
     ],
