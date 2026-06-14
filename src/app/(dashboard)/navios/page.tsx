@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
 import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
+import { SHIFT_PERIODS, type ShiftPeriod } from "@/types/database";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -180,6 +181,15 @@ function formatRelative(iso: string): string {
 // Um gasto lançado aqui vira um JobAdjustment ADICIONAL no Job do navio, então
 // já entra no custo da operação no fechamento. Manter em sincronia com
 // EXPENSE_CATEGORIES de financeiro/page.tsx.
+// Rótulos dos turnos de Costado (espelham os da Escalação > Costado). Usados no
+// form "Adicionar funcionário" da lateral quando o navio é do tipo Costado.
+const PERIOD_LABELS: Record<ShiftPeriod, string> = {
+  "07-13": "07h às 13h",
+  "13-19": "13h às 19h",
+  "19-01": "19h às 01h",
+  "01-07": "01h às 07h",
+};
+
 const EXPENSE_CATEGORIES: { value: string; label: string }[] = [
   { value: "COMPRAS", label: "Compras" },
   { value: "QUIMICA", label: "Química" },
@@ -282,6 +292,17 @@ export default function NaviosPage() {
   const [expenseAmount, setExpenseAmount] = useState("");
   const [savingExpense, setSavingExpense] = useState(false);
   const [expenseError, setExpenseError] = useState<string | null>(null);
+
+  // Form "Adicionar funcionário" (escalar) do painel do navio. Mesma ideia do
+  // gasto: escala um colaborador direto na lateral, criando uma job_allocation
+  // ATIVA no Job do navio (kind = tipo da operação do navio).
+  const [showAddCrew, setShowAddCrew] = useState(false);
+  const [crewEmpId, setCrewEmpId] = useState("");
+  const [crewFnId, setCrewFnId] = useState("");
+  const [crewShiftDate, setCrewShiftDate] = useState(""); // só COSTADO
+  const [crewShiftPeriod, setCrewShiftPeriod] = useState<ShiftPeriod>("07-13"); // só COSTADO
+  const [savingCrew, setSavingCrew] = useState(false);
+  const [crewError, setCrewError] = useState<string | null>(null);
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -1112,6 +1133,12 @@ export default function NaviosPage() {
     setExpenseAmount("");
     setExpenseCategory("COMPRAS");
     setExpenseError(null);
+    setShowAddCrew(false);
+    setCrewEmpId("");
+    setCrewFnId("");
+    setCrewShiftDate(new Date().toISOString().slice(0, 10));
+    setCrewShiftPeriod("07-13");
+    setCrewError(null);
     loadShipFinance(ship);
   }
 
@@ -1187,6 +1214,63 @@ export default function NaviosPage() {
     await loadShipFinance(selectedShip);
   }
 
+  // Escala um colaborador direto pela lateral do navio: cria uma job_allocation
+  // ATIVA no Job do navio, com a função escolhida e o rate certo (override por
+  // pessoa > default_rate da função — mesma regra da escala do modal). kind = tipo
+  // da operação do navio. Costado também grava o turno (data + período) pra a
+  // alocação aparecer na grade de Escalação > Costado.
+  async function handleAddCrew(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedShip) return;
+    const empIdNum = parseInt(crewEmpId, 10);
+    const fnIdNum = parseInt(crewFnId, 10);
+    if (!Number.isFinite(empIdNum)) { setCrewError("Selecione um colaborador."); return; }
+    if (!Number.isFinite(fnIdNum)) { setCrewError("Selecione a função."); return; }
+    const isCostado = getOperationType(selectedShip.services) === "COSTADO";
+    if (isCostado && !crewShiftDate) { setCrewError("Informe a data do turno."); return; }
+    setSavingCrew(true);
+    setCrewError(null);
+    try {
+      const jobId = await ensureShipJob(selectedShip);
+      // rate: override por pessoa > default_rate da função.
+      const fnRow = jobFunctions.find((f) => f.id === fnIdNum);
+      const { data: ovData } = await db
+        .from("employee_function_rates")
+        .select("rate")
+        .eq("employee_id", empIdNum)
+        .eq("function_id", fnIdNum);
+      const override = (ovData as { rate: string | number }[] | null)?.[0]?.rate;
+      const rate = Number(override ?? fnRow?.default_rate ?? 0);
+      const row: Record<string, unknown> = {
+        job_id: jobId,
+        function_id: fnIdNum,
+        employee_id: empIdNum,
+        quantity: 0,
+        rate,
+        pluxee_value: 0,
+        status: "ATIVO",
+        kind: isCostado ? "COSTADO" : "EMBARQUE",
+        added_by: profile?.full_name || "sistema",
+        added_at: new Date().toISOString(),
+      };
+      if (isCostado) {
+        row.shift_date = crewShiftDate;
+        row.shift_period = crewShiftPeriod;
+      }
+      const res: any = await db.from("job_allocations").insert(row);
+      if (res?.error) throw new Error(res.error.message);
+      setShowAddCrew(false);
+      setCrewEmpId("");
+      setCrewFnId("");
+      await loadShipFinance(selectedShip);
+      await loadOccupied();
+    } catch (err: any) {
+      setCrewError(err?.message || "Falha ao escalar o colaborador.");
+    } finally {
+      setSavingCrew(false);
+    }
+  }
+
   // Tripulação escalada do navio (deduplicada por colaborador — quem tem 2
   // funções aparece uma vez com as duas). Nome vem de `employees`; função de
   // `jobFunctions` (ambos já carregados).
@@ -1202,6 +1286,18 @@ export default function NaviosPage() {
     }
     return Array.from(byEmp.values()).sort((x, y) => x.name.localeCompare(y.name, "pt-BR"));
   }, [shipAllocs, employees, jobFunctions]);
+
+  // Colaboradores que aparecem no seletor de "Adicionar funcionário" da lateral:
+  // ATIVOS/PENDENCIA que ainda não estão neste navio. Quem está preso em OUTRA
+  // operação ativa continua na lista, mas desabilitado (regra do RH — ninguém em
+  // duas operações ao mesmo tempo), igual ao modal de novo navio.
+  const crewAddOptions = useMemo(() => {
+    const onShip = new Set(shipCrew.map((m) => m.id));
+    return employees.filter((e) => {
+      const status = e.status ?? "ATIVO";
+      return (status === "ATIVO" || status === "PENDENCIA") && !onShip.has(e.id);
+    });
+  }, [employees, shipCrew]);
 
   const shipExpenseTotal = shipExpenses.reduce(
     (s, a) => s + (a.type === "ADICIONAL" ? Number(a.amount) : -Number(a.amount)),
@@ -1467,9 +1563,97 @@ export default function NaviosPage() {
                 (job_allocations ATIVAS). Sem escala mas com equipe definida,
                 cai pros colaboradores da equipe (só leitura) pra não ficar vazio. */}
             <div className="border-t border-border pt-3">
-              <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-2">
-                Funcionários
-              </p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-text-light uppercase tracking-wider">
+                  Funcionários
+                </p>
+                {canEdit && !showAddCrew && (
+                  <button
+                    onClick={() => { setShowAddCrew(true); setCrewError(null); }}
+                    className="flex items-center gap-1 text-xs font-medium text-primary hover:bg-primary/10 px-2 py-1 rounded-lg transition"
+                  >
+                    <PlusIcon className="w-3.5 h-3.5" /> Adicionar
+                  </button>
+                )}
+              </div>
+
+              {showAddCrew && (() => {
+                const isCostadoShip = getOperationType(selectedShip.services) === "COSTADO";
+                return (
+                  <form onSubmit={handleAddCrew} className="space-y-2 mb-3 p-2.5 bg-gray-50 rounded-lg border border-border">
+                    <select
+                      value={crewEmpId}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        setCrewEmpId(id);
+                        // Auto-preenche a função pelo cargo do colaborador, se casar
+                        // com uma função cadastrada (mesma lógica do modal).
+                        const emp = employees.find((x) => String(x.id) === id);
+                        const role = (emp?.role || "").trim().toUpperCase();
+                        const fn = role ? jobFunctions.find((f) => f.name.toUpperCase() === role) : null;
+                        if (fn) setCrewFnId(String(fn.id));
+                      }}
+                      autoFocus
+                      className="w-full px-2.5 py-1.5 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    >
+                      <option value="">Selecione o colaborador…</option>
+                      {crewAddOptions.map((emp) => {
+                        const occKind = occupiedEmployeeKind.get(emp.id) || null;
+                        return (
+                          <option key={emp.id} value={emp.id} disabled={!!occKind}>
+                            {emp.name}{emp.role ? ` · ${emp.role}` : ""}
+                            {occKind ? (occKind === "COSTADO" ? " — em costado" : " — embarcado") : ""}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    <select
+                      value={crewFnId}
+                      onChange={(e) => setCrewFnId(e.target.value)}
+                      className="w-full px-2.5 py-1.5 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    >
+                      <option value="">Função…</option>
+                      {jobFunctions.map((f) => (
+                        <option key={f.id} value={f.id}>{f.name}</option>
+                      ))}
+                    </select>
+                    {isCostadoShip && (
+                      <div className="flex gap-2">
+                        <input
+                          type="date"
+                          value={crewShiftDate}
+                          onChange={(e) => setCrewShiftDate(e.target.value)}
+                          className="flex-1 px-2.5 py-1.5 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                        <select
+                          value={crewShiftPeriod}
+                          onChange={(e) => setCrewShiftPeriod(e.target.value as ShiftPeriod)}
+                          className="flex-1 px-2.5 py-1.5 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        >
+                          {SHIFT_PERIODS.map((p) => (
+                            <option key={p} value={p}>{PERIOD_LABELS[p]}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                    {jobFunctions.length === 0 && (
+                      <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                        ⚠️ Nenhuma função cadastrada em Financeiro → Funções e Valores. Cadastre antes pra poder escalar.
+                      </p>
+                    )}
+                    {crewError && <p className="text-xs text-danger">{crewError}</p>}
+                    <div className="flex gap-2 justify-end">
+                      <button type="button" onClick={() => { setShowAddCrew(false); setCrewError(null); }} className="text-xs text-text-light hover:text-text px-2 py-1">
+                        Cancelar
+                      </button>
+                      <button type="submit" disabled={savingCrew} className="text-xs font-medium bg-primary text-white px-3 py-1.5 rounded-lg hover:bg-primary-dark transition disabled:opacity-60">
+                        {savingCrew ? "Escalando..." : "Escalar"}
+                      </button>
+                    </div>
+                  </form>
+                );
+              })()}
+
               {shipFinLoading ? (
                 <p className="text-xs text-text-light italic">Carregando…</p>
               ) : shipCrew.length > 0 ? (
@@ -1512,7 +1696,7 @@ export default function NaviosPage() {
                     </div>
                   );
                 }
-                return <p className="text-xs text-text-light italic">Nenhum funcionário escalado neste navio.</p>;
+                return showAddCrew ? null : <p className="text-xs text-text-light italic">Nenhum funcionário escalado neste navio.</p>;
               })()}
             </div>
 
