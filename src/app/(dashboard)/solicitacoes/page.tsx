@@ -1859,37 +1859,55 @@ function numToInput(n: number | null | undefined): string {
 // têm código, então o campo não aparece pra eles.
 const CODED_DESTS: WarehouseDest[] = ["ESTOQUE", "EPI", "UNIFORME", "FERRAMENTA", "ELETRICA", "MAQUINARIO"];
 
-// Carrega os itens do setor de destino e devolve a lista [{ code, name }] já com o
-// código derivado (mesma regra da tabela do Almoxarifado). Rancho é por equipe; os
-// demais são globais. Vazio enquanto carrega ou pra destinos sem código.
+// Item do Almoxarifado já com o código derivado, pro autocomplete do CodeField.
+// `size` só existe em EPI/Uniforme (é o que diferencia itens de mesmo nome, ex.:
+// "Bota de borracha" em vários tamanhos); `qty` é o estoque atual. Maquinário não
+// tem quantidade (cada unidade é um registro próprio), então vem sem qty.
+interface WarehouseCode { code: string; name: string; size: string | null; qty: number | null }
+
+// Rótulo do item no autocomplete de código: nome + tamanho + estoque atual. É o que
+// torna a lista "informativa" — sem o tamanho, vários itens de mesmo nome (botas,
+// luvas) apareciam idênticos e só o código os distinguia.
+function warehouseCodeLabel(c: WarehouseCode): string {
+  const parts = [c.name];
+  if (c.size && c.size.trim()) parts.push(`Tam. ${c.size.trim()}`);
+  if (c.qty != null) parts.push(`${formatQty(c.qty)} em estoque`);
+  return parts.join(" · ");
+}
+
+// Carrega os itens do setor de destino e devolve a lista já com o código derivado
+// (mesma regra da tabela do Almoxarifado) + tamanho e estoque pra exibir no
+// autocomplete. Rancho é por equipe; os demais são globais. Vazio enquanto carrega
+// ou pra destinos sem código.
 function useWarehouseCodes(dest: WarehouseDest, team: string, open: boolean) {
-  const [codes, setCodes] = useState<{ code: string; name: string }[]>([]);
+  const [codes, setCodes] = useState<WarehouseCode[]>([]);
   useEffect(() => {
     if (!open || !CODED_DESTS.includes(dest)) { setCodes([]); return; }
     let cancelled = false;
     (async () => {
-      let items: { id: number; name: string }[] = [];
+      let items: { id: number; name: string; size?: string | null; qty?: number | null }[] = [];
       if (dest === "ESTOQUE") {
-        const { data } = await db.from("stock_items").select("id, name").eq("team", STOCK_TEAM);
-        items = (data as any) || [];
+        const { data } = await db.from("stock_items").select("id, name, quantity").eq("team", STOCK_TEAM);
+        items = ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, qty: i.quantity }));
       } else if (dest === "FERRAMENTA" || dest === "ELETRICA") {
-        const { data } = await db.from("stock_items").select("id, name").eq("team", dest);
-        items = (data as any) || [];
+        const { data } = await db.from("stock_items").select("id, name, quantity").eq("team", dest);
+        items = ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, qty: i.quantity }));
       } else if (dest === "MAQUINARIO") {
-        // Maquinário vive na tabela `tools` (empréstimo), não em stock_items.
+        // Maquinário vive na tabela `tools` (empréstimo), não em stock_items — sem quantidade.
         const { data } = await db.from("tools").select("id, name").eq("asset_type", "MAQUINARIO");
-        items = (data as any) || [];
+        items = ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name }));
       } else if (dest === "RANCHO") {
-        const { data } = await db.from("stock_items").select("id, name").eq("team", team || "EQUIPE_1");
-        items = (data as any) || [];
+        const { data } = await db.from("stock_items").select("id, name, quantity").eq("team", team || "EQUIPE_1");
+        items = ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, qty: i.quantity }));
       } else {
-        const { data } = await db.from(dest === "EPI" ? "epis" : "uniforms").select("id, name");
-        items = (data as any) || [];
+        // EPI / Uniforme — têm tamanho e estoque próprio (stock_qty).
+        const { data } = await db.from(dest === "EPI" ? "epis" : "uniforms").select("id, name, size, stock_qty");
+        items = ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, size: i.size ?? null, qty: i.stock_qty }));
       }
       if (cancelled) return;
       const map = buildCodeMap(items, (i) => i.id, (i) => i.name);
       const list = items
-        .map((i) => ({ code: map.get(i.id) || "", name: i.name }))
+        .map((i) => ({ code: map.get(i.id) || "", name: i.name, size: i.size ?? null, qty: i.qty ?? null }))
         .filter((x) => x.code)
         .sort((a, b) => a.code.localeCompare(b.code));
       setCodes(list);
@@ -1931,7 +1949,7 @@ function CodeField({ dest, team, value, onChange, onResolveName, open, required 
         placeholder="Ex: AR01 — escolha o item no Almoxarifado"
         className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" />
       <datalist id={listId}>
-        {codes.map((c) => <option key={c.code} value={c.code} label={c.name} />)}
+        {codes.map((c) => <option key={c.code} value={c.code} label={warehouseCodeLabel(c)} />)}
       </datalist>
       <p className="text-[10px] text-text-light mt-1">
         {required
@@ -1957,8 +1975,6 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
   const setDest = (dest: WarehouseDest) =>
     onChange({ dest, category: dest === "RANCHO" ? "SUPRIMENTOS" : "", unit: "UN", team: "EQUIPE_1", size: "" });
   const selCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
-  const subCls = "w-full px-3 py-2 border border-emerald-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none";
-  const boxCls = "rounded-lg border border-emerald-200 bg-emerald-50/60 p-3";
 
   return (
     <div className="space-y-3">
@@ -1980,12 +1996,10 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
       )}
 
       {stocking && (value.dest === "EPI" || value.dest === "UNIFORME") && (
-        <div className={boxCls}>
-          <label className="block text-xs font-medium text-emerald-800 mb-1">Tamanho <span className="font-normal">(opcional)</span></label>
-          <input type="text" value={value.size} onChange={(e) => onChange({ ...value, size: e.target.value })}
-            placeholder="Ex: P, M, G, 42..." className={subCls} />
-          <p className="text-[10px] text-emerald-700/80 mt-1">Mesmo nome (e tamanho) = soma a quantidade. Quantidade entra como número inteiro.</p>
-        </div>
+        <p className="text-xs text-emerald-700 bg-emerald-50/60 border border-emerald-200 rounded-lg p-3">
+          👕 O tamanho já vem do <strong>código</strong> do item — a quantidade é somada naquele tamanho.
+          Não precisa informar o tamanho aqui.
+        </p>
       )}
 
       {stocking && value.dest === "MAQUINARIO" && (
