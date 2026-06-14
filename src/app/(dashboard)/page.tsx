@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
+import { promoteStartedShips } from "@/lib/release-finished-ships";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { formatDateTime, parseLegacyDate, parseNrsWithDates, MOVEMENT_TYPE_LABELS, CATEGORY_LABELS } from "@/lib/utils";
 
@@ -97,6 +98,11 @@ export default function DashboardPage() {
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     try {
+      // Auto-promove navios cuja data de embarque já chegou/passou (mesma regra
+      // da aba Navios), pra a contagem/atividade do Dashboard ficar consistente
+      // sem precisar abrir Navios. Best-effort: não bloqueia o carregamento.
+      try { await promoteStartedShips(); } catch (err) { console.warn("[dashboard] auto-promote failed:", (err as Error).message); }
+
       // "Visto por último" da aba Conversas (localStorage, por dispositivo). O
       // card de Conversas conta as mensagens recebidas depois desse instante.
       const convLastSeen = typeof window !== "undefined" ? localStorage.getItem("conversas_last_seen") : null;
