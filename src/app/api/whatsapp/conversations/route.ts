@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { normalizeBRNumber } from "@/lib/services/evolution-api";
 
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
@@ -113,6 +114,46 @@ export async function GET() {
       message_count: Number(r.message_count),
       is_group: r.remote_jid.endsWith("@g.us"),
     }));
+
+    // Fallback de nome pra DMs sem contato resolvido. Quando NÓS iniciamos a
+    // conversa (ex.: cotação automática a um fornecedor) e o contato ainda não
+    // respondeu, não há push_name de entrada (from_me=false) — a lista mostraria
+    // só o número cru. Aqui casamos o número do JID com o cadastro: contato de
+    // fornecedor ou telefone de funcionário. Só roda quando há alguma DM nesse
+    // estado e nunca sobrescreve um nome que o próprio contato já mandou.
+    const namelessDms = conversations.filter(
+      (c) => !c.is_group && !(c.push_name && c.push_name.trim()),
+    );
+    if (namelessDms.length > 0) {
+      const [suppliers, employees] = await Promise.all([
+        prisma.supplier.findMany({
+          where: { contact: { not: null } },
+          select: { name: true, contact: true },
+        }),
+        prisma.employee.findMany({
+          where: { phone: { not: null } },
+          select: { name: true, phone: true },
+        }),
+      ]);
+      // Número no formato WhatsApp (DDI 55 + 9º dígito, igual ao usado no envio)
+      // -> nome do cadastro. Funcionários primeiro; fornecedor sobrepõe — a
+      // conversa em geral nasce no módulo de compras e é esse nome que o usuário
+      // espera ver. normalizeBRNumber ignora contatos sem número (e-mail, "—").
+      const nameByNumber = new Map<string, string>();
+      for (const e of employees) {
+        const n = normalizeBRNumber(e.phone || "");
+        if (n && !nameByNumber.has(n)) nameByNumber.set(n, e.name);
+      }
+      for (const s of suppliers) {
+        const n = normalizeBRNumber(s.contact || "");
+        if (n) nameByNumber.set(n, s.name);
+      }
+      for (const c of namelessDms) {
+        const num = c.remote_jid.replace(/@.*$/, "");
+        const name = nameByNumber.get(num) ?? nameByNumber.get(normalizeBRNumber(num));
+        if (name) c.push_name = name;
+      }
+    }
 
     return NextResponse.json({ conversations });
   } catch (err) {
