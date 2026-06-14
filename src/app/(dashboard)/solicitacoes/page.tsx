@@ -166,6 +166,19 @@ const RANCHO_TEAMS: { value: string; label: string }[] = [
 interface DestSpec { dest: WarehouseDest; category: string; unit: string; team: string; size: string }
 const DEFAULT_DEST_SPEC: DestSpec = { dest: "ESTOQUE", category: "", unit: "UN", team: "EQUIPE_1", size: "" };
 
+// Dados que o gestor confere/ajusta no "Aprovar e concluir" — além do destino
+// (DestSpec), o resumo editável da compra (descrição, fornecedor, valor, etc.),
+// tudo pré-preenchido a partir da solicitação.
+interface ApproveData {
+  toolName: string;
+  supplier: string | null;
+  paymentMethod: string | null;
+  purchaseDate: string; // YYYY-MM-DD
+  unitValue: number;
+  quantity: number;
+  spec: DestSpec;
+}
+
 const PAYMENT_METHODS = [
   "FATURADO",
   "CARTÃO DE CRÉDITO",
@@ -447,7 +460,7 @@ export default function SolicitacoesPage() {
   // lança o item no Estoque do galpão. Substitui o antigo "Aprovar → Registrar
   // Compra → Armazenar". Não há mais recusa — a solicitação ou é concluída ou
   // apagada.
-  async function handleConcludeRequest(spec: DestSpec) {
+  async function handleConcludeRequest(data: ApproveData) {
     const req = concludeRequest;
     if (!req) return;
     setSaving(true);
@@ -455,22 +468,28 @@ export default function SolicitacoesPage() {
     setSaveOk(null);
     try {
       const actor = profile?.full_name || "Sistema";
-      const unit = parseDecimalBR(req.estimated_value);
-      const qty = req.quantity > 0 ? req.quantity : 1;
+      const spec = data.spec;
+      // Valores conferidos/ajustados pelo gestor no modal (pré-preenchidos da
+      // solicitação). A compra e a reposição usam estes, não mais os da solicitação.
+      const unit = data.unitValue;
+      const qty = data.quantity > 0 ? data.quantity : 1;
+      const description = data.toolName.trim() || req.tool_name;
+      const supplier = data.supplier?.trim() || null;
       const today = new Date();
       const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      const purchaseDate = data.purchaseDate || todayISO;
 
-      // 1) Registra a compra (valor estimado da solicitação vira o valor unitário).
+      // 1) Registra a compra com os dados conferidos na aprovação.
       const { error: buyErr } = await db.from("purchase_orders").insert({
-        description: req.tool_name,
+        description,
         department: spec.dest === "OUTROS" ? null : spec.dest,
         code: req.code,
-        supplier: req.supplier || null,
-        purchase_date: todayISO,
+        supplier,
+        purchase_date: purchaseDate,
         unit_value: unit,
         quantity: qty,
         total_value: unit * qty,
-        payment_method: null,
+        payment_method: data.paymentMethod || null,
         notes: null,
         image_url: req.image_url,
         request_id: req.id,
@@ -478,10 +497,16 @@ export default function SolicitacoesPage() {
       } as any);
       if (buyErr) throw buyErr;
 
-      // 2) Marca a solicitação como concluída.
+      // 2) Marca a solicitação como concluída e guarda os valores conferidos
+      //    (o card passa a refletir o que foi de fato aprovado). quantity é Int
+      //    na tabela — arredonda o que pode ter vindo decimal do campo.
       const { error: updErr } = await db.from("tool_requests").update({
         status: "APROVADO",
         responded_by: actor,
+        tool_name: description,
+        quantity: Math.max(1, Math.round(qty)),
+        estimated_value: unit,
+        supplier,
         updated_at: new Date().toISOString(),
       } as any).eq("id", req.id);
       if (updErr) throw updErr;
@@ -492,7 +517,7 @@ export default function SolicitacoesPage() {
       if (destStocks(spec.dest)) {
         try {
           const r = await storeInWarehouse(spec.dest, {
-            name: req.tool_name, quantity: qty,
+            name: description, quantity: qty,
             category: spec.category, unit: spec.unit, team: spec.team, size: spec.size,
             code: req.code,
           });
@@ -511,31 +536,31 @@ export default function SolicitacoesPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            toolName: req.tool_name,
+            toolName: description,
             quantity: qty,
             value: unit,
-            supplier: req.supplier,
+            supplier,
             requestedBy: req.requested_by,
             concludedBy: actor,
             productUrl: req.product_url,
             imageUrl: req.image_url,
           }),
         });
-        const data = await res.json().catch(() => null);
-        if (data?.sent) {
-          const where = data.group ? `no(s) grupo(s) ${data.group}` : "no grupo";
-          groupMsg = data.withPhoto
+        const respData = await res.json().catch(() => null);
+        if (respData?.sent) {
+          const where = respData.group ? `no(s) grupo(s) ${respData.group}` : "no grupo";
+          groupMsg = respData.withPhoto
             ? ` 📨 Avisado ${where} (com foto).`
-            : ` 📨 Avisado ${where}${data.photoError ? ` (foto falhou: ${data.photoError})` : ""}.`;
-        } else if (data?.warning) {
-          groupMsg = ` ⚠️ ${data.warning}`;
+            : ` 📨 Avisado ${where}${respData.photoError ? ` (foto falhou: ${respData.photoError})` : ""}.`;
+        } else if (respData?.warning) {
+          groupMsg = ` ⚠️ ${respData.warning}`;
         }
       } catch {
         groupMsg = " ⚠️ Não consegui avisar o grupo Compras.";
       }
 
       setConcludeRequest(null);
-      setSaveOk(`✅ "${req.tool_name}" concluído — compra registrada.${stockMsg}${groupMsg}`);
+      setSaveOk(`✅ "${description}" concluído — compra registrada.${stockMsg}${groupMsg}`);
       loadAll();
     } catch (err: any) {
       console.error("Erro ao concluir solicitação:", err);
@@ -1620,6 +1645,7 @@ export default function SolicitacoesPage() {
         onClose={() => setConcludeRequest(null)}
         onConfirm={handleConcludeRequest}
         request={concludeRequest}
+        suppliers={suppliers}
         saving={saving}
       />
 
@@ -2366,28 +2392,118 @@ function ArmazenarEstoqueModal({ open, onClose, onConfirm, request, saving }: {
 
 // Aprovar e concluir uma solicitação: registra a compra no Controle de Compras e
 // lança o item no destino escolhido do Almoxarifado, num passo só.
-function AprovarModal({ open, onClose, onConfirm, request, saving }: {
+function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving }: {
   open: boolean; onClose: () => void;
-  onConfirm: (spec: DestSpec) => void;
+  onConfirm: (data: ApproveData) => void;
   request: ToolRequest | null;
+  suppliers: Supplier[];
   saving: boolean;
 }) {
   const [spec, setSpec] = useState<DestSpec>({ ...DEFAULT_DEST_SPEC });
+  // Resumo editável da compra — pré-preenchido a partir da solicitação. O gestor
+  // confere/ajusta antes de concluir; estes valores é que viram a compra.
+  const [toolName, setToolName] = useState("");
+  const [supplier, setSupplier] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("");
+  const [purchaseDate, setPurchaseDate] = useState("");
+  const [unitValue, setUnitValue] = useState("");
+  const [quantity, setQuantity] = useState("1");
 
-  // Pré-preenche o destino com a sugestão que veio da solicitação (campo
-  // department), se houver — o gestor ainda pode trocar.
   useEffect(() => {
-    if (open) setSpec({ ...DEFAULT_DEST_SPEC, dest: (request?.department as WarehouseDest) || "ESTOQUE" });
+    if (!open || !request) return;
+    const today = new Date();
+    const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    // Pré-preenche o destino com a sugestão da solicitação (campo department).
+    setSpec({ ...DEFAULT_DEST_SPEC, dest: (request.department as WarehouseDest) || "ESTOQUE" });
+    setToolName(request.tool_name || "");
+    setSupplier(request.supplier || "");
+    setPaymentMethod("");
+    setPurchaseDate(todayISO);
+    setUnitValue(numToInput(parseDecimalBR(request.estimated_value)));
+    setQuantity(numToInput(request.quantity) || "1");
   }, [open, request]);
 
+  const unit = parseDecimalBR(unitValue);
+  const qty = parseDecimalBR(quantity) || 1;
+  const total = unit * qty;
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+
   return (
-    <Modal open={open} onClose={onClose} title="Aprovar e concluir" maxWidth="max-w-md">
-      <form onSubmit={(e) => { e.preventDefault(); onConfirm(spec); }} className="space-y-4">
+    <Modal open={open} onClose={onClose} title="Aprovar e concluir" maxWidth="max-w-lg">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onConfirm({
+            toolName,
+            supplier: supplier || null,
+            paymentMethod: paymentMethod || null,
+            purchaseDate,
+            unitValue: unit,
+            quantity: qty,
+            spec,
+          });
+        }}
+        className="space-y-4"
+      >
         <p className="text-sm text-text-light">
-          Aprovar <strong>{request?.tool_name}</strong> (x{request?.quantity})? A compra é registrada no
-          Controle de Compras e o item é lançado no destino abaixo, automaticamente.
+          Confira e ajuste os dados abaixo. Ao concluir, a compra é registrada no Controle de Compras
+          e o item é lançado no destino, automaticamente.
         </p>
-        <WarehouseDestinationFields value={spec} onChange={setSpec} quantity={request?.quantity} />
+
+        {/* Resumo da origem (não editável) — quem pediu, motivo e link. */}
+        {request && (
+          <div className="bg-gray-50 border border-border rounded-lg px-3 py-2 text-xs text-text-light flex flex-wrap gap-x-3 gap-y-1 items-center">
+            <span>Solicitado por <strong className="text-text">{request.requested_by}</strong></span>
+            {request.reason && <span>· {request.reason}</span>}
+            {request.product_url && (
+              <a href={request.product_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">🔗 Ver produto</a>
+            )}
+          </div>
+        )}
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Produto / Descrição *</label>
+          <input type="text" value={toolName} onChange={(e) => setToolName(e.target.value)} required className={inputCls} />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Fornecedor</label>
+          <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Data da compra</label>
+            <input type="date" value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Forma de pagamento</label>
+            <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className={inputCls}>
+              <option value="">Selecionar...</option>
+              {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Valor unit. (R$)</label>
+            <input type="text" inputMode="decimal" value={unitValue} onChange={(e) => setUnitValue(e.target.value)} placeholder="0,00" className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Quantidade</label>
+            <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="1" className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Valor total</label>
+            <div className="w-full px-3 py-2.5 border border-border rounded-lg text-sm bg-gray-50 font-semibold text-primary">
+              {formatCurrency(total)}
+            </div>
+          </div>
+        </div>
+
+        <WarehouseDestinationFields value={spec} onChange={setSpec} quantity={qty} />
+
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={saving}>{saving ? "Concluindo..." : "Aprovar e concluir"}</Button>
