@@ -208,12 +208,23 @@ export const NAV_ITEMS: NavItem[] = [
     icon: "estoque",
     module: "ALMOXARIFADO",
     children: [
-      // Rancho, EPI, Uniforme, Maquinário, Ferramenta e Elétrica deixaram de ser
-      // itens do menu: viraram abas internas da própria aba "Estoque" (barra de
-      // abas no topo da página). Links antigos (?tab=rancho, ?tab=epi, …) seguem
-      // válidos — a página os abre já na aba interna certa. Aqui ficam só os
-      // níveis externos: Estoque (que agrupa o inventário), Compras e Histórico.
-      { label: "Estoque", href: "/almoxarifado?tab=estoque" },
+      // "Galpão" agrupa, como submenu, todos os setores do inventário. Cada item
+      // deep-linka pra aba interna certa via ?tab=<setor> — a página resolve isso
+      // por ESTOQUE_KEYS (almoxarifado/page.tsx). O item-pai não navega: clicar
+      // só abre/fecha a lista. Compras e Histórico seguem como níveis externos.
+      {
+        label: "Galpão",
+        href: "/almoxarifado?tab=estoque",
+        children: [
+          { label: "Estoque", href: "/almoxarifado?tab=estoque" },
+          { label: "Rancho", href: "/almoxarifado?tab=rancho" },
+          { label: "EPI", href: "/almoxarifado?tab=epi" },
+          { label: "Uniforme", href: "/almoxarifado?tab=uniforme" },
+          { label: "Maquinário", href: "/almoxarifado?tab=maquinario" },
+          { label: "Ferramenta", href: "/almoxarifado?tab=ferramenta" },
+          { label: "Elétrica", href: "/almoxarifado?tab=eletrica" },
+        ],
+      },
       { label: "Compras", href: "/almoxarifado?tab=compras" },
       { label: "Histórico", href: "/almoxarifado?tab=historico" },
     ],

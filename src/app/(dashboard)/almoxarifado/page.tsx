@@ -9,7 +9,7 @@ import { ToolsPanel } from "@/components/almoxarifado/tools-panel";
 import { HistoricoPanel } from "@/components/almoxarifado/historico-panel";
 import { ComprasPanel } from "@/components/almoxarifado/compras-panel";
 
-// Almoxarifado: a aba "Estoque" agrupa, numa barra de abas no topo da página,
+// Almoxarifado: a aba "Galpão" agrupa, numa barra de abas no topo da página,
 // TODAS as categorias de inventário — Estoque (galpão), Rancho, EPI, Uniforme,
 // Maquinário, Ferramenta e Elétrica. Cada categoria mantém suas próprias abas
 // internas (ex.: Rancho tem Reserva / Equipe 1 / Equipe 2). Compras e Histórico
@@ -71,7 +71,7 @@ export default function AlmoxarifadoPage() {
   // Abas externas — dirigidas pelo submenu da sidebar (hideHeader). A aba
   // "Estoque" embute a barra de abas interna acima.
   const outerTabs = [
-    { key: "estoque", label: "Estoque", content: <Tabs tabs={estoqueTabs} defaultTab={innerTab} /> },
+    { key: "estoque", label: "Galpão", content: <Tabs tabs={estoqueTabs} defaultTab={innerTab} /> },
     { key: "compras", label: "Compras", content: <ComprasPanel /> },
     { key: "historico", label: "Histórico", content: <HistoricoPanel /> },
   ];
