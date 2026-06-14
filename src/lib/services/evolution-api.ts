@@ -34,12 +34,24 @@ export function isEvolutionConfigured(): boolean {
   return !!(process.env.EVOLUTION_API_URL && process.env.EVOLUTION_API_KEY && process.env.EVOLUTION_INSTANCE);
 }
 
-// Brazilian numbers: strip everything except digits, prepend 55 when missing.
+// Brazilian numbers: strip everything except digits, prepend 55 when missing, e
+// garante o 9º dígito em celulares antigos. Cadastros antigos (fornecedores,
+// etc.) costumam ter o número SEM o 9 — ex.: "41 8786-2408" → 554187862408 (12
+// dígitos). Sem o 9 o WhatsApp não encontra o contato e o envio FALHA (a
+// conversa nem aparece). Regra: 55 + DDD(2) + 8 dígitos cujo primeiro dígito
+// local é 6-9 (faixa de celular) ganha um "9" depois do DDD → 13 dígitos.
+// Fixos (primeiro dígito 2-5) e números já com 13 dígitos ficam intactos.
 export function normalizeBRNumber(raw: string): string {
-  const digits = raw.replace(/\D/g, "");
+  let digits = raw.replace(/\D/g, "");
   if (!digits) return "";
-  if (digits.startsWith("55")) return digits;
-  return `55${digits}`;
+  if (!digits.startsWith("55")) digits = `55${digits}`;
+  if (digits.length === 12) {
+    const firstLocal = digits[4];
+    if (firstLocal >= "6" && firstLocal <= "9") {
+      digits = `${digits.slice(0, 4)}9${digits.slice(4)}`;
+    }
+  }
+  return digits;
 }
 
 // Recursively walks the parsed body looking for human-readable strings. Skips
