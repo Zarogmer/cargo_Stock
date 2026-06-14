@@ -30,10 +30,10 @@ export default function AlmoxarifadoPage() {
     { key: "rancho", label: "Rancho", content: <EstoquePanel /> },
     { key: "epi", label: "EPI", content: <SimpleInventoryPanel kind="EPI" /> },
     { key: "uniforme", label: "Uniforme", content: <SimpleInventoryPanel kind="UNIFORME" /> },
-    { key: "compras", label: "Compras", content: <ComprasPanel /> },
     { key: "maquinario", label: "Maquinário", content: <ToolsPanel assetType="MAQUINARIO" /> },
     { key: "ferramenta", label: "Ferramenta", content: <StockInventoryPanel kind="FERRAMENTA" /> },
     { key: "eletrica", label: "Elétrica", content: <StockInventoryPanel kind="ELETRICA" /> },
+    { key: "compras", label: "Compras", content: <ComprasPanel /> },
     { key: "historico", label: "Histórico", content: <HistoricoPanel /> },
   ];
 
