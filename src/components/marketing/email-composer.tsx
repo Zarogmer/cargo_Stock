@@ -102,6 +102,17 @@ function copyRichText(html: string): boolean {
   return ok;
 }
 
+// Aceita vários emails separados por vírgula ou ponto-e-vírgula e devolve uma
+// string limpa separada por vírgula (padrão dos clientes de email). Usado nos
+// três campos: Para, Cc e Cco.
+function cleanEmails(raw: string): string {
+  return raw
+    .split(/[,;]/)
+    .map((e) => e.trim())
+    .filter(Boolean)
+    .join(",");
+}
+
 // ─── Compositor ───────────────────────────────────────────────────────────────
 // Valores iniciais de "to" e "nome" vêm da URL (?to=...&nome=...) — é assim que o
 // botão "Enviar email" da aba Clientes chega aqui já preenchido.
@@ -109,21 +120,15 @@ function copyRichText(html: string): boolean {
 export function EmailComposer() {
   const searchParams = useSearchParams();
   const [to, setTo] = useState(() => searchParams.get("to") || "");
+  // Cc (com cópia) e Cco (com cópia oculta) — iguais ao Outlook. Aceitam vários
+  // emails separados por vírgula e também podem vir pré-preenchidos pela URL.
+  const [cc, setCc] = useState(() => searchParams.get("cc") || "");
+  const [bcc, setBcc] = useState(() => searchParams.get("bcc") || "");
   const [clientName, setClientName] = useState(() => searchParams.get("nome") || "");
   const [subject, setSubject] = useState(DEFAULT_SUBJECT);
   const [body, setBody] = useState(() => buildDefaultBody(searchParams.get("nome") || ""));
   // Feedback do "Preparar Envio": indica que a mensagem foi copiada pra colar.
   const [copied, setCopied] = useState(false);
-
-  // Aceita vários destinatários separados por vírgula ou ponto-e-vírgula e
-  // devolve uma string limpa separada por vírgula (padrão dos clientes de email).
-  function recipientList(): string {
-    return to
-      .split(/[,;]/)
-      .map((e) => e.trim())
-      .filter(Boolean)
-      .join(",");
-  }
 
   // Copia a mensagem como HTML (com o link clicável) e abre o compose do Outlook
   // só com destinatário e assunto — o usuário cola o corpo (Ctrl+V), preservando o
@@ -131,9 +136,13 @@ export function EmailComposer() {
   function enviar() {
     const ok = copyRichText(bodyToHtml(body));
     setCopied(ok);
+    const ccList = cleanEmails(cc);
+    const bccList = cleanEmails(bcc);
     const url =
       "https://outlook.office.com/mail/deeplink/compose" +
-      `?to=${encodeURIComponent(recipientList())}` +
+      `?to=${encodeURIComponent(cleanEmails(to))}` +
+      (ccList ? `&cc=${encodeURIComponent(ccList)}` : "") +
+      (bccList ? `&bcc=${encodeURIComponent(bccList)}` : "") +
       `&subject=${encodeURIComponent(subject)}` +
       (ok ? "" : `&body=${encodeURIComponent(body)}`);
     window.open(url, "_blank", "noopener,noreferrer");
@@ -172,7 +181,7 @@ export function EmailComposer() {
       {/* Formulário */}
       <div className="bg-card rounded-xl border border-border p-5 space-y-4">
         <div>
-          <label className="block text-sm font-medium text-text mb-1">Email do cliente</label>
+          <label className="block text-sm font-medium text-text mb-1">Para</label>
           <input
             type="text"
             value={to}
@@ -181,7 +190,39 @@ export function EmailComposer() {
             className={inputClass}
           />
           <p className="text-xs text-text-light mt-1">
-            Para enviar a vários, separe os emails por vírgula.
+            Email do cliente. Para enviar a vários, separe por vírgula.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">
+            Cc <span className="text-text-light font-normal">(com cópia)</span>
+          </label>
+          <input
+            type="text"
+            value={cc}
+            onChange={(e) => setCc(e.target.value)}
+            placeholder="copia@empresa.com"
+            className={inputClass}
+          />
+          <p className="text-xs text-text-light mt-1">
+            Recebe uma cópia — todos veem quem está em Cc. Separe vários por vírgula.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">
+            Cco <span className="text-text-light font-normal">(com cópia oculta)</span>
+          </label>
+          <input
+            type="text"
+            value={bcc}
+            onChange={(e) => setBcc(e.target.value)}
+            placeholder="copia.oculta@empresa.com"
+            className={inputClass}
+          />
+          <p className="text-xs text-text-light mt-1">
+            Recebe uma cópia sem os outros destinatários verem. Separe vários por vírgula.
           </p>
         </div>
 
@@ -279,7 +320,7 @@ export function EmailComposer() {
         <p>
           Clique em <strong>Baixar anexos</strong> para salvar os 2 PDFs no seu computador. Depois
           clique em <strong>Preparar Envio</strong>: a mensagem é copiada (com o link clicável) e o
-          Outlook abre no navegador com destinatário e assunto preenchidos. No corpo do email, cole
+          Outlook abre no navegador com <strong>Para</strong>, <strong>Cc</strong>, <strong>Cco</strong> e assunto preenchidos. No corpo do email, cole
           com <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link vem clicável. Arraste os 2 PDFs, confira
           tudo e clique em <strong>Enviar</strong> no Outlook. Nada é enviado automaticamente pelo sistema.
         </p>
