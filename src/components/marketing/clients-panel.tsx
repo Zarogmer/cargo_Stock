@@ -232,7 +232,11 @@ export function ClientsPanel() {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    {c.email && <p className="text-text">{c.email}</p>}
+                    {c.email
+                      ? c.email.split(/[,;]/).map((e) => e.trim()).filter(Boolean).map((e) => (
+                          <p key={e} className="text-text">{e}</p>
+                        ))
+                      : null}
                     {c.phone && <p className="text-xs text-text-light">{c.phone}</p>}
                     {!c.email && !c.phone && <span className="text-text-light">—</span>}
                   </td>
@@ -309,14 +313,17 @@ export function ClientsPanel() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-text mb-1">Email</label>
+              <label className="block text-sm font-medium text-text mb-1">
+                Email <span className="text-text-light font-normal">(1 ou vários)</span>
+              </label>
               <input
-                type="email"
+                type="text"
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
-                placeholder="contato@empresa.com"
+                placeholder="contato@empresa.com, financeiro@empresa.com"
                 className={inputClass}
               />
+              <p className="text-xs text-text-light mt-1">Separe vários por vírgula.</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-text mb-1">Telefone</label>

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
+import { db } from "@/lib/db";
 
 // ─── Modelo de email ───────────────────────────────────────────────────────
 // O corpo é editável como texto puro na tela. Ao enviar, geramos uma versão HTML
@@ -113,6 +114,17 @@ function cleanEmails(raw: string): string {
     .join(",");
 }
 
+// Cliente cadastrado (aba Clientes) usado no autocomplete do campo Nome. `email`
+// pode trazer vários endereços separados por vírgula.
+interface ClientOption {
+  id: number;
+  name: string;
+  company: string | null;
+  email: string | null;
+  city: string | null;
+  state: string | null;
+}
+
 // ─── Compositor ───────────────────────────────────────────────────────────────
 // Valores iniciais de "to" e "nome" vêm da URL (?to=...&nome=...) — é assim que o
 // botão "Enviar email" da aba Clientes chega aqui já preenchido.
@@ -127,8 +139,49 @@ export function EmailComposer() {
   const [clientName, setClientName] = useState(() => searchParams.get("nome") || "");
   const [subject, setSubject] = useState(DEFAULT_SUBJECT);
   const [body, setBody] = useState(() => buildDefaultBody(searchParams.get("nome") || ""));
+  // Nome que gerou o corpo-modelo atual. Se o corpo ainda for exatamente esse
+  // modelo, tratamos como "não editado" e podemos trocar a saudação ao escolher
+  // outro cliente; se o usuário mexeu no texto, não sobrescrevemos.
+  const [templateName, setTemplateName] = useState(() => searchParams.get("nome") || "");
   // Feedback do "Preparar Envio": indica que a mensagem foi copiada pra colar.
   const [copied, setCopied] = useState(false);
+
+  // Clientes cadastrados (aba Clientes) pro autocomplete do campo Nome. Carregado
+  // uma vez ao montar — é o que permite "digitar o nome e puxar os emails".
+  const [clients, setClients] = useState<ClientOption[]>([]);
+  const [showSug, setShowSug] = useState(false);
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const { data } = await db.from("marketing_clients").select("*").order("name");
+      if (active) setClients((data as ClientOption[]) || []);
+    })();
+    return () => { active = false; };
+  }, []);
+
+  // Sugestões filtradas pelo texto do campo Nome (casa nome, empresa ou email).
+  const matches = useMemo(() => {
+    const q = clientName.trim().toLowerCase();
+    const list = q
+      ? clients.filter((c) => [c.name, c.company, c.email].some((v) => (v || "").toLowerCase().includes(q)))
+      : clients;
+    return list.slice(0, 8);
+  }, [clients, clientName]);
+
+  // Escolher um cliente: joga os emails cadastrados no campo "Para" e fixa o nome.
+  // Se o corpo ainda for o modelo padrão (não editado), atualiza a saudação.
+  function selectClient(c: ClientOption) {
+    const display = c.company || c.name;
+    setTo(cleanEmails(c.email || ""));
+    // Só reescreve a saudação se o corpo ainda for o modelo padrão (não editado).
+    if (body === buildDefaultBody(templateName)) {
+      setBody(buildDefaultBody(display));
+      setTemplateName(display);
+    }
+    setClientName(display);
+    setCopied(false);
+    setShowSug(false);
+  }
 
   // Copia a mensagem como HTML (com o link clicável) e abre o compose do Outlook
   // só com destinatário e assunto — o usuário cola o corpo (Ctrl+V), preservando o
@@ -167,6 +220,7 @@ export function EmailComposer() {
   function restoreTemplate() {
     setSubject(DEFAULT_SUBJECT);
     setBody(buildDefaultBody(clientName));
+    setTemplateName(clientName);
   }
 
   const inputClass =
@@ -180,6 +234,55 @@ export function EmailComposer() {
 
       {/* Formulário */}
       <div className="bg-card rounded-xl border border-border p-5 space-y-4">
+        {/* Cliente: autocomplete dos cadastrados. Escolher um puxa os emails pro
+            campo "Para" automaticamente. */}
+        <div className="relative">
+          <label className="block text-sm font-medium text-text mb-1">
+            Nome do cliente / empresa <span className="text-text-light font-normal">(puxa os emails)</span>
+          </label>
+          <input
+            type="text"
+            value={clientName}
+            onChange={(e) => { setClientName(e.target.value); setShowSug(true); }}
+            onFocus={() => setShowSug(true)}
+            onBlur={() => setTimeout(() => setShowSug(false), 150)}
+            placeholder="Digite e escolha um cliente cadastrado…"
+            autoComplete="off"
+            className={inputClass}
+          />
+          {showSug && matches.length > 0 && (
+            <ul className="absolute z-20 mt-1 w-full max-h-64 overflow-auto bg-card border border-border rounded-lg shadow-lg py-1">
+              {matches.map((c) => {
+                const emails = cleanEmails(c.email || "");
+                const count = emails ? emails.split(",").length : 0;
+                const place = [c.city, c.state].filter(Boolean).join("/");
+                return (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => { e.preventDefault(); selectClient(c); }}
+                      className="w-full text-left px-3 py-2 hover:bg-primary/5 transition"
+                    >
+                      <span className="block text-sm font-medium text-text">
+                        {c.company || c.name}
+                        {count > 1 && (
+                          <span className="ml-2 text-xs font-normal text-primary">{count} emails</span>
+                        )}
+                      </span>
+                      <span className="block text-xs text-text-light truncate">
+                        {emails || "sem email cadastrado"}{place ? `  ·  ${place}` : ""}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <p className="text-xs text-text-light mt-1">
+            Escolha um cliente e os emails cadastrados entram em <strong>Para</strong> automaticamente. Cadastre clientes na aba Clientes.
+          </p>
+        </div>
+
         <div>
           <label className="block text-sm font-medium text-text mb-1">Para</label>
           <input
@@ -223,22 +326,6 @@ export function EmailComposer() {
           />
           <p className="text-xs text-text-light mt-1">
             Recebe uma cópia sem os outros destinatários verem. Separe vários por vírgula.
-          </p>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-text mb-1">
-            Nome do cliente / empresa <span className="text-text-light font-normal">(opcional)</span>
-          </label>
-          <input
-            type="text"
-            value={clientName}
-            onChange={(e) => setClientName(e.target.value)}
-            placeholder="Ex: Transatlântica"
-            className={inputClass}
-          />
-          <p className="text-xs text-text-light mt-1">
-            Usado na saudação quando você clicar em &ldquo;Restaurar modelo&rdquo;.
           </p>
         </div>
 
