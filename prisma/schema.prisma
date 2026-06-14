@@ -644,6 +644,11 @@ model PurchaseOrder {
   image_url      String? // foto do produto (herdada da solicitação ou anexada)
   product_url    String? // link do produto (Mercado Livre etc.), usado pra puxar nome/valor/foto
   request_id     String?   @db.Uuid // solicitação de origem, se houver
+  // Navio vinculado (aba Navios), opcional. ship_id é o link; ship_name é um
+  // snapshot do nome no momento da compra — navios são apagáveis, então guardar o
+  // nome preserva o histórico/relatório mesmo depois que o navio sai da lista.
+  ship_id        String?   @db.Uuid
+  ship_name      String? // NAVIO (snapshot do nome)
   created_by     String
   created_at     DateTime  @default(now()) @db.Timestamptz()
   updated_at     DateTime  @default(now()) @db.Timestamptz()
@@ -651,6 +656,7 @@ model PurchaseOrder {
   @@index([purchase_date(sort: Desc)])
   @@index([department])
   @@index([request_id])
+  @@index([ship_id])
   @@map("purchase_orders")
 }
 

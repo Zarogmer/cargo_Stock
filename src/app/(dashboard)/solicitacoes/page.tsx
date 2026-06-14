@@ -48,9 +48,22 @@ interface PurchaseOrder {
   image_url: string | null;
   product_url: string | null;
   request_id: string | null;
+  // Navio vinculado (aba Navios). ship_id é o link; ship_name é o snapshot do nome
+  // (sobrevive à exclusão do navio, pra não perder o vínculo no histórico/relatório).
+  ship_id: string | null;
+  ship_name: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
+}
+
+// Navio cadastrado (aba Navios) — só os campos que o seletor/rotulagem usa aqui.
+interface Ship {
+  id: string;
+  name: string;
+  status: string;
+  port: string | null;
+  arrival_date: string | null;
 }
 
 interface Supplier {
@@ -124,6 +137,18 @@ const DEST_SHORT_LABEL: Record<string, string> = {
 function departmentLabel(dep: string | null): string {
   if (!dep) return "";
   return DEST_SHORT_LABEL[dep] || dep;
+}
+
+// Rótulo de status do navio (espelha STATUS_LABELS da aba Navios) — usado no
+// seletor de navio do Nova Compra pra distinguir navios de mesmo nome.
+const SHIP_STATUS_LABELS: Record<string, string> = {
+  AGENDADO: "Agendado", EM_OPERACAO: "Em Operação", CONCLUIDO: "Concluído", CANCELADO: "Cancelado",
+};
+function shipSelectLabel(s: { name: string; status: string; port: string | null }): string {
+  const parts = [s.name];
+  if (s.status) parts.push(SHIP_STATUS_LABELS[s.status] || s.status);
+  if (s.port) parts.push(s.port);
+  return parts.join(" · ");
 }
 
 // Equipes do Rancho (comida por equipe — stock_items team=EQUIPE_x).
@@ -252,6 +277,7 @@ export default function SolicitacoesPage() {
   const [productLinks, setProductLinks] = useState<ProductLink[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchases, setPurchases] = useState<PurchaseOrder[]>([]);
+  const [ships, setShips] = useState<Ship[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -281,6 +307,7 @@ export default function SolicitacoesPage() {
   const [filterDept, setFilterDept] = useState("");
   const [filterSupplier, setFilterSupplier] = useState("");
   const [filterPayment, setFilterPayment] = useState("");
+  const [filterShip, setFilterShip] = useState("");
   const [generatingReport, setGeneratingReport] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
 
@@ -311,11 +338,13 @@ export default function SolicitacoesPage() {
     setLoading(true);
     setDbError(null);
     try {
-      const [reqRes, linksRes, suppRes, purchRes] = await Promise.all([
+      const [reqRes, linksRes, suppRes, purchRes, shipsRes] = await Promise.all([
         db.from("tool_requests").select("*").order("created_at", { ascending: false }),
         db.from("product_links").select("*").order("category").order("name"),
         db.from("suppliers").select("*").order("name"),
         db.from("purchase_orders").select("*").order("purchase_date", { ascending: false }).order("created_at", { ascending: false }),
+        // Navios pro seletor de "Navio" do Nova Compra (mais recentes primeiro).
+        db.from("ships").select("id, name, status, port, arrival_date").order("created_at", { ascending: false }),
       ]);
 
       const errors: string[] = [];
@@ -323,6 +352,7 @@ export default function SolicitacoesPage() {
       if (linksRes.error) errors.push(`product_links: ${linksRes.error.code} ${linksRes.error.message}`);
       if (suppRes.error) errors.push(`suppliers: ${suppRes.error.code} ${suppRes.error.message}`);
       if (purchRes.error) errors.push(`purchase_orders: ${purchRes.error.code} ${purchRes.error.message}`);
+      if (shipsRes.error) errors.push(`ships: ${shipsRes.error.code} ${shipsRes.error.message}`);
       if (errors.length > 0) {
         console.error("DB errors:", errors);
         setDbError(errors.join(" | "));
@@ -332,6 +362,7 @@ export default function SolicitacoesPage() {
       setProductLinks((linksRes.data as ProductLink[]) || []);
       setSuppliers((suppRes.data as Supplier[]) || []);
       setPurchases((purchRes.data as PurchaseOrder[]) || []);
+      setShips((shipsRes.data as Ship[]) || []);
     } catch (err) {
       console.error("loadAll error:", err);
       setDbError(String(err));
@@ -926,6 +957,7 @@ export default function SolicitacoesPage() {
     if (filterDept && (p.department || "") !== filterDept) return false;
     if (filterSupplier && (p.supplier || "") !== filterSupplier) return false;
     if (filterPayment && (p.payment_method || "") !== filterPayment) return false;
+    if (filterShip && (p.ship_name || "") !== filterShip) return false;
     return true;
   });
   const filteredTotal = filteredPurchases.reduce((sum, p) => sum + (p.total_value || 0), 0);
@@ -942,6 +974,8 @@ export default function SolicitacoesPage() {
   const purchaseSuppliers = Array.from(new Set(purchases.map((p) => p.supplier).filter(Boolean) as string[]))
     .sort((a, b) => a.localeCompare(b, "pt-BR"));
   const purchasePayments = Array.from(new Set(purchases.map((p) => p.payment_method).filter(Boolean) as string[])).sort();
+  const purchaseShips = Array.from(new Set(purchases.map((p) => p.ship_name).filter(Boolean) as string[]))
+    .sort((a, b) => a.localeCompare(b, "pt-BR"));
   const selCls = "px-3 py-2 border border-border rounded-lg text-sm bg-card focus:ring-2 focus:ring-primary outline-none";
 
   // Baixa o relatório em Excel do período/filtros atuais (layout da planilha oficial).
@@ -954,6 +988,7 @@ export default function SolicitacoesPage() {
       if (filterDept) params.set("department", filterDept);
       if (filterSupplier) params.set("supplier", filterSupplier);
       if (filterPayment) params.set("payment_method", filterPayment);
+      if (filterShip) params.set("ship", filterShip);
       const res = await fetch(`/api/documents/controle-compras?${params.toString()}`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -1180,10 +1215,19 @@ export default function SolicitacoesPage() {
                   {purchasePayments.map((pm) => <option key={pm} value={pm}>{pm}</option>)}
                 </select>
               </label>
-              {(filterMonth || filterDept || filterSupplier || filterPayment) && (
+              {purchaseShips.length > 0 && (
+                <label className="flex flex-col gap-1 text-xs">
+                  <span className="text-text-light font-medium uppercase tracking-wide">Navio</span>
+                  <select value={filterShip} onChange={(e) => setFilterShip(e.target.value)} className={`${selCls} max-w-[200px]`}>
+                    <option value="">Todos</option>
+                    {purchaseShips.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </label>
+              )}
+              {(filterMonth || filterDept || filterSupplier || filterPayment || filterShip) && (
                 <button
                   type="button"
-                  onClick={() => { setFilterMonth(""); setFilterDept(""); setFilterSupplier(""); setFilterPayment(""); }}
+                  onClick={() => { setFilterMonth(""); setFilterDept(""); setFilterSupplier(""); setFilterPayment(""); setFilterShip(""); }}
                   className="text-xs text-text-light underline hover:text-text pb-2.5"
                 >
                   Limpar filtros
@@ -1222,6 +1266,7 @@ export default function SolicitacoesPage() {
                       <th className="text-left font-medium px-3 py-2.5">Descrição</th>
                       <th className="text-left font-medium px-3 py-2.5">Depto.</th>
                       <th className="text-left font-medium px-3 py-2.5">Fornecedor</th>
+                      <th className="text-left font-medium px-3 py-2.5">Navio</th>
                       <th className="text-left font-medium px-3 py-2.5">Data</th>
                       <th className="text-right font-medium px-3 py-2.5">Unit.</th>
                       <th className="text-right font-medium px-3 py-2.5">Qtd</th>
@@ -1253,6 +1298,11 @@ export default function SolicitacoesPage() {
                           ) : "—"}
                         </td>
                         <td className="px-3 py-2.5">{p.supplier || "—"}</td>
+                        <td className="px-3 py-2.5">
+                          {p.ship_name ? (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-sky-100 text-sky-700 font-medium whitespace-nowrap" title="Navio vinculado">🚢 {p.ship_name}</span>
+                          ) : "—"}
+                        </td>
                         <td className="px-3 py-2.5 whitespace-nowrap">{formatPurchaseDate(p.purchase_date)}</td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">{formatCurrency(p.unit_value || 0)}</td>
                         <td className="px-3 py-2.5 text-right">{formatQty(p.quantity)}</td>
@@ -1271,7 +1321,7 @@ export default function SolicitacoesPage() {
                   </tbody>
                   <tfoot>
                     <tr className="bg-gray-50 font-semibold">
-                      <td className="px-3 py-2.5" colSpan={6}>Total</td>
+                      <td className="px-3 py-2.5" colSpan={7}>Total</td>
                       <td className="px-3 py-2.5 text-right text-primary whitespace-nowrap">{formatCurrency(filteredTotal)}</td>
                       <td className="px-3 py-2.5" colSpan={canManagePurchases ? 2 : 1}></td>
                     </tr>
@@ -1298,6 +1348,7 @@ export default function SolicitacoesPage() {
                         <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-xs text-text-light items-center">
                           {p.code && <span className="font-mono">{p.code}</span>}
                           {p.department && <span className={`px-1.5 py-0.5 rounded-full font-medium ${DEPARTMENT_BADGE[p.department] || "bg-gray-100 text-gray-700"}`}>{departmentLabel(p.department)}</span>}
+                          {p.ship_name && <span className="px-1.5 py-0.5 rounded-full font-medium bg-sky-100 text-sky-700">🚢 {p.ship_name}</span>}
                           {p.supplier && <span>{p.supplier}</span>}
                           <span>{formatPurchaseDate(p.purchase_date)}</span>
                           <span>{formatQty(p.quantity)} × {formatCurrency(p.unit_value || 0)}</span>
@@ -1603,6 +1654,7 @@ export default function SolicitacoesPage() {
         item={editPurchase}
         fromRequest={purchaseFromRequest}
         suppliers={suppliers}
+        ships={ships}
         saving={saving}
       />
 
@@ -2096,12 +2148,13 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
   );
 }
 
-function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers, saving }: {
+function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers, ships, saving }: {
   open: boolean; onClose: () => void;
   onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null) => void;
   item: PurchaseOrder | null;
   fromRequest: ToolRequest | null;
   suppliers: Supplier[];
+  ships: Ship[];
   saving: boolean;
 }) {
   const [description, setDescription] = useState("");
@@ -2119,6 +2172,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
   const [destSpec, setDestSpec] = useState<DestSpec>({ ...DEFAULT_DEST_SPEC });
   // Código do item no Almoxarifado (opcional) — repõe aquele item exato ao abastecer.
   const [code, setCode] = useState("");
+  // Navio vinculado (opcional) — guarda o id do navio escolhido na aba Navios.
+  const [shipId, setShipId] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -2137,6 +2192,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       setNotes(item.notes || "");
       setImageUrl(item.image_url || null);
       setCode(item.code || "");
+      setShipId(item.ship_id || "");
     } else if (fromRequest) {
       setDescription(fromRequest.tool_name || "");
       setLink(fromRequest.product_url || "");
@@ -2149,9 +2205,10 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       setNotes("");
       setImageUrl(fromRequest.image_url || null);
       setCode(fromRequest.code || "");
+      setShipId("");
     } else {
       setDescription(""); setLink(""); setDestSpec({ ...DEFAULT_DEST_SPEC }); setSupplier(""); setPurchaseDate(todayISO);
-      setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setImageUrl(null); setCode("");
+      setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setImageUrl(null); setCode(""); setShipId("");
     }
   }, [item, fromRequest, open]);
 
@@ -2170,6 +2227,10 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Navio: resolve o nome pelo id escolhido. Se o navio foi apagado (edição de
+    // uma compra antiga), mantém o ship_name já salvo pra não perder o vínculo.
+    const selectedShip = ships.find((s) => s.id === shipId);
+    const shipName = selectedShip ? selectedShip.name : (shipId ? (item?.ship_name || null) : null);
     onSave({
       description,
       department: destSpec.dest || null,
@@ -2183,6 +2244,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       notes: notes || null,
       image_url: imageUrl,
       product_url: link.trim() || null,
+      ship_id: shipId || null,
+      ship_name: shipName,
     }, fromRequest?.id || null,
       // Só lança no Almoxarifado em compras novas (na edição vira só rótulo).
       !item ? destSpec : null);
@@ -2210,6 +2273,20 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
         <div>
           <label className="block text-sm font-medium mb-1">Fornecedor</label>
           <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Navio <span className="text-text-light font-normal">(opcional)</span>
+          </label>
+          <select value={shipId} onChange={(e) => setShipId(e.target.value)} className={inputCls}>
+            <option value="">— Sem navio</option>
+            {ships.map((s) => <option key={s.id} value={s.id}>{shipSelectLabel(s)}</option>)}
+            {/* Navio já vinculado mas que saiu da lista (apagado): preserva o vínculo. */}
+            {shipId && item?.ship_name && !ships.some((s) => s.id === shipId) && (
+              <option value={shipId}>{item.ship_name} (fora da lista)</option>
+            )}
+          </select>
+          <p className="text-[10px] text-text-light mt-1">Vincula esta compra a um navio cadastrado na aba Navios.</p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>

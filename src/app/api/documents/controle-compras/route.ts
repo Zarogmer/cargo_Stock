@@ -12,10 +12,10 @@ export const runtime = "nodejs";
 // Relatório de Controle de Compras em Excel, no mesmo layout da planilha oficial
 // "PLANILHA DE COMPRAS - CARGO" (uma aba por mês): título + total no topo, cabeçalho
 // e uma linha por compra. As colunas batem 1:1 com o modelo purchase_orders:
-//   # · DESCRIÇÃO · DEPARTAMENTO · FORNECEDOR · DATA DA COMPRA · VALOR unit.(R$) ·
-//   QUANTIDADE · VALOR total (R$) · FORMA DE PAGAMENTO · OBSERVAÇÃO
+//   # · DESCRIÇÃO · DEPARTAMENTO · FORNECEDOR · NAVIO · DATA DA COMPRA ·
+//   VALOR unit.(R$) · QUANTIDADE · VALOR total (R$) · FORMA DE PAGAMENTO · OBSERVAÇÃO
 // Filtros (querystring): year (obrigatório), month (1-12, vazio = ano inteiro),
-// department, supplier, payment_method.
+// department, supplier, payment_method, ship (nome do navio).
 
 const MONTH_NAMES = [
   "JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
@@ -68,6 +68,7 @@ export async function GET(request: NextRequest) {
   const dept = (sp.get("department") || "").trim();
   const supplier = (sp.get("supplier") || "").trim();
   const payment = (sp.get("payment_method") || "").trim();
+  const ship = (sp.get("ship") || "").trim();
 
   // Período: ano inteiro ou só um mês. Intervalo em UTC casa com o @db.Date.
   const start = month ? new Date(Date.UTC(year, month - 1, 1)) : new Date(Date.UTC(year, 0, 1));
@@ -77,6 +78,7 @@ export async function GET(request: NextRequest) {
   if (dept) where.department = dept;
   if (supplier) where.supplier = supplier;
   if (payment) where.payment_method = payment;
+  if (ship) where.ship_name = ship;
 
   const purchases = await prisma.purchaseOrder.findMany({
     where,
@@ -85,7 +87,7 @@ export async function GET(request: NextRequest) {
 
   // ── Monta a planilha (AoA: array de arrays) ───────────────────────────────
   const headerRow = [
-    "#", "DESCRIÇÃO", "DEPARTAMENTO", "FORNECEDOR", "DATA DA COMPRA",
+    "#", "DESCRIÇÃO", "DEPARTAMENTO", "FORNECEDOR", "NAVIO", "DATA DA COMPRA",
     "VALOR unit.(R$)", "QUANTIDADE", "VALOR total (R$)", "FORMA DE PAGAMENTO", "OBSERVAÇÃO",
   ];
 
@@ -94,6 +96,7 @@ export async function GET(request: NextRequest) {
   if (dept) filterParts.push(`Destino: ${deptLabel(dept)}`);
   if (supplier) filterParts.push(`Fornecedor: ${supplier}`);
   if (payment) filterParts.push(`Pagamento: ${payment}`);
+  if (ship) filterParts.push(`Navio: ${ship}`);
   const filterNote = filterParts.length
     ? `Filtros — ${filterParts.join(" · ")}`
     : "Todos os destinos, fornecedores e formas de pagamento";
@@ -101,11 +104,14 @@ export async function GET(request: NextRequest) {
   const lastRow = 2 + purchases.length; // última linha de dados (1-indexed Excel)
 
   // Linha 1 (título). Células nulas não viram cell — só as preenchidas existem.
+  // Com a coluna NAVIO, o total fica na coluna I (8) — o rótulo "TOTAL R$" vai pra H
+  // e o valor pra I, alinhado com a coluna VALOR total dos dados.
   const titleRow: (string | number | { f: string } | null)[] = [
     "CONTROLE DE COMPRAS", null, null, null,
     periodLabel, null,
+    null,
     "TOTAL R$",
-    purchases.length ? { f: `SUM(H3:H${lastRow})` } : 0,
+    purchases.length ? { f: `SUM(I3:I${lastRow})` } : 0,
     filterNote, null,
   ];
 
@@ -119,10 +125,11 @@ export async function GET(request: NextRequest) {
       p.description || "",
       deptLabel(p.department),
       p.supplier || "",
+      p.ship_name || "",
       serial ?? "",
       p.unit_value || 0,
       p.quantity || 0,
-      { f: `F${r}*G${r}` },
+      { f: `G${r}*H${r}` },
       p.payment_method || "",
       p.notes || "",
     ]);
@@ -138,9 +145,9 @@ export async function GET(request: NextRequest) {
 
   setStyle("A1", { font: { name: "Calibri", sz: 18, bold: true, color: { rgb: "1F3864" } }, alignment: { horizontal: "left", vertical: "center" } });
   setStyle("E1", { font: { name: "Calibri", sz: 13, bold: true, color: { rgb: "1F3864" } }, alignment: { horizontal: "center", vertical: "center" } });
-  setStyle("G1", { font: { name: "Calibri", sz: 11, bold: true }, alignment: { horizontal: "right", vertical: "center" } });
-  setStyle("H1", { font: { name: "Calibri", sz: 14, bold: true, color: { rgb: "C00000" } }, alignment: { horizontal: "center", vertical: "center" }, numFmt: BRL });
-  setStyle("I1", { font: { name: "Calibri", sz: 9, italic: true, color: { rgb: "808080" } }, alignment: { horizontal: "left", vertical: "center", wrapText: true } });
+  setStyle("H1", { font: { name: "Calibri", sz: 11, bold: true }, alignment: { horizontal: "right", vertical: "center" } });
+  setStyle("I1", { font: { name: "Calibri", sz: 14, bold: true, color: { rgb: "C00000" } }, alignment: { horizontal: "center", vertical: "center" }, numFmt: BRL });
+  setStyle("J1", { font: { name: "Calibri", sz: 9, italic: true, color: { rgb: "808080" } }, alignment: { horizontal: "left", vertical: "center", wrapText: true } });
 
   const headerStyle = {
     font: { name: "Calibri", sz: 12, bold: true, color: { rgb: "1F3864" } },
@@ -156,17 +163,17 @@ export async function GET(request: NextRequest) {
   const colStyle = (col: number) => {
     const base: Record<string, unknown> = {
       font: { name: "Calibri", sz: 11 },
-      alignment: { vertical: "center", wrapText: col === 1 || col === 9 } as Record<string, unknown>,
+      alignment: { vertical: "center", wrapText: col === 1 || col === 10 } as Record<string, unknown>,
       border: borderAll,
     };
     const align = base.alignment as { horizontal?: string };
     if (col === 0) align.horizontal = "center";                 // #
-    if (col === 4) align.horizontal = "center";                 // data
-    if (col === 5 || col === 6 || col === 7) align.horizontal = "right"; // unit / qtd / total
-    if (col === 4) base.numFmt = "dd/mm/yyyy";
-    if (col === 5 || col === 7) base.numFmt = BRL;
-    if (col === 6) base.numFmt = QTY_FMT;
-    if (col === 7) base.fill = { patternType: "solid", fgColor: { rgb: "F2F2F2" } }; // total levemente sombreado
+    if (col === 5) align.horizontal = "center";                 // data
+    if (col === 6 || col === 7 || col === 8) align.horizontal = "right"; // unit / qtd / total
+    if (col === 5) base.numFmt = "dd/mm/yyyy";
+    if (col === 6 || col === 8) base.numFmt = BRL;
+    if (col === 7) base.numFmt = QTY_FMT;
+    if (col === 8) base.fill = { patternType: "solid", fgColor: { rgb: "F2F2F2" } }; // total levemente sombreado
     return base;
   };
   for (let i = 0; i < purchases.length; i++) {
@@ -179,11 +186,11 @@ export async function GET(request: NextRequest) {
   ws["!merges"] = [
     { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } }, // A1:D1 título
     { s: { r: 0, c: 4 }, e: { r: 0, c: 5 } }, // E1:F1 período
-    { s: { r: 0, c: 8 }, e: { r: 0, c: 9 } }, // I1:J1 nota de filtros
+    { s: { r: 0, c: 9 }, e: { r: 0, c: 10 } }, // J1:K1 nota de filtros
   ];
   ws["!cols"] = [
-    { wch: 5 }, { wch: 58 }, { wch: 16 }, { wch: 20 }, { wch: 15 },
-    { wch: 15 }, { wch: 11 }, { wch: 17 }, { wch: 20 }, { wch: 28 },
+    { wch: 5 }, { wch: 58 }, { wch: 16 }, { wch: 20 }, { wch: 18 },
+    { wch: 15 }, { wch: 15 }, { wch: 11 }, { wch: 17 }, { wch: 20 }, { wch: 28 },
   ];
   ws["!rows"] = [{ hpt: 34 }, { hpt: 26 }];
 
