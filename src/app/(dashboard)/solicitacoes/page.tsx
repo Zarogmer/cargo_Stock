@@ -2155,7 +2155,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
         <div>
           <label className="block text-sm font-medium mb-1">Observação</label>
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
-            placeholder="Ex: Crédito de 354,22, frete incluso..." className={`${inputCls} resize-none`} />
+            placeholder="Ex: Crédito de 354,22, frete incluso, rancho M/V Atlântico..." className={`${inputCls} resize-none`} />
         </div>
         <ImagePicker value={imageUrl} onChange={setImageUrl} />
 
