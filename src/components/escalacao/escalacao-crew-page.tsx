@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EditIcon, TrashIcon } from "@/components/icons";
 import { formatDate } from "@/lib/utils";
-import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import type {
   JobFunction,
   Job,
@@ -488,7 +487,6 @@ function EscalacaoTab({
         open={showAdd}
         item={editAlloc}
         ensureJob={ensureJob}
-        shipId={ship.id}
         employees={employees}
         functions={functions}
         existingAllocs={activeAllocs.filter((a) => a.id !== editAlloc?.id)}
@@ -513,12 +511,11 @@ function EscalacaoTab({
 // ─── Crew Form Modal (add/edit member) ──────────────────────────────────────
 
 function CrewFormModal({
-  open, item, ensureJob, shipId, employees, functions, existingAllocs, otherJobOccupiedKind, profileName, kind, onClose, onSaved,
+  open, item, ensureJob, employees, functions, existingAllocs, otherJobOccupiedKind, profileName, kind, onClose, onSaved,
 }: {
   open: boolean;
   item: JobAllocation | null;
   ensureJob: () => Promise<string>;
-  shipId: string;
   employees: Employee[];
   functions: JobFunction[];
   existingAllocs: JobAllocation[];
@@ -536,9 +533,6 @@ function CrewFormModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [showQuickAdd, setShowQuickAdd] = useState(false);
-  // "Avisar no WhatsApp ao escalar?" — DESLIGADO por padrão. Por padrão a escala
-  // é salva sem disparar o notify; marcado, dispara. Avisar é opt-in. Ver escala-whatsapp-pref.
-  const { send: sendWhats, setSend: setSendWhats } = useSendWhatsappPref();
 
   const isEditing = !!item;
 
@@ -699,20 +693,6 @@ function CrewFormModal({
       });
       for (const row of rows) {
         await db.from("job_allocations").insert(row);
-      }
-      // Fire-and-forget WhatsApp notification — only kicks in for EMBARQUE kind
-      // here (COSTADO has its own modal in escalacao-costado-page that already
-      // posts with shift info).
-      if (sendWhats && kind === "EMBARQUE" && shipId) {
-        fetch("/api/escalacao/notify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            shipId,
-            kind: "EMBARQUE",
-            employeeIds: Array.from(selectedIds),
-          }),
-        }).catch((err) => console.warn("[escalacao] notify failed:", err));
       }
       onSaved();
     } catch (err) {
@@ -942,10 +922,6 @@ function CrewFormModal({
               </button>
             </div>
           </>
-        )}
-
-        {!isEditing && (
-          <EnviarWhatsappToggle send={sendWhats} setSend={setSendWhats} />
         )}
 
         {error && (
