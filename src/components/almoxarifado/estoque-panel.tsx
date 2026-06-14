@@ -48,6 +48,12 @@ const REAL_TEAMS: RanchoTeam[] = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_4"];
 function ranchoTeamLabel(t: string): string {
   return RANCHO_TEAM_TABS.find((x) => x.key === t)?.label || t;
 }
+// Cor do selo (claro) de equipe mostrado por alimento na aba Total.
+const RANCHO_TEAM_BADGE: Record<string, string> = {
+  EQUIPE_1: "bg-blue-100 text-blue-700",
+  EQUIPE_2: "bg-purple-100 text-purple-700",
+  EQUIPE_4: "bg-orange-100 text-orange-700",
+};
 
 // Item já cadastrado nas equipes, oferecido no seletor de código ao cadastrar no
 // Total (deduplicado por nome).
@@ -167,6 +173,20 @@ export function EstoquePanel() {
     for (const it of items) {
       if (!REAL_TEAMS.includes(it.team as RanchoTeam)) continue;
       m.set(norm(it.name), (m.get(norm(it.name)) || 0) + (Number(it.quantity) || 0));
+    }
+    return m;
+  }, [items]);
+
+  // Quais equipes têm cada alimento (por nome) — alimenta os selos "Equipe 1 / 2 /
+  // Turbo" na aba Total, conforme quem realmente tem o produto.
+  const teamsByName = useMemo(() => {
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    const m = new Map<string, Set<string>>();
+    for (const it of items) {
+      if (!REAL_TEAMS.includes(it.team as RanchoTeam)) continue;
+      const k = norm(it.name);
+      if (!m.has(k)) m.set(k, new Set());
+      m.get(k)!.add(it.team as string);
     }
     return m;
   }, [items]);
@@ -314,16 +334,20 @@ export function EstoquePanel() {
     {
       key: "name",
       label: "Nome",
-      render: (i: StockItem) => (
-        <span className="font-medium">
-          {i.name}
-          {isTeamOnly(i) && (
-            <span className="ml-2 text-[10px] font-normal text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full align-middle" title="Existe nas equipes, mas ainda não está na lista-mãe. Use “Adicionar” para incluí-lo aqui.">
-              só nas equipes
-            </span>
-          )}
-        </span>
-      ),
+      render: (i: StockItem) => {
+        // Na aba Total, mostra um selo por equipe que TEM esse alimento.
+        const teams = isMaster ? teamsByName.get((i.name || "").trim().toLowerCase()) : null;
+        return (
+          <span className="font-medium">
+            {i.name}
+            {teams && REAL_TEAMS.filter((t) => teams.has(t)).map((t) => (
+              <span key={t} className={`ml-1.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full align-middle ${RANCHO_TEAM_BADGE[t] || "bg-gray-100 text-gray-600"}`}>
+                {ranchoTeamLabel(t)}
+              </span>
+            ))}
+          </span>
+        );
+      },
     },
     {
       key: "code",
