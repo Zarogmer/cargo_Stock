@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
-import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
+import { PlusIcon, EditIcon, TrashIcon, WhatsappIcon } from "@/components/icons";
 import { formatDateTime, formatCurrency, formatQty, parseDecimalBR, buildCodeMap } from "@/lib/utils";
 import { ImagePicker } from "@/components/ui/image-picker";
 
@@ -205,6 +205,42 @@ function findItemByCodeOrName<T extends { id: number; name: string }>(
   return items.find((i) => norm(i.name) === norm(name));
 }
 
+// --- WhatsApp pro fornecedor ---------------------------------------------
+// Alvo da mensagem: o contato bruto do fornecedor (ex.: "13 3229-9350"), o nome
+// e a mensagem pré-pronta (editável no modal). Compartilhado pela aba
+// Fornecedores ("Chamar") e pelo Nova Solicitação ("Pedir cotação").
+interface WhatsappTarget { to: string; name: string; message: string }
+
+// Telefone do contato → dígitos com DDI 55 (formato wa.me / Evolution). Vazio
+// quando não dá pra extrair número (contato pode ser e-mail, "—" ou texto).
+function waDigits(raw: string | null | undefined): string {
+  const digits = (raw || "").replace(/\D/g, "");
+  if (!digits) return "";
+  return digits.startsWith("55") ? digits : `55${digits}`;
+}
+// Só vale "chamar no WhatsApp" com um telefone plausível: 55 + DDD(2) + 8/9 dígitos.
+function hasWhatsapp(raw: string | null | undefined): boolean {
+  return waDigits(raw).length >= 12;
+}
+
+// Saudação padrão pra "Chamar no WhatsApp" da aba Fornecedores.
+const SUPPLIER_GREETING =
+  "Olá! Aqui é da *Cargo Ships Cleaning*. Tudo bem?\n\n" +
+  "Gostaríamos de fazer uma cotação. Pode nos atender?";
+
+// Mensagem de cotação disparada do Nova Solicitação — já leva o produto pedido.
+function supplierQuoteMessage(opts: { toolName: string; quantity: number; productUrl?: string | null }): string {
+  const qty = opts.quantity > 0 ? opts.quantity : 1;
+  const link = opts.productUrl?.trim() ? `\n🔗 ${opts.productUrl.trim()}` : "";
+  return (
+    "Olá! Aqui é da *Cargo Ships Cleaning*. Tudo bem?\n\n" +
+    "Gostaríamos de uma cotação:\n\n" +
+    `📦 *${opts.toolName.trim() || "Produto"}*\n` +
+    `🔢 Quantidade: ${qty}${link}\n\n` +
+    "Consegue nos passar preço e disponibilidade? Obrigado!"
+  );
+}
+
 export default function SolicitacoesPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
@@ -253,6 +289,9 @@ export default function SolicitacoesPage() {
   const [editSupplier, setEditSupplier] = useState<Supplier | null>(null);
   const [deleteSupplier, setDeleteSupplier] = useState<Supplier | null>(null);
   const [supplierSearch, setSupplierSearch] = useState("");
+  // Chamar o fornecedor no WhatsApp da Cargo (mensagem pré-pronta e editável).
+  // Aberto pela aba Fornecedores e pelo Nova Solicitação (pedido de cotação).
+  const [whatsappTarget, setWhatsappTarget] = useState<WhatsappTarget | null>(null);
 
   const canApproveRequests = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
   const canManageLinks = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
@@ -1410,9 +1449,19 @@ export default function SolicitacoesPage() {
                         {s.category && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">{s.category}</span>}
                       </div>
                       <div className="mt-2 space-y-1 text-sm text-text-light">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="shrink-0">📞</span>
                           <span>{s.contact || "—"}</span>
+                          {hasWhatsapp(s.contact) && (
+                            <button
+                              type="button"
+                              onClick={() => setWhatsappTarget({ to: s.contact!, name: s.name, message: SUPPLIER_GREETING })}
+                              className="ml-1 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-full transition"
+                              title="Chamar no WhatsApp da Cargo"
+                            >
+                              <WhatsappIcon className="w-3.5 h-3.5" /> Chamar
+                            </button>
+                          )}
                         </div>
                         {s.address && (
                           <div className="flex items-center gap-2">
@@ -1496,7 +1545,10 @@ export default function SolicitacoesPage() {
       <Tabs tabs={tabs} defaultTab={effectiveTab} hideHeader />
 
       {/* Request Form Modal */}
-      <RequestFormModal open={showRequestForm} onClose={() => { setShowRequestForm(false); setEditRequest(null); }} onSave={handleSaveRequest} item={editRequest} suppliers={suppliers} saving={saving} />
+      <RequestFormModal open={showRequestForm} onClose={() => { setShowRequestForm(false); setEditRequest(null); }} onSave={handleSaveRequest} item={editRequest} suppliers={suppliers} saving={saving} onAskSupplier={setWhatsappTarget} />
+
+      {/* Chamar fornecedor no WhatsApp (aba Fornecedores + Nova Solicitação) */}
+      <WhatsappSupplierModal open={!!whatsappTarget} onClose={() => setWhatsappTarget(null)} target={whatsappTarget} />
 
       {/* Product Link Form Modal */}
       <LinkFormModal open={showLinkForm} onClose={() => { setShowLinkForm(false); setEditLink(null); setSaveError(null); }} onSave={handleSaveLink} item={editLink} saving={saving} error={saveError} />
@@ -1736,7 +1788,7 @@ function ProductLinkField({ link, onLinkChange, onData, open }: {
   );
 }
 
-function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
+function RequestFormModal({ open, onClose, onSave, item, suppliers, saving, onAskSupplier }: {
   open: boolean; onClose: () => void;
   onSave: (data: {
     toolName: string; quantity: number; reason: string; imageUrl: string | null;
@@ -1746,6 +1798,7 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
   item: ToolRequest | null;
   suppliers: Supplier[];
   saving: boolean;
+  onAskSupplier: (target: WhatsappTarget) => void;
 }) {
   const [toolName, setToolName] = useState("");
   const [quantity, setQuantity] = useState(1);
@@ -1832,6 +1885,25 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
             <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
           </div>
         </div>
+        {/* Cotação no WhatsApp: aparece quando o fornecedor escolhido está
+            cadastrado e tem telefone, e já há um produto digitado. */}
+        {(() => {
+          const matched = suppliers.find((s) => s.name === supplier);
+          if (!matched || !hasWhatsapp(matched.contact) || !toolName.trim()) return null;
+          return (
+            <button
+              type="button"
+              onClick={() => onAskSupplier({
+                to: matched.contact!,
+                name: matched.name,
+                message: supplierQuoteMessage({ toolName, quantity, productUrl: link }),
+              })}
+              className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-2 rounded-lg transition"
+            >
+              <WhatsappIcon className="w-4 h-4" /> Pedir cotação a {matched.name} no WhatsApp
+            </button>
+          );
+        })()}
         <div>
           <label className="block text-sm font-medium mb-1">Motivo / Justificativa *</label>
           <textarea value={reason} onChange={(e) => setReason(e.target.value)} required rows={3}
@@ -2377,6 +2449,109 @@ function SupplierFormModal({ open, onClose, onSave, item, saving }: {
           <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+// Manda uma mensagem pré-pronta pro fornecedor pelo WhatsApp da Cargo (número já
+// conectado via Evolution). A mensagem vem preenchida mas é editável; o envio
+// passa por /api/whatsapp/send, então a resposta do fornecedor aparece na aba
+// Conversas. Se o WhatsApp da empresa estiver fora do ar, ainda dá pra abrir no
+// WhatsApp do próprio usuário (wa.me).
+function WhatsappSupplierModal({ open, onClose, target }: {
+  open: boolean; onClose: () => void; target: WhatsappTarget | null;
+}) {
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [sentOk, setSentOk] = useState(false);
+  // Estado da conexão do WhatsApp da empresa (badge no topo do modal).
+  const [waState, setWaState] = useState<"checking" | "open" | "offline" | "unconfigured">("checking");
+
+  useEffect(() => {
+    if (!open || !target) return;
+    setMessage(target.message);
+    setError(null);
+    setSentOk(false);
+    setWaState("checking");
+    let cancelled = false;
+    fetch("/api/whatsapp/status")
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        if (d?.configured === false) { setWaState("unconfigured"); return; }
+        setWaState(d?.status?.instance?.state === "open" ? "open" : "offline");
+      })
+      .catch(() => { if (!cancelled) setWaState("offline"); });
+    return () => { cancelled = true; };
+  }, [open, target]);
+
+  if (!target) return null;
+
+  const waLink = `https://wa.me/${waDigits(target.to)}?text=${encodeURIComponent(message)}`;
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+
+  async function handleSend() {
+    if (!target) return;
+    setSending(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/whatsapp/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: waDigits(target.to), text: message, label: target.name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) throw new Error(data?.error || `Erro ${res.status}`);
+      setSentOk(true);
+      setTimeout(onClose, 1300);
+    } catch (err) {
+      setError((err as Error)?.message || "Falha ao enviar.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Chamar no WhatsApp">
+      <div className="space-y-4">
+        <div>
+          <p className="text-sm text-text">Para <strong>{target.name}</strong></p>
+          <p className="text-xs text-text-light">{target.to} · enviado pelo WhatsApp da Cargo</p>
+        </div>
+
+        {waState === "checking" && <p className="text-xs text-text-light">Verificando conexão do WhatsApp…</p>}
+        {waState === "open" && <p className="text-xs text-emerald-600">🟢 WhatsApp da empresa conectado</p>}
+        {waState === "offline" && (
+          <p className="text-xs text-amber-600">🟡 WhatsApp da empresa desconectado — tente enviar mesmo assim ou abra no seu WhatsApp.</p>
+        )}
+        {waState === "unconfigured" && (
+          <p className="text-xs text-amber-600">🟡 WhatsApp da empresa não configurado — use “Abrir no meu WhatsApp”.</p>
+        )}
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Mensagem</label>
+          <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={7}
+            className={`${inputCls} resize-none`} />
+        </div>
+
+        {error && <div className="bg-red-50 border border-red-300 rounded-lg p-2.5 text-sm text-red-700">{error}</div>}
+        {sentOk && (
+          <div className="bg-emerald-50 border border-emerald-300 rounded-lg p-2.5 text-sm text-emerald-700">
+            ✅ Mensagem enviada! A resposta do fornecedor aparece na aba Conversas.
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-3 justify-end pt-2">
+          <a href={waLink} target="_blank" rel="noopener noreferrer"
+            className="px-4 py-2 text-sm font-medium text-text-light hover:text-text border border-border rounded-lg transition">
+            Abrir no meu WhatsApp
+          </a>
+          <Button type="button" onClick={handleSend} disabled={sending || sentOk || !message.trim() || waState === "unconfigured"}>
+            {sending ? "Enviando..." : "Enviar pelo WhatsApp da Cargo"}
+          </Button>
+        </div>
+      </div>
     </Modal>
   );
 }
