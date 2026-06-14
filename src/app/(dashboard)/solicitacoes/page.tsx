@@ -1643,10 +1643,7 @@ export default function SolicitacoesPage() {
       <Tabs tabs={tabs} defaultTab={effectiveTab} hideHeader />
 
       {/* Request Form Modal */}
-      <RequestFormModal open={showRequestForm} onClose={() => { setShowRequestForm(false); setEditRequest(null); }} onSave={handleSaveRequest} item={editRequest} suppliers={suppliers} saving={saving} onAskSupplier={setWhatsappTarget} />
-
-      {/* Chamar fornecedor no WhatsApp (aba Fornecedores + Nova Solicitação) */}
-      <WhatsappSupplierModal open={!!whatsappTarget} onClose={() => setWhatsappTarget(null)} target={whatsappTarget} />
+      <RequestFormModal open={showRequestForm} onClose={() => { setShowRequestForm(false); setEditRequest(null); }} onSave={handleSaveRequest} item={editRequest} suppliers={suppliers} saving={saving} />
 
       {/* Product Link Form Modal */}
       <LinkFormModal open={showLinkForm} onClose={() => { setShowLinkForm(false); setEditLink(null); setSaveError(null); }} onSave={handleSaveLink} item={editLink} saving={saving} error={saveError} />
@@ -1669,7 +1666,13 @@ export default function SolicitacoesPage() {
         request={concludeRequest}
         suppliers={suppliers}
         saving={saving}
+        onAskSupplier={setWhatsappTarget}
       />
+
+      {/* Chamar fornecedor no WhatsApp — aba Fornecedores + "Pedir cotação" do
+          Aprovar. Renderizado DEPOIS do AprovarModal pra ficar por cima dele ao
+          abrir de lá (mesmo z-index; quem vem por último no DOM fica na frente). */}
+      <WhatsappSupplierModal open={!!whatsappTarget} onClose={() => setWhatsappTarget(null)} target={whatsappTarget} />
 
       {/* Delete Link Confirm */}
       <ConfirmDialog
@@ -1888,7 +1891,7 @@ function ProductLinkField({ link, onLinkChange, onData, open }: {
   );
 }
 
-function RequestFormModal({ open, onClose, onSave, item, suppliers, saving, onAskSupplier }: {
+function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
   open: boolean; onClose: () => void;
   onSave: (data: {
     toolName: string; quantity: number; reason: string; imageUrl: string | null;
@@ -1898,7 +1901,6 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving, onAs
   item: ToolRequest | null;
   suppliers: Supplier[];
   saving: boolean;
-  onAskSupplier: (target: WhatsappTarget) => void;
 }) {
   const [toolName, setToolName] = useState("");
   const [quantity, setQuantity] = useState(1);
@@ -1985,25 +1987,6 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving, onAs
             <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
           </div>
         </div>
-        {/* Cotação no WhatsApp: aparece quando o fornecedor escolhido está
-            cadastrado e tem telefone, e já há um produto digitado. */}
-        {(() => {
-          const matched = suppliers.find((s) => s.name === supplier);
-          if (!matched || !hasWhatsapp(matched.contact) || !toolName.trim()) return null;
-          return (
-            <button
-              type="button"
-              onClick={() => onAskSupplier({
-                to: matched.contact!,
-                name: matched.name,
-                message: supplierQuoteMessage({ toolName, quantity, productUrl: link }),
-              })}
-              className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-2 rounded-lg transition"
-            >
-              <WhatsappIcon className="w-4 h-4" /> Pedir cotação a {matched.name} no WhatsApp
-            </button>
-          );
-        })()}
         <div>
           <label className="block text-sm font-medium mb-1">Motivo / Justificativa *</label>
           <textarea value={reason} onChange={(e) => setReason(e.target.value)} required rows={3}
@@ -2442,12 +2425,13 @@ function ArmazenarEstoqueModal({ open, onClose, onConfirm, request, saving }: {
 
 // Aprovar e concluir uma solicitação: registra a compra no Controle de Compras e
 // lança o item no destino escolhido do Almoxarifado, num passo só.
-function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving }: {
+function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving, onAskSupplier }: {
   open: boolean; onClose: () => void;
   onConfirm: (data: ApproveData) => void;
   request: ToolRequest | null;
   suppliers: Supplier[];
   saving: boolean;
+  onAskSupplier: (target: WhatsappTarget) => void;
 }) {
   const [spec, setSpec] = useState<DestSpec>({ ...DEFAULT_DEST_SPEC });
   // Resumo editável da compra — pré-preenchido a partir da solicitação. O gestor
@@ -2524,6 +2508,26 @@ function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving }: 
           <label className="block text-sm font-medium mb-1">Fornecedor</label>
           <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
         </div>
+
+        {/* Cotação no WhatsApp: aparece quando o fornecedor escolhido está
+            cadastrado e tem telefone. O gestor clica e chama na hora de aprovar. */}
+        {(() => {
+          const matched = suppliers.find((s) => s.name === supplier);
+          if (!matched || !hasWhatsapp(matched.contact) || !toolName.trim()) return null;
+          return (
+            <button
+              type="button"
+              onClick={() => onAskSupplier({
+                to: matched.contact!,
+                name: matched.name,
+                message: supplierQuoteMessage({ toolName, quantity: qty, productUrl: request?.product_url }),
+              })}
+              className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-2 rounded-lg transition"
+            >
+              <WhatsappIcon className="w-4 h-4" /> Pedir cotação a {matched.name} no WhatsApp
+            </button>
+          );
+        })()}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
