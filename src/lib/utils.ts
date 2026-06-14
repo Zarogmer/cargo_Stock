@@ -119,6 +119,33 @@ export function buildCodeMap<T>(
   return result;
 }
 
+// Código que um item DEVE ter num setor, a partir do nome: se já existe um item
+// com esse nome, devolve o código derivado dele (buildCodeMap); senão devolve o
+// PRÓXIMO código do prefixo (ex.: já há "MF01" → novo "Mangueira Filtro" vira
+// "MF02"; prefixo inédito vira "XX01"). É o que gera o código automaticamente
+// quando o Almoxarifado ainda não tem o equipamento — mesma numeração que a aba
+// do Almoxarifado exibe, então o código bate quando o item é criado.
+export function codeForName<T>(
+  items: T[],
+  getId: (item: T) => number,
+  getName: (item: T) => string,
+  name: string,
+): string {
+  const target = normalize(name);
+  if (target) {
+    const existing = items.find((i) => normalize(getName(i)) === target);
+    if (existing) {
+      const code = buildCodeMap(items, getId, getName).get(getId(existing));
+      if (code) return code;
+    }
+  }
+  const prefix = codePrefix(name);
+  // buildCodeMap numera 01..N denso por prefixo, então o próximo = nº de itens
+  // do mesmo prefixo + 1.
+  const used = items.filter((i) => codePrefix(getName(i)) === prefix).length;
+  return `${prefix}${String(used + 1).padStart(2, "0")}`;
+}
+
 export function normalize(str: string): string {
   return str
     .normalize("NFD")

@@ -10,7 +10,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon, WhatsappIcon } from "@/components/icons";
-import { formatDateTime, formatCurrency, formatQty, parseDecimalBR, buildCodeMap } from "@/lib/utils";
+import { formatDateTime, formatCurrency, formatQty, parseDecimalBR, buildCodeMap, codeForName } from "@/lib/utils";
 import { ImagePicker } from "@/components/ui/image-picker";
 
 interface ToolRequest {
@@ -177,6 +177,8 @@ interface ApproveData {
   unitValue: number;
   quantity: number;
   spec: DestSpec;
+  // Código no Almoxarifado conferido na aprovação. Em branco = gera pelo nome.
+  code: string | null;
 }
 
 const PAYMENT_METHODS = [
@@ -394,6 +396,11 @@ export default function SolicitacoesPage() {
     setSaving(true);
     setSaveError(null);
     try {
+      // Código no Almoxarifado: usa o que o usuário escolheu; em branco, GERA pelo
+      // nome no setor de destino (próximo do prefixo) — assim todo item, mesmo novo,
+      // já nasce com código, sem precisar cadastrar antes no Almoxarifado.
+      const code = data.code || (await resolveWarehouseCode(data.department as WarehouseDest, data.toolName));
+
       if (editRequest) {
         // Edição: atualiza os campos sem mexer em status/autor nem reavisar.
         const { error } = await db.from("tool_requests").update({
@@ -405,7 +412,7 @@ export default function SolicitacoesPage() {
           estimated_value: data.estimatedValue,
           supplier: data.supplier,
           department: data.department,
-          code: data.code,
+          code,
           updated_at: new Date().toISOString(),
         } as any).eq("id", editRequest.id);
         if (error) throw error;
@@ -426,7 +433,7 @@ export default function SolicitacoesPage() {
         estimated_value: data.estimatedValue,
         supplier: data.supplier,
         department: data.department,
-        code: data.code,
+        code,
       } as any);
       if (error) throw error;
       // Avisa os supervisores por WhatsApp (best-effort — não bloqueia nem
@@ -478,12 +485,17 @@ export default function SolicitacoesPage() {
       const today = new Date();
       const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
       const purchaseDate = data.purchaseDate || todayISO;
+      // Código no Almoxarifado: usa o conferido na aprovação; em branco, GERA pelo
+      // nome no setor escolhido (mesma regra do Almoxarifado). O destino pode ter
+      // mudado aqui (ex.: o gestor trocou Estoque→Maquinário), então geramos pro
+      // destino atual em vez de usar o código antigo da solicitação.
+      const effectiveCode = data.code || (await resolveWarehouseCode(spec.dest, description));
 
       // 1) Registra a compra com os dados conferidos na aprovação.
       const { error: buyErr } = await db.from("purchase_orders").insert({
         description,
         department: spec.dest === "OUTROS" ? null : spec.dest,
-        code: req.code,
+        code: effectiveCode,
         supplier,
         purchase_date: purchaseDate,
         unit_value: unit,
@@ -507,6 +519,9 @@ export default function SolicitacoesPage() {
         quantity: Math.max(1, Math.round(qty)),
         estimated_value: unit,
         supplier,
+        // Reflete no card o destino e o código de fato usados (podem ter mudado aqui).
+        department: spec.dest === "OUTROS" ? null : spec.dest,
+        code: effectiveCode,
         updated_at: new Date().toISOString(),
       } as any).eq("id", req.id);
       if (updErr) throw updErr;
@@ -519,7 +534,7 @@ export default function SolicitacoesPage() {
           const r = await storeInWarehouse(spec.dest, {
             name: description, quantity: qty,
             category: spec.category, unit: spec.unit, team: spec.team, size: spec.size,
-            code: req.code,
+            code: effectiveCode,
           });
           stockMsg = ` ${r.created ? "Criado" : "Reposto"} (+${formatQty(r.quantity)}) em ${r.where}.`;
         } catch (stockErr: any) {
@@ -775,8 +790,13 @@ export default function SolicitacoesPage() {
         const { error } = await db.from("purchase_orders").update(data as any).eq("id", editPurchase.id);
         if (error) throw error;
       } else {
+        // Código no Almoxarifado: usa o escolhido; em branco, GERA pelo nome no setor
+        // de destino (próximo do prefixo, mesma regra do Almoxarifado). Setor sem
+        // código devolve null. Mesmo código vai pra compra e pra reposição.
+        const code = data.code || (stock ? await resolveWarehouseCode(stock.dest, data.description || "") : null);
         const { error } = await db.from("purchase_orders").insert({
           ...data,
+          code,
           request_id: fromRequestId,
           created_by: actor,
         } as any);
@@ -796,7 +816,7 @@ export default function SolicitacoesPage() {
               name: data.description || "",
               quantity: Number(data.quantity) || 1,
               category: stock.category, unit: stock.unit, team: stock.team, size: stock.size,
-              code: data.code,
+              code,
             });
             setSaveOk(
               `📦 ${r.created ? "Criado" : "Reposto"}: "${data.description}" (+${formatQty(r.quantity)}) em ${r.where}.`,
@@ -827,11 +847,13 @@ export default function SolicitacoesPage() {
     setSaveError(null);
     setSaveOk(null);
     try {
+      // Código: usa o da solicitação; em branco, gera pelo nome no setor escolhido.
+      const code = stockRequest.code || (await resolveWarehouseCode(spec.dest, stockRequest.tool_name));
       const r = await storeInWarehouse(spec.dest, {
         name: stockRequest.tool_name,
         quantity: stockRequest.quantity,
         category: spec.category, unit: spec.unit, team: spec.team, size: spec.size,
-        code: stockRequest.code,
+        code,
       });
       const itemName = stockRequest.tool_name;
       setStockRequest(null);
@@ -1947,7 +1969,7 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving, onAs
           </select>
           <p className="text-[10px] text-text-light mt-1">Sugestão de onde guardar — o gestor confirma ao aprovar.</p>
         </div>
-        <CodeField dest={dest} team="EQUIPE_1" value={code} onChange={setCode} onResolveName={setToolName} open={open} required={dest !== "MAQUINARIO"} />
+        <CodeField dest={dest} team="EQUIPE_1" value={code} name={toolName} onChange={setCode} onResolveName={setToolName} open={open} />
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium mb-1">Quantidade</label>
@@ -2009,11 +2031,50 @@ function numToInput(n: number | null | undefined): string {
 // têm código, então o campo não aparece pra eles.
 const CODED_DESTS: WarehouseDest[] = ["ESTOQUE", "EPI", "UNIFORME", "FERRAMENTA", "ELETRICA", "MAQUINARIO"];
 
+// Item cru do setor de destino (id + nome, + tamanho/estoque pro autocomplete).
+// Base tanto do autocomplete de código quanto da geração automática (codeForName).
+interface WarehouseItem { id: number; name: string; size: string | null; qty: number | null }
+
 // Item do Almoxarifado já com o código derivado, pro autocomplete do CodeField.
 // `size` só existe em EPI/Uniforme (é o que diferencia itens de mesmo nome, ex.:
 // "Bota de borracha" em vários tamanhos); `qty` é o estoque atual. Maquinário não
 // tem quantidade (cada unidade é um registro próprio), então vem sem qty.
 interface WarehouseCode { code: string; name: string; size: string | null; qty: number | null }
+
+// Carrega os itens do setor de destino (id+nome, +tamanho/estoque). Compartilhado
+// pelo autocomplete (useWarehouseCodes) e pela geração automática de código nas
+// ações (resolveWarehouseCode). Setores sem código devolvem lista vazia.
+async function loadWarehouseItems(dest: WarehouseDest): Promise<WarehouseItem[]> {
+  if (!CODED_DESTS.includes(dest)) return [];
+  if (dest === "ESTOQUE") {
+    const { data } = await db.from("stock_items").select("id, name, quantity").eq("team", STOCK_TEAM);
+    return ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, size: null, qty: i.quantity }));
+  }
+  if (dest === "FERRAMENTA" || dest === "ELETRICA") {
+    const { data } = await db.from("stock_items").select("id, name, quantity").eq("team", dest);
+    return ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, size: null, qty: i.quantity }));
+  }
+  if (dest === "MAQUINARIO") {
+    // Maquinário vive na tabela `tools` (empréstimo), não em stock_items — sem quantidade.
+    const { data } = await db.from("tools").select("id, name").eq("asset_type", "MAQUINARIO");
+    return ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, size: null, qty: null }));
+  }
+  // EPI / Uniforme — têm tamanho e estoque próprio (stock_qty).
+  const { data } = await db.from(dest === "EPI" ? "epis" : "uniforms").select("id, name, size, stock_qty");
+  return ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, size: i.size ?? null, qty: i.stock_qty }));
+}
+
+// Código do item pro setor de destino, a partir do nome: usa o código de um item de
+// mesmo nome se já existir; senão gera o próximo código do prefixo (codeForName). É
+// o que faz "gerar código pelo nome quando o Almoxarifado ainda não tem o
+// equipamento". Setores sem código (Rancho/Escritório/Outros) devolvem null.
+async function resolveWarehouseCode(dest: WarehouseDest, name: string): Promise<string | null> {
+  if (!CODED_DESTS.includes(dest)) return null;
+  const trimmed = (name || "").trim();
+  if (!trimmed) return null;
+  const items = await loadWarehouseItems(dest);
+  return codeForName(items, (i) => i.id, (i) => i.name, trimmed);
+}
 
 // Rótulo do item no autocomplete de código: nome + tamanho + estoque atual. É o que
 // torna a lista "informativa" — sem o tamanho, vários itens de mesmo nome (botas,
@@ -2025,60 +2086,44 @@ function warehouseCodeLabel(c: WarehouseCode): string {
   return parts.join(" · ");
 }
 
-// Carrega os itens do setor de destino e devolve a lista já com o código derivado
-// (mesma regra da tabela do Almoxarifado) + tamanho e estoque pra exibir no
-// autocomplete. Rancho é por equipe; os demais são globais. Vazio enquanto carrega
-// ou pra destinos sem código.
-function useWarehouseCodes(dest: WarehouseDest, team: string, open: boolean) {
-  const [codes, setCodes] = useState<WarehouseCode[]>([]);
+// Carrega os itens do setor de destino e devolve tanto a lista crua (pra gerar a
+// sugestão de código novo) quanto os códigos derivados (mesma regra da tabela do
+// Almoxarifado) + tamanho e estoque pro autocomplete. Vazio enquanto carrega ou
+// pra destinos sem código. `team` fica no dep só por reatividade (futuros setores
+// por equipe); hoje os setores com código são todos globais.
+function useWarehouseCodes(dest: WarehouseDest, team: string, open: boolean): { codes: WarehouseCode[]; items: WarehouseItem[] } {
+  const [items, setItems] = useState<WarehouseItem[]>([]);
   useEffect(() => {
-    if (!open || !CODED_DESTS.includes(dest)) { setCodes([]); return; }
+    if (!open || !CODED_DESTS.includes(dest)) { setItems([]); return; }
     let cancelled = false;
     (async () => {
-      let items: { id: number; name: string; size?: string | null; qty?: number | null }[] = [];
-      if (dest === "ESTOQUE") {
-        const { data } = await db.from("stock_items").select("id, name, quantity").eq("team", STOCK_TEAM);
-        items = ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, qty: i.quantity }));
-      } else if (dest === "FERRAMENTA" || dest === "ELETRICA") {
-        const { data } = await db.from("stock_items").select("id, name, quantity").eq("team", dest);
-        items = ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, qty: i.quantity }));
-      } else if (dest === "MAQUINARIO") {
-        // Maquinário vive na tabela `tools` (empréstimo), não em stock_items — sem quantidade.
-        const { data } = await db.from("tools").select("id, name").eq("asset_type", "MAQUINARIO");
-        items = ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name }));
-      } else if (dest === "RANCHO") {
-        const { data } = await db.from("stock_items").select("id, name, quantity").eq("team", team || "EQUIPE_1");
-        items = ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, qty: i.quantity }));
-      } else {
-        // EPI / Uniforme — têm tamanho e estoque próprio (stock_qty).
-        const { data } = await db.from(dest === "EPI" ? "epis" : "uniforms").select("id, name, size, stock_qty");
-        items = ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, size: i.size ?? null, qty: i.stock_qty }));
-      }
-      if (cancelled) return;
-      const map = buildCodeMap(items, (i) => i.id, (i) => i.name);
-      const list = items
-        .map((i) => ({ code: map.get(i.id) || "", name: i.name, size: i.size ?? null, qty: i.qty ?? null }))
-        .filter((x) => x.code)
-        .sort((a, b) => a.code.localeCompare(b.code));
-      setCodes(list);
+      const loaded = await loadWarehouseItems(dest);
+      if (!cancelled) setItems(loaded);
     })();
     return () => { cancelled = true; };
   }, [dest, team, open]);
-  return codes;
+  const map = buildCodeMap(items, (i) => i.id, (i) => i.name);
+  const codes = items
+    .map((i) => ({ code: map.get(i.id) || "", name: i.name, size: i.size, qty: i.qty }))
+    .filter((x) => x.code)
+    .sort((a, b) => a.code.localeCompare(b.code));
+  return { codes, items };
 }
 
 // Campo "Código no Almoxarifado" (opcional) com autocomplete dos itens do destino
 // escolhido. Escolher um código repõe EXATAMENTE aquele item ao abastecer (em vez de
 // casar pelo nome) e preenche o nome com o do item, pra ficar consistente com a aba
-// do Almoxarifado. Em branco = comportamento antigo (casa pelo nome / item novo).
-function CodeField({ dest, team, value, onChange, onResolveName, open, required = false }: {
+// do Almoxarifado. Em branco = o sistema GERA o código pelo nome ao salvar (próximo
+// do prefixo) — não precisa mais cadastrar o item antes no Almoxarifado.
+function CodeField({ dest, team, value, name = "", onChange, onResolveName, open }: {
   dest: WarehouseDest; team: string; value: string;
+  // Nome do produto digitado — base da sugestão de código novo quando em branco.
+  name?: string;
   onChange: (v: string) => void;
   onResolveName?: (name: string) => void;
   open: boolean;
-  required?: boolean;
 }) {
-  const codes = useWarehouseCodes(dest, team, open);
+  const { codes, items } = useWarehouseCodes(dest, team, open);
   if (!CODED_DESTS.includes(dest)) return null;
   const listId = `wh-codes-${dest}`;
   const norm = (s: string) => s.trim().toUpperCase();
@@ -2088,25 +2133,30 @@ function CodeField({ dest, team, value, onChange, onResolveName, open, required 
     const hit = codes.find((c) => norm(c.code) === norm(v));
     if (hit && onResolveName) onResolveName(hit.name);
   };
+  // Código que será gerado se o campo ficar em branco (mesma regra do Almoxarifado).
+  const suggested = name.trim() ? codeForName(items, (i) => i.id, (i) => i.name, name) : "";
+  const matched = value.trim() ? codes.find((c) => norm(c.code) === norm(value)) : undefined;
   return (
     <div>
       <label className="block text-sm font-medium mb-1">
         Código no Almoxarifado{" "}
-        {required ? "*" : <span className="font-normal text-text-light">(opcional)</span>}
+        <span className="font-normal text-text-light">(opcional)</span>
       </label>
-      <input type="text" list={listId} value={value} required={required}
+      <input type="text" list={listId} value={value}
         onChange={(e) => handleChange(e.target.value)}
-        placeholder="Ex: AR01 — escolha o item no Almoxarifado"
+        placeholder={suggested ? `Em branco = gera ${suggested}` : "Ex: AR01 — escolha o item no Almoxarifado"}
         className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none" />
       <datalist id={listId}>
         {codes.map((c) => <option key={c.code} value={c.code} label={warehouseCodeLabel(c)} />)}
       </datalist>
       <p className="text-[10px] text-text-light mt-1">
-        {required
-          ? "Escolha o código do item que será reposto. Item novo? Cadastre antes no Almoxarifado."
-          : (codes.length > 0
-              ? "Escolha um código pra repor exatamente aquele item. Em branco = casa pelo nome (item novo)."
-              : "Informe o código do item se for reposição. Em branco = casa pelo nome (item novo).")}
+        {matched
+          ? <>Repõe <strong>{matched.name}</strong>{matched.qty != null ? ` · ${formatQty(matched.qty)} em estoque` : ""}.</>
+          : value.trim()
+            ? "Código novo — o item será criado no Almoxarifado."
+            : suggested
+              ? <>Em branco = gera o código automaticamente pelo nome: <strong>{suggested}</strong>.</>
+              : "Em branco = gera um código automático pelo nome ao salvar."}
       </p>
     </div>
   );
@@ -2295,7 +2345,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
             placeholder="Ex: Fita silver tape, Água 1,5 L..." className={inputCls} />
         </div>
         <WarehouseDestinationFields value={destSpec} onChange={(v) => { if (v.dest !== destSpec.dest) setCode(""); setDestSpec(v); }} quantity={qty} stocking={!item} />
-        {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} onChange={setCode} onResolveName={setDescription} open={open} required={destSpec.dest !== "MAQUINARIO"} />}
+        {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} name={description} onChange={setCode} onResolveName={setDescription} open={open} />}
         <div>
           <label className="block text-sm font-medium mb-1">Fornecedor</label>
           <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
@@ -2408,6 +2458,8 @@ function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving }: 
   const [purchaseDate, setPurchaseDate] = useState("");
   const [unitValue, setUnitValue] = useState("");
   const [quantity, setQuantity] = useState("1");
+  // Código no Almoxarifado — vem da solicitação; em branco o sistema gera pelo nome.
+  const [code, setCode] = useState("");
 
   useEffect(() => {
     if (!open || !request) return;
@@ -2421,6 +2473,7 @@ function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving }: 
     setPurchaseDate(todayISO);
     setUnitValue(numToInput(parseDecimalBR(request.estimated_value)));
     setQuantity(numToInput(request.quantity) || "1");
+    setCode(request.code || "");
   }, [open, request]);
 
   const unit = parseDecimalBR(unitValue);
@@ -2441,6 +2494,7 @@ function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving }: 
             unitValue: unit,
             quantity: qty,
             spec,
+            code: code.trim().toUpperCase() || null,
           });
         }}
         className="space-y-4"
@@ -2502,7 +2556,8 @@ function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving }: 
           </div>
         </div>
 
-        <WarehouseDestinationFields value={spec} onChange={setSpec} quantity={qty} />
+        <WarehouseDestinationFields value={spec} onChange={(v) => { if (v.dest !== spec.dest) setCode(""); setSpec(v); }} quantity={qty} />
+        <CodeField dest={spec.dest} team={spec.team} value={code} name={toolName} onChange={setCode} onResolveName={setToolName} open={open} />
 
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
