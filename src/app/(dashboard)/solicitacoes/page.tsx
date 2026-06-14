@@ -172,24 +172,6 @@ const DEPARTMENT_BADGE: Record<string, string> = {
 // precisa bater com o TEAM da aba Almoxarifado › Estoque (materiais-panel.tsx).
 const STOCK_TEAM = "GALPAO";
 
-// Categorias do Estoque de materiais (espelha os grupos da aba Almoxarifado ›
-// Estoque). Usadas quando uma compra é lançada direto no estoque do galpão.
-// É uma datalist (texto livre), então categorias novas também valem.
-const STOCK_CATEGORIES = [
-  "Cozinha",
-  "Elétrica",
-  "Embarque",
-  "EPI e Químicos",
-  "Ferramentas",
-  "Hidrojato",
-  "Líquidos",
-  "Mangueiras e Conexões",
-  "Pistola e Caneta",
-  "Rodas",
-  "Varões",
-  "Outros",
-];
-
 // Converte um valor de data do banco (ISO ou Date) para dd/mm/aaaa sem sofrer
 // o deslocamento de fuso (datas @db.Date voltam como meia-noite UTC).
 function formatPurchaseDate(value: string | null): string {
@@ -1983,17 +1965,6 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
           {WAREHOUSE_DESTINATIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
         </select>
       </div>
-
-      {stocking && (value.dest === "ESTOQUE" || value.dest === "FERRAMENTA" || value.dest === "ELETRICA") && (
-        <div className={boxCls}>
-          <label className="block text-xs font-medium text-emerald-800 mb-1">Categoria</label>
-          <input type="text" list="wh-stock-cats" value={value.category}
-            onChange={(e) => onChange({ ...value, category: e.target.value })}
-            placeholder="Ex: Elétrica, Hidrojato, Ferramentas..." className={subCls} />
-          <datalist id="wh-stock-cats">{STOCK_CATEGORIES.map((c) => <option key={c} value={c} />)}</datalist>
-          <p className="text-[10px] text-emerald-700/80 mt-1">Sem categoria, entra como <strong>Outros</strong>. Mesmo nome = soma a quantidade (reposição).</p>
-        </div>
-      )}
 
       {/* Rancho (card #46): só registra o gasto na aba de Compras — não lança no
           Almoxarifado nem usa código, então não mostramos Equipe/Categoria/Unidade. */}
