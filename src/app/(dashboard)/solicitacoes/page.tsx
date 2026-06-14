@@ -1816,7 +1816,7 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
           </select>
           <p className="text-[10px] text-text-light mt-1">Sugestão de onde guardar — o gestor confirma ao aprovar.</p>
         </div>
-        <CodeField dest={dest} team="EQUIPE_1" value={code} onChange={setCode} onResolveName={setToolName} open={open} required />
+        <CodeField dest={dest} team="EQUIPE_1" value={code} onChange={setCode} onResolveName={setToolName} open={open} required={dest !== "MAQUINARIO"} />
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium mb-1">Quantidade</label>
@@ -1857,7 +1857,7 @@ function numToInput(n: number | null | undefined): string {
 // nome — buildCodeMap). Maquinário (cada unidade é um registro próprio), Rancho
 // (card #46: só registra a compra, sem mexer no estoque), Escritório e Outros não
 // têm código, então o campo não aparece pra eles.
-const CODED_DESTS: WarehouseDest[] = ["ESTOQUE", "EPI", "UNIFORME", "FERRAMENTA", "ELETRICA"];
+const CODED_DESTS: WarehouseDest[] = ["ESTOQUE", "EPI", "UNIFORME", "FERRAMENTA", "ELETRICA", "MAQUINARIO"];
 
 // Carrega os itens do setor de destino e devolve a lista [{ code, name }] já com o
 // código derivado (mesma regra da tabela do Almoxarifado). Rancho é por equipe; os
@@ -1874,6 +1874,10 @@ function useWarehouseCodes(dest: WarehouseDest, team: string, open: boolean) {
         items = (data as any) || [];
       } else if (dest === "FERRAMENTA" || dest === "ELETRICA") {
         const { data } = await db.from("stock_items").select("id, name").eq("team", dest);
+        items = (data as any) || [];
+      } else if (dest === "MAQUINARIO") {
+        // Maquinário vive na tabela `tools` (empréstimo), não em stock_items.
+        const { data } = await db.from("tools").select("id, name").eq("asset_type", "MAQUINARIO");
         items = (data as any) || [];
       } else if (dest === "RANCHO") {
         const { data } = await db.from("stock_items").select("id, name").eq("team", team || "EQUIPE_1");
@@ -2116,7 +2120,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
             placeholder="Ex: Fita silver tape, Água 1,5 L..." className={inputCls} />
         </div>
         <WarehouseDestinationFields value={destSpec} onChange={(v) => { if (v.dest !== destSpec.dest) setCode(""); setDestSpec(v); }} quantity={qty} stocking={!item} />
-        {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} onChange={setCode} onResolveName={setDescription} open={open} required />}
+        {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} onChange={setCode} onResolveName={setDescription} open={open} required={destSpec.dest !== "MAQUINARIO"} />}
         <div>
           <label className="block text-sm font-medium mb-1">Fornecedor</label>
           <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
