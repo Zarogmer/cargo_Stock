@@ -20,12 +20,13 @@ import type { StockItem } from "@/types/database";
 //   GALPAO     → aba "Estoque" (materiais do galpão)
 //   FERRAMENTA → aba "Ferramenta"
 //   ELETRICA   → aba "Elétrica"
+//   FLUIDOS    → aba "Fluídos" (óleos, graxas, químicos, etc.)
 // (Rancho usa EQUIPE_1/2/3 e o Embarque filtra por equipe — todos ignoram estes
 // sentinelas.) Estes setores NÃO usam categoria — cada um já é uma aba; só o
 // Rancho mantém categoria. `category` é sempre OUTROS (enum fixo) e `location`
 // fica sem uso aqui. Maquinário NÃO usa este painel — é empréstimo por equipe
 // (tabela `tools`, ToolsPanel).
-export type InventoryKind = "GALPAO" | "FERRAMENTA" | "ELETRICA";
+export type InventoryKind = "GALPAO" | "FERRAMENTA" | "ELETRICA" | "FLUIDOS";
 
 interface KindConfig {
   module: Module;
@@ -48,6 +49,12 @@ const KIND_CONFIG: Record<InventoryKind, KindConfig> = {
   ELETRICA: {
     module: "ELETRICA", singular: "Item elétrico", newTitle: "Novo item elétrico", editTitle: "Editar item elétrico",
     emptyMsg: "Nenhum item encontrado", searchPlaceholder: "Buscar item elétrico...",
+  },
+  // Fluídos reaproveita as permissões do Estoque (mesma gestão dos materiais do
+  // galpão). Sentinela próprio em stock_items.team = "FLUIDOS".
+  FLUIDOS: {
+    module: "ESTOQUE", singular: "Fluído", newTitle: "Novo Fluído", editTitle: "Editar Fluído",
+    emptyMsg: "Nenhum fluído encontrado", searchPlaceholder: "Buscar fluído...",
   },
 };
 
