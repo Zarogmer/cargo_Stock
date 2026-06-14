@@ -12,23 +12,18 @@ import { useSearchParams } from "next/navigation";
 const SITE_URL = "https://cargoshipscleaning.com";
 
 // Anexos hospedados em /public/materiais. O deeplink do Outlook NÃO carrega
-// anexos (aceita só to/subject/body), então o botão "Baixar anexos" baixa os 3
+// anexos (aceita só to/subject/body), então o botão "Baixar anexos" baixa os 2
 // PDFs e o usuário arrasta para a janela do Outlook antes de enviar.
 const ATTACHMENTS = [
   {
     label: "Apresentação institucional (PT)",
-    href: "/materiais/apresentacao-cargo-ships-cleaning-pt.pdf",
+    href: "/materiais/cargo-ships-2026-pt.pdf",
     filename: "Cargo Ships Cleaning - Apresentacao.pdf",
   },
   {
     label: "Company presentation (EN)",
-    href: "/materiais/cargo-ships-cleaning-company-presentation-en.pdf",
+    href: "/materiais/cargo-ships-2026-en.pdf",
     filename: "Cargo Ships Cleaning - Company Presentation.pdf",
-  },
-  {
-    label: "Proposta — limpeza de porão (Santos)",
-    href: "/materiais/proposta-limpeza-de-porao-santos.pdf",
-    filename: "Cargo Ships Cleaning - Proposta Limpeza de Porao.pdf",
   },
 ];
 
@@ -53,7 +48,7 @@ Nossos serviços:
 • Remoção de ferrugem e pintura de porão (sob demanda)
 • Serviços a bordo durante a estadia no porto
 
-Em anexo enviamos nossa apresentação institucional e uma proposta modelo. Conheça mais em nosso site:
+Em anexo enviamos nossa apresentação institucional (PT e EN). Conheça mais em nosso site:
 ${SITE_URL}
 
 Estamos à disposição para atender a sua embarcação com agilidade, segurança e resultado garantido.
@@ -144,7 +139,7 @@ export function EmailComposer() {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  // O deeplink do Outlook não carrega anexos — então baixamos os 3 PDFs para a
+  // O deeplink do Outlook não carrega anexos — então baixamos os 2 PDFs para a
   // máquina do usuário, que arrasta os arquivos para a janela do Outlook.
   function baixarAnexos() {
     ATTACHMENTS.forEach((att, i) => {
@@ -228,7 +223,7 @@ export function EmailComposer() {
 
         {/* Anexos */}
         <div className="rounded-lg border border-border bg-gray-50 p-3">
-          <p className="text-xs font-medium text-text mb-2">Anexos (3 PDFs)</p>
+          <p className="text-xs font-medium text-text mb-2">Anexos (2 PDFs)</p>
           <ul className="space-y-1">
             {ATTACHMENTS.map((att) => (
               <li key={att.href} className="flex items-center gap-1.5 text-xs text-text-light">
@@ -260,7 +255,7 @@ export function EmailComposer() {
             className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg hover:bg-gray-50 transition text-sm font-medium text-text"
           >
             <span aria-hidden>📎</span>
-            Baixar anexos (3 PDFs)
+            Baixar anexos (2 PDFs)
           </button>
           <button
             onClick={restoreTemplate}
@@ -273,7 +268,7 @@ export function EmailComposer() {
         {copied && (
           <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
             ✓ Mensagem copiada! No Outlook que abriu, clique no corpo do email e cole com{" "}
-            <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link do site já vem clicável. Depois arraste os 3 PDFs.
+            <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link do site já vem clicável. Depois arraste os 2 PDFs.
           </p>
         )}
       </div>
@@ -282,10 +277,10 @@ export function EmailComposer() {
       <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-800">
         <p className="font-medium mb-1">Como funciona</p>
         <p>
-          Clique em <strong>Baixar anexos</strong> para salvar os 3 PDFs no seu computador. Depois
+          Clique em <strong>Baixar anexos</strong> para salvar os 2 PDFs no seu computador. Depois
           clique em <strong>Preparar Envio</strong>: a mensagem é copiada (com o link clicável) e o
           Outlook abre no navegador com destinatário e assunto preenchidos. No corpo do email, cole
-          com <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link vem clicável. Arraste os 3 PDFs, confira
+          com <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link vem clicável. Arraste os 2 PDFs, confira
           tudo e clique em <strong>Enviar</strong> no Outlook. Nada é enviado automaticamente pelo sistema.
         </p>
       </div>
