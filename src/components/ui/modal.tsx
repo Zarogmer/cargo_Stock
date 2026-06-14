@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { CloseIcon } from "@/components/icons";
 
 interface ModalProps {
@@ -18,12 +18,6 @@ export function Modal({
   children,
   maxWidth = "max-w-lg",
 }: ModalProps) {
-  const overlayRef = useRef<HTMLDivElement>(null);
-  // Track whether the current pointer interaction started on the overlay.
-  // Without this, text selections that begin inside the modal and release on
-  // the overlay (e.g. when copying a phone number) would trigger onClose.
-  const pressStartedOnOverlay = useRef(false);
-
   useEffect(() => {
     if (open) {
       document.body.style.overflow = "hidden";
@@ -38,19 +32,10 @@ export function Modal({
   if (!open) return null;
 
   return (
-    <div
-      ref={overlayRef}
-      className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-      onMouseDown={(e) => {
-        pressStartedOnOverlay.current = e.target === overlayRef.current;
-      }}
-      onMouseUp={(e) => {
-        if (pressStartedOnOverlay.current && e.target === overlayRef.current) {
-          onClose();
-        }
-        pressStartedOnOverlay.current = false;
-      }}
-    >
+    // Clicar no fundo (overlay) NÃO fecha o modal de propósito: evita perder o
+    // que foi digitado num clique fora sem querer. Fecha só pelo botão "Cancelar"
+    // ou pelo X do cabeçalho — ações deliberadas.
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
       <div
         className={`bg-white rounded-2xl shadow-xl w-full ${maxWidth} max-h-[90vh] flex flex-col animate-in fade-in zoom-in-95 duration-200`}
       >
@@ -60,6 +45,7 @@ export function Modal({
           <button
             onClick={onClose}
             className="p-1 hover:bg-gray-100 rounded-lg transition"
+            title="Fechar"
           >
             <CloseIcon className="w-5 h-5 text-text-light" />
           </button>
