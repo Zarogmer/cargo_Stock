@@ -19,7 +19,7 @@ interface PurchaseItem {
 }
 
 const GROUP_META: Record<PurchaseItem["kind"], { label: string; icon: string }> = {
-  ESTOQUE: { label: "Estoque", icon: "🧰" },
+  ESTOQUE: { label: "Utensílios", icon: "🧰" },
   EPI: { label: "EPI", icon: "⛑️" },
   UNIFORME: { label: "Uniforme", icon: "👕" },
 };

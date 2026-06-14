@@ -208,15 +208,15 @@ export const NAV_ITEMS: NavItem[] = [
     icon: "estoque",
     module: "ALMOXARIFADO",
     children: [
-      // "Galpão" agrupa, como submenu, todos os setores do inventário. Cada item
+      // "Estoque" agrupa, como submenu, todos os setores do inventário. Cada item
       // deep-linka pra aba interna certa via ?tab=<setor> — a página resolve isso
       // por ESTOQUE_KEYS (almoxarifado/page.tsx). O item-pai não navega: clicar
       // só abre/fecha a lista. Compras e Histórico seguem como níveis externos.
       {
-        label: "Galpão",
+        label: "Estoque",
         href: "/almoxarifado?tab=estoque",
         children: [
-          { label: "Estoque", href: "/almoxarifado?tab=estoque" },
+          { label: "Utensílios", href: "/almoxarifado?tab=estoque" },
           { label: "Rancho", href: "/almoxarifado?tab=rancho" },
           { label: "EPI", href: "/almoxarifado?tab=epi" },
           { label: "Uniforme", href: "/almoxarifado?tab=uniforme" },

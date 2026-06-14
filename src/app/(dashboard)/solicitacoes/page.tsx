@@ -109,7 +109,7 @@ const PRODUCT_CATEGORIES = [
 type WarehouseDest = "ESTOQUE" | "RANCHO" | "EPI" | "UNIFORME" | "MAQUINARIO" | "FERRAMENTA" | "ELETRICA" | "ESCRITORIO" | "OUTROS";
 
 const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
-  { value: "ESTOQUE", label: "📦 Estoque (galpão)" },
+  { value: "ESTOQUE", label: "📦 Utensílios" },
   { value: "RANCHO", label: "🍽️ Rancho (alimentos)" },
   { value: "EPI", label: "⛑️ EPI" },
   { value: "UNIFORME", label: "👕 Uniforme" },
@@ -131,7 +131,7 @@ function destStocks(dest: WarehouseDest): boolean {
 
 // Rótulo curto pro badge na tabela de Controle de Compras.
 const DEST_SHORT_LABEL: Record<string, string> = {
-  ESTOQUE: "Estoque", RANCHO: "Rancho", EPI: "EPI",
+  ESTOQUE: "Utensílios", RANCHO: "Rancho", EPI: "EPI",
   UNIFORME: "Uniforme", MAQUINARIO: "Maquinário", FERRAMENTA: "Ferramenta", ELETRICA: "Elétrica", ESCRITORIO: "Escritório", OUTROS: "Outros",
 };
 function departmentLabel(dep: string | null): string {

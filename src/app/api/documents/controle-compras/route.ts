@@ -25,7 +25,7 @@ const MONTH_NAMES = [
 // Rótulo curto do destino/departamento — espelha DEST_SHORT_LABEL da página de
 // Solicitações (o "Destino" no Almoxarifado é o que a planilha chama DEPARTAMENTO).
 const DEST_LABEL: Record<string, string> = {
-  ESTOQUE: "Estoque", RANCHO: "Rancho", EPI: "EPI",
+  ESTOQUE: "Utensílios", RANCHO: "Rancho", EPI: "EPI",
   UNIFORME: "Uniforme", MAQUINARIO: "Maquinário", FERRAMENTA: "Ferramenta", ELETRICA: "Elétrica", ESCRITORIO: "Escritório", OUTROS: "Outros",
 };
 function deptLabel(d: string | null): string {

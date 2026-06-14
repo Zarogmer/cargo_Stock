@@ -9,8 +9,9 @@ import { ToolsPanel } from "@/components/almoxarifado/tools-panel";
 import { HistoricoPanel } from "@/components/almoxarifado/historico-panel";
 import { ComprasPanel } from "@/components/almoxarifado/compras-panel";
 
-// Almoxarifado: a aba "Galpão" agrupa, numa barra de abas no topo da página,
-// TODAS as categorias de inventário — Estoque (galpão), Rancho, EPI, Uniforme,
+// Almoxarifado: a aba "Estoque" agrupa, numa barra de abas no topo da página,
+// TODAS as categorias de inventário — Utensílios (materiais do galpão), Rancho,
+// EPI, Uniforme,
 // Maquinário, Ferramenta e Elétrica. Cada categoria mantém suas próprias abas
 // internas (ex.: Rancho tem Reserva / Equipe 1 / Equipe 2). Compras e Histórico
 // seguem como abas próprias, fora do grupo Estoque.
@@ -59,7 +60,7 @@ export default function AlmoxarifadoPage() {
 
   // Abas internas do grupo Estoque — barra de abas visível no topo da página.
   const estoqueTabs = [
-    { key: "estoque", label: "Estoque", content: <StockInventoryPanel kind="GALPAO" /> },
+    { key: "estoque", label: "Utensílios", content: <StockInventoryPanel kind="GALPAO" /> },
     { key: "rancho", label: "Rancho", content: <EstoquePanel /> },
     { key: "epi", label: "EPI", content: <SimpleInventoryPanel kind="EPI" /> },
     { key: "uniforme", label: "Uniforme", content: <SimpleInventoryPanel kind="UNIFORME" /> },
@@ -71,7 +72,7 @@ export default function AlmoxarifadoPage() {
   // Abas externas — dirigidas pelo submenu da sidebar (hideHeader). A aba
   // "Estoque" embute a barra de abas interna acima.
   const outerTabs = [
-    { key: "estoque", label: "Galpão", content: <Tabs tabs={estoqueTabs} defaultTab={innerTab} /> },
+    { key: "estoque", label: "Estoque", content: <Tabs tabs={estoqueTabs} defaultTab={innerTab} /> },
     { key: "compras", label: "Compras", content: <ComprasPanel /> },
     { key: "historico", label: "Histórico", content: <HistoricoPanel /> },
   ];
