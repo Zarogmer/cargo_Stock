@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { hasPermission } from "@/lib/rbac";
 import { db } from "@/lib/db";
-import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
+import { releaseFinishedShipAllocations, promoteStartedShips } from "@/lib/release-finished-ships";
 import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 import { SHIFT_PERIODS, type ShiftPeriod } from "@/types/database";
@@ -340,6 +340,14 @@ export default function NaviosPage() {
         await releaseFinishedShipAllocations(profile?.full_name || "sistema");
       } catch (err) {
         console.warn("[navios] auto-release failed:", (err as Error).message);
+      }
+
+      // Auto-promove: navio cuja data de embarque já chegou/passou deixa de ser
+      // "Agendado" e vira "Em Operação" sozinho (idempotente, não-fatal).
+      try {
+        await promoteStartedShips();
+      } catch (err) {
+        console.warn("[navios] auto-promote failed:", (err as Error).message);
       }
 
       const { data } = await db
