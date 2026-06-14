@@ -175,14 +175,33 @@ export function EstoquePanel() {
   // Aqui não há "qtd atual" própria nem baixa — a quantidade é o somatório.
   const isMaster = activeTeam === "EQUIPE_3";
 
-  const filteredItems = items.filter((i) => {
+  // Linhas do Total: UNIÃO dos alimentos — os da lista-mãe (EQUIPE_3, editáveis)
+  // + os que existem só nas equipes (representante = 1º item achado; só leitura
+  // aqui, já que não estão na lista-mãe). Deduplicado por nome; a lista-mãe tem
+  // prioridade como representante.
+  const totalRows = useMemo(() => {
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    const byName = new Map<string, StockItem>();
+    for (const it of items) if (it.team === "EQUIPE_3") byName.set(norm(it.name), it);
+    for (const it of items) {
+      if (!REAL_TEAMS.includes(it.team as RanchoTeam)) continue;
+      const k = norm(it.name);
+      if (!byName.has(k)) byName.set(k, it);
+    }
+    return Array.from(byName.values());
+  }, [items]);
+
+  // No Total uma linha é "só das equipes" quando não veio da lista-mãe (EQUIPE_3).
+  const isTeamOnly = (i: StockItem) => isMaster && i.team !== "EQUIPE_3";
+
+  const baseItems = isMaster ? totalRows : items.filter((i) => i.team === activeTeam);
+  const filteredItems = baseItems.filter((i) => {
     const matchesSearch =
       matchSearch(i.name, search) ||
       matchSearch(codeMap.get(i.id) || "", search);
     const matchesCategory =
       filterCategory === "TODOS" || i.category === filterCategory;
-    const matchesTeam = i.team === activeTeam;
-    return matchesSearch && matchesCategory && matchesTeam;
+    return matchesSearch && matchesCategory;
   });
 
   // Itens cadastrados no Total (lista-mãe, EQUIPE_3) — base do botão "Preparar".
@@ -295,7 +314,16 @@ export function EstoquePanel() {
     {
       key: "name",
       label: "Nome",
-      render: (i: StockItem) => <span className="font-medium">{i.name}</span>,
+      render: (i: StockItem) => (
+        <span className="font-medium">
+          {i.name}
+          {isTeamOnly(i) && (
+            <span className="ml-2 text-[10px] font-normal text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full align-middle" title="Existe nas equipes, mas ainda não está na lista-mãe. Use “Adicionar” para incluí-lo aqui.">
+              só nas equipes
+            </span>
+          )}
+        </span>
+      ),
     },
     {
       key: "code",
@@ -315,7 +343,11 @@ export function EstoquePanel() {
       key: "default_quantity",
       label: "Padrão",
       render: (i: StockItem) => (
-        <span className="text-text-light">{i.default_quantity ? `${formatQty(i.default_quantity)} ${unitSuffix(i.unit)}` : "—"}</span>
+        <span className="text-text-light">
+          {isTeamOnly(i)
+            ? "—"
+            : i.default_quantity ? `${formatQty(i.default_quantity)} ${unitSuffix(i.unit)}` : "—"}
+        </span>
       ),
     },
     {
@@ -372,7 +404,7 @@ export function EstoquePanel() {
               </svg>
             </button>
           )}
-          {canEdit && (
+          {canEdit && !isTeamOnly(i) && (
             <button
               onClick={(e) => { e.stopPropagation(); setEditItem(i); setShowForm(true); }}
               className="p-1.5 text-primary hover:bg-blue-50 rounded"
@@ -381,7 +413,7 @@ export function EstoquePanel() {
               <EditIcon />
             </button>
           )}
-          {canDelete && (
+          {canDelete && !isTeamOnly(i) && (
             <button
               onClick={(e) => { e.stopPropagation(); setDeleteItem(i); }}
               className="p-1.5 text-danger hover:bg-red-50 rounded"
@@ -436,7 +468,7 @@ export function EstoquePanel() {
         keyExtractor={(i) => i.id}
         emptyMessage="Nenhum item encontrado"
         mobileCards
-        onRowClick={canEdit ? (i) => { setEditItem(i); setShowForm(true); } : undefined}
+        onRowClick={canEdit ? (i) => { if (isTeamOnly(i)) return; setEditItem(i); setShowForm(true); } : undefined}
         searchValue={search}
         onSearchChange={setSearch}
         searchPlaceholder="Buscar por nome ou código..."
