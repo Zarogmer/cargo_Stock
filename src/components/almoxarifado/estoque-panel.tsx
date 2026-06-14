@@ -32,8 +32,25 @@ const STOCK_UNITS = [
   { value: "SACO", label: "Saco" },
 ];
 
-// Item já cadastrado nas Equipes 1/2 oferecido no seletor de código ao
-// adicionar na Reserva (deduplicado por nome).
+// Abas do Rancho. EQUIPE_3 = "Total" (lista-mãe: cadastra os alimentos e mostra
+// a SOMA das quantidades das equipes). EQUIPE_1/2/4 = equipes reais, cada uma com
+// suas próprias quantidades (cadastro livre). EQUIPE_4 = "Equipe Turbo" (equipe
+// maior, leva mais comida — mesmos alimentos).
+type RanchoTeam = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "EQUIPE_4";
+const RANCHO_TEAM_TABS: { key: RanchoTeam; label: string; emoji: string; activeCls: string }[] = [
+  { key: "EQUIPE_3", label: "Total", emoji: "🧮", activeCls: "bg-teal-600 text-white shadow-md" },
+  { key: "EQUIPE_1", label: "Equipe 1", emoji: "🚢", activeCls: "bg-blue-600 text-white shadow-md" },
+  { key: "EQUIPE_2", label: "Equipe 2", emoji: "🚢", activeCls: "bg-purple-600 text-white shadow-md" },
+  { key: "EQUIPE_4", label: "Equipe Turbo", emoji: "🔥", activeCls: "bg-orange-600 text-white shadow-md" },
+];
+// Só as equipes reais (sem o Total) — base da soma e do "Preparar".
+const REAL_TEAMS: RanchoTeam[] = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_4"];
+function ranchoTeamLabel(t: string): string {
+  return RANCHO_TEAM_TABS.find((x) => x.key === t)?.label || t;
+}
+
+// Item já cadastrado nas equipes, oferecido no seletor de código ao cadastrar no
+// Total (deduplicado por nome).
 type CodeSourceItem = {
   id: number;
   name: string;
@@ -41,7 +58,7 @@ type CodeSourceItem = {
   unit: string;
   default_quantity: number;
   code: string;
-  teams: ("EQUIPE_1" | "EQUIPE_2")[];
+  teams: RanchoTeam[];
 };
 
 // Painel de Rancho (comida/suprimentos por equipe, stock_items filtrados por
@@ -56,8 +73,8 @@ export function EstoquePanel() {
   const [dbError, setDbError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("TODOS");
-  // Reserva (EQUIPE_3) é a aba padrão — é a lista-mãe que abastece as equipes.
-  const [activeTeam, setActiveTeam] = useState<"EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3">("EQUIPE_3");
+  // Total (EQUIPE_3) é a aba padrão — lista-mãe que mostra a soma das equipes.
+  const [activeTeam, setActiveTeam] = useState<RanchoTeam>("EQUIPE_3");
   const [editItem, setEditItem] = useState<StockItem | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [showBaixa, setShowBaixa] = useState(false);
@@ -102,15 +119,15 @@ export function EstoquePanel() {
   const codeMap = useMemo(() => buildCodeMap(items, (i) => i.id, (i) => i.name), [items]);
 
   // Itens já cadastrados nas Equipes 1/2, deduplicados por nome — fonte do
-  // seletor de código ao adicionar um item na Reserva. O representante é a
+  // seletor de código ao cadastrar um item no Total. O representante é a
   // Equipe 1 quando existe, pra o código casar com o que aparece na aba dela.
   const codeSourceItems = useMemo<CodeSourceItem[]>(() => {
     const norm = (s: string) => (s || "").trim().toLowerCase();
     const byName = new Map<string, CodeSourceItem>();
     const repTeam = new Map<string, string>();
     for (const it of items) {
-      if (it.team !== "EQUIPE_1" && it.team !== "EQUIPE_2") continue;
-      const team = it.team as "EQUIPE_1" | "EQUIPE_2";
+      if (!REAL_TEAMS.includes(it.team as RanchoTeam)) continue;
+      const team = it.team as RanchoTeam;
       const key = norm(it.name);
       const existing = byName.get(key);
       if (existing) {
@@ -138,9 +155,25 @@ export function EstoquePanel() {
       }
     }
     return Array.from(byName.values())
-      .map((v) => ({ ...v, teams: [...v.teams].sort() as ("EQUIPE_1" | "EQUIPE_2")[] }))
+      .map((v) => ({ ...v, teams: [...v.teams].sort() as RanchoTeam[] }))
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [items, codeMap]);
+
+  // Soma das quantidades das equipes reais (1, 2 e Turbo) por nome — alimenta a
+  // coluna "Soma" da aba Total (a lista-mãe mostra quanto há somado nas equipes).
+  const teamSumByName = useMemo(() => {
+    const norm = (s: string) => (s || "").trim().toLowerCase();
+    const m = new Map<string, number>();
+    for (const it of items) {
+      if (!REAL_TEAMS.includes(it.team as RanchoTeam)) continue;
+      m.set(norm(it.name), (m.get(norm(it.name)) || 0) + (Number(it.quantity) || 0));
+    }
+    return m;
+  }, [items]);
+
+  // Total (EQUIPE_3) é a lista-mãe: cadastro dos alimentos + soma das equipes.
+  // Aqui não há "qtd atual" própria nem baixa — a quantidade é o somatório.
+  const isMaster = activeTeam === "EQUIPE_3";
 
   const filteredItems = items.filter((i) => {
     const matchesSearch =
@@ -152,7 +185,7 @@ export function EstoquePanel() {
     return matchesSearch && matchesCategory && matchesTeam;
   });
 
-  // Itens cadastrados na Reserva (ex-Equipe 3) — base do botão "Preparar".
+  // Itens cadastrados no Total (lista-mãe, EQUIPE_3) — base do botão "Preparar".
   const reservaCount = items.filter((i) => i.team === "EQUIPE_3").length;
 
   function getCategoryLabel(cat: string) {
@@ -225,10 +258,10 @@ export function EstoquePanel() {
     loadItems();
   }
 
-  // "Preparar": copia os itens da Reserva (EQUIPE_3) para a equipe escolhida,
-  // usando a quantidade padrão de cada um (a qtd de suprimentos é sempre a mesma).
-  // Casa por nome: item existente na equipe é atualizado; o que falta é criado.
-  async function handlePreparar(targetTeam: "EQUIPE_1" | "EQUIPE_2") {
+  // "Preparar": copia os itens do Total (lista-mãe, EQUIPE_3) para a equipe
+  // escolhida, usando a quantidade padrão de cada um. Casa por nome: item
+  // existente na equipe é atualizado; o que falta é criado.
+  async function handlePreparar(targetTeam: "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4") {
     setPreparing(true);
     const actor = profile?.full_name || "Sistema";
     const reservaItems = items.filter((i) => i.team === "EQUIPE_3");
@@ -287,8 +320,17 @@ export function EstoquePanel() {
     },
     {
       key: "quantity",
-      label: "Qtd",
+      label: isMaster ? "Soma equipes" : "Qtd",
       render: (i: StockItem) => {
+        // No Total, a quantidade é o somatório das equipes (por nome).
+        if (isMaster) {
+          const sum = teamSumByName.get((i.name || "").trim().toLowerCase()) || 0;
+          return (
+            <span className={`font-semibold ${sum <= 0 ? "text-danger" : "text-text"}`}>
+              {formatQty(sum)} <span className="text-xs font-normal text-text-light">{unitSuffix(i.unit)}</span>
+            </span>
+          );
+        }
         const def = i.default_quantity || 0;
         const isLow = def > 0 && i.quantity < def * 0.5;
         const isEmpty = i.quantity <= 0;
@@ -319,7 +361,7 @@ export function EstoquePanel() {
       className: "w-24",
       render: (i: StockItem) => (
         <div className="flex items-center gap-1">
-          {canBaixar && (
+          {canBaixar && !isMaster && (
             <button
               onClick={(e) => { e.stopPropagation(); setBaixaItem(i); setShowBaixa(true); }}
               className="p-1.5 text-amber-600 hover:bg-amber-50 rounded"
@@ -361,26 +403,17 @@ export function EstoquePanel() {
         </div>
       )}
 
-      {/* Team selector — Reserva primeiro (lista-mãe que abastece as equipes). */}
-      <div className="flex gap-2">
-        <button
-          onClick={() => setActiveTeam("EQUIPE_3")}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTeam === "EQUIPE_3" ? "bg-teal-600 text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-        >
-          📦 Reserva
-        </button>
-        <button
-          onClick={() => setActiveTeam("EQUIPE_1")}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTeam === "EQUIPE_1" ? "bg-blue-600 text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-        >
-          🚢 Equipe 1
-        </button>
-        <button
-          onClick={() => setActiveTeam("EQUIPE_2")}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTeam === "EQUIPE_2" ? "bg-purple-600 text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-        >
-          🚢 Equipe 2
-        </button>
+      {/* Seletor de aba — Total primeiro (lista-mãe + soma das equipes). */}
+      <div className="flex gap-2 flex-wrap">
+        {RANCHO_TEAM_TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setActiveTeam(t.key)}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTeam === t.key ? t.activeCls : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+          >
+            {t.emoji} {t.label}
+          </button>
+        ))}
       </div>
 
       {/* Category filter */}
@@ -469,7 +502,7 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
   onSave: (data: Partial<StockItem>) => void;
   item: StockItem | null;
   saving: boolean;
-  team: "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3";
+  team: RanchoTeam;
   sourceItems: CodeSourceItem[];
 }) {
   const [name, setName] = useState("");
@@ -479,7 +512,7 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
   const [quantity, setQuantity] = useState("");
   const [defaultQuantity, setDefaultQuantity] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
-  // Item de origem escolhido no seletor de código (só na Reserva).
+  // Item de origem escolhido no seletor de código (só no Total).
   const [sourceId, setSourceId] = useState("");
 
   useEffect(() => {
@@ -501,9 +534,12 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
     setSourceId("");
   }, [item, open]);
 
-  // Ao adicionar na Reserva, puxar um item já cadastrado na Equipe 1/2 pelo
-  // código preenche nome, categoria, unidade e qtd padrão automaticamente.
-  const showCodePicker = !item && team === "EQUIPE_3" && sourceItems.length > 0;
+  // Total (EQUIPE_3) é a lista-mãe: sem "qtd atual" própria (a quantidade é a
+  // soma das equipes). Cadastra-se só nome, categoria, unidade e qtd padrão.
+  const isMaster = team === "EQUIPE_3";
+  // Ao cadastrar no Total, puxar um item já existente nas equipes pelo código
+  // preenche nome, categoria, unidade e qtd padrão automaticamente.
+  const showCodePicker = !item && isMaster && sourceItems.length > 0;
   const selectedSource = sourceItems.find((s) => String(s.id) === sourceId) || null;
 
   function handlePickSource(id: string) {
@@ -522,7 +558,8 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
       name,
       category: category as StockItem["category"],
       unit,
-      quantity: parseDecimalBR(quantity),
+      // No Total a quantidade própria não é usada (mostra a soma das equipes).
+      quantity: isMaster ? 0 : parseDecimalBR(quantity),
       default_quantity: parseDecimalBR(defaultQuantity),
       expiry_date: expiryDate || null,
       min_quantity: 0,
@@ -537,7 +574,7 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
         {showCodePicker && (
           <div className="rounded-lg border border-teal-200 bg-teal-50/60 p-3">
             <label className="block text-sm font-medium text-text mb-1">
-              Puxar item já cadastrado (Equipe 1/2)
+              Puxar item já cadastrado (das equipes)
             </label>
             <select value={sourceId} onChange={(e) => handlePickSource(e.target.value)} className={inputCls}>
               <option value="">— Item novo (digitar manualmente) —</option>
@@ -548,7 +585,7 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
             {selectedSource ? (
               <p className="text-[11px] text-text-light mt-1.5">
                 <span className="font-mono">{selectedSource.code}</span> · {selectedSource.name} — já em{" "}
-                {selectedSource.teams.map((t) => (t === "EQUIPE_1" ? "Equipe 1" : "Equipe 2")).join(", ")}
+                {selectedSource.teams.map(ranchoTeamLabel).join(", ")}
                 {selectedSource.default_quantity
                   ? ` · padrão ${formatQty(selectedSource.default_quantity)} ${unitSuffix(selectedSource.unit)}`
                   : ""}
@@ -580,15 +617,17 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
             ))}
           </select>
         </div>
-        <div className="grid grid-cols-3 gap-4">
+        <div className={`grid ${isMaster ? "grid-cols-2" : "grid-cols-3"} gap-4`}>
           <div>
             <label className="block text-sm font-medium text-text mb-1">Qtd Padrão</label>
             <input type="text" inputMode="decimal" value={defaultQuantity} onChange={(e) => setDefaultQuantity(e.target.value)} placeholder="Ex: 10 ou 1,5" className={inputCls} />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-text mb-1">Qtd Atual</label>
-            <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 1,5" className={inputCls} />
-          </div>
+          {!isMaster && (
+            <div>
+              <label className="block text-sm font-medium text-text mb-1">Qtd Atual</label>
+              <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 1,5" className={inputCls} />
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-text mb-1">Validade</label>
             <input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} className={inputCls} />
@@ -645,34 +684,35 @@ function BaixaModal({ open, onClose, onConfirm, item, saving }: {
   );
 }
 
-// Modal do botão "Preparar" da Reserva: escolhe a equipe destino (1 ou 2) e
-// copia os itens da Reserva com a quantidade padrão.
+// Modal do botão "Preparar" do Total: escolhe a equipe destino e copia os itens
+// da lista-mãe com a quantidade padrão.
 function PrepararModal({ open, onClose, onConfirm, count, saving }: {
   open: boolean;
   onClose: () => void;
-  onConfirm: (team: "EQUIPE_1" | "EQUIPE_2") => void;
+  onConfirm: (team: "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4") => void;
   count: number;
   saving: boolean;
 }) {
-  const [team, setTeam] = useState<"EQUIPE_1" | "EQUIPE_2">("EQUIPE_1");
+  const [team, setTeam] = useState<"EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4">("EQUIPE_1");
 
   useEffect(() => { if (open) setTeam("EQUIPE_1"); }, [open]);
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
 
   return (
-    <Modal open={open} onClose={onClose} title="Preparar suprimentos da Reserva">
+    <Modal open={open} onClose={onClose} title="Preparar suprimentos do Total">
       <div className="space-y-4">
         <p className="text-sm text-text-light">
-          Copia os <strong>{count}</strong> {count === 1 ? "item" : "itens"} da Reserva para a equipe escolhida,
+          Copia os <strong>{count}</strong> {count === 1 ? "item" : "itens"} do Total para a equipe escolhida,
           usando a <strong>quantidade padrão</strong> de cada um. Itens com o mesmo nome na equipe são atualizados;
           os que faltam são criados.
         </p>
         <div>
           <label className="block text-sm font-medium text-text mb-1">Equipe destino</label>
-          <select value={team} onChange={(e) => setTeam(e.target.value as "EQUIPE_1" | "EQUIPE_2")} className={inputCls}>
+          <select value={team} onChange={(e) => setTeam(e.target.value as "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4")} className={inputCls}>
             <option value="EQUIPE_1">Equipe 1</option>
             <option value="EQUIPE_2">Equipe 2</option>
+            <option value="EQUIPE_4">Equipe Turbo</option>
           </select>
         </div>
         <div className="flex gap-3 justify-end pt-2">
