@@ -9,6 +9,7 @@ import { releaseFinishedShipAllocations, promoteStartedShips } from "@/lib/relea
 import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 import { SHIFT_PERIODS, type ShiftPeriod } from "@/types/database";
+import { Modal } from "@/components/ui/modal";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -219,6 +220,17 @@ interface ShipExpense {
   amount: string | number;
 }
 
+// Tipo leve de uma compra do Controle de Compras (subset de purchase_orders),
+// usado no seletor "Puxar do Controle de Compras" do resumo do navio.
+interface PurchaseOrderLite {
+  id: string;
+  description: string;
+  supplier: string | null;
+  purchase_date: string | null;
+  total_value: string | number;
+  ship_name: string | null;
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function NaviosPage() {
@@ -303,6 +315,16 @@ export default function NaviosPage() {
   const [crewShiftPeriod, setCrewShiftPeriod] = useState<ShiftPeriod>("07-13"); // só COSTADO
   const [savingCrew, setSavingCrew] = useState(false);
   const [crewError, setCrewError] = useState<string | null>(null);
+
+  // "Puxar do Controle de Compras": seletor das últimas compras (purchase_orders)
+  // pra lançar como gasto do navio sem redigitar. Cada compra escolhida vira um
+  // JobAdjustment ADICIONAL (mesma forma do gasto manual).
+  const [showPullPurchases, setShowPullPurchases] = useState(false);
+  const [recentPurchases, setRecentPurchases] = useState<PurchaseOrderLite[]>([]);
+  const [purchasesLoading, setPurchasesLoading] = useState(false);
+  const [selectedPurchaseIds, setSelectedPurchaseIds] = useState<Set<string>>(new Set());
+  const [pullingPurchases, setPullingPurchases] = useState(false);
+  const [pullError, setPullError] = useState<string | null>(null);
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -1147,6 +1169,9 @@ export default function NaviosPage() {
     setCrewShiftDate(new Date().toISOString().slice(0, 10));
     setCrewShiftPeriod("07-13");
     setCrewError(null);
+    setShowPullPurchases(false);
+    setSelectedPurchaseIds(new Set());
+    setPullError(null);
     loadShipFinance(ship);
   }
 
@@ -1220,6 +1245,65 @@ export default function NaviosPage() {
     if (!selectedShip) return;
     await db.from("job_adjustments").delete().eq("id", id);
     await loadShipFinance(selectedShip);
+  }
+
+  // Carrega as últimas compras do Controle de Compras (purchase_orders) pro
+  // seletor "Puxar". Mais recentes primeiro.
+  const loadRecentPurchases = useCallback(async () => {
+    setPurchasesLoading(true);
+    try {
+      const { data } = await db
+        .from("purchase_orders")
+        .select("id, description, supplier, purchase_date, total_value, ship_name")
+        .order("purchase_date", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(40);
+      setRecentPurchases((data as PurchaseOrderLite[]) || []);
+    } catch (err) {
+      console.error("loadRecentPurchases error:", err);
+      setRecentPurchases([]);
+    } finally {
+      setPurchasesLoading(false);
+    }
+  }, []);
+
+  function openPullPurchases() {
+    setShowAddExpense(false);
+    setShowPullPurchases(true);
+    setSelectedPurchaseIds(new Set());
+    setPullError(null);
+    loadRecentPurchases();
+  }
+
+  // Lança as compras selecionadas como gasto do navio: cada uma vira um
+  // JobAdjustment ADICIONAL (categoria COMPRAS) com o valor total da compra,
+  // igual ao gasto manual — então já entra no custo da operação no Financeiro.
+  async function handlePullPurchases() {
+    if (!selectedShip || selectedPurchaseIds.size === 0) return;
+    setPullingPurchases(true);
+    setPullError(null);
+    try {
+      const jobId = await ensureShipJob(selectedShip);
+      const chosen = recentPurchases.filter((p) => selectedPurchaseIds.has(p.id));
+      for (const p of chosen) {
+        const desc = p.supplier ? `${p.description} (${p.supplier})` : p.description;
+        const res: any = await db.from("job_adjustments").insert({
+          job_id: jobId,
+          type: "ADICIONAL",
+          category: "COMPRAS",
+          description: desc,
+          amount: Number(p.total_value) || 0,
+        });
+        if (res?.error) throw new Error(res.error.message);
+      }
+      setShowPullPurchases(false);
+      setSelectedPurchaseIds(new Set());
+      await loadShipFinance(selectedShip);
+    } catch (err: any) {
+      setPullError(err?.message || "Falha ao puxar as compras.");
+    } finally {
+      setPullingPurchases(false);
+    }
   }
 
   // Escala um colaborador direto pela lateral do navio: cria uma job_allocation
@@ -1509,21 +1593,14 @@ export default function NaviosPage() {
           )}
         </div>
 
-        {/* Detail panel */}
+        {/* Resumo do navio — modal aberto ao clicar no card (igual ao "Editar",
+            mas em modo leitura + escala de funcionários + custos). */}
         {selectedShip && (
-          <div className="lg:w-80 bg-card rounded-xl border border-border p-4 space-y-4 self-start lg:sticky lg:top-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-[10px] font-semibold text-text-light uppercase tracking-wider">Informações gerais</p>
-                <h2 className="font-bold text-text">{selectedShip.name}</h2>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[selectedShip.status]}`}>
-                  {STATUS_LABELS[selectedShip.status]}
-                </span>
-              </div>
-              <button onClick={() => setSelectedShip(null)} className="p-1 hover:bg-gray-100 rounded-lg transition text-text-light">
-                ✕
-              </button>
-            </div>
+          <Modal open onClose={() => setSelectedShip(null)} title={selectedShip.name}>
+            <div className="space-y-4">
+            <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[selectedShip.status]}`}>
+              {STATUS_LABELS[selectedShip.status]}
+            </span>
 
             <div className="space-y-1.5 text-sm">
               {selectedShip.port && (
@@ -1715,13 +1792,22 @@ export default function NaviosPage() {
                 <p className="text-xs font-semibold text-text-light uppercase tracking-wider">
                   Compras e Gastos
                 </p>
-                {canEdit && !showAddExpense && (
-                  <button
-                    onClick={() => { setShowAddExpense(true); setExpenseError(null); }}
-                    className="flex items-center gap-1 text-xs font-medium text-primary hover:bg-primary/10 px-2 py-1 rounded-lg transition"
-                  >
-                    <PlusIcon className="w-3.5 h-3.5" /> Adicionar
-                  </button>
+                {canEdit && !showAddExpense && !showPullPurchases && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={openPullPurchases}
+                      className="flex items-center gap-1 text-xs font-medium text-primary hover:bg-primary/10 px-2 py-1 rounded-lg transition"
+                      title="Puxar das últimas compras do Controle de Compras"
+                    >
+                      🛒 Puxar
+                    </button>
+                    <button
+                      onClick={() => { setShowAddExpense(true); setExpenseError(null); }}
+                      className="flex items-center gap-1 text-xs font-medium text-primary hover:bg-primary/10 px-2 py-1 rounded-lg transition"
+                    >
+                      <PlusIcon className="w-3.5 h-3.5" /> Adicionar
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -1766,10 +1852,72 @@ export default function NaviosPage() {
                 </form>
               )}
 
+              {/* Puxar do Controle de Compras: escolhe uma ou mais das últimas
+                  compras (purchase_orders) pra lançar como gasto do navio. */}
+              {showPullPurchases && (
+                <div className="space-y-2 mb-3 p-2.5 bg-gray-50 rounded-lg border border-border">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-text">Últimas compras</p>
+                    <button onClick={() => setShowPullPurchases(false)} className="text-text-light hover:text-text text-xs px-1">✕</button>
+                  </div>
+                  {purchasesLoading ? (
+                    <p className="text-xs text-text-light italic">Carregando compras…</p>
+                  ) : recentPurchases.length === 0 ? (
+                    <p className="text-xs text-text-light italic">Nenhuma compra registrada no Controle de Compras.</p>
+                  ) : (
+                    <>
+                      <ul className="space-y-1 max-h-56 overflow-auto">
+                        {recentPurchases.map((p) => {
+                          const checked = selectedPurchaseIds.has(p.id);
+                          return (
+                            <li key={p.id}>
+                              <label className={`flex items-start gap-2 px-2 py-1.5 rounded-lg cursor-pointer ${checked ? "bg-emerald-50" : "hover:bg-white"}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => setSelectedPurchaseIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
+                                    return next;
+                                  })}
+                                  className="mt-0.5 w-4 h-4 accent-emerald-600 shrink-0"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium text-text truncate">{p.description}</p>
+                                  <p className="text-[10px] text-text-light truncate">
+                                    {[p.supplier, p.purchase_date ? formatDate(p.purchase_date) : null, p.ship_name ? `🚢 ${p.ship_name}` : null].filter(Boolean).join(" · ") || "—"}
+                                  </p>
+                                </div>
+                                <span className="text-sm font-semibold text-text whitespace-nowrap">{brl(Number(p.total_value) || 0)}</span>
+                              </label>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      {pullError && <p className="text-xs text-danger">{pullError}</p>}
+                      <div className="flex items-center gap-2 justify-end">
+                        <span className="text-[10px] text-text-light mr-auto">{selectedPurchaseIds.size} selecionada(s)</span>
+                        <button type="button" onClick={() => setShowPullPurchases(false)} className="text-xs text-text-light hover:text-text px-2 py-1">
+                          Cancelar
+                        </button>
+                        <button
+                          type="button"
+                          disabled={pullingPurchases || selectedPurchaseIds.size === 0}
+                          onClick={handlePullPurchases}
+                          className="text-xs font-medium bg-primary text-white px-3 py-1.5 rounded-lg hover:bg-primary-dark transition disabled:opacity-60"
+                        >
+                          {pullingPurchases ? "Adicionando…" : "Adicionar como gasto"}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
               {shipFinLoading ? (
                 <p className="text-xs text-text-light italic">Carregando…</p>
               ) : shipExpenses.length === 0 ? (
-                !showAddExpense && <p className="text-xs text-text-light italic">Nenhum gasto lançado. Clique em Adicionar.</p>
+                !showAddExpense && !showPullPurchases && <p className="text-xs text-text-light italic">Nenhum gasto lançado. Clique em Adicionar.</p>
               ) : (
                 <>
                   <ul className="space-y-1.5 max-h-48 overflow-auto">
@@ -1802,7 +1950,8 @@ export default function NaviosPage() {
                 </>
               )}
             </div>
-          </div>
+            </div>
+          </Modal>
         )}
       </div>
 
