@@ -63,14 +63,6 @@ interface Employee {
   sector: "OPERACIONAL" | "ADMINISTRATIVO" | null;
 }
 
-interface ShipEmployee {
-  id: string;
-  ship_id: string;
-  employee_id: number;
-  role_in_ship: string | null;
-  employees: { name: string; team: string | null } | null;
-}
-
 interface ExternalShip {
   id: string;
   name: string;
@@ -184,6 +176,39 @@ function formatRelative(iso: string): string {
   return `há ${days}d`;
 }
 
+// Categorias de despesa do navio — espelham as do Financeiro (job_adjustments).
+// Um gasto lançado aqui vira um JobAdjustment ADICIONAL no Job do navio, então
+// já entra no custo da operação no fechamento. Manter em sincronia com
+// EXPENSE_CATEGORIES de financeiro/page.tsx.
+const EXPENSE_CATEGORIES: { value: string; label: string }[] = [
+  { value: "COMPRAS", label: "Compras" },
+  { value: "QUIMICA", label: "Química" },
+  { value: "MATERIAL_DANIFICADO", label: "Material danificado" },
+  { value: "AJUDA_DE_CUSTO", label: "Ajuda de custo" },
+  { value: "ALIMENTACAO", label: "Alimentação" },
+  { value: "RESTAURANTE", label: "Jantar/Restaurante" },
+  { value: "OUTROS", label: "Outros" },
+];
+
+function expenseCategoryLabel(cat: string | null | undefined): string {
+  if (!cat) return "Outros";
+  return EXPENSE_CATEGORIES.find((c) => c.value === cat)?.label || cat;
+}
+
+function brl(n: number): string {
+  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+// Tipo leve do gasto do navio (subset de job_adjustments).
+interface ShipExpense {
+  id: number;
+  job_id: string;
+  type: string;
+  category: string | null;
+  description: string;
+  amount: string | number;
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function NaviosPage() {
@@ -242,8 +267,21 @@ export default function NaviosPage() {
 
   // Ship detail / crew panel
   const [selectedShip, setSelectedShip] = useState<Ship | null>(null);
-  const [shipTeam, setShipTeam] = useState<string | null>(null); // "EQUIPE_1" | "EQUIPE_2" | null
-  const [shipTeamLoading, setShipTeamLoading] = useState(false);
+
+  // Dados financeiros do navio selecionado (tripulação escalada + gastos),
+  // carregados sob demanda ao abrir o painel. A tripulação vem das
+  // job_allocations ATIVAS do(s) Job(s) do navio; os gastos das job_adjustments.
+  const [shipAllocs, setShipAllocs] = useState<Array<{ id: number; employee_id: number | null; function_id: number; kind: string | null; status: string }>>([]);
+  const [shipExpenses, setShipExpenses] = useState<ShipExpense[]>([]);
+  const [shipFinLoading, setShipFinLoading] = useState(false);
+
+  // Form "Adicionar gasto" do painel do navio.
+  const [showAddExpense, setShowAddExpense] = useState(false);
+  const [expenseDesc, setExpenseDesc] = useState("");
+  const [expenseCategory, setExpenseCategory] = useState("COMPRAS");
+  const [expenseAmount, setExpenseAmount] = useState("");
+  const [savingExpense, setSavingExpense] = useState(false);
+  const [expenseError, setExpenseError] = useState<string | null>(null);
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -1040,21 +1078,135 @@ export default function NaviosPage() {
 
   // ── Crew helpers ───────────────────────────────────────────────────────────
 
+  // Carrega tripulação escalada + gastos do navio selecionado. Acha os Job(s) do
+  // navio e puxa as job_allocations ATIVAS e as job_adjustments daquele(s) job(s).
+  const loadShipFinance = useCallback(async (ship: Ship) => {
+    setShipFinLoading(true);
+    try {
+      const { data: jobsData } = await db.from("jobs").select("id").eq("ship_id", ship.id);
+      const jobIds = ((jobsData as { id: string }[]) || []).map((j) => j.id);
+      if (jobIds.length === 0) {
+        setShipAllocs([]);
+        setShipExpenses([]);
+        return;
+      }
+      const [allocRes, adjRes] = await Promise.all([
+        db.from("job_allocations").select("id, employee_id, function_id, kind, status").in("job_id", jobIds).eq("status", "ATIVO"),
+        db.from("job_adjustments").select("id, job_id, type, category, description, amount").in("job_id", jobIds).order("created_at", { ascending: false }),
+      ]);
+      setShipAllocs((allocRes.data as any[]) || []);
+      setShipExpenses((adjRes.data as ShipExpense[]) || []);
+    } catch (err) {
+      console.error("loadShipFinance error:", err);
+      setShipAllocs([]);
+      setShipExpenses([]);
+    } finally {
+      setShipFinLoading(false);
+    }
+  }, []);
+
   function openDetail(ship: Ship) {
     setSelectedShip(ship);
-    setShipTeam(ship.assigned_team);
+    setShowAddExpense(false);
+    setExpenseDesc("");
+    setExpenseAmount("");
+    setExpenseCategory("COMPRAS");
+    setExpenseError(null);
+    loadShipFinance(ship);
   }
 
-  async function handleAssignTeam(team: string | null) {
-    if (!selectedShip) return;
-    setShipTeamLoading(true);
-    await db.from("ships").update({ assigned_team: team } as any).eq("id", selectedShip.id);
-    setShipTeam(team);
-    setSelectedShip({ ...selectedShip, assigned_team: team });
-    // Refresh ship list
-    loadShips();
-    setShipTeamLoading(false);
+  // Garante que o navio tem um Job financeiro (alguns navios — criados pela
+  // "Selecionar da Barra" ou legados — não têm). Devolve o id do Job, criando um
+  // se preciso. Mesma forma do Job auto-criado em handleSave.
+  async function ensureShipJob(ship: Ship): Promise<string> {
+    const { data: jobsData } = await db.from("jobs").select("id").eq("ship_id", ship.id);
+    const existing = ((jobsData as { id: string }[]) || [])[0]?.id;
+    if (existing) return existing;
+    const jobPayload: Record<string, unknown> = {
+      name: ship.name,
+      ship_id: ship.id,
+      start_date: ship.arrival_date ? ship.arrival_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
+      end_date: ship.departure_date ? ship.departure_date.slice(0, 10) : null,
+      status: "ABERTO",
+      client: ship.client_name,
+      cargo_type: ship.cargo_type,
+      holds_count: ship.holds_count,
+      port: ship.port,
+      created_by: profile?.full_name || "sistema",
+    };
+    const jobRes: any = await db.from("jobs").insert(jobPayload);
+    if (jobRes.error) throw new Error(jobRes.error.message);
+    const j = jobRes.data;
+    const newId = Array.isArray(j) ? j[0]?.id : j?.id;
+    if (!newId) throw new Error("Não consegui criar o registro financeiro do navio.");
+    return newId;
   }
+
+  // Lança um gasto do navio: vira um JobAdjustment ADICIONAL no Job do navio
+  // (despesas SOMAM ao custo da operação — mesma convenção do Financeiro), então
+  // já aparece no fechamento/relatório financeiro daquele navio.
+  async function handleAddExpense(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedShip) return;
+    const amountNum = parseFloat(expenseAmount.replace(/\./g, "").replace(",", "."));
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      setExpenseError("Informe um valor válido (ex.: 150,00).");
+      return;
+    }
+    if (!expenseDesc.trim()) {
+      setExpenseError("Descreva o que foi comprado/gasto.");
+      return;
+    }
+    setSavingExpense(true);
+    setExpenseError(null);
+    try {
+      const jobId = await ensureShipJob(selectedShip);
+      const res: any = await db.from("job_adjustments").insert({
+        job_id: jobId,
+        type: "ADICIONAL",
+        category: expenseCategory,
+        description: expenseDesc.trim(),
+        amount: amountNum,
+      });
+      if (res?.error) throw new Error(res.error.message);
+      setExpenseDesc("");
+      setExpenseAmount("");
+      setExpenseCategory("COMPRAS");
+      setShowAddExpense(false);
+      await loadShipFinance(selectedShip);
+    } catch (err: any) {
+      setExpenseError(err?.message || "Falha ao salvar o gasto.");
+    } finally {
+      setSavingExpense(false);
+    }
+  }
+
+  async function handleDeleteExpense(id: number) {
+    if (!selectedShip) return;
+    await db.from("job_adjustments").delete().eq("id", id);
+    await loadShipFinance(selectedShip);
+  }
+
+  // Tripulação escalada do navio (deduplicada por colaborador — quem tem 2
+  // funções aparece uma vez com as duas). Nome vem de `employees`; função de
+  // `jobFunctions` (ambos já carregados).
+  const shipCrew = useMemo(() => {
+    const byEmp = new Map<number, { id: number; name: string; functions: string[] }>();
+    for (const a of shipAllocs) {
+      if (a.employee_id == null) continue;
+      const emp = employees.find((e) => e.id === a.employee_id);
+      const fn = jobFunctions.find((f) => f.id === a.function_id);
+      const entry = byEmp.get(a.employee_id) || { id: a.employee_id, name: emp?.name || `#${a.employee_id}`, functions: [] };
+      if (fn?.name && !entry.functions.includes(fn.name)) entry.functions.push(fn.name);
+      byEmp.set(a.employee_id, entry);
+    }
+    return Array.from(byEmp.values()).sort((x, y) => x.name.localeCompare(y.name, "pt-BR"));
+  }, [shipAllocs, employees, jobFunctions]);
+
+  const shipExpenseTotal = shipExpenses.reduce(
+    (s, a) => s + (a.type === "ADICIONAL" ? Number(a.amount) : -Number(a.amount)),
+    0,
+  );
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -1258,6 +1410,7 @@ export default function NaviosPage() {
           <div className="lg:w-80 bg-card rounded-xl border border-border p-4 space-y-4 self-start lg:sticky lg:top-4">
             <div className="flex items-start justify-between">
               <div>
+                <p className="text-[10px] font-semibold text-text-light uppercase tracking-wider">Informações gerais</p>
                 <h2 className="font-bold text-text">{selectedShip.name}</h2>
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[selectedShip.status]}`}>
                   {STATUS_LABELS[selectedShip.status]}
@@ -1310,80 +1463,153 @@ export default function NaviosPage() {
               )}
             </div>
 
-            {/* Equipe Designada só aparece pra Embarque. Em Costado cada navio
-                tem grupo próprio criado na escalação, então essa seção não
-                faz sentido (o grupo de equipe não é usado). */}
-            {getOperationType(selectedShip.services) === "EMBARQUE" && (
+            {/* Funcionários do navio: a tripulação realmente escalada
+                (job_allocations ATIVAS). Sem escala mas com equipe definida,
+                cai pros colaboradores da equipe (só leitura) pra não ficar vazio. */}
             <div className="border-t border-border pt-3">
               <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-2">
-                Equipe Designada
+                Funcionários
               </p>
-
-              {canEdit ? (
-                <div className="flex gap-2 mb-3">
-                  {["EQUIPE_1", "EQUIPE_2"].map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => handleAssignTeam(shipTeam === t ? null : t)}
-                      disabled={shipTeamLoading}
-                      className={`flex-1 py-2 text-xs font-medium rounded-lg transition border ${
-                        shipTeam === t
-                          ? t === "EQUIPE_1"
-                            ? "bg-blue-500 text-white border-blue-500"
-                            : "bg-purple-500 text-white border-purple-500"
-                          : "border-border hover:bg-gray-50 text-text-light"
-                      }`}
-                    >
-                      {t === "EQUIPE_1" ? "⚓ Equipe 1" : "⚓ Equipe 2"}
-                    </button>
-                  ))}
+              {shipFinLoading ? (
+                <p className="text-xs text-text-light italic">Carregando…</p>
+              ) : shipCrew.length > 0 ? (
+                <div>
+                  <p className="text-xs text-text-light mb-2">{shipCrew.length} escalado{shipCrew.length > 1 ? "s" : ""}</p>
+                  <ul className="space-y-1.5">
+                    {shipCrew.map((m) => (
+                      <li key={m.id} className="flex items-center gap-2 text-sm py-1 px-2 bg-gray-50 rounded-lg">
+                        <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white bg-primary shrink-0">
+                          {m.name.charAt(0).toUpperCase()}
+                        </div>
+                        <span className="font-medium text-text truncate flex-1">{m.name}</span>
+                        {m.functions.length > 0 && (
+                          <span className="text-[10px] text-text-light truncate shrink-0 max-w-[45%]" title={m.functions.join(", ")}>
+                            {m.functions.join(", ")}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-              ) : (
-                <p className="text-sm font-medium mb-3">
-                  {shipTeam === "EQUIPE_1" ? (
-                    <span className="text-blue-700">⚓ Equipe 1</span>
-                  ) : shipTeam === "EQUIPE_2" ? (
-                    <span className="text-purple-700">⚓ Equipe 2</span>
-                  ) : (
-                    <span className="text-text-light italic">Nenhuma equipe designada</span>
-                  )}
+              ) : (() => {
+                const members = selectedShip.assigned_team ? getShipTeamMembers(selectedShip) : [];
+                if (members.length > 0) {
+                  return (
+                    <div>
+                      <p className="text-xs text-text-light mb-2">
+                        {selectedShip.assigned_team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"} · {members.length} colaborador{members.length > 1 ? "es" : ""} <span className="italic">(não escalados)</span>
+                      </p>
+                      <ul className="space-y-1.5">
+                        {members.map((m) => (
+                          <li key={m.id} className="flex items-center gap-2 text-sm py-1 px-2 bg-gray-50 rounded-lg">
+                            <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white bg-gray-400 shrink-0">
+                              {m.name.charAt(0).toUpperCase()}
+                            </div>
+                            <span className="font-medium text-text truncate">{m.name}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                }
+                return <p className="text-xs text-text-light italic">Nenhum funcionário escalado neste navio.</p>;
+              })()}
+            </div>
+
+            {/* Compras e gastos do navio. Cada lançamento vira um custo
+                (JobAdjustment ADICIONAL) no Financeiro daquele navio. */}
+            <div className="border-t border-border pt-3">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-text-light uppercase tracking-wider">
+                  Compras e Gastos
                 </p>
+                {canEdit && !showAddExpense && (
+                  <button
+                    onClick={() => { setShowAddExpense(true); setExpenseError(null); }}
+                    className="flex items-center gap-1 text-xs font-medium text-primary hover:bg-primary/10 px-2 py-1 rounded-lg transition"
+                  >
+                    <PlusIcon className="w-3.5 h-3.5" /> Adicionar
+                  </button>
+                )}
+              </div>
+
+              {showAddExpense && (
+                <form onSubmit={handleAddExpense} className="space-y-2 mb-3 p-2.5 bg-gray-50 rounded-lg border border-border">
+                  <input
+                    type="text"
+                    value={expenseDesc}
+                    onChange={(e) => setExpenseDesc(e.target.value)}
+                    placeholder="Descrição (ex.: química, luvas, rancho...)"
+                    autoFocus
+                    className="w-full px-2.5 py-1.5 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                  <div className="flex gap-2">
+                    <select
+                      value={expenseCategory}
+                      onChange={(e) => setExpenseCategory(e.target.value)}
+                      className="flex-1 px-2.5 py-1.5 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    >
+                      {EXPENSE_CATEGORIES.map((c) => (
+                        <option key={c.value} value={c.value}>{c.label}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={expenseAmount}
+                      onChange={(e) => setExpenseAmount(e.target.value)}
+                      placeholder="R$ 0,00"
+                      className="w-24 px-2.5 py-1.5 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                  </div>
+                  {expenseError && <p className="text-xs text-danger">{expenseError}</p>}
+                  <div className="flex gap-2 justify-end">
+                    <button type="button" onClick={() => { setShowAddExpense(false); setExpenseError(null); }} className="text-xs text-text-light hover:text-text px-2 py-1">
+                      Cancelar
+                    </button>
+                    <button type="submit" disabled={savingExpense} className="text-xs font-medium bg-primary text-white px-3 py-1.5 rounded-lg hover:bg-primary-dark transition disabled:opacity-60">
+                      {savingExpense ? "Salvando..." : "Lançar gasto"}
+                    </button>
+                  </div>
+                </form>
               )}
 
-              {/* Show team members */}
-              {shipTeam ? (
-                <>
-                  {(() => {
-                    const members = getShipTeamMembers(selectedShip);
-                    return members.length === 0 ? (
-                      <p className="text-xs text-text-light italic">
-                        Nenhum colaborador cadastrado na {shipTeam === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}.
-                        Defina a equipe dos colaboradores em Colaboradores.
-                      </p>
-                    ) : (
-                      <div>
-                        <p className="text-xs text-text-light mb-2">{members.length} colaborador{members.length > 1 ? "es" : ""}</p>
-                        <ul className="space-y-1.5">
-                          {members.map((m) => (
-                            <li key={m.id} className="flex items-center gap-2 text-sm py-1 px-2 bg-gray-50 rounded-lg">
-                              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${
-                                shipTeam === "EQUIPE_1" ? "bg-blue-500" : "bg-purple-500"
-                              }`}>
-                                {m.name.charAt(0).toUpperCase()}
-                              </div>
-                              <span className="font-medium text-text truncate">{m.name}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    );
-                  })()}
-                </>
+              {shipFinLoading ? (
+                <p className="text-xs text-text-light italic">Carregando…</p>
+              ) : shipExpenses.length === 0 ? (
+                !showAddExpense && <p className="text-xs text-text-light italic">Nenhum gasto lançado. Clique em Adicionar.</p>
               ) : (
-                <p className="text-xs text-text-light italic">Selecione Equipe 1 ou Equipe 2 para ver os colaboradores.</p>
+                <>
+                  <ul className="space-y-1.5 max-h-48 overflow-auto">
+                    {shipExpenses.map((a) => (
+                      <li key={a.id} className="flex items-start gap-2 text-sm py-1.5 px-2 bg-gray-50 rounded-lg group">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-text truncate">{a.description || "—"}</p>
+                          <span className="text-[10px] text-text-light">{expenseCategoryLabel(a.category)}</span>
+                        </div>
+                        <span className="font-semibold text-sm text-text whitespace-nowrap">{brl(Number(a.amount))}</span>
+                        {canDelete && (
+                          <button
+                            onClick={() => handleDeleteExpense(a.id)}
+                            className="p-1 text-text-light hover:text-danger hover:bg-danger/10 rounded transition opacity-0 group-hover:opacity-100 shrink-0"
+                            title="Excluir gasto"
+                          >
+                            <TrashIcon className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-border">
+                    <span className="text-xs font-semibold text-text-light uppercase tracking-wider">Total</span>
+                    <span className="font-bold text-text">{brl(shipExpenseTotal)}</span>
+                  </div>
+                  <p className="text-[10px] text-text-light mt-1.5">
+                    Estes gastos entram como custo deste navio no Financeiro.
+                  </p>
+                </>
               )}
             </div>
-            )}
           </div>
         )}
       </div>
