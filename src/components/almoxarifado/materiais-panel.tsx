@@ -58,6 +58,18 @@ const KIND_CONFIG: Record<InventoryKind, KindConfig> = {
   },
 };
 
+// "Onde está" cada item (coluna assigned_team) — escolhido por item, estilo
+// Maquinário. DISPONIVEL = no almoxarifado; EQUIPE_1/2 = levado pela equipe.
+type AssignTeam = "DISPONIVEL" | "EQUIPE_1" | "EQUIPE_2";
+const ASSIGN_TABS: { value: AssignTeam; label: string; activeCls: string; badgeCls: string }[] = [
+  { value: "DISPONIVEL", label: "Disponível", activeCls: "bg-teal-600 text-white shadow-md", badgeCls: "bg-teal-100 text-teal-700" },
+  { value: "EQUIPE_1", label: "Equipe 1", activeCls: "bg-blue-600 text-white shadow-md", badgeCls: "bg-blue-100 text-blue-700" },
+  { value: "EQUIPE_2", label: "Equipe 2", activeCls: "bg-purple-600 text-white shadow-md", badgeCls: "bg-purple-100 text-purple-700" },
+];
+function assignOf(i: StockItem): AssignTeam {
+  return (i.assigned_team as AssignTeam) || "DISPONIVEL";
+}
+
 export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   const cfg = KIND_CONFIG[kind];
   const TEAM = kind; // o sentinela em stock_items.team é o próprio kind
@@ -74,6 +86,8 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   const [deleteItem, setDeleteItem] = useState<StockItem | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Sub-aba "onde está": Disponível / Equipe 1 / Equipe 2.
+  const [activeAssign, setActiveAssign] = useState<AssignTeam>("DISPONIVEL");
 
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, cfg.module, "create");
@@ -111,10 +125,18 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   const codeMap = useMemo(() => buildCodeMap(items, (i) => i.id, (i) => i.name), [items]);
 
   const filteredItems = items.filter((i) =>
-    matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search),
+    assignOf(i) === activeAssign &&
+    (matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search)),
   );
 
-  async function handleSave(formData: { name: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null }) {
+  // Move o item entre Disponível / Equipe 1 / Equipe 2 (o item inteiro vai junto).
+  async function handleAssign(item: StockItem, target: AssignTeam) {
+    const actor = profile?.full_name || "Sistema";
+    await db.from("stock_items").update({ assigned_team: target, updated_by: actor } as Record<string, unknown>).eq("id", item.id);
+    loadItems();
+  }
+
+  async function handleSave(formData: { name: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null; assigned_team: string }) {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
     const payload = {
@@ -122,6 +144,7 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
       quantity: formData.quantity,
       category: "OUTROS",
       team: TEAM,
+      assigned_team: formData.assigned_team,
       min_quantity: formData.min_quantity,
       image_url: formData.image_url,
       notes: formData.notes,
@@ -221,6 +244,28 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
       ),
     },
     {
+      key: "assigned_team",
+      label: "Equipe",
+      render: (i: StockItem) => {
+        const cur = assignOf(i);
+        const acfg = ASSIGN_TABS.find((a) => a.value === cur);
+        if (!canEdit) {
+          return <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${acfg?.badgeCls || ""}`}>{acfg?.label || cur}</span>;
+        }
+        return (
+          <select
+            value={cur}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => { e.stopPropagation(); handleAssign(i, e.target.value as AssignTeam); }}
+            className="text-xs px-2 py-1 border border-border rounded-lg bg-card focus:ring-2 focus:ring-primary outline-none"
+            title="Onde está o item — mover entre Disponível / Equipe 1 / Equipe 2"
+          >
+            {ASSIGN_TABS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+          </select>
+        );
+      },
+    },
+    {
       key: "notes",
       label: "Obs",
       hideOnMobile: true,
@@ -284,6 +329,22 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         </div>
       )}
 
+      {/* Sub-abas: onde está o item — Disponível / Equipe 1 / Equipe 2. */}
+      <div className="flex gap-2 flex-wrap">
+        {ASSIGN_TABS.map((a) => {
+          const count = items.filter((i) => assignOf(i) === a.value).length;
+          return (
+            <button
+              key={a.value}
+              onClick={() => setActiveAssign(a.value)}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeAssign === a.value ? a.activeCls : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+            >
+              {a.label}{count > 0 ? ` (${count})` : ""}
+            </button>
+          );
+        })}
+      </div>
+
       <DataTable
         columns={columns}
         data={filteredItems}
@@ -310,6 +371,7 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         item={editItem}
         newTitle={cfg.newTitle}
         editTitle={cfg.editTitle}
+        defaultAssign={activeAssign}
         saving={saving}
       />
 
@@ -336,16 +398,18 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   );
 }
 
-function MaterialFormModal({ open, onClose, onSave, item, newTitle, editTitle, saving }: {
+function MaterialFormModal({ open, onClose, onSave, item, newTitle, editTitle, defaultAssign, saving }: {
   open: boolean;
   onClose: () => void;
-  onSave: (data: { name: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null }) => void;
+  onSave: (data: { name: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null; assigned_team: string }) => void;
   item: StockItem | null;
   newTitle: string;
   editTitle: string;
+  defaultAssign: AssignTeam;
   saving: boolean;
 }) {
   const [name, setName] = useState("");
+  const [assignTeam, setAssignTeam] = useState<AssignTeam>("DISPONIVEL");
   // Strings para aceitar vírgula (ex.: "1,5"); convertidas no submit.
   const [quantity, setQuantity] = useState("");
   const [minQuantity, setMinQuantity] = useState("");
@@ -359,14 +423,16 @@ function MaterialFormModal({ open, onClose, onSave, item, newTitle, editTitle, s
       setMinQuantity(item.min_quantity ? formatQty(item.min_quantity) : "");
       setImageUrl(item.image_url || null);
       setNotes(item.notes || "");
+      setAssignTeam((item.assigned_team as AssignTeam) || "DISPONIVEL");
     } else {
       setName("");
       setQuantity("");
       setMinQuantity("");
       setImageUrl(null);
       setNotes("");
+      setAssignTeam(defaultAssign);
     }
-  }, [item, open]);
+  }, [item, open, defaultAssign]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -377,6 +443,7 @@ function MaterialFormModal({ open, onClose, onSave, item, newTitle, editTitle, s
       min_quantity: Math.round(parseDecimalBR(minQuantity)),
       image_url: imageUrl,
       notes: notes.trim() || null,
+      assigned_team: assignTeam,
     });
   }
 
@@ -398,6 +465,12 @@ function MaterialFormModal({ open, onClose, onSave, item, newTitle, editTitle, s
             <label className="block text-sm font-medium text-text mb-1">Qtd Mínima <span className="text-text-light font-normal">(opcional)</span></label>
             <input type="text" inputMode="numeric" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} placeholder="0 = sem mínimo" className={inputCls} />
           </div>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Onde está</label>
+          <select value={assignTeam} onChange={(e) => setAssignTeam(e.target.value as AssignTeam)} className={inputCls}>
+            {ASSIGN_TABS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+          </select>
         </div>
         <div>
           <label className="block text-sm font-medium text-text mb-1">Observações <span className="text-text-light font-normal">(opcional)</span></label>

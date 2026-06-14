@@ -93,6 +93,10 @@ model StockItem {
   quantity         Float           @default(0)
   default_quantity Float           @default(0)
   team             String?
+  // Onde o item está, nas abas de inventário (Estoque/Ferramenta/Elétrica/Fluídos):
+  // null/"DISPONIVEL" = no almoxarifado; "EQUIPE_1"/"EQUIPE_2" = levado pela equipe.
+  // (Rancho usa o próprio `team` pra separar as equipes; aqui `team` é o setor.)
+  assigned_team    String?
   expiry_date      DateTime?       @db.Date
   min_quantity     Int             @default(0)
   // Foto opcional do produto (data URL base64 comprimida no cliente). Inline no

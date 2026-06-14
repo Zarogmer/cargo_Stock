@@ -34,6 +34,9 @@ export interface StockItem {
   quantity: number;
   default_quantity: number;
   team: string | null;
+  // Onde o item está (abas de inventário): null/"DISPONIVEL" = no almoxarifado;
+  // "EQUIPE_1"/"EQUIPE_2" = levado pela equipe. (Rancho não usa isto.)
+  assigned_team: string | null;
   expiry_date: string | null;
   min_quantity: number;
   image_url: string | null;
