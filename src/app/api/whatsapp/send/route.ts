@@ -6,6 +6,7 @@ import {
   sendWhatsappText,
   sendWhatsappTextToGroup,
   extractSentMessageId,
+  normalizeBRNumber,
 } from "@/lib/services/evolution-api";
 import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 
@@ -15,8 +16,10 @@ import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
 // POST { to: string, text: string, label?: string } — envia um texto via Evolution.
-// Se `to` termina em "@g.us" é um grupo (exige papel em ALLOWED_ROLES e grava
-// stub pra aparecer em Conversas); senão é DM pra um número.
+// Se `to` termina em "@g.us" é um grupo (exige papel em ALLOWED_ROLES); senão é
+// DM pra um número. Nos DOIS casos grava um stub da mensagem enviada pra a
+// conversa aparecer/atualizar na aba Conversas (sem isso, a conversa com um
+// contato novo — ex.: fornecedor — só surgiria quando ELE respondesse).
 // Requer autenticação. Retorna 503 quando a Evolution não está configurada.
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -90,6 +93,36 @@ export async function POST(request: NextRequest) {
 
   try {
     const result = await sendWhatsappText(to, text);
+    // Persiste a mensagem enviada (DM) pra a conversa aparecer/atualizar na aba
+    // Conversas. Sem isso, a conversa com o fornecedor/contato só surgiria depois
+    // que ELE respondesse (o webhook grava as recebidas). Usa o id REAL do
+    // WhatsApp (key.id) e faz upsert pela chave única — se o webhook reenviar o
+    // mesmo evento fromMe, casa pelo id+jid e NÃO duplica. Não-fatal: a mensagem
+    // já saiu, então só logamos se o stub falhar.
+    try {
+      const number = normalizeBRNumber(to);
+      const remoteJid = `${number}@s.whatsapp.net`;
+      const instanceName = process.env.EVOLUTION_INSTANCE || "default";
+      const messageId = extractSentMessageId(result) ?? `dm-${number}-${Date.now()}`;
+      await prisma.whatsappMessage.upsert({
+        where: { unique_message: { instance_name: instanceName, message_id: messageId, remote_jid: remoteJid } },
+        update: { text },
+        create: {
+          message_id: messageId,
+          instance_name: instanceName,
+          remote_jid: remoteJid,
+          from_me: true,
+          push_name: body.label?.trim() || null,
+          message_type: "conversation",
+          text,
+          timestamp_ms: BigInt(Date.now()),
+          sent_by_user_id: session.user.id || null,
+          raw_event: { source: "dm-send" },
+        },
+      });
+    } catch (stubErr) {
+      console.warn("[send] DM stub insert failed:", (stubErr as Error).message);
+    }
     return NextResponse.json({ success: true, result });
   } catch (err) {
     return NextResponse.json({ error: friendlyEvolutionError((err as Error).message) }, { status: 502 });
