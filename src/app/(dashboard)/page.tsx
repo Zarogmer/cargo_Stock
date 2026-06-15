@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { promoteStartedShips } from "@/lib/release-finished-ships";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
+import { COMPRAS_ROLES } from "@/lib/rbac";
 import { formatDateTime, parseLegacyDate, parseNrsWithDates, MOVEMENT_TYPE_LABELS, CATEGORY_LABELS } from "@/lib/utils";
 
 interface StockChartItem {
@@ -39,6 +40,7 @@ interface DashboardStats {
   totalUniforms: number;
   totalConversations: number;
   totalSolicitacoes: number;
+  totalCompras: number;    // Controle de Compras (compras registradas no mês corrente)
 }
 
 interface RecentMovement {
@@ -84,7 +86,7 @@ export default function DashboardPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
 
-  const [stats, setStats] = useState<DashboardStats>({ totalMateriais: 0, totalRancho: 0, totalEmployees: 0, totalMaquinario: 0, totalFerramentas: 0, totalEletrica: 0, totalEpis: 0, totalUniforms: 0, totalConversations: 0, totalSolicitacoes: 0 });
+  const [stats, setStats] = useState<DashboardStats>({ totalMateriais: 0, totalRancho: 0, totalEmployees: 0, totalMaquinario: 0, totalFerramentas: 0, totalEletrica: 0, totalEpis: 0, totalUniforms: 0, totalConversations: 0, totalSolicitacoes: 0, totalCompras: 0 });
   const [movements, setMovements] = useState<RecentMovement[]>([]);
   const [dollar, setDollar] = useState<DollarQuote | null>(null);
   const [stockItems, setStockItems] = useState<StockChartItem[]>([]);
@@ -110,7 +112,15 @@ export default function DashboardPage() {
       // "Estoque" = materiais do galpão (team=GALPAO). "Rancho" = comida por
       // equipe (EQUIPE_1/2/3). Ambos vivem em stock_items, separados pelo team.
       const FOOD_TEAMS = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_3"];
-      const [materiaisRes, ranchoRes, stockFullRes, employeesRes, maquinarioRes, ferramentasRes, eletricaRes, episRes, uniformsRes, solicitacoesRes, unreadRes] = await Promise.all([
+      // Controle de Compras: compras registradas no mês corrente. A aba abre já
+      // filtrada por este mês, então o card bate com o que o gestor vê ao clicar.
+      // purchase_date é DATE → comparo por string ISO [início do mês, próximo mês).
+      const nowD = new Date();
+      const pad2 = (n: number) => String(n).padStart(2, "0");
+      const monthStart = `${nowD.getFullYear()}-${pad2(nowD.getMonth() + 1)}-01`;
+      const nextMonthD = new Date(nowD.getFullYear(), nowD.getMonth() + 1, 1);
+      const monthEnd = `${nextMonthD.getFullYear()}-${pad2(nextMonthD.getMonth() + 1)}-01`;
+      const [materiaisRes, ranchoRes, stockFullRes, employeesRes, maquinarioRes, ferramentasRes, eletricaRes, episRes, uniformsRes, solicitacoesRes, comprasRes, unreadRes] = await Promise.all([
         db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "GALPAO"),
         db.from("stock_items").select("id", { count: "exact", head: true }).in("team", FOOD_TEAMS),
         db.from("stock_items").select("name, quantity, default_quantity, category, team").in("team", FOOD_TEAMS),
@@ -122,6 +132,7 @@ export default function DashboardPage() {
         // Uniformes: soma das quantidades em estoque (total de peças), não o nº de tipos.
         db.from("uniforms").select("stock_qty"),
         db.from("tool_requests").select("id", { count: "exact", head: true }).eq("status", "PENDENTE"),
+        db.from("purchase_orders").select("id", { count: "exact", head: true }).gte("purchase_date", monthStart).lt("purchase_date", monthEnd),
         // Conversas: mensagens recebidas (from_me=false) ainda não vistas na aba
         // Conversas (created_at > último acesso). Sem acesso prévio → 0.
         convLastSeen
@@ -142,6 +153,7 @@ export default function DashboardPage() {
         totalUniforms,
         totalConversations: unreadRes.count || 0,
         totalSolicitacoes: solicitacoesRes.count || 0,
+        totalCompras: comprasRes.count || 0,
       });
 
       setStockItems((stockFullRes.data || []) as StockChartItem[]);
@@ -383,6 +395,9 @@ export default function DashboardPage() {
   const greeting = getGreeting();
   const allowedEmails = ["chico@cargostock.local", "sandra@cargostock.local", "guigui12306@gmail.com"];
   const canSeeMovements = allowedEmails.includes(profile?.email || "");
+  // Controle de Compras é gestão (mesma regra do menu em rbac.ts). Só esses
+  // papéis enxergam a aba — então o card também só aparece pra eles.
+  const canSeeCompras = COMPRAS_ROLES.includes(profile?.role || "RH");
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
@@ -411,6 +426,9 @@ export default function DashboardPage() {
         <StatCard label="Uniformes" value={stats.totalUniforms} icon="👕" tone="rose" href="/almoxarifado?tab=uniforme" />
         <StatCard label="Conversas" value={stats.totalConversations} icon="💬" tone="cyan" href="/conversas" />
         <StatCard label="Solicitações" value={stats.totalSolicitacoes} icon="📋" tone="indigo" href="/solicitacoes?tab=solicitacoes" />
+        {canSeeCompras && (
+          <StatCard label="Controle de Compras" value={stats.totalCompras} icon="🧾" tone="orange" href="/solicitacoes?tab=compras" />
+        )}
       </div>
 
       {/* Training renewal alerts (ASO + NRs + Meio Ambiente) */}
@@ -678,7 +696,7 @@ export default function DashboardPage() {
 
 // --- Helper Components ---
 
-type StatTone = "blue" | "emerald" | "amber" | "violet" | "rose" | "teal" | "cyan" | "indigo" | "slate" | "yellow";
+type StatTone = "blue" | "emerald" | "amber" | "violet" | "rose" | "teal" | "cyan" | "indigo" | "slate" | "yellow" | "orange";
 
 const STAT_TONE: Record<StatTone, { chip: string; accent: string }> = {
   blue:    { chip: "bg-blue-50 text-blue-600",       accent: "bg-blue-500" },
@@ -691,6 +709,7 @@ const STAT_TONE: Record<StatTone, { chip: string; accent: string }> = {
   indigo:  { chip: "bg-indigo-50 text-indigo-600",   accent: "bg-indigo-500" },
   slate:   { chip: "bg-slate-100 text-slate-600",    accent: "bg-slate-500" },
   yellow:  { chip: "bg-yellow-50 text-yellow-600",   accent: "bg-yellow-500" },
+  orange:  { chip: "bg-orange-50 text-orange-600",   accent: "bg-orange-500" },
 };
 
 function StatCard({
