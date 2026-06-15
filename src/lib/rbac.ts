@@ -48,6 +48,10 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     // Mensagens fica restrito a Tecnologia, Executivo e Financeiro (pedido do
     // usuário) — Gestor e RH não enxergam mais a aba.
     CONVERSAS: ["view", "create"],
+    // Gestor enxerga a WhatsApp API pra conectar/reconectar a instância
+    // (Lucas faz a conexão). Gestor já está nos ADMIN_ROLES da página, então
+    // vê os controles de QR Code / conectar / desconectar.
+    WHATSAPP: ["view", "edit"],
   },
   EXECUTIVO: {
     DASHBOARD: ["view"],
