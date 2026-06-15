@@ -1978,7 +1978,7 @@ export default function NaviosPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-text mb-1">Data de Embarque</label>
+                <label className="block text-sm font-medium text-text mb-1">{form.operation_type === "COSTADO" ? "Data de Início" : "Data de Embarque"}</label>
                 <input
                   type="date"
                   value={form.arrival_date}
