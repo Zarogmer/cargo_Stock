@@ -427,7 +427,7 @@ export default function DashboardPage() {
         <StatCard label="Conversas" value={stats.totalConversations} icon="💬" tone="cyan" href="/conversas" />
         <StatCard label="Solicitações" value={stats.totalSolicitacoes} icon="📋" tone="indigo" href="/solicitacoes?tab=solicitacoes" />
         {canSeeCompras && (
-          <StatCard label="Controle de Compras" value={stats.totalCompras} icon="🧾" tone="orange" href="/solicitacoes?tab=compras" />
+          <StatCard label="Compras" value={stats.totalCompras} icon="🧾" tone="orange" href="/solicitacoes?tab=compras" />
         )}
       </div>
 
