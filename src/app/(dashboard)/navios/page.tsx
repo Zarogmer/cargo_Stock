@@ -332,8 +332,8 @@ export default function NaviosPage() {
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  // "Fechar" navio Em Operação: registra a data de saída e marca CONCLUIDO.
-  const [closeShip, setCloseShip] = useState<Ship | null>(null);
+  // "Fechar" navio Em Operação: a Data de Saída é informada no resumo do navio
+  // (modal de detalhe), onde também dá pra puxar as compras antes de fechar.
   const [closeDate, setCloseDate] = useState("");
 
   // External ships (AIS Stream) modal
@@ -1023,14 +1023,11 @@ export default function NaviosPage() {
   // Fecha o navio: registra a data de saída, marca CONCLUIDO e fecha a ponta
   // do(s) job(s) (end_date). Só depois disso o navio aparece no Financeiro.
   async function handleClose() {
-    if (!closeShip || !closeDate) return;
-    await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate }).eq("id", closeShip.id);
-    await db.from("jobs").update({ end_date: closeDate }).eq("ship_id", closeShip.id);
-    if (selectedShip?.id === closeShip.id) {
-      setSelectedShip({ ...selectedShip, status: "CONCLUIDO", departure_date: closeDate });
-    }
-    setCloseShip(null);
-    setCloseDate("");
+    if (!selectedShip || !closeDate) return;
+    await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate }).eq("id", selectedShip.id);
+    await db.from("jobs").update({ end_date: closeDate }).eq("ship_id", selectedShip.id);
+    // Atualiza o resumo aberto pra refletir Concluído (a seção de fechar some).
+    setSelectedShip({ ...selectedShip, status: "CONCLUIDO", departure_date: closeDate });
     loadShips();
   }
 
@@ -1176,6 +1173,8 @@ export default function NaviosPage() {
     setShowPullPurchases(false);
     setSelectedPurchaseIds(new Set());
     setPullError(null);
+    // Data de Saída do "Fechar Navio" (rodapé do resumo): a já registrada ou hoje.
+    setCloseDate(ship.departure_date ? ship.departure_date.slice(0, 10) : new Date().toISOString().slice(0, 10));
     loadShipFinance(ship);
   }
 
@@ -1563,9 +1562,9 @@ export default function NaviosPage() {
                       <div className="flex gap-1 shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
                         {canEdit && ship.status === "EM_OPERACAO" && (
                           <button
-                            onClick={() => { setCloseShip(ship); setCloseDate(new Date().toISOString().slice(0, 10)); }}
+                            onClick={() => openDetail(ship)}
                             className="px-2 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition whitespace-nowrap"
-                            title="Fechar navio — registra a saída e libera pro Financeiro"
+                            title="Abrir o navio — puxe as compras e registre a saída pra fechar"
                           >
                             🏁 Fechar
                           </button>
@@ -1954,6 +1953,38 @@ export default function NaviosPage() {
                 </>
               )}
             </div>
+
+            {/* Fechar Navio — só pra navios Em Operação. Fica no fim do resumo,
+                depois de Funcionários e Compras e Gastos, pra o usuário puxar as
+                compras (acima) antes de registrar a saída e liberar pro Financeiro. */}
+            {canEdit && selectedShip.status === "EM_OPERACAO" && (
+              <div className="border-t border-border pt-3">
+                <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-2">Fechar Navio</p>
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 space-y-2.5">
+                  <p className="text-xs text-emerald-900">
+                    🏁 Registra a saída, marca como <strong>Concluído</strong> e libera o navio pro <strong>Financeiro</strong>. Puxe as compras acima antes, se precisar.
+                  </p>
+                  <div className="flex flex-col sm:flex-row sm:items-end gap-2">
+                    <div className="flex-1">
+                      <label className="block text-xs font-medium text-text mb-1">Data de Saída *</label>
+                      <input
+                        type="date"
+                        value={closeDate}
+                        onChange={(e) => setCloseDate(e.target.value)}
+                        className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm bg-white"
+                      />
+                    </div>
+                    <button
+                      onClick={handleClose}
+                      disabled={!closeDate}
+                      className="py-2 px-4 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                    >
+                      🏁 Fechar Navio
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             </div>
           </Modal>
         )}
@@ -2903,42 +2934,6 @@ export default function NaviosPage() {
         </div>
       )}
 
-      {/* Fechar navio — registra a saída e libera pro Financeiro */}
-      {closeShip && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm">
-            <div className="text-center mb-4">
-              <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl">🏁</div>
-              <h3 className="font-bold text-text mb-1">Fechar Navio</h3>
-              <p className="text-sm text-text-light">
-                Registra a saída de <strong className="text-text">{closeShip.name}</strong>, marca como <strong className="text-text">Concluído</strong> e libera o navio pro <strong className="text-text">Financeiro</strong>.
-              </p>
-            </div>
-            <label className="block text-sm font-medium text-text mb-1">Data de Saída *</label>
-            <input
-              type="date"
-              value={closeDate}
-              onChange={(e) => setCloseDate(e.target.value)}
-              className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm mb-4"
-            />
-            <div className="flex gap-3">
-              <button
-                onClick={() => { setCloseShip(null); setCloseDate(""); }}
-                className="flex-1 py-2 text-sm text-text-light hover:text-text hover:bg-gray-100 rounded-lg transition"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleClose}
-                disabled={!closeDate}
-                className="flex-1 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Fechar Navio
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
