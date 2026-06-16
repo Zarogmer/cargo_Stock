@@ -385,6 +385,16 @@ export function EmailComposer() {
             <span aria-hidden>📎</span>
             Baixar anexos (2 PDFs)
           </button>
+          <a
+            href={SITE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg hover:bg-gray-50 transition text-sm font-medium text-text"
+            title="Abrir o site da Cargo Ships Cleaning em uma nova aba"
+          >
+            <span aria-hidden>🌐</span>
+            Acessar site
+          </a>
           <button
             onClick={restoreTemplate}
             className="px-4 py-2 text-sm text-text-light hover:text-text transition"
