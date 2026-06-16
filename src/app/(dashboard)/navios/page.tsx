@@ -8,7 +8,7 @@ import { db } from "@/lib/db";
 import { releaseFinishedShipAllocations, promoteStartedShips } from "@/lib/release-finished-ships";
 import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
-import { SHIFT_PERIODS, type ShiftPeriod } from "@/types/database";
+import { SHIFT_PERIODS, isEscalableJobUnit, type ShiftPeriod } from "@/types/database";
 import { Modal } from "@/components/ui/modal";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -276,7 +276,11 @@ export default function NaviosPage() {
   // pagas. A chave só existe quando o usuário clicou em "+ 2ª função".
   const [groupPerEmpFn2, setGroupPerEmpFn2] = useState<Map<number, string>>(new Map());
   // Active job functions, loaded once for the function selector
-  const [jobFunctions, setJobFunctions] = useState<{ id: number; name: string; active: boolean; default_rate: string | number }[]>([]);
+  const [jobFunctions, setJobFunctions] = useState<{ id: number; name: string; active: boolean; default_rate: string | number; unit: string }[]>([]);
+  // Só funções operacionais entram na escala (porão/embarque + costado). As
+  // mensalistas/admin (ex.: Analista RH) ficam de fora dos seletores de função
+  // — mas `jobFunctions` continua completo pros lookups por id (nome/rate).
+  const escalableFunctions = useMemo(() => jobFunctions.filter((f) => isEscalableJobUnit(f.unit)), [jobFunctions]);
   // Costado-only: shift date + period for the bulk-allocated rows
   const [costadoShiftDate, setCostadoShiftDate] = useState("");
   const [costadoShiftPeriod, setCostadoShiftPeriod] = useState("07-13");
@@ -429,7 +433,7 @@ export default function NaviosPage() {
     try {
       const { data } = await db
         .from("job_functions")
-        .select("id, name, active, default_rate")
+        .select("id, name, active, default_rate, unit")
         .order("name");
       setJobFunctions(((data as any[]) || []).filter((f) => f.active !== false));
     } catch (err) {
@@ -619,7 +623,7 @@ export default function NaviosPage() {
       }
       for (const e of teamAvailable) {
         const role = (e.role || "").trim().toUpperCase();
-        const fn = role ? jobFunctions.find((f) => f.name.toUpperCase() === role) : null;
+        const fn = role ? escalableFunctions.find((f) => f.name.toUpperCase() === role) : null;
         if (fn) nm.set(e.id, String(fn.id));
       }
       return nm;
@@ -1675,7 +1679,7 @@ export default function NaviosPage() {
                         // com uma função cadastrada (mesma lógica do modal).
                         const emp = employees.find((x) => String(x.id) === id);
                         const role = (emp?.role || "").trim().toUpperCase();
-                        const fn = role ? jobFunctions.find((f) => f.name.toUpperCase() === role) : null;
+                        const fn = role ? escalableFunctions.find((f) => f.name.toUpperCase() === role) : null;
                         if (fn) setCrewFnId(String(fn.id));
                       }}
                       autoFocus
@@ -1698,7 +1702,7 @@ export default function NaviosPage() {
                       className="w-full px-2.5 py-1.5 border border-border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
                     >
                       <option value="">Função…</option>
-                      {jobFunctions.map((f) => (
+                      {escalableFunctions.map((f) => (
                         <option key={f.id} value={f.id}>{f.name}</option>
                       ))}
                     </select>
@@ -1721,9 +1725,9 @@ export default function NaviosPage() {
                         </select>
                       </div>
                     )}
-                    {jobFunctions.length === 0 && (
+                    {escalableFunctions.length === 0 && (
                       <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
-                        ⚠️ Nenhuma função cadastrada em Financeiro → Funções e Valores. Cadastre antes pra poder escalar.
+                        ⚠️ Nenhuma função operacional cadastrada em Financeiro → Funções e Valores. Cadastre antes pra poder escalar.
                       </p>
                     )}
                     {crewError && <p className="text-xs text-danger">{crewError}</p>}
@@ -2454,7 +2458,7 @@ export default function NaviosPage() {
                                         }`}
                                       >
                                         <option value="">Função...</option>
-                                        {jobFunctions.map((f) => (
+                                        {escalableFunctions.map((f) => (
                                           <option key={f.id} value={String(f.id)}>{f.name}</option>
                                         ))}
                                       </select>
@@ -2501,7 +2505,7 @@ export default function NaviosPage() {
                                           }`}
                                         >
                                           <option value="">Função...</option>
-                                          {jobFunctions
+                                          {escalableFunctions
                                             .filter((f) => String(f.id) !== curFn)
                                             .map((f) => (
                                               <option key={f.id} value={String(f.id)}>{f.name}</option>
@@ -2638,7 +2642,7 @@ export default function NaviosPage() {
                                         // no colaborador (emp.role), se houver match.
                                         const role = (emp.role || "").trim().toUpperCase();
                                         const fn = role
-                                          ? jobFunctions.find((f) => f.name.toUpperCase() === role)
+                                          ? escalableFunctions.find((f) => f.name.toUpperCase() === role)
                                           : null;
                                         if (fn) {
                                           setGroupPerEmpFn((m) => new Map(m).set(emp.id, String(fn.id)));

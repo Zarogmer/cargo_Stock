@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EditIcon, TrashIcon } from "@/components/icons";
 import { formatDate } from "@/lib/utils";
+import { isEscalableJobUnit } from "@/types/database";
 import type {
   JobFunction,
   Job,
@@ -722,7 +723,9 @@ function CrewFormModal({
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
-  const activeFunctions = functions.filter((f) => f.active);
+  // Só funções operacionais entram na escala (porão/embarque + costado); as
+  // mensalistas/admin (ex.: Analista RH) ficam de fora do seletor de função.
+  const activeFunctions = functions.filter((f) => f.active && isEscalableJobUnit(f.unit));
   const selectedList = Array.from(selectedIds).map((id) => employees.find((e) => e.id === id)).filter(Boolean) as Employee[];
 
   return (

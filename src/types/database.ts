@@ -234,6 +234,16 @@ export interface ToolRequest {
 // ── Sistema Financeiro ────────────────────────────────────────────────────────
 
 export type JobUnit = "MENSALISTA" | "PORAO" | "POR_NAVIO" | "POR_DIA" | "POR_HORA" | "POR_OPERACAO" | "TURNO";
+
+// Unidades de função "operacionais" — as que entram na escala de navio: porão/
+// embarque (PORAO, POR_NAVIO, POR_OPERACAO) + turno de Costado (TURNO). As demais
+// (MENSALISTA, POR_DIA, POR_HORA) são administrativas/mensalistas (ex.: Analista
+// RH) e NÃO devem aparecer nos seletores de função da escalação. Espelha a
+// distinção de UNIT_LABELS no Financeiro (onde essas três = "Mensalista").
+export const ESCALABLE_JOB_UNITS: JobUnit[] = ["PORAO", "POR_NAVIO", "POR_OPERACAO", "TURNO"];
+export function isEscalableJobUnit(unit: string | null | undefined): boolean {
+  return !!unit && (ESCALABLE_JOB_UNITS as string[]).includes(unit);
+}
 export type JobStatus = "ABERTO" | "EM_ANDAMENTO" | "VERIFICADO" | "FECHADO" | "CANCELADO";
 export type AdjustmentType = "ADICIONAL" | "REDUCAO";
 
