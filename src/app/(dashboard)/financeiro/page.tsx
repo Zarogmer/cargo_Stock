@@ -1275,7 +1275,7 @@ function EmployeeRatesModal({
   onClose: () => void;
   onChange?: () => void;
 }) {
-  const [employees, setEmployees] = useState<{ id: number; name: string; status: string | null }[]>([]);
+  const [employees, setEmployees] = useState<{ id: number; name: string; status: string | null; role: string | null }[]>([]);
   const [overrides, setOverrides] = useState<Record<number, { id?: number; rate: string }>>({});
   // Snapshot dos rates carregados do banco — usado pra detectar quais funcionários
   // realmente mudaram no Save (e só sincronizar as alocações que precisam).
@@ -1289,11 +1289,15 @@ function EmployeeRatesModal({
     if (!fn) return;
     setLoading(true);
     const [empRes, rateRes] = await Promise.all([
-      db.from("employees").select("id, name, status").order("name"),
+      db.from("employees").select("id, name, status, role").order("name"),
       db.from("employee_function_rates").select("*").eq("function_id", fn!.id),
     ]);
-    const emps = ((empRes.data as { id: number; name: string; status: string | null }[]) || [])
-      .filter((e) => e.status !== "INATIVO");
+    // Só os funcionários DESTA função (cargo === nome da função, mesmo match do
+    // employeeCount / "Ver colaboradores"). Cada um tem sua função, então a lista
+    // de valores especiais não mistura cargos de outras funções.
+    const target = (fn.name || "").trim().toUpperCase();
+    const emps = ((empRes.data as { id: number; name: string; status: string | null; role: string | null }[]) || [])
+      .filter((e) => e.status !== "INATIVO" && (e.role || "").trim().toUpperCase() === target);
     setEmployees(emps);
     const defaultStr = Number(fn.default_rate).toFixed(2).replace(".", ",");
     // Pré-popula TODOS os funcionários com o valor padrão. Quem tiver override
