@@ -41,14 +41,26 @@ export function useSendWhatsappPref(): {
 // Checkbox reutilizável usada nos 3 pontos de escala. Avisar é OPT-IN: por
 // padrão fica desmarcada (só escala). Quando marcada fica verde, sinalizando a
 // ação extra de disparar a mensagem pros escalados.
+//
+// Os textos têm padrão genérico ("avisar no WhatsApp"), mas podem ser
+// sobrescritos por quem chama. O modal de Navios usa isso pra deixar o rótulo
+// ciente do contexto: no Costado a ação é CRIAR um grupo novo do navio; no
+// Embarque é só avisar os grupos pré-prontos das equipes. As telas de
+// Escalação não passam nada e mantêm o texto genérico.
 export function EnviarWhatsappToggle({
   send,
   setSend,
   className = "",
+  label = "📲 Também avisar no WhatsApp ao escalar",
+  sentHint = "Os escalados serão avisados no WhatsApp.",
+  idleHint = "Apenas escala — ninguém será avisado no WhatsApp.",
 }: {
   send: boolean;
   setSend: (v: boolean) => void;
   className?: string;
+  label?: string;
+  sentHint?: string;
+  idleHint?: string;
 }) {
   return (
     <label
@@ -63,11 +75,9 @@ export function EnviarWhatsappToggle({
         className="h-4 w-4 mt-0.5 accent-emerald-600"
       />
       <span className="text-sm leading-snug">
-        <span className="font-medium text-text">📲 Também avisar no WhatsApp ao escalar</span>
+        <span className="font-medium text-text">{label}</span>
         <span className="block text-[11px] text-text-light">
-          {send
-            ? "Os escalados serão avisados no WhatsApp."
-            : "Apenas escala — ninguém será avisado no WhatsApp."}
+          {send ? sentHint : idleHint}
         </span>
       </span>
     </label>

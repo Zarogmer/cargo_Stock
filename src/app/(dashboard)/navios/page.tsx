@@ -2190,7 +2190,23 @@ export default function NaviosPage() {
                   </label>
 
                   {createGroup && (
-                    <EnviarWhatsappToggle send={sendWhats} setSend={setSendWhats} />
+                    form.operation_type === "COSTADO" ? (
+                      <EnviarWhatsappToggle
+                        send={sendWhats}
+                        setSend={setSendWhats}
+                        label="📲 Criar grupo e avisar no WhatsApp"
+                        sentHint="Cria o grupo do navio no WhatsApp e avisa cada colaborador no privado."
+                        idleHint="Nenhum grupo será criado e ninguém será avisado no WhatsApp."
+                      />
+                    ) : (
+                      <EnviarWhatsappToggle
+                        send={sendWhats}
+                        setSend={setSendWhats}
+                        label="📲 Avisar os grupos das equipes"
+                        sentHint="Os grupos das equipes serão avisados no WhatsApp."
+                        idleHint="Apenas escala — nenhum grupo será avisado."
+                      />
+                    )
                   )}
 
                   {createGroup && sendWhats && form.operation_type === "EMBARQUE" && (
