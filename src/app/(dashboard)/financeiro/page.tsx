@@ -1275,7 +1275,11 @@ function EmployeeRatesModal({
   onClose: () => void;
   onChange?: () => void;
 }) {
-  const [employees, setEmployees] = useState<{ id: number; name: string; status: string | null }[]>([]);
+  const [employees, setEmployees] = useState<{ id: number; name: string; status: string | null; role: string | null }[]>([]);
+  // Por padrão a lista mostra só os funcionários DESTA função (cargo base de
+  // Colaboradores); marcar este checkbox revela todos — pra quando um navio
+  // escala alguém numa função diferente da dele. Reinicia desmarcado ao abrir.
+  const [showAll, setShowAll] = useState(false);
   const [overrides, setOverrides] = useState<Record<number, { id?: number; rate: string }>>({});
   // Snapshot dos rates carregados do banco — usado pra detectar quais funcionários
   // realmente mudaram no Save (e só sincronizar as alocações que precisam).
@@ -1289,13 +1293,14 @@ function EmployeeRatesModal({
     if (!fn) return;
     setLoading(true);
     const [empRes, rateRes] = await Promise.all([
-      db.from("employees").select("id, name, status").order("name"),
+      db.from("employees").select("id, name, status, role").order("name"),
       db.from("employee_function_rates").select("*").eq("function_id", fn!.id),
     ]);
-    // Mostra TODOS os funcionários ativos (não só os do cargo desta função): o
-    // mesmo funcionário pode ir em outro navio numa função diferente da dele e
-    // precisar de um valor especial ali também. Inativos ficam de fora.
-    const emps = ((empRes.data as { id: number; name: string; status: string | null }[]) || [])
+    // Carrega TODOS os ativos (com o cargo base de Colaboradores). A lista filtra
+    // por padrão só os DESTA função; o checkbox "mostrar todos" revela o resto.
+    // Pré-popula overrides pra todos, então alternar a visão não recarrega e o
+    // Save cobre quem tem valor especial mesmo sem estar visível. Inativos fora.
+    const emps = ((empRes.data as { id: number; name: string; status: string | null; role: string | null }[]) || [])
       .filter((e) => e.status !== "INATIVO");
     setEmployees(emps);
     const defaultStr = Number(fn.default_rate).toFixed(2).replace(".", ",");
@@ -1318,6 +1323,7 @@ function EmployeeRatesModal({
   useEffect(() => {
     if (!open || !fn) return;
     setSearch("");
+    setShowAll(false);
     setSavedToast(null);
     loadRates();
   }, [open, fn, loadRates]);
@@ -1418,9 +1424,13 @@ function EmployeeRatesModal({
     }
   }
 
-  const filtered = employees.filter((e) =>
-    e.name.toLowerCase().includes(search.toLowerCase())
-  );
+  // Por padrão lista só os funcionários cujo cargo base é esta função; o checkbox
+  // "mostrar todos" libera o resto (navio escalando alguém em outra função).
+  const fnTarget = (fn?.name || "").trim().toUpperCase();
+  const filtered = employees.filter((e) => {
+    if (!showAll && (e.role || "").trim().toUpperCase() !== fnTarget) return false;
+    return e.name.toLowerCase().includes(search.toLowerCase());
+  });
   const defaultRate = Number(fn?.default_rate || 0);
   const overrideCount = Object.values(overrides).filter((o) => {
     const n = Number((o.rate || "").toString().replace(",", "."));
@@ -1450,6 +1460,20 @@ function EmployeeRatesModal({
             onChange={(e) => setSearch(e.target.value)}
             className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
           />
+
+          {/* Por padrão só os da função; marcar revela todos os funcionários. */}
+          <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showAll}
+              onChange={(e) => setShowAll(e.target.checked)}
+              className="w-4 h-4 accent-primary"
+            />
+            <span className="text-text-light">
+              Mostrar <strong className="text-text">todos os funcionários</strong> (de outras funções).
+              {" "}Por padrão, só os de <strong className="text-text">{fn.name}</strong>.
+            </span>
+          </label>
 
           {loading ? (
             <p className="text-center text-text-light py-8 text-sm">Carregando...</p>
