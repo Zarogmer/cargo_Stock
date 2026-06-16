@@ -124,6 +124,33 @@ function cleanEmails(raw: string): string {
     .join(",");
 }
 
+// Equipe Cargo Ships que entra SEMPRE em Cco (cópia oculta): toda prospecção
+// enviada pinga pra equipe interna sem o cliente ver. Pré-preenchido no campo
+// Cco ao abrir o compositor (editável, caso precise tirar alguém pontualmente).
+const FIXED_BCC = [
+  "bpn@cargoships.com.br",
+  "camila@cargoships.com.br",
+  "comercial@cargoships.com.br",
+  "rose@cargoships.com.br",
+  "sandra@cargoships.com.br",
+].join(",");
+
+// Junta listas de email (vírgula/;) removendo duplicados (case-insensitive).
+function mergeEmails(...parts: string[]): string {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of parts) {
+    for (const e of part.split(/[,;]/).map((x) => x.trim()).filter(Boolean)) {
+      const key = e.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(e);
+      }
+    }
+  }
+  return out.join(",");
+}
+
 // Cliente cadastrado (aba Clientes) usado no autocomplete do campo Nome. `email`
 // pode trazer vários endereços separados por vírgula.
 interface ClientOption {
@@ -174,7 +201,9 @@ export function EmailComposer() {
   // Cc (com cópia) e Cco (com cópia oculta) — iguais ao Outlook. Aceitam vários
   // emails separados por vírgula e também podem vir pré-preenchidos pela URL.
   const [cc, setCc] = useState(() => searchParams.get("cc") || "");
-  const [bcc, setBcc] = useState(() => searchParams.get("bcc") || "");
+  // Cco já abre com a equipe Cargo Ships (FIXED_BCC) — sempre presente — mais
+  // qualquer bcc vindo da URL, sem duplicar.
+  const [bcc, setBcc] = useState(() => mergeEmails(searchParams.get("bcc") || "", FIXED_BCC));
   const [clientName, setClientName] = useState(() => searchParams.get("nome") || "");
   const [subject, setSubject] = useState(DEFAULT_SUBJECT);
   const [body, setBody] = useState(() => buildDefaultBody(searchParams.get("nome") || ""));
@@ -501,6 +530,7 @@ export function EmailComposer() {
           />
           <p className="text-xs text-text-light mt-1">
             Recebe uma cópia sem os outros destinatários verem. Separe vários por vírgula.
+            A equipe Cargo Ships já entra aqui por padrão.
           </p>
         </div>
 
