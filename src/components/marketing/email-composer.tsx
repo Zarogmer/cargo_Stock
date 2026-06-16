@@ -162,33 +162,16 @@ interface ClientOption {
   state: string | null;
 }
 
-// Navio vindo da Barra (cache do AIS Stream, via /api/external-ships) — mesma
-// fonte do botão "Selecionar da Barra" da tela de Navios.
+// Navio vindo da Barra de Santos via Praticagem (ZP-21), por /api/praticagem.
+// Traz a AGÊNCIA de cada navio — é o que liga o navio ao contato/email.
 interface BarraShip {
-  id: string;
+  imo: string;
   name: string;
-  mmsi: string | null;
-  imo: string | null;
-  status: string | null;
-  updatedAt: string;
-}
-
-const VESSEL_STATUS_LABELS: Record<string, string> = {
-  underway: "Em movimento",
-  underway_sailing: "Em movimento",
-  anchored: "Ancorado",
-  moored: "Atracado",
-  fishing: "Pesqueiro",
-  not_under_command: "Sem comando",
-  restricted_maneuverability: "Manobra restrita",
-  constrained_by_draught: "Calado restrito",
-  aground: "Encalhado",
-  undefined: "Indefinido",
-};
-
-function vesselStatusLabel(s: string | null): string {
-  if (!s) return "—";
-  return VESSEL_STATUS_LABELS[s] ?? s;
+  agencia: string | null;
+  situacao: string;
+  mv: string | null;
+  local: string | null;
+  horario: string | null;
 }
 
 // ─── Compositor ───────────────────────────────────────────────────────────────
@@ -242,20 +225,25 @@ export function EmailComposer() {
     return () => { active = false; };
   }, []);
 
-  // Navios da Barra: lê o cache do AIS (mesma fonte do botão em Navios).
-  const loadVessels = useCallback(async () => {
+  // Navios da Barra de Santos: lê o line-up da Praticagem (já com a agência).
+  const loadVessels = useCallback(async (force = false): Promise<boolean> => {
     setVesselLoading(true);
     setVesselError(null);
     try {
-      const res = await fetch("/api/external-ships", { cache: "no-store" });
+      const res = await fetch(`/api/praticagem${force ? "?force=1" : ""}`, { cache: "no-store" });
+      const b = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const b = await res.json().catch(() => ({}));
-        throw new Error(b.error || `Erro ${res.status}`);
+        throw new Error(
+          b.configured === false
+            ? "Praticagem não configurada. Defina PRATICAGEM_USUARIO e PRATICAGEM_SENHA no Railway."
+            : b.error || `Erro ${res.status}`,
+        );
       }
-      const b = await res.json();
       setVessels(b.ships || []);
+      return true;
     } catch (e: any) {
       setVesselError(e.message || "Erro ao carregar navios.");
+      return false;
     } finally {
       setVesselLoading(false);
     }
@@ -270,15 +258,15 @@ export function EmailComposer() {
     return list.slice(0, 8);
   }, [clients, clientName]);
 
-  // Filtro do modal da Barra (nome, MMSI ou IMO).
+  // Filtro do modal da Barra (nome, IMO ou agência).
   const filteredVessels = useMemo(() => {
     const q = vesselSearch.trim().toLowerCase();
     if (!q) return vessels;
     return vessels.filter(
       (s) =>
         s.name.toLowerCase().includes(q) ||
-        (s.mmsi || "").includes(q) ||
-        (s.imo || "").includes(q),
+        (s.imo || "").includes(q) ||
+        (s.agencia || "").toLowerCase().includes(q),
     );
   }, [vessels, vesselSearch]);
 
@@ -347,36 +335,56 @@ export function EmailComposer() {
     loadVessels();
   }
 
-  // "Atualizar": captura navios ao vivo do AIS Stream (mesma rota do Navios).
+  // "Atualizar": força uma releitura ao vivo do line-up da praticagem.
   async function syncVessels() {
     setVesselSyncing(true);
     setVesselSyncMsg(null);
-    setVesselError(null);
-    try {
-      const res = await fetch("/api/external-ships/sync", { method: "POST" });
-      const b = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(b.error || `Erro ${res.status}`);
-      setVesselSyncMsg(`${b.upserted} navio(s) atualizado(s).`);
-      await loadVessels();
-    } catch (e: any) {
-      setVesselError(e.message || "Erro ao sincronizar.");
-    } finally {
-      setVesselSyncing(false);
-    }
+    const ok = await loadVessels(true);
+    if (ok) setVesselSyncMsg("Lista atualizada da praticagem.");
+    setVesselSyncing(false);
   }
 
-  // Confirma o navio escolhido: bota o nome no assunto e abre o corpo citando a
-  // embarcação — mas só reescreve assunto/corpo se ainda estiverem no modelo
-  // (não sobrescreve o que o usuário editou à mão).
+  // Acha um cliente cadastrado (aba Clientes) cuja empresa/nome bata com a
+  // agência do navio — é o que puxa o email automático.
+  function findClientByAgency(agencia: string): ClientOption | null {
+    const a = agencia.trim().toUpperCase();
+    if (!a) return null;
+    const exact = clients.find(
+      (c) => (c.company || c.name || "").trim().toUpperCase() === a,
+    );
+    if (exact) return exact;
+    return (
+      clients.find((c) => `${c.company || ""} ${c.name || ""}`.toUpperCase().includes(a)) || null
+    );
+  }
+
+  // Confirma o navio escolhido da Barra: personaliza o email com a embarcação e,
+  // se a agência bater com um cliente cadastrado, já puxa o email pro "Para".
+  // Só reescreve assunto/corpo se ainda estiverem no modelo (não apaga edição).
   function confirmVessel() {
     const v = pickInModal;
     if (!v) return;
-    if (body === buildDefaultBody(templateName, templateVessel)) {
-      setBody(buildDefaultBody(templateName, v.name));
-    }
+
+    const client = v.agencia ? findClientByAgency(v.agencia) : null;
+    const bodyIsTemplate = body === buildDefaultBody(templateName, templateVessel);
     const subjectIsTemplate =
       subject === DEFAULT_SUBJECT || subject === buildSubject(templateVessel);
+
+    if (client) {
+      setTo(cleanEmails(client.email || ""));
+      setClientName(client.company || client.name);
+    } else if (v.agencia) {
+      // Agência não cadastrada: mostra o nome dela pro usuário achar/cadastrar.
+      setClientName(v.agencia);
+    }
+
+    if (bodyIsTemplate) {
+      const greetName = client ? client.company || client.name : templateName;
+      setBody(buildDefaultBody(greetName, v.name));
+      if (client) setTemplateName(client.company || client.name);
+    }
     if (subjectIsTemplate) setSubject(buildSubject(v.name));
+
     setTemplateVessel(v.name);
     setSelectedVessel(v);
     setCopied(false);
@@ -404,15 +412,15 @@ export function EmailComposer() {
         Convide clientes a conhecer a Cargo Ships Cleaning e o site cargoshipscleaning.com.
       </p>
 
-      {/* Selecionar da Barra: traz um navio que está em Santos (AIS) e deixa o
-          email específico daquele navio. O email/contato continua vindo do
-          cliente cadastrado (aba Clientes) — o AIS não fornece email. */}
+      {/* Selecionar da Barra: traz um navio que está em Santos (Praticagem ZP-21)
+          já com a AGÊNCIA. Se a agência estiver cadastrada na aba Clientes, o
+          email é puxado automático; senão, o nome da agência aparece pra achar. */}
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={openBarra}
           className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg hover:bg-gray-50 transition text-sm font-medium text-text"
-          title="Escolher um navio que está na barra de Santos (AIS) e personalizar o email"
+          title="Escolher um navio na barra de Santos (Praticagem) e puxar a agência"
         >
           <span aria-hidden>📡</span>
           Selecionar da Barra
@@ -421,8 +429,8 @@ export function EmailComposer() {
           <span className="inline-flex items-center gap-1.5 text-xs bg-primary/10 text-primary border border-primary/20 rounded-full pl-3 pr-1.5 py-1">
             <span aria-hidden>🚢</span>
             <span className="font-medium">{selectedVessel.name}</span>
-            {selectedVessel.status && (
-              <span className="opacity-70">· {vesselStatusLabel(selectedVessel.status)}</span>
+            {selectedVessel.agencia && (
+              <span className="opacity-70">· {selectedVessel.agencia}</span>
             )}
             <button
               type="button"
@@ -638,7 +646,7 @@ export function EmailComposer() {
               <div>
                 <h2 className="font-bold text-lg text-text">Selecionar da Barra</h2>
                 <p className="text-xs text-text-light mt-0.5">
-                  Navios próximos ao Porto de Santos (AIS Stream). Escolher um deixa o email específico daquele navio.
+                  Navios na barra de Santos (Praticagem ZP-21). Escolher um já puxa a agência pro email.
                 </p>
               </div>
               <button
@@ -663,7 +671,7 @@ export function EmailComposer() {
                   onClick={syncVessels}
                   disabled={vesselSyncing}
                   className="px-3 py-2 text-sm bg-card border border-border text-text rounded-lg hover:bg-gray-50 transition disabled:opacity-50 whitespace-nowrap"
-                  title="Capturar navios ao vivo do AIS Stream"
+                  title="Reler o line-up da praticagem ao vivo"
                 >
                   {vesselSyncing ? "Atualizando..." : "🔄 Atualizar"}
                 </button>
@@ -689,16 +697,16 @@ export function EmailComposer() {
                   <p className="text-3xl mb-2">📡</p>
                   <p className="text-sm text-text-light">
                     {vessels.length === 0
-                      ? "Nenhum navio em cache. Clique em Atualizar."
+                      ? "Nenhum navio carregado. Clique em Atualizar."
                       : "Nenhum navio corresponde à busca."}
                   </p>
                 </div>
               ) : (
                 <ul className="space-y-2 pb-2">
                   {filteredVessels.map((s) => {
-                    const isSel = pickInModal?.id === s.id;
+                    const isSel = pickInModal?.imo === s.imo;
                     return (
-                      <li key={s.id}>
+                      <li key={s.imo}>
                         <button
                           onClick={() => setPickInModal(s)}
                           className={`w-full text-left p-3 rounded-xl border transition ${
@@ -707,15 +715,20 @@ export function EmailComposer() {
                         >
                           <div className="flex items-center gap-2 flex-wrap">
                             <h3 className="font-semibold text-text truncate">{s.name}</h3>
-                            {s.status && (
-                              <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700">
-                                {vesselStatusLabel(s.status)}
+                            {s.agencia && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-primary/10 text-primary">
+                                {s.agencia}
                               </span>
                             )}
+                            <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700">
+                              {s.situacao}
+                            </span>
                           </div>
                           <div className="flex flex-wrap gap-3 mt-1 text-[11px] text-text-light">
-                            {s.mmsi && <span>MMSI: <span className="font-mono">{s.mmsi}</span></span>}
-                            {s.imo && <span>IMO: <span className="font-mono">{s.imo}</span></span>}
+                            <span>IMO: <span className="font-mono">{s.imo}</span></span>
+                            {s.mv && <span>{s.mv === "S" ? "Saindo" : s.mv === "E" ? "Entrando" : s.mv}</span>}
+                            {s.local && <span>{s.local}</span>}
+                            {s.horario && <span>{s.horario}</span>}
                           </div>
                         </button>
                       </li>
