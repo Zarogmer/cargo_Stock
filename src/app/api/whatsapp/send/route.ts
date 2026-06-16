@@ -5,6 +5,8 @@ import {
   isEvolutionConfigured,
   sendWhatsappText,
   sendWhatsappTextToGroup,
+  sendWhatsappMediaToNumber,
+  sendWhatsappMediaToGroup,
   extractSentMessageId,
   normalizeBRNumber,
 } from "@/lib/services/evolution-api";
@@ -15,7 +17,9 @@ import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 // qualquer usuário logado (comportamento histórico).
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
-// POST { to: string, text: string, label?: string } — envia um texto via Evolution.
+// POST { to: string, text: string, label?: string, imageUrl?: string } — envia via
+// Evolution. Com `imageUrl` (data URL/base64 ou URL pública) manda a FOTO com `text`
+// de legenda (cai pro texto puro se a mídia falhar); sem ela, manda só texto.
 // Se `to` termina em "@g.us" é um grupo (exige papel em ALLOWED_ROLES); senão é
 // DM pra um número. Nos DOIS casos grava um stub da mensagem enviada pra a
 // conversa aparecer/atualizar na aba Conversas (sem isso, a conversa com um
@@ -30,7 +34,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Evolution API não configurada" }, { status: 503 });
   }
 
-  let body: { to?: string; text?: string; label?: string };
+  let body: { to?: string; text?: string; label?: string; imageUrl?: string };
   try {
     body = await request.json();
   } catch {
@@ -42,6 +46,8 @@ export async function POST(request: NextRequest) {
   if (!to || !text) {
     return NextResponse.json({ error: "Campos 'to' e 'text' são obrigatórios" }, { status: 400 });
   }
+  // Foto opcional: quando vem, a mensagem sai como mídia (legenda = `text`).
+  const image = body.imageUrl?.trim() || null;
 
   // Cadeado da aba Conversas: recusa envio manual pra conversas travadas. `to`
   // pode ser o JID (grupo) ou só o número (DM) — cobre as duas formas.
@@ -61,7 +67,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     try {
-      const result = await sendWhatsappTextToGroup(to, text);
+      let result: unknown;
+      if (image) {
+        try {
+          result = await sendWhatsappMediaToGroup(to, image, text);
+        } catch (mediaErr) {
+          console.warn("[send] group media failed, fallback to text:", (mediaErr as Error).message);
+          result = await sendWhatsappTextToGroup(to, text);
+        }
+      } else {
+        result = await sendWhatsappTextToGroup(to, text);
+      }
       // Persiste a mensagem pra aparecer em Conversas (mesmo padrão de
       // groups/route.ts e escalacao/notify). Falha aqui é não-fatal: a
       // mensagem já saiu pro grupo.
@@ -92,7 +108,17 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await sendWhatsappText(to, text);
+    let result: unknown;
+    if (image) {
+      try {
+        result = await sendWhatsappMediaToNumber(to, image, text);
+      } catch (mediaErr) {
+        console.warn("[send] DM media failed, fallback to text:", (mediaErr as Error).message);
+        result = await sendWhatsappText(to, text);
+      }
+    } else {
+      result = await sendWhatsappText(to, text);
+    }
     // Persiste a mensagem enviada (DM) pra a conversa aparecer/atualizar na aba
     // Conversas. Sem isso, a conversa com o fornecedor/contato só surgiria depois
     // que ELE respondesse (o webhook grava as recebidas). Usa o id REAL do

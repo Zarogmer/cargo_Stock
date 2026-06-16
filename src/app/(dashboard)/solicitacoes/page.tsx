@@ -179,6 +179,8 @@ interface ApproveData {
   spec: DestSpec;
   // Código no Almoxarifado conferido na aprovação. Em branco = gera pelo nome.
   code: string | null;
+  // Aviso opcional ao fornecedor no WhatsApp (null = não avisar).
+  notify?: WhatsappTarget | null;
 }
 
 const PAYMENT_METHODS = [
@@ -249,7 +251,7 @@ function findItemByCodeOrName<T extends { id: number; name: string }>(
 // Alvo da mensagem: o contato bruto do fornecedor (ex.: "13 3229-9350"), o nome
 // e a mensagem pré-pronta (editável no modal). Compartilhado pela aba
 // Fornecedores ("Chamar") e pelo Nova Solicitação ("Pedir cotação").
-interface WhatsappTarget { to: string; name: string; message: string }
+interface WhatsappTarget { to: string; name: string; message: string; imageUrl?: string | null }
 
 // Telefone do contato → dígitos com DDI 55 (formato wa.me / Evolution). Vazio
 // quando não dá pra extrair número (contato pode ser e-mail, "—" ou texto).
@@ -278,6 +280,22 @@ function supplierQuoteMessage(opts: { toolName: string; quantity: number; produc
     `📦 *${opts.toolName.trim() || "Produto"}*\n` +
     `🔢 Quantidade: ${qty}${link}\n\n` +
     "Consegue nos passar preço e disponibilidade? Obrigado!"
+  );
+}
+
+// Mensagem de confirmação de compra enviada ao fornecedor (opcional) ao registrar
+// uma Nova Compra ou ao aprovar uma solicitação. Sai com a foto do produto como
+// legenda quando houver. Sem valor de propósito (o preço já foi combinado) — leva
+// saudação, produto, quantidade e forma de pagamento.
+function purchaseConfirmMessage(opts: { description: string; quantity: number; paymentMethod?: string | null }): string {
+  const qty = opts.quantity > 0 ? opts.quantity : 1;
+  const pay = opts.paymentMethod?.trim() ? `\n💳 Pagamento: ${opts.paymentMethod.trim()}` : "";
+  return (
+    "Olá! Aqui é da *Cargo Ships Cleaning*. Tudo bem?\n\n" +
+    "Compra confirmada:\n\n" +
+    `📦 *${opts.description.trim() || "Produto"}*\n` +
+    `🔢 Quantidade: ${qty}${pay}\n\n` +
+    "Obrigado!"
   );
 }
 
@@ -576,6 +594,9 @@ export default function SolicitacoesPage() {
 
       setConcludeRequest(null);
       setSaveOk(`✅ "${description}" concluído — compra registrada.${stockMsg}${groupMsg}`);
+      // Se o aprovador marcou "Avisar o fornecedor", abre o modal de revisão com a
+      // mensagem pronta (e a foto da solicitação) pra ele conferir e clicar Enviar.
+      if (data.notify) setWhatsappTarget(data.notify);
       loadAll();
     } catch (err: any) {
       console.error("Erro ao concluir solicitação:", err);
@@ -780,6 +801,7 @@ export default function SolicitacoesPage() {
     data: Partial<PurchaseOrder>,
     fromRequestId: string | null,
     stock?: DestSpec | null,
+    notify?: WhatsappTarget | null,
   ) {
     setSaving(true);
     setSaveError(null);
@@ -829,6 +851,9 @@ export default function SolicitacoesPage() {
       setShowPurchaseForm(false);
       setEditPurchase(null);
       setPurchaseFromRequest(null);
+      // Compra salva: se o usuário marcou "Avisar o fornecedor", abre o modal de
+      // revisão com a mensagem pronta (e a foto) pra ele conferir e clicar Enviar.
+      if (notify) setWhatsappTarget(notify);
       loadAll();
     } catch (err: any) {
       console.error("Erro ao salvar compra:", err);
@@ -2209,7 +2234,7 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
 
 function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers, ships, saving }: {
   open: boolean; onClose: () => void;
-  onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null) => void;
+  onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null, notify?: WhatsappTarget | null) => void;
   item: PurchaseOrder | null;
   fromRequest: ToolRequest | null;
   suppliers: Supplier[];
@@ -2233,9 +2258,13 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
   const [code, setCode] = useState("");
   // Navio vinculado (opcional) — guarda o id do navio escolhido na aba Navios.
   const [shipId, setShipId] = useState("");
+  // Avisar o fornecedor no WhatsApp ao salvar (opcional, SEMPRE começa desmarcado).
+  const [notifySupplier, setNotifySupplier] = useState(false);
 
   useEffect(() => {
     if (!open) return;
+    // O aviso ao fornecedor sempre reinicia DESMARCADO a cada abertura do form.
+    setNotifySupplier(false);
     const today = new Date();
     const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     if (item) {
@@ -2290,6 +2319,17 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
     // uma compra antiga), mantém o ship_name já salvo pra não perder o vínculo.
     const selectedShip = ships.find((s) => s.id === shipId);
     const shipName = selectedShip ? selectedShip.name : (shipId ? (item?.ship_name || null) : null);
+    // Aviso opcional ao fornecedor: só em compra nova, com fornecedor cadastrado e
+    // com telefone, e quando o usuário marcou a opção. Senão é só registro da compra.
+    const matched = suppliers.find((s) => s.name === supplier);
+    const notify: WhatsappTarget | null = (!item && notifySupplier && matched && hasWhatsapp(matched.contact))
+      ? {
+          to: matched.contact!,
+          name: matched.name,
+          imageUrl,
+          message: purchaseConfirmMessage({ description, quantity: qty || 1, paymentMethod }),
+        }
+      : null;
     onSave({
       description,
       department: destSpec.dest || null,
@@ -2307,7 +2347,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       ship_name: shipName,
     }, fromRequest?.id || null,
       // Só lança no Almoxarifado em compras novas (na edição vira só rótulo).
-      !item ? destSpec : null);
+      !item ? destSpec : null,
+      notify);
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
@@ -2385,6 +2426,30 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
         </div>
         <ImagePicker value={imageUrl} onChange={setImageUrl} />
 
+        {/* Avisar o fornecedor no WhatsApp (opcional, sempre começa desmarcado).
+            Só habilita com fornecedor cadastrado e com telefone — senão é só
+            registro da compra (às vezes o usuário só quer anotar). */}
+        {!item && (() => {
+          const matched = suppliers.find((s) => s.name === supplier);
+          const canNotify = !!matched && hasWhatsapp(matched.contact);
+          return (
+            <div className="border border-border rounded-lg p-3 bg-gray-50/60">
+              <label className={`flex items-start gap-2.5 ${canNotify ? "cursor-pointer" : "opacity-60 cursor-not-allowed"}`}>
+                <input type="checkbox" checked={canNotify && notifySupplier} disabled={!canNotify}
+                  onChange={(e) => setNotifySupplier(e.target.checked)} className="mt-0.5 w-4 h-4 accent-emerald-600" />
+                <span className="text-sm">
+                  <span className="font-medium inline-flex items-center gap-1.5"><WhatsappIcon className="w-4 h-4 text-emerald-600" /> Avisar o fornecedor no WhatsApp</span>
+                  <span className="block text-xs text-text-light mt-0.5">
+                    {canNotify
+                      ? `Ao salvar, abre a mensagem pronta${imageUrl ? " (com a foto)" : ""} pra você revisar e enviar a ${matched!.name}.`
+                      : "Selecione um fornecedor cadastrado e com telefone (aba Fornecedores) pra habilitar."}
+                  </span>
+                </span>
+              </label>
+            </div>
+          );
+        })()}
+
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar Compra"}</Button>
@@ -2444,9 +2509,13 @@ function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving, on
   const [quantity, setQuantity] = useState("1");
   // Código no Almoxarifado — vem da solicitação; em branco o sistema gera pelo nome.
   const [code, setCode] = useState("");
+  // Avisar o fornecedor no WhatsApp ao concluir (opcional, SEMPRE começa desmarcado).
+  const [notifySupplier, setNotifySupplier] = useState(false);
 
   useEffect(() => {
     if (!open || !request) return;
+    // O aviso ao fornecedor sempre reinicia DESMARCADO a cada abertura do modal.
+    setNotifySupplier(false);
     const today = new Date();
     const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     // Pré-preenche o destino com a sugestão da solicitação (campo department).
@@ -2470,6 +2539,16 @@ function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving, on
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          // Aviso opcional ao fornecedor (fornecedor cadastrado, com telefone e opção marcada).
+          const matched = suppliers.find((s) => s.name === supplier);
+          const notify: WhatsappTarget | null = (notifySupplier && matched && hasWhatsapp(matched.contact))
+            ? {
+                to: matched.contact!,
+                name: matched.name,
+                imageUrl: request?.image_url ?? null,
+                message: purchaseConfirmMessage({ description: toolName, quantity: qty, paymentMethod }),
+              }
+            : null;
           onConfirm({
             toolName,
             supplier: supplier || null,
@@ -2479,6 +2558,7 @@ function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving, on
             quantity: qty,
             spec,
             code: code.trim().toUpperCase() || null,
+            notify,
           });
         }}
         className="space-y-4"
@@ -2562,6 +2642,29 @@ function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving, on
 
         <WarehouseDestinationFields value={spec} onChange={(v) => { if (v.dest !== spec.dest) setCode(""); setSpec(v); }} quantity={qty} />
         <CodeField dest={spec.dest} team={spec.team} value={code} name={toolName} onChange={setCode} onResolveName={setToolName} open={open} />
+
+        {/* Avisar o fornecedor no WhatsApp ao aprovar (opcional, sempre desmarcado).
+            Só habilita com fornecedor cadastrado e com telefone. */}
+        {(() => {
+          const matched = suppliers.find((s) => s.name === supplier);
+          const canNotify = !!matched && hasWhatsapp(matched.contact);
+          return (
+            <div className="border border-border rounded-lg p-3 bg-gray-50/60">
+              <label className={`flex items-start gap-2.5 ${canNotify ? "cursor-pointer" : "opacity-60 cursor-not-allowed"}`}>
+                <input type="checkbox" checked={canNotify && notifySupplier} disabled={!canNotify}
+                  onChange={(e) => setNotifySupplier(e.target.checked)} className="mt-0.5 w-4 h-4 accent-emerald-600" />
+                <span className="text-sm">
+                  <span className="font-medium inline-flex items-center gap-1.5"><WhatsappIcon className="w-4 h-4 text-emerald-600" /> Avisar o fornecedor no WhatsApp</span>
+                  <span className="block text-xs text-text-light mt-0.5">
+                    {canNotify
+                      ? `Ao concluir, abre a mensagem pronta${request?.image_url ? " (com a foto)" : ""} pra você revisar e enviar a ${matched!.name}.`
+                      : "Selecione um fornecedor cadastrado e com telefone (aba Fornecedores) pra habilitar."}
+                  </span>
+                </span>
+              </label>
+            </div>
+          );
+        })()}
 
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
@@ -2751,7 +2854,7 @@ function WhatsappSupplierModal({ open, onClose, target }: {
       const res = await fetch("/api/whatsapp/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to: waDigits(target.to), text: message, label: target.name }),
+        body: JSON.stringify({ to: waDigits(target.to), text: message, label: target.name, imageUrl: target.imageUrl ?? null }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.error) throw new Error(data?.error || `Erro ${res.status}`);
@@ -2779,6 +2882,15 @@ function WhatsappSupplierModal({ open, onClose, target }: {
         )}
         {waState === "unconfigured" && (
           <p className="text-xs text-amber-600">🟡 WhatsApp da empresa não configurado — use “Abrir no meu WhatsApp”.</p>
+        )}
+
+        {target.imageUrl && (
+          <div>
+            <p className="text-sm font-medium mb-1">Foto do produto</p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={target.imageUrl} alt="Produto" className="max-h-40 rounded-lg border border-border object-contain" />
+            <p className="text-[10px] text-text-light mt-1">A foto vai junto com a mensagem.</p>
+          </div>
         )}
 
         <div>
