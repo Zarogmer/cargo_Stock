@@ -2157,7 +2157,7 @@ function JobDetailModal({
     const missingPay = fixedRate * holds * missing;
     const perPerson = +(missingPay / selected.length).toFixed(2);
     const fnName = fn?.name || `Função ${fnId}`;
-    const reason = `Rateio: ${missing} ${fnName} faltou(aram), valor (${brl(fixedRate)} × ${holds} porão${holds === 1 ? "" : "ões"} × ${missing}) dividido entre ${selected.length}`;
+    const reason = `Rateio: ${missing} ${fnName} faltou(aram), valor (${brl(fixedRate)} × ${holds} ${holds === 1 ? "porão" : "porões"} × ${missing}) dividido entre ${selected.length}`;
 
     setRateioSaving(true);
     try {
@@ -2785,7 +2785,7 @@ function JobDetailModal({
                 {fnId > 0 && missing > 0 && selectedCount > 0 && (
                   <div className="bg-white border border-amber-300 rounded-lg p-2 text-xs space-y-0.5">
                     <p>Valor fixo da função: <strong>{brl(fixedRate)}</strong></p>
-                    <p>Pagamento por porões: <strong>{brl(fixedRate)} × {holds} porão{holds === 1 ? "" : "ões"} = {brl(fixedRate * holds)}</strong></p>
+                    <p>Pagamento por porões: <strong>{brl(fixedRate)} × {holds} {holds === 1 ? "porão" : "porões"} = {brl(fixedRate * holds)}</strong></p>
                     <p>Valor de quem faltou: <strong>{brl(fixedRate * holds)} × {missing} = {brl(missingPay)}</strong></p>
                     <p>Dividido entre {selectedCount} {selectedCount === 1 ? "colaborador selecionado" : "colaboradores selecionados"}: <strong className="text-emerald-700">+ {brl(perPerson)} por pessoa</strong></p>
                   </div>
@@ -2887,12 +2887,15 @@ function JobDetailModal({
                         </span>
                       )}
                     </p>
-                    {kindFilter === "EMBARQUE" && (
-                      <p className="text-text-light">
-                        Total: <strong className="text-emerald-700">{brl(resolvedRate * Math.max(1, Number(job?.holds_count || 1)))}</strong>
-                        {" "}({Math.max(1, Number(job?.holds_count || 1))} porões × {brl(resolvedRate)})
-                      </p>
-                    )}
+                    {kindFilter === "EMBARQUE" && (() => {
+                      const holdsN = Math.max(1, Number(job?.holds_count || 1));
+                      return (
+                        <p className="text-text-light">
+                          Total: <strong className="text-emerald-700">{brl(resolvedRate * holdsN)}</strong>
+                          {" "}({holdsN} {holdsN === 1 ? "porão" : "porões"} × {brl(resolvedRate)})
+                        </p>
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -5093,7 +5096,7 @@ function ControleTab({
             color="blue"
             items={topPerformers.poroes.map((s) => ({
               employee: s.employee,
-              value: `${s.embarque.poroes} porão${s.embarque.poroes === 1 ? "" : "ões"}`,
+              value: `${s.embarque.poroes} ${s.embarque.poroes === 1 ? "porão" : "porões"}`,
               sub: `${s.embarque.ships.size} navios · ${brl(s.embarque.earnings)}`,
             }))}
             onClick={(emp) => setDetailEmp(emp)}
@@ -5471,7 +5474,7 @@ function EmployeeDetailDrawer({
                       </td>
                       <td className="px-2 py-1.5 text-center text-text-light whitespace-nowrap">
                         {h.kind === "EMBARQUE" ? (
-                          h.poroes ? <>{h.poroes} porõe{h.poroes === 1 ? "m" : "s"}</> : "—"
+                          h.poroes ? <>{h.poroes} {h.poroes === 1 ? "porão" : "porões"}</> : "—"
                         ) : (
                           <>
                             {h.period && (
