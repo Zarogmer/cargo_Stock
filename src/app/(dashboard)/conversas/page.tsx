@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo, Fragment } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, Fragment, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Modal } from "@/components/ui/modal";
@@ -107,6 +107,35 @@ function resolveSender(
     return { label: aliasName || `Participante ${lid.slice(-6)}`, lid };
   }
   return { label: name, lid: null };
+}
+
+// Menção (número que aparece depois do @) -> nome resolvido pelo backend.
+type MentionMap = Record<string, string>;
+
+// Renderiza o texto da mensagem trocando cada menção "@<número>" pelo nome de
+// quem foi mencionado (estilo WhatsApp, em azul). Números sem nome resolvido
+// ficam como estão — melhor o número cru do que esconder a menção.
+function renderTextWithMentions(text: string, mentions: MentionMap): ReactNode {
+  if (!text || !mentions || Object.keys(mentions).length === 0) return text;
+  const re = /@(\d{8,})/g;
+  const parts: ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const name = mentions[m[1]];
+    if (!name) continue; // não resolvido — deixa o "@número" no texto
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    parts.push(
+      <span key={`m${key++}-${m.index}`} className="text-sky-600 font-medium">
+        @{name}
+      </span>,
+    );
+    last = m.index + m[0].length;
+  }
+  if (parts.length === 0) return text;
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
 }
 
 // Tudo no fuso do Brasil — o usuário raciocina em horário de Brasília,
@@ -313,6 +342,8 @@ export default function ConversasPage() {
   const [search, setSearch] = useState("");
   const [selectedJid, setSelectedJid] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  // Menções resolvidas (@número -> nome) da conversa aberta, vindas do backend.
+  const [mentions, setMentions] = useState<MentionMap>({});
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   // Paginação "carregar anteriores": cresce o limite e re-busca. O polling de
   // 30s usa o mesmo limite, então não apaga o histórico já carregado.
@@ -426,6 +457,7 @@ export default function ConversasPage() {
       if (res.ok) {
         const msgs = (body.messages || []) as Message[];
         setMessages(msgs);
+        setMentions((body.mentions || {}) as MentionMap);
         // Voltou menos que o limite pedido → não há mais histórico anterior.
         setHasMoreOlder(msgs.length >= limit);
         // Marca a conversa aberta como lida até a mensagem mais recente.
@@ -1072,7 +1104,7 @@ export default function ConversasPage() {
                           {hasMedia ? (
                             <MediaBubble msg={m} onImageClick={setLightboxSrc} />
                           ) : (
-                            <p className="text-sm whitespace-pre-wrap break-words">{m.text || "(vazio)"}</p>
+                            <p className="text-sm whitespace-pre-wrap break-words">{m.text ? renderTextWithMentions(m.text, mentions) : "(vazio)"}</p>
                           )}
                           <p className="text-[10px] text-gray-500 text-right mt-1" title={formatFullDateTime(m.timestamp_ms)}>
                             {formatMsgTime(m.timestamp_ms)}

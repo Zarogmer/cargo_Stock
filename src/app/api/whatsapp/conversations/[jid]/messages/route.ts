@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { extractMentionNumbers, resolveMentionNames } from "@/lib/services/whatsapp-mentions";
 
 const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
@@ -85,7 +86,18 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jid:
       };
     });
 
-    return NextResponse.json({ messages });
+    // Resolve as menções "@<número>" do texto para nomes. Em grupos, os números
+    // são LIDs de privacidade — cruzamos com o histórico do grupo e o cadastro
+    // pra mostrar quem foi mencionado/convocado em vez do número cru.
+    const mentionNums = new Set<string>();
+    for (const m of messages) {
+      for (const n of extractMentionNumbers(m.text)) mentionNums.add(n);
+    }
+    const mentions = mentionNums.size > 0
+      ? await resolveMentionNames([...mentionNums], jid)
+      : {};
+
+    return NextResponse.json({ messages, mentions });
   } catch (err) {
     console.error("messages GET error:", err);
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
