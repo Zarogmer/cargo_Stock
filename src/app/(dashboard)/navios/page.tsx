@@ -1837,21 +1837,9 @@ export default function NaviosPage() {
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-text mb-1">{form.operation_type === "COSTADO" ? "Data de Início" : "Data de Embarque"}</label>
-                <input
-                  type="date"
-                  value={form.arrival_date}
-                  onChange={(e) => setForm({ ...form, arrival_date: e.target.value })}
-                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                />
-                {/* A data de saída não é mais preenchida aqui — ela é registrada
-                    ao "Fechar" o navio (card de navio Em Operação). */}
-              </div>
-
-              {/* Tipo da Operação vem ANTES do Porto — define o resto do
-                  form (porto fica travado em Santos pra Costado, serviços
-                  só aparecem pra Embarque, Equipe Designada some em
+              {/* Tipo da Operação vem logo após o nome (2º campo) — define o
+                  resto do form (porto fica travado em Santos pra Costado,
+                  serviços só aparecem pra Embarque, Equipe Designada some em
                   Costado etc.). */}
               <div>
                 <label className="block text-sm font-medium text-text mb-1">Tipo da Operação</label>
@@ -1932,6 +1920,18 @@ export default function NaviosPage() {
                     🧹 <strong>Costado:</strong> sem sub-serviços.
                   </p>
                 )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-text mb-1">{form.operation_type === "COSTADO" ? "Data de Início" : "Data de Embarque"}</label>
+                <input
+                  type="date"
+                  value={form.arrival_date}
+                  onChange={(e) => setForm({ ...form, arrival_date: e.target.value })}
+                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                />
+                {/* A data de saída não é mais preenchida aqui — ela é registrada
+                    ao "Fechar" o navio (card de navio Em Operação). */}
               </div>
 
               <div>
