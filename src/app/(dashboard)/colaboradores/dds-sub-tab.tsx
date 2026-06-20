@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob } from "@/lib/print";
+import { PdfPreview } from "./pdf-preview";
 import { SearchIcon, PlusIcon, TrashIcon } from "@/components/icons";
 import type { Employee } from "@/types/database";
 
@@ -63,8 +64,9 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
 
   const [picked, setPicked] = useState<SelectedEmployee[]>([]);
   const [search, setSearch] = useState("");
-  const [generating, setGenerating] = useState<"docx" | "pdf" | "print" | null>(null);
+  const [generating, setGenerating] = useState<"docx" | "pdf" | "print" | "preview" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -136,7 +138,7 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
     setPicked((prev) => prev.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
   }
 
-  async function handleGenerate(action: "docx" | "pdf" | "print") {
+  async function handleGenerate(action: "docx" | "pdf" | "print" | "preview") {
     setError(null);
     if (!shipName.trim()) {
       setError("Selecione um navio ou informe o nome.");
@@ -168,7 +170,9 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
         throw new Error(body.detail ? `${main}\n\nDetalhe tecnico: ${body.detail}` : main);
       }
       const blob = await res.blob();
-      if (action === "print") {
+      if (action === "preview") {
+        setPreviewBlob(blob);
+      } else if (action === "print") {
         printPdfBlob(blob);
       } else {
         const url = URL.createObjectURL(blob);
@@ -387,7 +391,15 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
         </div>
       )}
 
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button
+          variant="secondary"
+          onClick={() => handleGenerate("preview")}
+          disabled={!!generating || picked.length === 0}
+          className="mr-auto"
+        >
+          {generating === "preview" ? "Gerando..." : "👁️ Pré-visualizar"}
+        </Button>
         <Button
           variant="primary"
           onClick={() => handleGenerate("docx")}
@@ -410,6 +422,8 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
           {generating === "print" ? "Imprimindo..." : "🖨️ Imprimir"}
         </Button>
       </div>
+
+      <PdfPreview blob={previewBlob} loading={generating === "preview"} onClose={() => setPreviewBlob(null)} />
     </div>
   );
 }

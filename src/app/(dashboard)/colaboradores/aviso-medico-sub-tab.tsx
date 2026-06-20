@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob } from "@/lib/print";
+import { PdfPreview } from "./pdf-preview";
 import type { Employee } from "@/types/database";
 
 const EXAM_TYPES = [
@@ -45,8 +46,9 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
   const [data, setData] = useState<string>(todayInput);
   const [tipoExame, setTipoExame] = useState<ExamType>("ADMISSIONAL");
 
-  const [generating, setGenerating] = useState<"docx" | "pdf" | "print" | null>(null);
+  const [generating, setGenerating] = useState<"docx" | "pdf" | "print" | "preview" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
 
   const sortedEmployees = useMemo(() => {
     return [...employees]
@@ -70,7 +72,7 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
     // Função stays as "Auxiliar Operacional" — don't overwrite from e.role.
   }
 
-  async function handleGenerate(action: "docx" | "pdf" | "print") {
+  async function handleGenerate(action: "docx" | "pdf" | "print" | "preview") {
     setError(null);
     if (!nome.trim()) {
       setError("Selecione um funcionário ou informe o nome.");
@@ -97,7 +99,9 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
         throw new Error(body.detail ? `${main}\n\nDetalhe tecnico: ${body.detail}` : main);
       }
       const blob = await res.blob();
-      if (action === "print") {
+      if (action === "preview") {
+        setPreviewBlob(blob);
+      } else if (action === "print") {
         printPdfBlob(blob);
       } else {
         const url = URL.createObjectURL(blob);
@@ -222,7 +226,15 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
         </div>
       )}
 
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button
+          variant="secondary"
+          onClick={() => handleGenerate("preview")}
+          disabled={!!generating || !nome.trim()}
+          className="mr-auto"
+        >
+          {generating === "preview" ? "Gerando..." : "👁️ Pré-visualizar"}
+        </Button>
         <Button
           variant="primary"
           onClick={() => handleGenerate("docx")}
@@ -245,6 +257,8 @@ export function AvisoMedicoSubTab({ employees }: { employees: Employee[] }) {
           {generating === "print" ? "Imprimindo..." : "🖨️ Imprimir"}
         </Button>
       </div>
+
+      <PdfPreview blob={previewBlob} loading={generating === "preview"} onClose={() => setPreviewBlob(null)} />
     </div>
   );
 }

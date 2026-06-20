@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob } from "@/lib/print";
+import { PdfPreview } from "./pdf-preview";
 import { db } from "@/lib/db";
 import { parseDecimalBR } from "@/lib/utils";
 import {
@@ -58,8 +59,9 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
   const [poroes, setPoroes] = useState(1);
 
   const [ships, setShips] = useState<Ship[]>([]);
-  const [generating, setGenerating] = useState<"docx" | "pdf" | "print" | null>(null);
+  const [generating, setGenerating] = useState<"docx" | "pdf" | "print" | "preview" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
 
   // Navios cadastrados pro dropdown (com opção de digitar um avulso).
   useEffect(() => {
@@ -157,7 +159,7 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
     return [{ nome: nome.trim(), cpf: cpf.trim() }];
   }
 
-  async function handleGenerate(action: "docx" | "pdf" | "print") {
+  async function handleGenerate(action: "docx" | "pdf" | "print" | "preview") {
     setError(null);
     const recipients = buildRecipients();
     if (recipients.length === 0 || recipients.some((r) => !r.nome)) {
@@ -192,7 +194,9 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
         throw new Error(b.detail ? `${main}\n\nDetalhe tecnico: ${b.detail}` : main);
       }
       const blob = await res.blob();
-      if (action === "print") {
+      if (action === "preview") {
+        setPreviewBlob(blob);
+      } else if (action === "print") {
         printPdfBlob(blob);
       } else {
         const url = URL.createObjectURL(blob);
@@ -407,7 +411,16 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
         </div>
       )}
 
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button
+          variant="secondary"
+          onClick={() => handleGenerate("preview")}
+          disabled={!canGenerate || isLote}
+          className="mr-auto"
+          title={isLote ? "Visualização disponível para 1 recibo (lotes geram .zip)" : undefined}
+        >
+          {generating === "preview" ? "Gerando..." : "👁️ Pré-visualizar"}
+        </Button>
         <Button variant="primary" onClick={() => handleGenerate("docx")} disabled={!canGenerate}>
           {generating === "docx" ? "Gerando..." : isLote ? "Gerar lote Word (.zip)" : "Gerar Word (.docx)"}
         </Button>
@@ -423,6 +436,8 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
           {generating === "print" ? "Imprimindo..." : "🖨️ Imprimir"}
         </Button>
       </div>
+
+      <PdfPreview blob={previewBlob} loading={generating === "preview"} onClose={() => setPreviewBlob(null)} />
     </div>
   );
 }
