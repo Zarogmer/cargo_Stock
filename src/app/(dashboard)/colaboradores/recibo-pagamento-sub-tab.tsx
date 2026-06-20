@@ -17,6 +17,7 @@ import type { Employee } from "@/types/database";
 interface Ship {
   id: string;
   name: string;
+  holds_count: number | null;
 }
 
 interface Recipient {
@@ -67,7 +68,7 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
   useEffect(() => {
     let active = true;
     (async () => {
-      const { data, error } = await db.from("ships").select("id, name").order("name");
+      const { data, error } = await db.from("ships").select("id, name, holds_count").order("name");
       if (!active) return;
       if (!error && data) setShips(data as Ship[]);
     })();
@@ -110,7 +111,8 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
     }
   }, [selectedIds, employees]);
 
-  const shipKnown = ships.some((s) => s.name === navio);
+  const navioShip = ships.find((s) => s.name === navio) || null;
+  const shipKnown = !!navioShip;
   const valorNum = parseDecimalBR(valor);
   const extensoPreview = valorNum > 0 ? valorPorExtenso(valorNum) : "";
   const periodoPreview = formatPeriodoAnterior(data);
@@ -367,8 +369,12 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
               <select
                 value={navio}
                 onChange={(e) => {
-                  if (e.target.value === OTHER) { setNavio(""); setNavioTyping(true); }
-                  else setNavio(e.target.value);
+                  const v = e.target.value;
+                  if (v === OTHER) { setNavio(""); setNavioTyping(true); return; }
+                  setNavio(v);
+                  // Puxa a quantidade de porões do navio (qtd cadastrada no navio).
+                  const ship = ships.find((s) => s.name === v);
+                  if (ship && ship.holds_count && ship.holds_count > 0) setPoroes(ship.holds_count);
                 }}
                 className={fieldCls}
               >
@@ -392,10 +398,18 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
               <div className="mt-2">
                 <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Quantidade de porões</label>
                 <select value={poroes} onChange={(e) => setPoroes(Number(e.target.value))} className={fieldCls}>
-                  {[1, 2, 3, 4, 5, 6, 7].map((n) => (
-                    <option key={n} value={n}>{n} {n === 1 ? "porão" : "porões"}</option>
-                  ))}
+                  {Array.from(new Set([1, 2, 3, 4, 5, 6, 7, poroes]))
+                    .filter((n) => n >= 1)
+                    .sort((a, b) => a - b)
+                    .map((n) => (
+                      <option key={n} value={n}>{n} {n === 1 ? "porão" : "porões"}</option>
+                    ))}
                 </select>
+                {navioShip?.holds_count ? (
+                  <p className="text-[11px] text-text-light mt-1">Puxado do navio ({navioShip.holds_count} {navioShip.holds_count === 1 ? "porão" : "porões"}). Ajuste se necessário.</p>
+                ) : navioShip ? (
+                  <p className="text-[11px] text-amber-700 mt-1">Este navio não tem porões cadastrados — informe a quantidade ou cadastre em Navios.</p>
+                ) : null}
                 <p className="text-[11px] text-text-light mt-1">
                   No recibo sai: <strong>{tipoDoc}</strong>
                 </p>
