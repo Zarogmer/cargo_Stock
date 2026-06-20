@@ -413,6 +413,7 @@ export default function ColaboradoresPage() {
     "ficha-epi": "Ficha de EPI",
     "aviso-medico": "Aviso Médico",
     "recibo-pagamento": "Recibo de Pagamento",
+    "folha-ponto": "Folha de Ponto",
   };
   const docCrumb = initialTab === "documentos" ? docSubLabel[docSub || "dds"] : null;
 

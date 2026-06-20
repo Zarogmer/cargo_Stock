@@ -37,7 +37,8 @@ async function findSofficePath(): Promise<string | null> {
 }
 
 /**
- * Converte um buffer DOCX para PDF chamando o binario `soffice` diretamente.
+ * Converte um buffer de documento Office (DOCX, XLSX, ...) para PDF chamando o
+ * binario `soffice` diretamente.
  *
  * NAO usa a lib `libreoffice-convert` porque ela trata qualquer aparicao
  * da palavra "error" no stderr como falha — e o LibreOffice em Nix sempre
@@ -47,7 +48,8 @@ async function findSofficePath(): Promise<string | null> {
  * Cada chamada usa um diretorio de profile dedicado (UserInstallation +
  * HOME) pra permitir conversoes concorrentes sem conflito.
  */
-export async function docxToPdf(docxBuffer: Buffer): Promise<Buffer> {
+export async function officeToPdf(buffer: Buffer, inputExt: string): Promise<Buffer> {
+  const ext = inputExt.replace(/^\./, "").toLowerCase();
   const sofficePath = await findSofficePath();
   if (!sofficePath) {
     throw new Error(
@@ -56,16 +58,16 @@ export async function docxToPdf(docxBuffer: Buffer): Promise<Buffer> {
     );
   }
 
-  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "docx2pdf-"));
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "office2pdf-"));
   const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "sofficeprofile-"));
-  const inputName = `input-${randomBytes(4).toString("hex")}.docx`;
+  const inputName = `input-${randomBytes(4).toString("hex")}.${ext}`;
   const inputPath = path.join(workDir, inputName);
   const outputPath = path.join(
     workDir,
-    inputName.replace(/\.docx$/, ".pdf"),
+    inputName.replace(new RegExp(`\\.${ext}$`), ".pdf"),
   );
 
-  await fs.writeFile(inputPath, docxBuffer);
+  await fs.writeFile(inputPath, buffer);
 
   const args = [
     `-env:UserInstallation=file://${profileDir}`,
@@ -111,4 +113,14 @@ export async function docxToPdf(docxBuffer: Buffer): Promise<Buffer> {
     fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
     fs.rm(profileDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/** Converte um buffer DOCX para PDF. */
+export function docxToPdf(docxBuffer: Buffer): Promise<Buffer> {
+  return officeToPdf(docxBuffer, "docx");
+}
+
+/** Converte um buffer XLSX para PDF (respeita o page setup embutido na planilha). */
+export function xlsxToPdf(xlsxBuffer: Buffer): Promise<Buffer> {
+  return officeToPdf(xlsxBuffer, "xlsx");
 }

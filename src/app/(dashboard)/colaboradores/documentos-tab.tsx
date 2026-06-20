@@ -6,11 +6,12 @@ import { DdsSubTab } from "./dds-sub-tab";
 import { FichaEpiSubTab } from "./ficha-epi-sub-tab";
 import { AvisoMedicoSubTab } from "./aviso-medico-sub-tab";
 import { ReciboPagamentoSubTab } from "./recibo-pagamento-sub-tab";
+import { FolhaPontoSubTab } from "./folha-ponto-sub-tab";
 
-type SubTabKey = "dds" | "ficha-epi" | "aviso-medico" | "recibo-pagamento";
+type SubTabKey = "dds" | "ficha-epi" | "aviso-medico" | "recibo-pagamento" | "folha-ponto";
 
 function parseDoc(raw: string | null): SubTabKey {
-  if (raw === "ficha-epi" || raw === "aviso-medico" || raw === "recibo-pagamento" || raw === "dds") return raw;
+  if (raw === "ficha-epi" || raw === "aviso-medico" || raw === "recibo-pagamento" || raw === "folha-ponto" || raw === "dds") return raw;
   return "dds";
 }
 
@@ -21,5 +22,6 @@ export function DocumentosTab({ employees }: { employees: Employee[] }) {
   if (active === "ficha-epi") return <FichaEpiSubTab employees={employees} />;
   if (active === "aviso-medico") return <AvisoMedicoSubTab employees={employees} />;
   if (active === "recibo-pagamento") return <ReciboPagamentoSubTab employees={employees} />;
+  if (active === "folha-ponto") return <FolhaPontoSubTab employees={employees} />;
   return <DdsSubTab employees={employees} />;
 }

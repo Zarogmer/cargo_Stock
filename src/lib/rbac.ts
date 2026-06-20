@@ -245,6 +245,7 @@ export const NAV_ITEMS: NavItem[] = [
           { label: "Ficha de EPI", href: "/colaboradores?tab=documentos&doc=ficha-epi" },
           { label: "Aviso Médico", href: "/colaboradores?tab=documentos&doc=aviso-medico" },
           { label: "Recibo de Pagamento", href: "/colaboradores?tab=documentos&doc=recibo-pagamento" },
+          { label: "Folha de Ponto", href: "/colaboradores?tab=documentos&doc=folha-ponto" },
         ],
       },
     ],
