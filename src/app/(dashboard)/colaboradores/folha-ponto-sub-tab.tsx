@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { printPdfBlob } from "@/lib/print";
 import { db } from "@/lib/db";
 import { AllocInput, expandWorkedDates } from "@/lib/folha-ponto";
+import { FolhaPontoPreview } from "./folha-ponto-preview";
 import type { Employee } from "@/types/database";
 
 const MESES = [
@@ -45,9 +46,12 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
   const [month, setMonth] = useState(init.month);
   const [year, setYear] = useState(init.year);
 
-  // Prévia de dias trabalhados por colaborador (best-effort).
-  const [preview, setPreview] = useState<Record<number, number>>({});
+  // Dias trabalhados por colaborador no mês (best-effort) — alimenta a contagem
+  // e a visualização. Guardamos as datas (não só a contagem) pra renderizar a prévia.
+  const [workedByEmp, setWorkedByEmp] = useState<Record<number, string[]>>({});
   const [previewLoading, setPreviewLoading] = useState(false);
+  // Qual colaborador está sendo visualizado.
+  const [previewId, setPreviewId] = useState<number | null>(null);
 
   const [generating, setGenerating] = useState<"xlsx" | "pdf" | "print" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +83,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
   useEffect(() => {
     const ids = [...selectedIds];
     if (ids.length === 0) {
-      setPreview({});
+      setWorkedByEmp({});
       return;
     }
     let active = true;
@@ -93,7 +97,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           .eq("status", "ATIVO");
         if (!active) return;
         if (aErr || !allocs) {
-          setPreview({});
+          setWorkedByEmp({});
           return;
         }
         const allocRows = allocs as unknown as AllocRow[];
@@ -126,11 +130,13 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           });
           byEmp.set(a.employee_id, list);
         }
-        const next: Record<number, number> = {};
-        for (const id of ids) next[id] = expandWorkedDates(byEmp.get(id) || [], year, month).size;
-        setPreview(next);
+        const next: Record<number, string[]> = {};
+        for (const id of ids) {
+          next[id] = [...expandWorkedDates(byEmp.get(id) || [], year, month)].sort();
+        }
+        setWorkedByEmp(next);
       } catch {
-        if (active) setPreview({});
+        if (active) setWorkedByEmp({});
       } finally {
         if (active) setPreviewLoading(false);
       }
@@ -153,9 +159,36 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
     setSelectedIds(new Set());
   }
 
+  // Mantém o colaborador visualizado dentro da seleção (default = primeiro).
+  useEffect(() => {
+    setPreviewId((cur) => {
+      if (cur != null && selectedIds.has(cur)) return cur;
+      const first = [...selectedIds].sort((a, b) => {
+        const na = employees.find((e) => e.id === a)?.name || "";
+        const nb = employees.find((e) => e.id === b)?.name || "";
+        return na.localeCompare(nb, "pt-BR");
+      })[0];
+      return first ?? null;
+    });
+  }, [selectedIds, employees]);
+
   const totalWorked = useMemo(
-    () => [...selectedIds].reduce((acc, id) => acc + (preview[id] ?? 0), 0),
-    [selectedIds, preview]
+    () => [...selectedIds].reduce((acc, id) => acc + (workedByEmp[id]?.length ?? 0), 0),
+    [selectedIds, workedByEmp]
+  );
+
+  const previewEmp = previewId != null ? employees.find((e) => e.id === previewId) ?? null : null;
+  const previewWorked = useMemo(
+    () => new Set(previewId != null ? workedByEmp[previewId] ?? [] : []),
+    [previewId, workedByEmp]
+  );
+  const selectedEmpList = useMemo(
+    () =>
+      [...selectedIds]
+        .map((id) => employees.find((e) => e.id === id))
+        .filter((e): e is Employee => !!e)
+        .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
+    [selectedIds, employees]
   );
 
   async function handleGenerate(action: "xlsx" | "pdf" | "print") {
@@ -267,7 +300,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
             ) : (
               filteredEmployees.map((e) => {
                 const checked = selectedIds.has(e.id);
-                const dias = preview[e.id];
+                const dias = workedByEmp[e.id]?.length;
                 return (
                   <label
                     key={e.id}
@@ -323,6 +356,39 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           {generating === "print" ? "Imprimindo..." : "🖨️ Imprimir"}
         </Button>
       </div>
+
+      {/* Visualização */}
+      {selectedCount > 0 && previewEmp && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h4 className="text-sm font-semibold text-text">
+              Visualização
+              {previewLoading && <span className="ml-2 text-xs font-normal text-text-light">atualizando…</span>}
+            </h4>
+            {selectedCount > 1 && (
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-text-light">Colaborador:</label>
+                <select
+                  value={previewId ?? ""}
+                  onChange={(e) => setPreviewId(Number(e.target.value))}
+                  className="px-2 py-1 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  {selectedEmpList.map((e) => (
+                    <option key={e.id} value={e.id}>{e.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+          <FolhaPontoPreview
+            name={previewEmp.name}
+            empId={previewEmp.id}
+            worked={previewWorked}
+            year={year}
+            month={month}
+          />
+        </div>
+      )}
     </div>
   );
 }

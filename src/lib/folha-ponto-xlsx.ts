@@ -5,17 +5,7 @@
 // <pageSetup>, garantindo um PDF limpo na conversão via LibreOffice.
 import * as XLSX from "xlsx-js-style";
 import PizZip from "pizzip";
-import {
-  CARGA_DIARIA_MIN,
-  DIAS_SEMANA_PT,
-  MESES_PT,
-  daysInMonth,
-  isHighlightedDay,
-  seedKey,
-  timesForDay,
-  totalsForDay,
-  weekdayOf,
-} from "./folha-ponto";
+import { CARGA_DIARIA_MIN, MESES_PT, computeFolha } from "./folha-ponto";
 
 export interface FolhaEmployee {
   id: number;
@@ -62,7 +52,7 @@ function cargaLabelValue(): string {
 
 // Constrói a worksheet de um colaborador.
 function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.WorkSheet {
-  const nDays = daysInMonth(year, month1);
+  const { rows: dayRows, totals: monthTotals } = computeFolha(emp.id, emp.worked, year, month1);
   const COLS = 16; // A..P
   const blankRow = () => Array(COLS).fill(null) as (string | number | null)[];
   const aoa: (string | number | null)[][] = [];
@@ -90,17 +80,12 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.Work
   const cargaLabels = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "DOMINGO", "FERIADOS"];
 
   const dayMeta: { row: number; highlight: boolean }[] = [];
-  let totH = 0, totA = 0, totHE = 0, totF1 = 0, totF2 = 0;
-  for (let d = 1; d <= nDays; d++) {
-    const iso = `${year}-${String(month1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    const wd = weekdayOf(iso);
-    const worked = emp.worked.has(iso);
+  for (const dr of dayRows) {
     const row = blankRow();
-    row[0] = excelSerial(year, month1, d);
-    row[1] = DIAS_SEMANA_PT[wd];
-    if (worked) {
-      const t = timesForDay(seedKey(emp.id, iso));
-      const tot = totalsForDay(t);
+    row[0] = excelSerial(year, month1, dr.day);
+    row[1] = dr.dayName;
+    if (dr.worked && dr.times && dr.totals) {
+      const t = dr.times, tot = dr.totals;
       row[2] = t.entrada1 / 1440;
       row[3] = t.saida1 / 1440;
       row[4] = t.entrada2 / 1440;
@@ -112,12 +97,11 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.Work
       row[10] = "-";
       row[11] = tot.faixa1 ? tot.faixa1 / 1440 : "-";
       row[12] = tot.faixa2 ? tot.faixa2 / 1440 : "-";
-      totH += tot.hDiaria; totA += tot.atraso; totHE += tot.he; totF1 += tot.faixa1; totF2 += tot.faixa2;
     } else {
       for (let c = 2; c <= 12; c++) row[c] = "-";
     }
     aoa.push(row);
-    dayMeta.push({ row: aoa.length - 1, highlight: isHighlightedDay(iso) });
+    dayMeta.push({ row: aoa.length - 1, highlight: dr.highlight });
   }
 
   // Tabela lateral CARGA HORÁRIA (coluna O/P) a partir da linha de cabeçalho.
@@ -130,11 +114,11 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.Work
 
   const totalRow = blankRow();
   totalRow[0] = "TOTAIS";
-  totalRow[6] = totH ? totH / 1440 : "-";
-  totalRow[7] = totA ? totA / 1440 : "-";
-  totalRow[9] = totHE ? totHE / 1440 : "-";
-  totalRow[11] = totF1 ? totF1 / 1440 : "-";
-  totalRow[12] = totF2 ? totF2 / 1440 : "-";
+  totalRow[6] = monthTotals.hDiaria ? monthTotals.hDiaria / 1440 : "-";
+  totalRow[7] = monthTotals.atraso ? monthTotals.atraso / 1440 : "-";
+  totalRow[9] = monthTotals.he ? monthTotals.he / 1440 : "-";
+  totalRow[11] = monthTotals.faixa1 ? monthTotals.faixa1 / 1440 : "-";
+  totalRow[12] = monthTotals.faixa2 ? monthTotals.faixa2 / 1440 : "-";
   aoa.push(totalRow);
   const TOTAL_ROW = aoa.length - 1;
 

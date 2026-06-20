@@ -176,3 +176,63 @@ export function totalsForDay(t: DayTimes): DayTotals {
 export function seedKey(employeeId: number, iso: string): string {
   return `${employeeId}|${iso}`;
 }
+
+// "HH:MM" a partir de minutos (aceita > 24h para os totais).
+export function fmtHHMM(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+// ── Folha consolidada (fonte única do Excel e da prévia em tela) ────────────────
+
+export interface FolhaDayRow {
+  iso: string;
+  day: number;
+  dayName: string;
+  highlight: boolean; // domingo/feriado → linha realçada
+  worked: boolean;
+  times: DayTimes | null;
+  totals: DayTotals | null;
+}
+
+export interface FolhaComputed {
+  rows: FolhaDayRow[];
+  totals: DayTotals; // somatório do mês
+}
+
+// Monta as linhas da folha de um colaborador (todos os dias do mês; só os dias
+// trabalhados recebem horário/cálculo). Usada pelo gerador de Excel e pela prévia
+// da tela — assim a visualização bate exatamente com o arquivo gerado.
+export function computeFolha(
+  empId: number,
+  worked: Set<string>,
+  year: number,
+  month1to12: number,
+): FolhaComputed {
+  const nDays = daysInMonth(year, month1to12);
+  const rows: FolhaDayRow[] = [];
+  let totH = 0, totA = 0, totHE = 0, totF1 = 0, totF2 = 0;
+  for (let d = 1; d <= nDays; d++) {
+    const iso = `${year}-${String(month1to12).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const isWorked = worked.has(iso);
+    let times: DayTimes | null = null;
+    let totals: DayTotals | null = null;
+    if (isWorked) {
+      times = timesForDay(seedKey(empId, iso));
+      totals = totalsForDay(times);
+      totH += totals.hDiaria; totA += totals.atraso; totHE += totals.he;
+      totF1 += totals.faixa1; totF2 += totals.faixa2;
+    }
+    rows.push({
+      iso,
+      day: d,
+      dayName: DIAS_SEMANA_PT[weekdayOf(iso)],
+      highlight: isHighlightedDay(iso),
+      worked: isWorked,
+      times,
+      totals,
+    });
+  }
+  return { rows, totals: { hDiaria: totH, atraso: totA, he: totHE, faixa1: totF1, faixa2: totF2 } };
+}
