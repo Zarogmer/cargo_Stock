@@ -90,11 +90,16 @@ export function daysInMonth(year: number, month1to12: number): number {
 export type AllocKind = "COSTADO" | "EMBARQUE";
 
 export interface AllocInput {
+  // Tipo da escalação (legado). O tipo de jornada da folha é decidido pelo
+  // navio (ship_services), não por este campo.
   kind: AllocKind;
   // COSTADO: data exata do turno (YYYY-MM-DD).
   shift_date: string | null;
   // COSTADO: turno de 6h ("07-13", "13-19", "19-01", "01-07").
   shift_period?: string | null;
+  // Serviços do navio (aba Navios): inclui "COSTADO" → dia de Costado (6h, turno);
+  // senão → Embarque (7h20). Esta é a FONTE do tipo de jornada de cada dia.
+  ship_services?: string[] | null;
   // EMBARQUE: janela da operação do navio.
   ship_arrival: string | null;
   ship_departure: string | null;
@@ -134,7 +139,9 @@ export function expandWorkedDates(
   };
 
   for (const a of allocs) {
-    if (a.kind === "COSTADO") {
+    // O navio decide o tipo: services com "COSTADO" → turno de 6h (shift_date);
+    // qualquer outro navio → Embarque (janela do navio).
+    if ((a.ship_services || []).includes("COSTADO")) {
       const d = (a.shift_date || "").slice(0, 10);
       if (d && d >= monthStart && d <= monthEnd) {
         consider(d, { kind: "COSTADO", period: a.shift_period ?? null });
@@ -268,17 +275,15 @@ export interface FolhaComputed {
 // Monta as linhas da folha de um colaborador (todos os dias do mês; só os dias
 // trabalhados recebem horário/cálculo). Usada pelo gerador de Excel e pela prévia
 // da tela — assim a visualização bate exatamente com o arquivo gerado.
-// `jornada` é o tipo escolhido na tela e aplicado a TODOS os dias trabalhados:
-//   - EMBARQUE: 7h20 (09:00–17:20 com variação determinística por dia);
-//   - COSTADO: 6h no horário do turno escalado de cada dia (shift_period), com
-//     fallback de turno quando o dia não tem turno gravado.
-// Os dias trabalhados continuam vindo dos navios (worked); só a jornada muda.
+// Cada dia trabalhado usa a jornada do navio onde a pessoa esteve naquele dia
+// (definida em expandWorkedDates pelo services do navio): COSTADO = 6h no horário
+// do turno escalado; EMBARQUE = 7h20 (09:00–17:20). A folha reflete o tipo real
+// de cada dia automaticamente — sem escolha manual.
 export function computeFolha(
   empId: number,
   worked: WorkedMap,
   year: number,
   month1to12: number,
-  jornada: WorkedKind = "EMBARQUE",
 ): FolhaComputed {
   const nDays = daysInMonth(year, month1to12);
   const rows: FolhaDayRow[] = [];
@@ -289,9 +294,8 @@ export function computeFolha(
     let times: DayTimes | null = null;
     let totals: DayTotals | null = null;
     if (wd) {
-      const day: WorkedDay = { kind: jornada, period: wd.period };
-      times = timesForDay(seedKey(empId, iso), day);
-      totals = totalsForDay(times, cargaForDay(day));
+      times = timesForDay(seedKey(empId, iso), wd);
+      totals = totalsForDay(times, cargaForDay(wd));
       totH += totals.hDiaria; totA += totals.atraso; totHE += totals.he;
       totF1 += totals.faixa1; totF2 += totals.faixa2;
     }
@@ -301,7 +305,7 @@ export function computeFolha(
       dayName: DIAS_SEMANA_PT[weekdayOf(iso)],
       highlight: isHighlightedDay(iso),
       worked: wd != null,
-      kind: wd != null ? jornada : null,
+      kind: wd?.kind ?? null,
       times,
       totals,
     });
