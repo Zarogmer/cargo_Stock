@@ -268,11 +268,17 @@ export interface FolhaComputed {
 // Monta as linhas da folha de um colaborador (todos os dias do mês; só os dias
 // trabalhados recebem horário/cálculo). Usada pelo gerador de Excel e pela prévia
 // da tela — assim a visualização bate exatamente com o arquivo gerado.
+// `jornada` é o tipo escolhido na tela e aplicado a TODOS os dias trabalhados:
+//   - EMBARQUE: 7h20 (09:00–17:20 com variação determinística por dia);
+//   - COSTADO: 6h no horário do turno escalado de cada dia (shift_period), com
+//     fallback de turno quando o dia não tem turno gravado.
+// Os dias trabalhados continuam vindo dos navios (worked); só a jornada muda.
 export function computeFolha(
   empId: number,
   worked: WorkedMap,
   year: number,
   month1to12: number,
+  jornada: WorkedKind = "EMBARQUE",
 ): FolhaComputed {
   const nDays = daysInMonth(year, month1to12);
   const rows: FolhaDayRow[] = [];
@@ -283,8 +289,9 @@ export function computeFolha(
     let times: DayTimes | null = null;
     let totals: DayTotals | null = null;
     if (wd) {
-      times = timesForDay(seedKey(empId, iso), wd);
-      totals = totalsForDay(times, cargaForDay(wd));
+      const day: WorkedDay = { kind: jornada, period: wd.period };
+      times = timesForDay(seedKey(empId, iso), day);
+      totals = totalsForDay(times, cargaForDay(day));
       totH += totals.hDiaria; totA += totals.atraso; totHE += totals.he;
       totF1 += totals.faixa1; totF2 += totals.faixa2;
     }
@@ -294,7 +301,7 @@ export function computeFolha(
       dayName: DIAS_SEMANA_PT[weekdayOf(iso)],
       highlight: isHighlightedDay(iso),
       worked: wd != null,
-      kind: wd?.kind ?? null,
+      kind: wd != null ? jornada : null,
       times,
       totals,
     });

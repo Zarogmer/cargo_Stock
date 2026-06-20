@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob } from "@/lib/print";
 import { db } from "@/lib/db";
-import { AllocInput, WorkedMap, expandWorkedDates } from "@/lib/folha-ponto";
+import { AllocInput, WorkedKind, WorkedMap, expandWorkedDates } from "@/lib/folha-ponto";
 import { FolhaPontoPreview } from "./folha-ponto-preview";
 import type { Employee } from "@/types/database";
 
@@ -46,6 +46,8 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
   const init = defaultCompetencia();
   const [month, setMonth] = useState(init.month);
   const [year, setYear] = useState(init.year);
+  // Tipo de jornada aplicado à folha inteira (escolha manual). Default Embarque.
+  const [jornada, setJornada] = useState<WorkedKind>("EMBARQUE");
 
   // Dias trabalhados por colaborador no mês (best-effort) — alimenta a contagem
   // e a visualização. Guardamos as datas (não só a contagem) pra renderizar a prévia.
@@ -206,7 +208,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
       const res = await fetch(`/api/documents/folha-ponto?format=${format}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employeeIds: ids, month, year }),
+        body: JSON.stringify({ employeeIds: ids, month, year, jornada }),
       });
       if (!res.ok) {
         const b = await res.json().catch(() => ({}));
@@ -248,9 +250,29 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           <h3 className="font-semibold text-text">Gerar Folha de Ponto</h3>
           <p className="text-xs text-text-light mt-0.5">
             Os dias trabalhados saem dos <strong>navios cadastrados</strong> (Costado pelo dia do
-            turno, Embarque pela janela do navio). O Embarque sai no padrão 09:00–17:20 (7h20) e o
-            Costado no horário do turno escalado (6h). Vários colaboradores geram um único arquivo com uma aba (ou página) para cada.
+            turno, Embarque pela janela do navio). Escolha a <strong>jornada</strong>: Embarque no
+            padrão 09:00–17:20 (7h20) ou Costado no horário do turno escalado (6h). Vários colaboradores geram um único arquivo com uma aba (ou página) para cada.
           </p>
+        </div>
+
+        {/* Tipo de jornada */}
+        <div>
+          <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Tipo de jornada</label>
+          <div className="mt-1 inline-flex rounded-lg border border-border overflow-hidden">
+            {([["EMBARQUE", "Embarque · 7h20"], ["COSTADO", "Costado · 6h"]] as const).map(([val, label]) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => setJornada(val)}
+                aria-pressed={jornada === val}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  jornada === val ? "bg-primary text-white" : "bg-card text-text hover:bg-gray-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Competência */}
@@ -388,6 +410,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
             worked={previewWorked}
             year={year}
             month={month}
+            jornada={jornada}
           />
         </div>
       )}

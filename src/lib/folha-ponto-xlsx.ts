@@ -5,12 +5,12 @@
 // <pageSetup>, garantindo um PDF limpo na conversão via LibreOffice.
 import * as XLSX from "xlsx-js-style";
 import PizZip from "pizzip";
-import { CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, MESES_PT, WorkedMap, computeFolha } from "./folha-ponto";
+import { CARGA_DIARIA_MIN, MESES_PT, WorkedKind, WorkedMap, computeFolha } from "./folha-ponto";
 
 export interface FolhaEmployee {
   id: number;
   name: string;
-  worked: WorkedMap; // dias trabalhados no mês → tipo de jornada (Costado/Embarque)
+  worked: WorkedMap; // dias trabalhados no mês (origem dos navios)
 }
 
 // ── Estilo ─────────────────────────────────────────────────────────────────────
@@ -44,21 +44,15 @@ function sanitizeSheetName(name: string, used: Set<string>): string {
   return n;
 }
 
-function hhmm(min: number): string {
-  const h = String(Math.floor(min / 60)).padStart(2, "0");
-  const m = String(min % 60).padStart(2, "0");
+function cargaLabelValue(): string {
+  const h = String(Math.floor(CARGA_DIARIA_MIN / 60)).padStart(2, "0");
+  const m = String(CARGA_DIARIA_MIN % 60).padStart(2, "0");
   return `${h}:${m}`;
 }
 
-// Tabela lateral de referência: carga por tipo de jornada.
-const CARGA_ROWS: [string, string][] = [
-  ["EMBARQUE", hhmm(CARGA_DIARIA_MIN)],
-  ["COSTADO", hhmm(COSTADO_DIARIA_MIN)],
-];
-
 // Constrói a worksheet de um colaborador.
-function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.WorkSheet {
-  const { rows: dayRows, totals: monthTotals } = computeFolha(emp.id, emp.worked, year, month1);
+function buildSheet(emp: FolhaEmployee, year: number, month1: number, jornada: WorkedKind): XLSX.WorkSheet {
+  const { rows: dayRows, totals: monthTotals } = computeFolha(emp.id, emp.worked, year, month1, jornada);
   const COLS = 16; // A..P
   const blankRow = () => Array(COLS).fill(null) as (string | number | null)[];
   const aoa: (string | number | null)[][] = [];
@@ -82,6 +76,8 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.Work
   ["Data", "Dia Semana", "Entrada", "Saída", "Entrada", "Saída", "H. Diária", "Atrasos", "Abona", "Horas Extras", "A.N.", "1ª Faixa", "2ª Faixa"].forEach((h, i) => (headRow[i] = h));
   aoa.push(headRow);
   const HEAD_ROW = 5;
+
+  const cargaLabels = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "DOMINGO", "FERIADOS"];
 
   const dayMeta: { row: number; highlight: boolean }[] = [];
   for (const dr of dayRows) {
@@ -110,11 +106,11 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.Work
   }
 
   // Tabela lateral CARGA HORÁRIA (coluna O/P) a partir da linha de cabeçalho.
-  for (let i = 0; i < CARGA_ROWS.length; i++) {
+  for (let i = 0; i < cargaLabels.length; i++) {
     const r = HEAD_ROW + i;
     while (aoa.length <= r) aoa.push(blankRow());
-    aoa[r][14] = CARGA_ROWS[i][0];
-    aoa[r][15] = CARGA_ROWS[i][1];
+    aoa[r][14] = cargaLabels[i];
+    aoa[r][15] = cargaLabelValue();
   }
 
   const totalRow = blankRow();
@@ -153,7 +149,7 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.Work
   const headStyle = { font: { name: F, sz: 10, bold: true, color: { rgb: NAVY } }, fill: { patternType: "solid", fgColor: { rgb: GREY_HEAD } }, alignment: { horizontal: "center", vertical: "center", wrapText: true }, border: borderAll };
   for (let c = 0; c <= 12; c++) set(HEAD_ROW, c, headStyle);
 
-  for (let i = 0; i < CARGA_ROWS.length; i++) {
+  for (let i = 0; i < cargaLabels.length; i++) {
     const r = HEAD_ROW + i;
     set(r, 14, { font: { name: F, sz: 10, bold: true }, fill: { patternType: "solid", fgColor: { rgb: GREY_HEAD } }, alignment: { horizontal: "left", vertical: "center" }, border: borderAll });
     set(r, 15, { font: { name: F, sz: 10, bold: true, color: { rgb: NAVY } }, fill: { patternType: "solid", fgColor: { rgb: YELLOW } }, alignment: { horizontal: "center", vertical: "center" }, border: borderAll });
@@ -233,11 +229,17 @@ function injectPageSetup(buf: Buffer): Buffer {
 }
 
 // Gera o workbook (uma aba por colaborador) já com page setup para PDF limpo.
-export function buildFolhaPontoXlsx(employees: FolhaEmployee[], year: number, month1: number): Buffer {
+// `jornada` (EMBARQUE/COSTADO) define a jornada aplicada a todos os dias.
+export function buildFolhaPontoXlsx(
+  employees: FolhaEmployee[],
+  year: number,
+  month1: number,
+  jornada: WorkedKind = "EMBARQUE",
+): Buffer {
   const wb = XLSX.utils.book_new();
   const used = new Set<string>();
   for (const emp of employees) {
-    const ws = buildSheet(emp, year, month1);
+    const ws = buildSheet(emp, year, month1, jornada);
     XLSX.utils.book_append_sheet(wb, ws, sanitizeSheetName(emp.name, used));
   }
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;

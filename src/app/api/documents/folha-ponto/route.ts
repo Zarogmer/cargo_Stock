@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { xlsxToPdf } from "@/lib/docx-to-pdf";
-import { AllocInput, MESES_PT, expandWorkedDates } from "@/lib/folha-ponto";
+import { AllocInput, MESES_PT, WorkedKind, expandWorkedDates } from "@/lib/folha-ponto";
 import { buildFolhaPontoXlsx, FolhaEmployee } from "@/lib/folha-ponto-xlsx";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +17,7 @@ interface FolhaRequestBody {
   employeeIds?: number[];
   month?: number; // 1-12
   year?: number;
+  jornada?: string; // "EMBARQUE" | "COSTADO"
 }
 
 // Converte os DateTime (@db.Date, meia-noite UTC) do Prisma em "YYYY-MM-DD".
@@ -41,6 +42,7 @@ export async function POST(request: NextRequest) {
   const ids = Array.isArray(body.employeeIds) ? body.employeeIds.filter((n) => Number.isInteger(n)) : [];
   const month = Number(body.month);
   const year = Number(body.year);
+  const jornada: WorkedKind = body.jornada === "COSTADO" ? "COSTADO" : "EMBARQUE";
   if (ids.length === 0) {
     return NextResponse.json({ error: "Selecione ao menos um colaborador." }, { status: 400 });
   }
@@ -93,7 +95,7 @@ export async function POST(request: NextRequest) {
       worked: expandWorkedDates(allocByEmp.get(emp.id) || [], year, month),
     }));
 
-  const xlsxBuf = buildFolhaPontoXlsx(ordered, year, month);
+  const xlsxBuf = buildFolhaPontoXlsx(ordered, year, month, jornada);
 
   const format = request.nextUrl.searchParams.get("format") === "pdf" ? "pdf" : "xlsx";
   const periodo = `${MESES_PT[month - 1]} ${year}`;
