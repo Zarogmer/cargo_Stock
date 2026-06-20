@@ -1351,7 +1351,7 @@ export default function NaviosPage() {
                       )}
                       <div className="flex flex-wrap gap-3 mt-2 text-xs text-text-light">
                         {ship.arrival_date && (
-                          <span>🚢 Embarque: <span className="font-medium text-text">{formatDate(ship.arrival_date)}</span></span>
+                          <span>🚢 Início da Operação: <span className="font-medium text-text">{formatDate(ship.arrival_date)}</span></span>
                         )}
                         {ship.departure_date && (
                           <span>🏁 Saída: <span className="font-medium text-text">{formatDate(ship.departure_date)}</span></span>
@@ -1435,7 +1435,7 @@ export default function NaviosPage() {
                 <p><span className="text-text-light">Porto:</span> <span className="font-medium">{selectedShip.port}</span></p>
               )}
               {selectedShip.arrival_date && (
-                <p><span className="text-text-light">Embarque:</span> <span className="font-medium">{formatDate(selectedShip.arrival_date)}</span></p>
+                <p><span className="text-text-light">Início da Operação:</span> <span className="font-medium">{formatDate(selectedShip.arrival_date)}</span></p>
               )}
               {selectedShip.departure_date && (
                 <p><span className="text-text-light">Saída:</span> <span className="font-medium">{formatDate(selectedShip.departure_date)}</span></p>
@@ -1923,7 +1923,7 @@ export default function NaviosPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-text mb-1">{form.operation_type === "COSTADO" ? "Data de Início" : "Data de Embarque"}</label>
+                <label className="block text-sm font-medium text-text mb-1">Início da Operação</label>
                 <input
                   type="date"
                   value={form.arrival_date}
