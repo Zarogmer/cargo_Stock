@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
         employee_id: true,
         kind: true,
         shift_date: true,
+        shift_period: true,
         jobs: { select: { start_date: true, ships: { select: { arrival_date: true, departure_date: true } } } },
       },
     }),
@@ -76,6 +77,7 @@ export async function POST(request: NextRequest) {
     list.push({
       kind: a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE",
       shift_date: isoDate(a.shift_date),
+      shift_period: a.shift_period ?? null,
       ship_arrival: isoDate(a.jobs?.ships?.arrival_date),
       ship_departure: isoDate(a.jobs?.ships?.departure_date),
       job_start: isoDate(a.jobs?.start_date),

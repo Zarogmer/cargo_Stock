@@ -5,12 +5,12 @@
 // <pageSetup>, garantindo um PDF limpo na conversão via LibreOffice.
 import * as XLSX from "xlsx-js-style";
 import PizZip from "pizzip";
-import { CARGA_DIARIA_MIN, MESES_PT, computeFolha } from "./folha-ponto";
+import { CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, MESES_PT, WorkedMap, computeFolha } from "./folha-ponto";
 
 export interface FolhaEmployee {
   id: number;
   name: string;
-  worked: Set<string>; // dias trabalhados no mês (YYYY-MM-DD)
+  worked: WorkedMap; // dias trabalhados no mês → tipo de jornada (Costado/Embarque)
 }
 
 // ── Estilo ─────────────────────────────────────────────────────────────────────
@@ -44,11 +44,17 @@ function sanitizeSheetName(name: string, used: Set<string>): string {
   return n;
 }
 
-function cargaLabelValue(): string {
-  const h = String(Math.floor(CARGA_DIARIA_MIN / 60)).padStart(2, "0");
-  const m = String(CARGA_DIARIA_MIN % 60).padStart(2, "0");
+function hhmm(min: number): string {
+  const h = String(Math.floor(min / 60)).padStart(2, "0");
+  const m = String(min % 60).padStart(2, "0");
   return `${h}:${m}`;
 }
+
+// Tabela lateral de referência: carga por tipo de jornada.
+const CARGA_ROWS: [string, string][] = [
+  ["EMBARQUE", hhmm(CARGA_DIARIA_MIN)],
+  ["COSTADO", hhmm(COSTADO_DIARIA_MIN)],
+];
 
 // Constrói a worksheet de um colaborador.
 function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.WorkSheet {
@@ -77,8 +83,6 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.Work
   aoa.push(headRow);
   const HEAD_ROW = 5;
 
-  const cargaLabels = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "DOMINGO", "FERIADOS"];
-
   const dayMeta: { row: number; highlight: boolean }[] = [];
   for (const dr of dayRows) {
     const row = blankRow();
@@ -88,8 +92,9 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.Work
       const t = dr.times, tot = dr.totals;
       row[2] = t.entrada1 / 1440;
       row[3] = t.saida1 / 1440;
-      row[4] = t.entrada2 / 1440;
-      row[5] = t.saida2 / 1440;
+      // Costado é corrido (sem 2º período) → colunas Entrada/Saída ficam vazias.
+      row[4] = t.entrada2 != null ? t.entrada2 / 1440 : "-";
+      row[5] = t.saida2 != null ? t.saida2 / 1440 : "-";
       row[6] = tot.hDiaria / 1440;
       row[7] = tot.atraso ? tot.atraso / 1440 : "-";
       row[8] = "-";
@@ -105,11 +110,11 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.Work
   }
 
   // Tabela lateral CARGA HORÁRIA (coluna O/P) a partir da linha de cabeçalho.
-  for (let i = 0; i < cargaLabels.length; i++) {
+  for (let i = 0; i < CARGA_ROWS.length; i++) {
     const r = HEAD_ROW + i;
     while (aoa.length <= r) aoa.push(blankRow());
-    aoa[r][14] = cargaLabels[i];
-    aoa[r][15] = cargaLabelValue();
+    aoa[r][14] = CARGA_ROWS[i][0];
+    aoa[r][15] = CARGA_ROWS[i][1];
   }
 
   const totalRow = blankRow();
@@ -148,7 +153,7 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.Work
   const headStyle = { font: { name: F, sz: 10, bold: true, color: { rgb: NAVY } }, fill: { patternType: "solid", fgColor: { rgb: GREY_HEAD } }, alignment: { horizontal: "center", vertical: "center", wrapText: true }, border: borderAll };
   for (let c = 0; c <= 12; c++) set(HEAD_ROW, c, headStyle);
 
-  for (let i = 0; i < cargaLabels.length; i++) {
+  for (let i = 0; i < CARGA_ROWS.length; i++) {
     const r = HEAD_ROW + i;
     set(r, 14, { font: { name: F, sz: 10, bold: true }, fill: { patternType: "solid", fgColor: { rgb: GREY_HEAD } }, alignment: { horizontal: "left", vertical: "center" }, border: borderAll });
     set(r, 15, { font: { name: F, sz: 10, bold: true, color: { rgb: NAVY } }, fill: { patternType: "solid", fgColor: { rgb: YELLOW } }, alignment: { horizontal: "center", vertical: "center" }, border: borderAll });

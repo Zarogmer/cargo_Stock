@@ -1,13 +1,16 @@
 "use client";
 
 import { useMemo } from "react";
-import { CARGA_DIARIA_MIN, MESES_PT, computeFolha, fmtHHMM } from "@/lib/folha-ponto";
+import { CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, MESES_PT, WorkedMap, computeFolha, fmtHHMM } from "@/lib/folha-ponto";
 
 // Prévia em tela da Folha de Ponto. Usa exatamente a mesma lógica (computeFolha)
 // do arquivo gerado, então o que aparece aqui é o que sai no Excel/PDF.
 
-const CARGA = fmtHHMM(CARGA_DIARIA_MIN);
-const CARGA_LABELS = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "DOMINGO", "FERIADOS"];
+// Tabela lateral de referência: carga por tipo de jornada.
+const CARGA_ROWS: [string, string][] = [
+  ["EMBARQUE", fmtHHMM(CARGA_DIARIA_MIN)],
+  ["COSTADO", fmtHHMM(COSTADO_DIARIA_MIN)],
+];
 
 function ddmm(iso: string): string {
   return `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
@@ -22,7 +25,7 @@ export function FolhaPontoPreview({
 }: {
   name: string;
   empId: number;
-  worked: Set<string>;
+  worked: WorkedMap;
   year: number;
   month: number;
 }) {
@@ -58,10 +61,10 @@ export function FolhaPontoPreview({
               </tr>
             </thead>
             <tbody>
-              {CARGA_LABELS.map((l) => (
+              {CARGA_ROWS.map(([l, v]) => (
                 <tr key={l}>
                   <td className="border border-gray-300 px-2 py-0.5 font-semibold">{l}</td>
-                  <td className="border border-gray-300 px-2 py-0.5 text-center bg-[#FFF2CC] font-semibold">{CARGA}</td>
+                  <td className="border border-gray-300 px-2 py-0.5 text-center bg-[#FFF2CC] font-semibold">{v}</td>
                 </tr>
               ))}
             </tbody>
@@ -92,8 +95,8 @@ export function FolhaPontoPreview({
                   <td className={`${cell} ${hl}`}>{r.dayName}</td>
                   <td className={`${cell} ${yellow}`}>{r.worked && r.times ? fmtHHMM(r.times.entrada1) : ""}</td>
                   <td className={`${cell} ${yellow}`}>{r.worked && r.times ? fmtHHMM(r.times.saida1) : ""}</td>
-                  <td className={`${cell} ${yellow}`}>{r.worked && r.times ? fmtHHMM(r.times.entrada2) : ""}</td>
-                  <td className={`${cell} ${yellow}`}>{r.worked && r.times ? fmtHHMM(r.times.saida2) : ""}</td>
+                  <td className={`${cell} ${yellow}`}>{r.worked && r.times?.entrada2 != null ? fmtHHMM(r.times.entrada2) : ""}</td>
+                  <td className={`${cell} ${yellow}`}>{r.worked && r.times?.saida2 != null ? fmtHHMM(r.times.saida2) : ""}</td>
                   <td className={cell}>{r.worked && r.totals ? <span className="text-[#1F7A4D] font-semibold">{fmtHHMM(r.totals.hDiaria)}</span> : dash}</td>
                   <td className={cell}>{r.worked && r.totals ? dur(r.totals.atraso, "text-[#C00000]") : dash}</td>
                   <td className={cell}>{dash}</td>
@@ -118,7 +121,7 @@ export function FolhaPontoPreview({
           </tbody>
         </table>
         <p className="text-[10px] text-gray-400 mt-2">
-          Prévia idêntica ao arquivo gerado. Dias em azul = domingo/feriado. Horários no padrão 09:00–17:20 com variação por dia.
+          Prévia idêntica ao arquivo gerado. Dias em azul = domingo/feriado. Embarque no padrão 09:00–17:20 (7h20); Costado no horário do turno escalado (6h).
         </p>
       </div>
     </div>

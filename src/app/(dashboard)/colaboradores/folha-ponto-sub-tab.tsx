@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob } from "@/lib/print";
 import { db } from "@/lib/db";
-import { AllocInput, expandWorkedDates } from "@/lib/folha-ponto";
+import { AllocInput, WorkedMap, expandWorkedDates } from "@/lib/folha-ponto";
 import { FolhaPontoPreview } from "./folha-ponto-preview";
 import type { Employee } from "@/types/database";
 
@@ -31,6 +31,7 @@ interface AllocRow {
   employee_id: number | null;
   kind: string | null;
   shift_date: string | null;
+  shift_period: string | null;
   job_id: string | null;
 }
 interface JobRow {
@@ -48,7 +49,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
 
   // Dias trabalhados por colaborador no mês (best-effort) — alimenta a contagem
   // e a visualização. Guardamos as datas (não só a contagem) pra renderizar a prévia.
-  const [workedByEmp, setWorkedByEmp] = useState<Record<number, string[]>>({});
+  const [workedByEmp, setWorkedByEmp] = useState<Record<number, WorkedMap>>({});
   const [previewLoading, setPreviewLoading] = useState(false);
   // Qual colaborador está sendo visualizado.
   const [previewId, setPreviewId] = useState<number | null>(null);
@@ -92,7 +93,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
       try {
         const { data: allocs, error: aErr } = await db
           .from("job_allocations")
-          .select("employee_id, kind, shift_date, job_id")
+          .select("employee_id, kind, shift_date, shift_period, job_id")
           .in("employee_id", ids)
           .eq("status", "ATIVO");
         if (!active) return;
@@ -124,15 +125,16 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           list.push({
             kind: a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE",
             shift_date: a.shift_date ? a.shift_date.slice(0, 10) : null,
+            shift_period: a.shift_period ?? null,
             ship_arrival: job?.ships?.arrival_date ? job.ships.arrival_date.slice(0, 10) : null,
             ship_departure: job?.ships?.departure_date ? job.ships.departure_date.slice(0, 10) : null,
             job_start: job?.start_date ? job.start_date.slice(0, 10) : null,
           });
           byEmp.set(a.employee_id, list);
         }
-        const next: Record<number, string[]> = {};
+        const next: Record<number, WorkedMap> = {};
         for (const id of ids) {
-          next[id] = [...expandWorkedDates(byEmp.get(id) || [], year, month)].sort();
+          next[id] = expandWorkedDates(byEmp.get(id) || [], year, month);
         }
         setWorkedByEmp(next);
       } catch {
@@ -173,13 +175,13 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
   }, [selectedIds, employees]);
 
   const totalWorked = useMemo(
-    () => [...selectedIds].reduce((acc, id) => acc + (workedByEmp[id]?.length ?? 0), 0),
+    () => [...selectedIds].reduce((acc, id) => acc + (workedByEmp[id]?.size ?? 0), 0),
     [selectedIds, workedByEmp]
   );
 
   const previewEmp = previewId != null ? employees.find((e) => e.id === previewId) ?? null : null;
-  const previewWorked = useMemo(
-    () => new Set(previewId != null ? workedByEmp[previewId] ?? [] : []),
+  const previewWorked = useMemo<WorkedMap>(
+    () => (previewId != null ? workedByEmp[previewId] : undefined) ?? new Map(),
     [previewId, workedByEmp]
   );
   const selectedEmpList = useMemo(
@@ -246,8 +248,8 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           <h3 className="font-semibold text-text">Gerar Folha de Ponto</h3>
           <p className="text-xs text-text-light mt-0.5">
             Os dias trabalhados saem dos <strong>navios cadastrados</strong> (Costado pelo dia do
-            turno, Embarque pela janela do navio). O horário vem no padrão 09:00–17:20 com pequena
-            variação por dia. Vários colaboradores geram um único arquivo com uma aba (ou página) para cada.
+            turno, Embarque pela janela do navio). O Embarque sai no padrão 09:00–17:20 (7h20) e o
+            Costado no horário do turno escalado (6h). Vários colaboradores geram um único arquivo com uma aba (ou página) para cada.
           </p>
         </div>
 
@@ -300,7 +302,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
             ) : (
               filteredEmployees.map((e) => {
                 const checked = selectedIds.has(e.id);
-                const dias = workedByEmp[e.id]?.length;
+                const dias = workedByEmp[e.id]?.size;
                 return (
                   <label
                     key={e.id}
