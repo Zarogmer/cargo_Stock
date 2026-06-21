@@ -190,19 +190,24 @@ export interface DayTimes {
   saida2: number | null;
 }
 
-// Horário do dia conforme o tipo de jornada:
-//   - COSTADO: 6h corridas no horário do turno escalado (sem 2º período).
+// Horário do dia conforme o tipo de jornada (sempre com minutos "quebrados",
+// variação determinística por colaborador+dia):
+//   - COSTADO: 6h corridas em torno do turno escalado — entra perto do início
+//     do turno e sai ~6h depois (sem 2º período). % 1440 mantém o relógio
+//     00:00–23:59 mesmo no turno que cruza a meia-noite (ex.: 19-01).
 //   - EMBARQUE: padrão da planilha oficial — entra ~09:00, almoço de 1h começando
 //     ~12:15–12:45, saída fixa 17:20. Como o almoço é exatamente 1h e a saída é
 //     fixa, a H. Diária depende só da entrada (≈ 16:20 − entrada): entrar antes
 //     das 9h vira hora extra, depois vira atraso — igual ao exemplo do CARLISSON.
 export function timesForDay(seedKey: string, day: WorkedDay): DayTimes {
-  if (day.kind === "COSTADO") {
-    const s = costadoShift(day.period);
-    return { entrada1: s.start, saida1: s.end, entrada2: null, saida2: null };
-  }
   const rnd = mulberry32(hashStr(seedKey));
   const randInt = (min: number, max: number) => min + Math.floor(rnd() * (max - min + 1));
+  if (day.kind === "COSTADO") {
+    const s = costadoShift(day.period);
+    const entrada1 = (s.start + randInt(-6, 6) + 1440) % 1440;
+    const saida1 = (entrada1 + COSTADO_DIARIA_MIN + randInt(-6, 6) + 1440) % 1440;
+    return { entrada1, saida1, entrada2: null, saida2: null };
+  }
   const entrada1 = 9 * 60 + randInt(-6, 6); // 08:54..09:06
   const saida1 = 12 * 60 + 15 + randInt(0, 30); // 12:15..12:45
   const entrada2 = saida1 + 60; // almoço de 1h
