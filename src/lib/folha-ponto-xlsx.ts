@@ -5,7 +5,7 @@
 // <pageSetup>, garantindo um PDF limpo na conversão via LibreOffice.
 import * as XLSX from "xlsx-js-style";
 import PizZip from "pizzip";
-import { CARGA_DIARIA_MIN, MESES_PT, WorkedKind, WorkedMap, computeFolha } from "./folha-ponto";
+import { CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, MESES_PT, WorkedKind, WorkedMap, computeFolha } from "./folha-ponto";
 
 export interface FolhaEmployee {
   id: number;
@@ -44,9 +44,12 @@ function sanitizeSheetName(name: string, used: Set<string>): string {
   return n;
 }
 
-function cargaLabelValue(): string {
-  const h = String(Math.floor(CARGA_DIARIA_MIN / 60)).padStart(2, "0");
-  const m = String(CARGA_DIARIA_MIN % 60).padStart(2, "0");
+// Carga de referência da tabela lateral conforme a jornada: 6h no Costado, 7h20
+// no Embarque.
+function cargaLabelValue(jornada?: WorkedKind): string {
+  const min = jornada === "COSTADO" ? COSTADO_DIARIA_MIN : CARGA_DIARIA_MIN;
+  const h = String(Math.floor(min / 60)).padStart(2, "0");
+  const m = String(min % 60).padStart(2, "0");
   return `${h}:${m}`;
 }
 
@@ -110,7 +113,7 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number, jornada?: 
     const r = HEAD_ROW + i;
     while (aoa.length <= r) aoa.push(blankRow());
     aoa[r][14] = cargaLabels[i];
-    aoa[r][15] = cargaLabelValue();
+    aoa[r][15] = cargaLabelValue(jornada);
   }
 
   const totalRow = blankRow();

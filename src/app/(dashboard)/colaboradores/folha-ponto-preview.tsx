@@ -1,12 +1,11 @@
 "use client";
 
 import { useMemo } from "react";
-import { CARGA_DIARIA_MIN, MESES_PT, WorkedKind, WorkedMap, computeFolha, fmtHHMM } from "@/lib/folha-ponto";
+import { CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, MESES_PT, WorkedKind, WorkedMap, computeFolha, fmtHHMM } from "@/lib/folha-ponto";
 
 // Prévia em tela da Folha de Ponto. Usa exatamente a mesma lógica (computeFolha)
 // do arquivo gerado, então o que aparece aqui é o que sai no Excel/PDF.
 
-const CARGA = fmtHHMM(CARGA_DIARIA_MIN);
 const CARGA_LABELS = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "DOMINGO", "FERIADOS"];
 
 function ddmm(iso: string): string {
@@ -29,6 +28,7 @@ export function FolhaPontoPreview({
   jornada: WorkedKind;
 }) {
   const folha = useMemo(() => computeFolha(empId, worked, year, month, jornada), [empId, worked, year, month, jornada]);
+  const carga = fmtHHMM(jornada === "COSTADO" ? COSTADO_DIARIA_MIN : CARGA_DIARIA_MIN);
 
   const cell = "border border-gray-300 px-1.5 py-0.5 text-center whitespace-nowrap";
   const dash = <span className="text-gray-300">–</span>;
@@ -63,7 +63,7 @@ export function FolhaPontoPreview({
               {CARGA_LABELS.map((l) => (
                 <tr key={l}>
                   <td className="border border-gray-300 px-2 py-0.5 font-semibold">{l}</td>
-                  <td className="border border-gray-300 px-2 py-0.5 text-center bg-[#FFF2CC] font-semibold">{CARGA}</td>
+                  <td className="border border-gray-300 px-2 py-0.5 text-center bg-[#FFF2CC] font-semibold">{carga}</td>
                 </tr>
               ))}
             </tbody>
