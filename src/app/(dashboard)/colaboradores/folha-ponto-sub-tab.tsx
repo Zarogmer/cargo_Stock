@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob } from "@/lib/print";
 import { db } from "@/lib/db";
-import { AllocInput, WorkedMap, expandWorkedDates } from "@/lib/folha-ponto";
+import { AllocInput, WorkedKind, WorkedMap, countWorkedKind, expandWorkedDates } from "@/lib/folha-ponto";
 import { FolhaPontoPreview } from "./folha-ponto-preview";
 import type { Employee } from "@/types/database";
 
@@ -13,16 +13,10 @@ const MESES = [
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
 ];
 
-// Mês anterior ao de hoje (competência típica de fechamento).
+// Competência atual (a folha abre sempre no mês de hoje).
 function defaultCompetencia(): { month: number; year: number } {
   const d = new Date();
-  let month = d.getMonth(); // 0-based mês anterior já que getMonth()+1 seria o atual
-  let year = d.getFullYear();
-  if (month === 0) {
-    month = 12;
-    year -= 1;
-  }
-  return { month, year };
+  return { month: d.getMonth() + 1, year: d.getFullYear() };
 }
 
 // Linhas cruas do Supabase. Buscamos alocações e jobs (com o navio embutido)
@@ -46,6 +40,8 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
   const init = defaultCompetencia();
   const [month, setMonth] = useState(init.month);
   const [year, setYear] = useState(init.year);
+  // Tipo de jornada que filtra a folha (Costado/Embarque). Default Embarque.
+  const [jornada, setJornada] = useState<WorkedKind>("EMBARQUE");
 
   // Dias trabalhados por colaborador no mês (best-effort) — alimenta a contagem
   // e a visualização. Guardamos as datas (não só a contagem) pra renderizar a prévia.
@@ -177,8 +173,11 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
   }, [selectedIds, employees]);
 
   const totalWorked = useMemo(
-    () => [...selectedIds].reduce((acc, id) => acc + (workedByEmp[id]?.size ?? 0), 0),
-    [selectedIds, workedByEmp]
+    () => [...selectedIds].reduce((acc, id) => {
+      const w = workedByEmp[id];
+      return acc + (w ? countWorkedKind(w, jornada) : 0);
+    }, 0),
+    [selectedIds, workedByEmp, jornada]
   );
 
   const previewEmp = previewId != null ? employees.find((e) => e.id === previewId) ?? null : null;
@@ -208,7 +207,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
       const res = await fetch(`/api/documents/folha-ponto?format=${format}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employeeIds: ids, month, year }),
+        body: JSON.stringify({ employeeIds: ids, month, year, jornada }),
       });
       if (!res.ok) {
         const b = await res.json().catch(() => ({}));
@@ -223,9 +222,10 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
         const a = document.createElement("a");
         a.href = url;
         const periodo = `${MESES[month - 1]} ${year}`;
+        const tipoLabel = jornada === "COSTADO" ? "Costado" : "Embarque";
         a.download = ids.length === 1
-          ? `Folha de Ponto - ${periodo}.${format}`
-          : `Folhas de Ponto (${ids.length}) - ${periodo}.${format}`;
+          ? `Folha de Ponto ${tipoLabel} - ${periodo}.${format}`
+          : `Folhas de Ponto ${tipoLabel} (${ids.length}) - ${periodo}.${format}`;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -249,10 +249,31 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
         <div>
           <h3 className="font-semibold text-text">Gerar Folha de Ponto</h3>
           <p className="text-xs text-text-light mt-0.5">
-            Os dias trabalhados saem dos <strong>navios cadastrados</strong>. Cada dia usa o horário do
-            navio onde a pessoa esteve: <strong>Costado</strong> 6h (horário do turno escalado) ou{" "}
-            <strong>Embarque</strong> 7h20 (09:00–17:20). Vários colaboradores geram um único arquivo com uma aba (ou página) para cada.
+            Os dias trabalhados saem dos <strong>navios cadastrados</strong> (o tipo de cada dia vem do
+            navio). Escolha a <strong>jornada</strong> para ver e gerar a folha desse tipo:{" "}
+            <strong>Embarque</strong> 7h20 (09:00–17:20) ou <strong>Costado</strong> 6h (horário do turno).
+            Quem trabalhou nos dois no mês tem uma folha de cada. Vários colaboradores geram um único arquivo com uma aba (ou página) para cada.
           </p>
+        </div>
+
+        {/* Tipo de jornada — filtra a folha por tipo de navio */}
+        <div>
+          <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Tipo de jornada</label>
+          <div className="mt-1 inline-flex rounded-lg border border-border overflow-hidden">
+            {([["EMBARQUE", "Embarque · 7h20"], ["COSTADO", "Costado · 6h"]] as const).map(([val, label]) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => setJornada(val)}
+                aria-pressed={jornada === val}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  jornada === val ? "bg-primary text-white" : "bg-card text-text hover:bg-gray-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Competência */}
@@ -304,7 +325,8 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
             ) : (
               filteredEmployees.map((e) => {
                 const checked = selectedIds.has(e.id);
-                const dias = workedByEmp[e.id]?.size;
+                const w = workedByEmp[e.id];
+                const dias = w ? countWorkedKind(w, jornada) : undefined;
                 return (
                   <label
                     key={e.id}
@@ -390,6 +412,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
             worked={previewWorked}
             year={year}
             month={month}
+            jornada={jornada}
           />
         </div>
       )}

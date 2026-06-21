@@ -5,7 +5,7 @@
 // <pageSetup>, garantindo um PDF limpo na conversão via LibreOffice.
 import * as XLSX from "xlsx-js-style";
 import PizZip from "pizzip";
-import { CARGA_DIARIA_MIN, MESES_PT, WorkedMap, computeFolha } from "./folha-ponto";
+import { CARGA_DIARIA_MIN, MESES_PT, WorkedKind, WorkedMap, computeFolha } from "./folha-ponto";
 
 export interface FolhaEmployee {
   id: number;
@@ -51,8 +51,8 @@ function cargaLabelValue(): string {
 }
 
 // Constrói a worksheet de um colaborador.
-function buildSheet(emp: FolhaEmployee, year: number, month1: number): XLSX.WorkSheet {
-  const { rows: dayRows, totals: monthTotals } = computeFolha(emp.id, emp.worked, year, month1);
+function buildSheet(emp: FolhaEmployee, year: number, month1: number, jornada?: WorkedKind): XLSX.WorkSheet {
+  const { rows: dayRows, totals: monthTotals } = computeFolha(emp.id, emp.worked, year, month1, jornada);
   const COLS = 16; // A..P
   const blankRow = () => Array(COLS).fill(null) as (string | number | null)[];
   const aoa: (string | number | null)[][] = [];
@@ -229,11 +229,17 @@ function injectPageSetup(buf: Buffer): Buffer {
 }
 
 // Gera o workbook (uma aba por colaborador) já com page setup para PDF limpo.
-export function buildFolhaPontoXlsx(employees: FolhaEmployee[], year: number, month1: number): Buffer {
+// `jornada` filtra a folha por tipo (Costado/Embarque); sem ela, todos os dias.
+export function buildFolhaPontoXlsx(
+  employees: FolhaEmployee[],
+  year: number,
+  month1: number,
+  jornada?: WorkedKind,
+): Buffer {
   const wb = XLSX.utils.book_new();
   const used = new Set<string>();
   for (const emp of employees) {
-    const ws = buildSheet(emp, year, month1);
+    const ws = buildSheet(emp, year, month1, jornada);
     XLSX.utils.book_append_sheet(wb, ws, sanitizeSheetName(emp.name, used));
   }
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;

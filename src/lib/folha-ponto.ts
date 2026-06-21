@@ -275,15 +275,16 @@ export interface FolhaComputed {
 // Monta as linhas da folha de um colaborador (todos os dias do mês; só os dias
 // trabalhados recebem horário/cálculo). Usada pelo gerador de Excel e pela prévia
 // da tela — assim a visualização bate exatamente com o arquivo gerado.
-// Cada dia trabalhado usa a jornada do navio onde a pessoa esteve naquele dia
-// (definida em expandWorkedDates pelo services do navio): COSTADO = 6h no horário
-// do turno escalado; EMBARQUE = 7h20 (09:00–17:20). A folha reflete o tipo real
-// de cada dia automaticamente — sem escolha manual.
+// O tipo de cada dia vem do navio onde a pessoa esteve (definido em
+// expandWorkedDates pelo services): COSTADO = 6h no turno; EMBARQUE = 7h20.
+// `jornada` filtra a folha por tipo — passa só os dias daquele tipo, pra o RH
+// gerar uma folha por jornada (sem misturar). Sem `jornada`, mostra todos.
 export function computeFolha(
   empId: number,
   worked: WorkedMap,
   year: number,
   month1to12: number,
+  jornada?: WorkedKind,
 ): FolhaComputed {
   const nDays = daysInMonth(year, month1to12);
   const rows: FolhaDayRow[] = [];
@@ -291,11 +292,13 @@ export function computeFolha(
   for (let d = 1; d <= nDays; d++) {
     const iso = `${year}-${String(month1to12).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
     const wd = worked.get(iso) ?? null;
+    // Filtra pelo tipo selecionado: dia de outro tipo conta como não trabalhado.
+    const day = wd && (jornada === undefined || wd.kind === jornada) ? wd : null;
     let times: DayTimes | null = null;
     let totals: DayTotals | null = null;
-    if (wd) {
-      times = timesForDay(seedKey(empId, iso), wd);
-      totals = totalsForDay(times, cargaForDay(wd));
+    if (day) {
+      times = timesForDay(seedKey(empId, iso), day);
+      totals = totalsForDay(times, cargaForDay(day));
       totH += totals.hDiaria; totA += totals.atraso; totHE += totals.he;
       totF1 += totals.faixa1; totF2 += totals.faixa2;
     }
@@ -304,11 +307,18 @@ export function computeFolha(
       day: d,
       dayName: DIAS_SEMANA_PT[weekdayOf(iso)],
       highlight: isHighlightedDay(iso),
-      worked: wd != null,
-      kind: wd?.kind ?? null,
+      worked: day != null,
+      kind: day?.kind ?? null,
       times,
       totals,
     });
   }
   return { rows, totals: { hDiaria: totH, atraso: totA, he: totHE, faixa1: totF1, faixa2: totF2 } };
+}
+
+// Quantos dias de um tipo (Costado/Embarque) há no mapa — para o contador da tela.
+export function countWorkedKind(worked: WorkedMap, jornada: WorkedKind): number {
+  let n = 0;
+  for (const v of worked.values()) if (v.kind === jornada) n++;
+  return n;
 }

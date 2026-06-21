@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { CARGA_DIARIA_MIN, MESES_PT, WorkedMap, computeFolha, fmtHHMM } from "@/lib/folha-ponto";
+import { CARGA_DIARIA_MIN, MESES_PT, WorkedKind, WorkedMap, computeFolha, fmtHHMM } from "@/lib/folha-ponto";
 
 // Prévia em tela da Folha de Ponto. Usa exatamente a mesma lógica (computeFolha)
 // do arquivo gerado, então o que aparece aqui é o que sai no Excel/PDF.
@@ -19,14 +19,16 @@ export function FolhaPontoPreview({
   worked,
   year,
   month,
+  jornada,
 }: {
   name: string;
   empId: number;
   worked: WorkedMap;
   year: number;
   month: number;
+  jornada: WorkedKind;
 }) {
-  const folha = useMemo(() => computeFolha(empId, worked, year, month), [empId, worked, year, month]);
+  const folha = useMemo(() => computeFolha(empId, worked, year, month, jornada), [empId, worked, year, month, jornada]);
 
   const cell = "border border-gray-300 px-1.5 py-0.5 text-center whitespace-nowrap";
   const dash = <span className="text-gray-300">–</span>;
@@ -118,8 +120,8 @@ export function FolhaPontoPreview({
           </tbody>
         </table>
         <p className="text-[10px] text-gray-400 mt-2">
-          Prévia idêntica ao arquivo gerado. Dias em azul = domingo/feriado. Cada dia usa o horário do
-          navio: Costado 6h (horário do turno) ou Embarque 7h20 (09:00–17:20).
+          Prévia idêntica ao arquivo gerado. Dias em azul = domingo/feriado. Mostrando apenas os dias de{" "}
+          <strong>{jornada === "COSTADO" ? "Costado (6h, horário do turno)" : "Embarque (7h20, 09:00–17:20)"}</strong>.
         </p>
       </div>
     </div>
