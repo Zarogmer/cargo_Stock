@@ -107,12 +107,13 @@ export interface AllocInput {
   job_start: string | null;
 }
 
-// Um dia trabalhado, já resolvido para um tipo de jornada. O Costado carrega o
-// turno escalado (define o horário e a carga de 6h); o Embarque é a jornada de 7h20.
+// Um dia trabalhado, já resolvido para um tipo de jornada. O Costado carrega os
+// turnos escalados do dia (a pessoa pode fazer mais de um turno de 6h no mesmo
+// dia); o Embarque é a jornada de 7h20 (sem turnos).
 export type WorkedKind = "EMBARQUE" | "COSTADO";
 export interface WorkedDay {
   kind: WorkedKind;
-  period: string | null; // turno (somente COSTADO)
+  periods: string[]; // turnos de Costado no dia (vazio no Embarque; 1+ no Costado)
 }
 export type WorkedMap = Map<string, WorkedDay>;
 
@@ -129,13 +130,18 @@ export function expandWorkedDates(
   const monthEnd = `${year}-${mm}-${String(daysInMonth(year, month1to12)).padStart(2, "0")}`;
   const out: WorkedMap = new Map();
 
-  const consider = (iso: string, day: WorkedDay) => {
+  // Costado (turno específico) tem prioridade sobre Embarque (janela ampla); e
+  // acumula vários turnos no mesmo dia (a pessoa pode fazer 2+ turnos de 6h).
+  const addCostado = (iso: string, period: string | null) => {
     const prev = out.get(iso);
-    if (!prev) { out.set(iso, day); return; }
-    if (day.kind === "EMBARQUE") return; // janela não sobrescreve nada já marcado
-    if (prev.kind === "EMBARQUE") { out.set(iso, day); return; }
-    // Ambos Costado: mantém o turno que começa mais cedo.
-    if (costadoShift(day.period).start < costadoShift(prev.period).start) out.set(iso, day);
+    if (!prev || prev.kind === "EMBARQUE") {
+      out.set(iso, { kind: "COSTADO", periods: period ? [period] : [] });
+    } else if (period && !prev.periods.includes(period)) {
+      prev.periods.push(period);
+    }
+  };
+  const addEmbarque = (iso: string) => {
+    if (!out.has(iso)) out.set(iso, { kind: "EMBARQUE", periods: [] });
   };
 
   for (const a of allocs) {
@@ -143,9 +149,7 @@ export function expandWorkedDates(
     // qualquer outro navio → Embarque (janela do navio).
     if ((a.ship_services || []).includes("COSTADO")) {
       const d = (a.shift_date || "").slice(0, 10);
-      if (d && d >= monthStart && d <= monthEnd) {
-        consider(d, { kind: "COSTADO", period: a.shift_period ?? null });
-      }
+      if (d && d >= monthStart && d <= monthEnd) addCostado(d, a.shift_period ?? null);
       continue;
     }
     // EMBARQUE: toda a janela do navio (chegada → saída), recortada ao mês.
@@ -157,7 +161,7 @@ export function expandWorkedDates(
     const to = end < monthEnd ? end : monthEnd;
     if (from > to) continue;
     for (let s = isoToSerial(from); s <= isoToSerial(to); s++) {
-      consider(serialToIso(s), { kind: "EMBARQUE", period: null });
+      addEmbarque(serialToIso(s));
     }
   }
   return out;
@@ -192,9 +196,10 @@ export interface DayTimes {
 
 // Horário do dia conforme o tipo de jornada (sempre com minutos "quebrados",
 // variação determinística por colaborador+dia):
-//   - COSTADO: 6h corridas em torno do turno escalado — entra perto do início
-//     do turno e sai ~6h depois (sem 2º período). % 1440 mantém o relógio
-//     00:00–23:59 mesmo no turno que cruza a meia-noite (ex.: 19-01).
+//   - COSTADO: cada turno de 6h vira um período. Um turno → 1 período (entra
+//     perto do início, sai no fim do turno ou pouco depois — nunca antes). Dois
+//     turnos no dia (ex.: 07-13 + 13-19) → dois períodos = trabalhou 07:00→19:00.
+//     % 1440 mantém o relógio 00:00–23:59 mesmo no turno que cruza a meia-noite.
 //   - EMBARQUE: padrão da planilha oficial — entra ~09:00, almoço de 1h começando
 //     ~12:15–12:45, saída fixa 17:20. Como o almoço é exatamente 1h e a saída é
 //     fixa, a H. Diária depende só da entrada (≈ 16:20 − entrada): entrar antes
@@ -203,10 +208,21 @@ export function timesForDay(seedKey: string, day: WorkedDay): DayTimes {
   const rnd = mulberry32(hashStr(seedKey));
   const randInt = (min: number, max: number) => min + Math.floor(rnd() * (max - min + 1));
   if (day.kind === "COSTADO") {
-    const s = costadoShift(day.period);
-    const entrada1 = (s.start + randInt(-6, 6) + 1440) % 1440;
-    const saida1 = (entrada1 + COSTADO_DIARIA_MIN + randInt(-6, 6) + 1440) % 1440;
-    return { entrada1, saida1, entrada2: null, saida2: null };
+    const shifts = (day.periods.length ? day.periods : [COSTADO_SHIFT_FALLBACK])
+      .map(costadoShift)
+      .sort((a, b) => a.start - b.start);
+    const jit = () => randInt(-6, 6);
+    const entrada1 = (shifts[0].start + jit() + 1440) % 1440;
+    if (shifts.length === 1) {
+      const saida1 = (shifts[0].end + randInt(1, 8) + 1440) % 1440; // fim do turno ou pouco depois
+      return { entrada1, saida1, entrada2: null, saida2: null };
+    }
+    // 2+ turnos: período 1 = primeiro turno; período 2 = do segundo ao último.
+    const saida1 = (shifts[0].end + jit() + 1440) % 1440;
+    const contiguo = shifts[1].start === shifts[0].end; // ex.: 07-13 emendado com 13-19
+    const entrada2 = contiguo ? saida1 : (shifts[1].start + jit() + 1440) % 1440;
+    const saida2 = (shifts[shifts.length - 1].end + randInt(1, 8) + 1440) % 1440;
+    return { entrada1, saida1, entrada2, saida2 };
   }
   const entrada1 = 9 * 60 + randInt(-6, 6); // 08:54..09:06
   const saida1 = 12 * 60 + 15 + randInt(0, 30); // 12:15..12:45
@@ -242,9 +258,11 @@ export function totalsForDay(t: DayTimes, cargaMin: number = CARGA_DIARIA_MIN): 
   return { hDiaria, atraso, he, faixa1, faixa2 };
 }
 
-// Carga horária esperada do dia conforme o tipo de jornada.
+// Carga horária esperada do dia. No Costado é 6h por turno (2 turnos no dia →
+// 12h de carga, então a jornada cheia não vira hora extra).
 export function cargaForDay(day: WorkedDay): number {
-  return day.kind === "COSTADO" ? COSTADO_DIARIA_MIN : CARGA_DIARIA_MIN;
+  if (day.kind === "COSTADO") return COSTADO_DIARIA_MIN * Math.max(1, day.periods.length);
+  return CARGA_DIARIA_MIN;
 }
 
 // Semente estável por colaborador+dia.
