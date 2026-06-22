@@ -52,7 +52,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   EXECUTIVO: {
     DASHBOARD: ["view"],
     ALMOXARIFADO: ["view"],
-    EMBARQUE: ["view"],
+    EMBARQUE: ["view", "embarcar"],
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "baixar"],
@@ -60,10 +60,10 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     ELETRICA: ["view", "create", "edit", "delete", "baixar"],
     NAVIOS: ["view", "create", "edit", "delete"],
     MARKETING: ["view", "create", "edit", "delete"],
-    // Financeiro é só leitura pra Executivo — quem edita valores é Financeiro
-    // e Tecnologia. Pedido da Sandra: controle total dela, Executivo vê tudo
-    // sem chance de mexer (sem exceção).
-    FINANCEIRO_MOD: ["view"],
+    // 2026-06: a pedido do Guilherme, Executivo e Financeiro passam a poder
+    // editar tudo, menos a aba WhatsApp API. Antes o Financeiro era só-leitura
+    // pro Executivo (pedido da Sandra) — essa restrição foi removida.
+    FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
     MENSAGENS: ["view", "create"],
     CONVERSAS: ["view", "create"],
@@ -82,12 +82,12 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   FINANCEIRO: {
     DASHBOARD: ["view"],
     ALMOXARIFADO: ["view"],
-    EMBARQUE: ["view"],
-    ESTOQUE: ["view"],
-    EPI: ["view"],
-    FERRAMENTAS: ["view"],
-    MAQUINARIO: ["view"],
-    ELETRICA: ["view"],
+    EMBARQUE: ["view", "embarcar"],
+    ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
+    EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
+    FERRAMENTAS: ["view", "create", "edit", "delete", "baixar"],
+    MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
+    ELETRICA: ["view", "create", "edit", "delete", "baixar"],
     NAVIOS: ["view", "create", "edit", "delete"],
     MARKETING: ["view", "create", "edit", "delete"],
     FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
@@ -178,6 +178,10 @@ export interface NavSubItem {
 // Fonte única: o menu (rbac) e a própria página de Solicitações filtram por isto.
 export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "FINANCEIRO"];
 
+// Papéis que enxergam "Lista de Produtos" (catálogo de produtos do Controle).
+// Era exclusivo da Tecnologia; Guilherme liberou também Executivo e Financeiro.
+export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "EXECUTIVO", "FINANCEIRO"];
+
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/", icon: "dashboard", module: "DASHBOARD" },
   { label: "Navios", href: "/navios", icon: "navios", module: "NAVIOS" },
@@ -258,7 +262,7 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       { label: "Solicitações", href: "/solicitacoes?tab=solicitacoes" },
       { label: "Controle de Compras", href: "/solicitacoes?tab=compras", roles: COMPRAS_ROLES },
-      { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos", roles: ["TECNOLOGIA"] },
+      { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos", roles: PRODUTOS_ROLES },
       { label: "Fornecedores", href: "/solicitacoes?tab=fornecedores" },
     ],
   },

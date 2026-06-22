@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
-import { hasPermission, COMPRAS_ROLES } from "@/lib/rbac";
+import { hasPermission, COMPRAS_ROLES, PRODUTOS_ROLES } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -353,8 +353,8 @@ export default function SolicitacoesPage() {
   // Aberto pela aba Fornecedores e pelo Nova Solicitação (pedido de cotação).
   const [whatsappTarget, setWhatsappTarget] = useState<WhatsappTarget | null>(null);
 
-  const canApproveRequests = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
-  const canManageLinks = ["GESTOR", "EXECUTIVO", "TECNOLOGIA"].includes(role);
+  const canApproveRequests = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "FINANCEIRO"].includes(role);
+  const canManageLinks = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "FINANCEIRO"].includes(role);
   const canEditRequests = hasPermission(role, "SOLICITACOES", "edit");
   const canDeleteRequests = hasPermission(role, "SOLICITACOES", "delete");
   // Gerir compras (Registrar Compra, Armazenar no estoque, Nova/editar compra) é
@@ -1622,7 +1622,7 @@ export default function SolicitacoesPage() {
       ),
     },
   ]
-    .filter((t) => t.key !== "produtos" || role === "TECNOLOGIA")
+    .filter((t) => t.key !== "produtos" || PRODUTOS_ROLES.includes(role))
     // "Controle de Compras" só pros papéis de gestão (mesma regra do menu em
     // rbac.ts). Manutenção/RH não veem a aba nem acessando ?tab=compras direto —
     // o effectiveTab abaixo cai pra primeira aba disponível (Solicitações).
