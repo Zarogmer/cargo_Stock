@@ -581,8 +581,9 @@ export default function NaviosPage() {
       return;
     }
 
-    // Costado não usa produto/porão — força null pra não persistir lixo se o
-    // usuário tiver preenchido antes de trocar pra Costado.
+    // Costado não usa porão — força null pra não persistir lixo se o usuário
+    // tiver preenchido antes de trocar pra Costado. Produto/Carga agora vale
+    // pros dois tipos (Costado também guarda o produto do navio).
     const isCostado = form.operation_type === "COSTADO";
     // Situação do embarque só faz sentido pra EMBARQUE. AGENDADO sem horário cai pra null.
     const boardingSituation = !isCostado && form.boarding_situation ? form.boarding_situation : null;
@@ -602,7 +603,7 @@ export default function NaviosPage() {
       port: form.port.trim() || null,
       status: form.status,
       assigned_team: form.assigned_team || null,
-      cargo_type: isCostado ? null : (form.cargo_type.trim() || null),
+      cargo_type: form.cargo_type.trim() || null,
       holds_count: isCostado ? null : holdsParsed,
       client_name: form.client_name.trim() || null,
       services: isCostado ? ["COSTADO"] : form.services.filter((s) => s !== "COSTADO"),
@@ -1991,25 +1992,27 @@ export default function NaviosPage() {
                   grupo" (mais abaixo) — só é necessária quando se vai mandar a
                   mensagem do WhatsApp. */}
 
-              {form.operation_type === "EMBARQUE" && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-text mb-1">Produto / Carga</label>
-                    <input
-                      type="text"
-                      value={form.cargo_type}
-                      onChange={(e) => setForm({ ...form, cargo_type: e.target.value.toUpperCase() })}
-                      placeholder="Ex: CARVÃO"
-                      list="cargo-options"
-                      className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                    />
-                    <datalist id="cargo-options">
-                      {CARGO_OPTIONS.map((c) => (
-                        <option key={c} value={c} />
-                      ))}
-                    </datalist>
-                    <p className="text-[10px] text-text-light mt-1">Selecione ou digite o produto transportado</p>
-                  </div>
+              {/* Produto / Carga vale pros dois tipos (Costado também guarda o
+                  produto do navio). Porão (qtd) só faz sentido pra Embarque. */}
+              <div className={form.operation_type === "EMBARQUE" ? "grid grid-cols-1 sm:grid-cols-2 gap-3" : ""}>
+                <div>
+                  <label className="block text-sm font-medium text-text mb-1">Produto / Carga</label>
+                  <input
+                    type="text"
+                    value={form.cargo_type}
+                    onChange={(e) => setForm({ ...form, cargo_type: e.target.value.toUpperCase() })}
+                    placeholder="Ex: CARVÃO"
+                    list="cargo-options"
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                  />
+                  <datalist id="cargo-options">
+                    {CARGO_OPTIONS.map((c) => (
+                      <option key={c} value={c} />
+                    ))}
+                  </datalist>
+                  <p className="text-[10px] text-text-light mt-1">Selecione ou digite o produto transportado</p>
+                </div>
+                {form.operation_type === "EMBARQUE" && (
                   <div>
                     <label className="block text-sm font-medium text-text mb-1">Porão (qtd)</label>
                     <input
@@ -2021,8 +2024,8 @@ export default function NaviosPage() {
                       className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
                     />
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
               <div>
                 <label className="block text-sm font-medium text-text mb-1">Observações</label>
