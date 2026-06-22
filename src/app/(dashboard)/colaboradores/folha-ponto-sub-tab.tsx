@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob } from "@/lib/print";
 import { db } from "@/lib/db";
-import { AllocInput, WorkedKind, WorkedMap, countWorkedKind, expandWorkedDates } from "@/lib/folha-ponto";
+import { AllocInput, JornadaFilter, WorkedMap, countWorkedKind, expandWorkedDates } from "@/lib/folha-ponto";
 import { FolhaPontoPreview } from "./folha-ponto-preview";
 import type { Employee } from "@/types/database";
 
@@ -40,8 +40,9 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
   const init = defaultCompetencia();
   const [month, setMonth] = useState(init.month);
   const [year, setYear] = useState(init.year);
-  // Tipo de jornada que filtra a folha (Costado/Embarque). Default Embarque.
-  const [jornada, setJornada] = useState<WorkedKind>("EMBARQUE");
+  // Tipo de jornada que filtra a folha. "AMBAS" mostra Embarque e Costado juntos
+  // na mesma folha (é o que vai pra contabilidade) — default.
+  const [jornada, setJornada] = useState<JornadaFilter>("AMBAS");
 
   // Dias trabalhados por colaborador no mês (best-effort) — alimenta a contagem
   // e a visualização. Guardamos as datas (não só a contagem) pra renderizar a prévia.
@@ -222,7 +223,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
         const a = document.createElement("a");
         a.href = url;
         const periodo = `${MESES[month - 1]} ${year}`;
-        const tipoLabel = jornada === "COSTADO" ? "Costado" : "Embarque";
+        const tipoLabel = jornada === "COSTADO" ? "Costado" : jornada === "AMBAS" ? "Ambas" : "Embarque";
         a.download = ids.length === 1
           ? `Folha de Ponto ${tipoLabel} - ${periodo}.${format}`
           : `Folhas de Ponto ${tipoLabel} (${ids.length}) - ${periodo}.${format}`;
@@ -250,9 +251,10 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           <h3 className="font-semibold text-text">Gerar Folha de Ponto</h3>
           <p className="text-xs text-text-light mt-0.5">
             Os dias trabalhados saem dos <strong>navios cadastrados</strong> (o tipo de cada dia vem do
-            navio). Escolha a <strong>jornada</strong> para ver e gerar a folha desse tipo:{" "}
-            <strong>Embarque</strong> 7h20 (09:00–17:20) ou <strong>Costado</strong> 6h (horário do turno).
-            Quem trabalhou nos dois no mês tem uma folha de cada. Vários colaboradores geram um único arquivo com uma aba (ou página) para cada.
+            navio). Escolha a <strong>jornada</strong>: <strong>Embarque</strong> 7h20 (09:00–17:20),{" "}
+            <strong>Costado</strong> 6h (só o 1º turno do dia) ou <strong>Ambas</strong> (Embarque e Costado na
+            mesma folha — a carga horária ao lado diz qual é qual). Vários colaboradores geram um único arquivo
+            com uma aba (ou página) para cada.
           </p>
         </div>
 
@@ -260,7 +262,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
         <div>
           <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Tipo de jornada</label>
           <div className="mt-1 inline-flex rounded-lg border border-border overflow-hidden">
-            {([["EMBARQUE", "Embarque · 7h20"], ["COSTADO", "Costado · 6h"]] as const).map(([val, label]) => (
+            {([["AMBAS", "Ambas"], ["EMBARQUE", "Embarque · 7h20"], ["COSTADO", "Costado · 6h"]] as const).map(([val, label]) => (
               <button
                 key={val}
                 type="button"

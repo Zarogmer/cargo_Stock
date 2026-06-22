@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, MESES_PT, WorkedKind, WorkedMap, computeFolha, fmtHHMM } from "@/lib/folha-ponto";
+import { CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, JornadaFilter, MESES_PT, WorkedMap, computeFolha, fmtHHMM } from "@/lib/folha-ponto";
 
 // Prévia em tela da Folha de Ponto. Usa exatamente a mesma lógica (computeFolha)
 // do arquivo gerado, então o que aparece aqui é o que sai no Excel/PDF.
@@ -25,10 +25,15 @@ export function FolhaPontoPreview({
   worked: WorkedMap;
   year: number;
   month: number;
-  jornada: WorkedKind;
+  jornada: JornadaFilter;
 }) {
   const folha = useMemo(() => computeFolha(empId, worked, year, month, jornada), [empId, worked, year, month, jornada]);
-  const carga = fmtHHMM(jornada === "COSTADO" ? COSTADO_DIARIA_MIN : CARGA_DIARIA_MIN);
+  // Tabela lateral CARGA HORÁRIA: por dia da semana no modo simples; legenda dos
+  // dois tipos no modo AMBAS (deixa claro qual carga é Embarque e qual é Costado).
+  const cargaRows: [string, string][] =
+    jornada === "AMBAS"
+      ? [["EMBARQUE", fmtHHMM(CARGA_DIARIA_MIN)], ["COSTADO", fmtHHMM(COSTADO_DIARIA_MIN)]]
+      : CARGA_LABELS.map((l) => [l, fmtHHMM(jornada === "COSTADO" ? COSTADO_DIARIA_MIN : CARGA_DIARIA_MIN)]);
 
   const cell = "border border-gray-300 px-1.5 py-0.5 text-center whitespace-nowrap";
   const dash = <span className="text-gray-300">–</span>;
@@ -60,10 +65,10 @@ export function FolhaPontoPreview({
               </tr>
             </thead>
             <tbody>
-              {CARGA_LABELS.map((l) => (
+              {cargaRows.map(([l, v]) => (
                 <tr key={l}>
                   <td className="border border-gray-300 px-2 py-0.5 font-semibold">{l}</td>
-                  <td className="border border-gray-300 px-2 py-0.5 text-center bg-[#FFF2CC] font-semibold">{carga}</td>
+                  <td className="border border-gray-300 px-2 py-0.5 text-center bg-[#FFF2CC] font-semibold">{v}</td>
                 </tr>
               ))}
             </tbody>
@@ -120,8 +125,15 @@ export function FolhaPontoPreview({
           </tbody>
         </table>
         <p className="text-[10px] text-gray-400 mt-2">
-          Prévia idêntica ao arquivo gerado. Dias em azul = domingo/feriado. Mostrando apenas os dias de{" "}
-          <strong>{jornada === "COSTADO" ? "Costado (6h, horário do turno)" : "Embarque (7h20, 09:00–17:20)"}</strong>.
+          Prévia idêntica ao arquivo gerado. Dias em azul = domingo/feriado. Mostrando{" "}
+          <strong>
+            {jornada === "AMBAS"
+              ? "Embarque (7h20) e Costado (6h, só o 1º turno)"
+              : jornada === "COSTADO"
+                ? "apenas os dias de Costado (6h, só o 1º turno)"
+                : "apenas os dias de Embarque (7h20, 09:00–17:20)"}
+          </strong>
+          .
         </p>
       </div>
     </div>

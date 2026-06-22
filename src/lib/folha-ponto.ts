@@ -117,6 +117,10 @@ export interface WorkedDay {
 }
 export type WorkedMap = Map<string, WorkedDay>;
 
+// Filtro de jornada da folha (o que o RH escolhe na tela). "AMBAS" não filtra:
+// mostra Embarque e Costado juntos na mesma folha (é o que vai pra contabilidade).
+export type JornadaFilter = WorkedKind | "AMBAS";
+
 // Mapa dia (YYYY-MM-DD) → tipo de jornada, a partir das alocações do mês.
 // Costado (turno específico) tem prioridade sobre Embarque (janela ampla); entre
 // dois turnos de Costado no mesmo dia, fica o que começa mais cedo (determinístico).
@@ -196,10 +200,11 @@ export interface DayTimes {
 
 // Horário do dia conforme o tipo de jornada (sempre com minutos "quebrados",
 // variação determinística por colaborador+dia):
-//   - COSTADO: cada turno de 6h vira um período. Um turno → 1 período (entra
-//     perto do início, sai no fim do turno ou pouco depois — nunca antes). Dois
-//     turnos no dia (ex.: 07-13 + 13-19) → dois períodos = trabalhou 07:00→19:00.
-//     % 1440 mantém o relógio 00:00–23:59 mesmo no turno que cruza a meia-noite.
+//   - COSTADO: jornada de 6h corrida = um único período (entra perto do início,
+//     sai no fim do turno ou pouco depois — nunca antes). Se a pessoa fez 2+
+//     turnos no dia, a folha mostra SÓ O PRIMEIRO (o que começa mais cedo),
+//     porque vai pra contabilidade como 6h. % 1440 mantém o relógio 00:00–23:59
+//     mesmo no turno que cruza a meia-noite.
 //   - EMBARQUE: padrão da planilha oficial — entra ~09:00, almoço de 1h começando
 //     ~12:15–12:45, saída fixa 17:20. Como o almoço é exatamente 1h e a saída é
 //     fixa, a H. Diária depende só da entrada (≈ 16:20 − entrada): entrar antes
@@ -208,21 +213,14 @@ export function timesForDay(seedKey: string, day: WorkedDay): DayTimes {
   const rnd = mulberry32(hashStr(seedKey));
   const randInt = (min: number, max: number) => min + Math.floor(rnd() * (max - min + 1));
   if (day.kind === "COSTADO") {
-    const shifts = (day.periods.length ? day.periods : [COSTADO_SHIFT_FALLBACK])
+    // Só o primeiro turno do dia (o que começa mais cedo): a folha vai pra
+    // contabilidade como 6h, então 2+ turnos não viram 2 períodos.
+    const shift = (day.periods.length ? day.periods : [COSTADO_SHIFT_FALLBACK])
       .map(costadoShift)
-      .sort((a, b) => a.start - b.start);
-    const jit = () => randInt(-6, 6);
-    const entrada1 = (shifts[0].start + jit() + 1440) % 1440;
-    if (shifts.length === 1) {
-      const saida1 = (shifts[0].end + randInt(1, 8) + 1440) % 1440; // fim do turno ou pouco depois
-      return { entrada1, saida1, entrada2: null, saida2: null };
-    }
-    // 2+ turnos: período 1 = primeiro turno; período 2 = do segundo ao último.
-    const saida1 = (shifts[0].end + jit() + 1440) % 1440;
-    const contiguo = shifts[1].start === shifts[0].end; // ex.: 07-13 emendado com 13-19
-    const entrada2 = contiguo ? saida1 : (shifts[1].start + jit() + 1440) % 1440;
-    const saida2 = (shifts[shifts.length - 1].end + randInt(1, 8) + 1440) % 1440;
-    return { entrada1, saida1, entrada2, saida2 };
+      .sort((a, b) => a.start - b.start)[0];
+    const entrada1 = (shift.start + randInt(-6, 6) + 1440) % 1440;
+    const saida1 = (shift.end + randInt(1, 8) + 1440) % 1440; // fim do turno ou pouco depois
+    return { entrada1, saida1, entrada2: null, saida2: null };
   }
   const entrada1 = 9 * 60 + randInt(-6, 6); // 08:54..09:06
   const saida1 = 12 * 60 + 15 + randInt(0, 30); // 12:15..12:45
@@ -258,10 +256,11 @@ export function totalsForDay(t: DayTimes, cargaMin: number = CARGA_DIARIA_MIN): 
   return { hDiaria, atraso, he, faixa1, faixa2 };
 }
 
-// Carga horária esperada do dia. No Costado é 6h por turno (2 turnos no dia →
-// 12h de carga, então a jornada cheia não vira hora extra).
+// Carga horária esperada do dia. No Costado é sempre 6h: a folha mostra só o
+// primeiro turno (vai pra contabilidade como 6h), então 2+ turnos no mesmo dia
+// não somam carga.
 export function cargaForDay(day: WorkedDay): number {
-  if (day.kind === "COSTADO") return COSTADO_DIARIA_MIN * Math.max(1, day.periods.length);
+  if (day.kind === "COSTADO") return COSTADO_DIARIA_MIN;
   return CARGA_DIARIA_MIN;
 }
 
@@ -300,14 +299,15 @@ export interface FolhaComputed {
 // da tela — assim a visualização bate exatamente com o arquivo gerado.
 // O tipo de cada dia vem do navio onde a pessoa esteve (definido em
 // expandWorkedDates pelo services): COSTADO = 6h no turno; EMBARQUE = 7h20.
-// `jornada` filtra a folha por tipo — passa só os dias daquele tipo, pra o RH
-// gerar uma folha por jornada (sem misturar). Sem `jornada`, mostra todos.
+// `jornada` filtra a folha por tipo: "EMBARQUE"/"COSTADO" passa só os dias
+// daquele tipo; "AMBAS" (ou sem `jornada`) mostra todos os dias, Embarque e
+// Costado juntos na mesma folha.
 export function computeFolha(
   empId: number,
   worked: WorkedMap,
   year: number,
   month1to12: number,
-  jornada?: WorkedKind,
+  jornada?: JornadaFilter,
 ): FolhaComputed {
   const nDays = daysInMonth(year, month1to12);
   const rows: FolhaDayRow[] = [];
@@ -315,8 +315,8 @@ export function computeFolha(
   for (let d = 1; d <= nDays; d++) {
     const iso = `${year}-${String(month1to12).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
     const wd = worked.get(iso) ?? null;
-    // Filtra pelo tipo selecionado: dia de outro tipo conta como não trabalhado.
-    const day = wd && (jornada === undefined || wd.kind === jornada) ? wd : null;
+    // Filtra pelo tipo selecionado; "AMBAS" (ou sem filtro) mantém todos os dias.
+    const day = wd && (jornada == null || jornada === "AMBAS" || wd.kind === jornada) ? wd : null;
     let times: DayTimes | null = null;
     let totals: DayTotals | null = null;
     if (day) {
@@ -339,9 +339,10 @@ export function computeFolha(
   return { rows, totals: { hDiaria: totH, atraso: totA, he: totHE, faixa1: totF1, faixa2: totF2 } };
 }
 
-// Quantos dias de um tipo (Costado/Embarque) há no mapa — para o contador da tela.
-export function countWorkedKind(worked: WorkedMap, jornada: WorkedKind): number {
+// Quantos dias de um tipo há no mapa — para o contador da tela. "AMBAS" conta
+// todos os dias trabalhados (Embarque + Costado).
+export function countWorkedKind(worked: WorkedMap, jornada: JornadaFilter): number {
   let n = 0;
-  for (const v of worked.values()) if (v.kind === jornada) n++;
+  for (const v of worked.values()) if (jornada === "AMBAS" || v.kind === jornada) n++;
   return n;
 }

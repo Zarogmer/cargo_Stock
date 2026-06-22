@@ -5,7 +5,7 @@
 // <pageSetup>, garantindo um PDF limpo na conversão via LibreOffice.
 import * as XLSX from "xlsx-js-style";
 import PizZip from "pizzip";
-import { CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, MESES_PT, WorkedKind, WorkedMap, computeFolha } from "./folha-ponto";
+import { CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, JornadaFilter, MESES_PT, WorkedMap, computeFolha, fmtHHMM } from "./folha-ponto";
 
 export interface FolhaEmployee {
   id: number;
@@ -44,17 +44,20 @@ function sanitizeSheetName(name: string, used: Set<string>): string {
   return n;
 }
 
-// Carga de referência da tabela lateral conforme a jornada: 6h no Costado, 7h20
-// no Embarque.
-function cargaLabelValue(jornada?: WorkedKind): string {
-  const min = jornada === "COSTADO" ? COSTADO_DIARIA_MIN : CARGA_DIARIA_MIN;
-  const h = String(Math.floor(min / 60)).padStart(2, "0");
-  const m = String(min % 60).padStart(2, "0");
-  return `${h}:${m}`;
+// Linhas da tabela lateral CARGA HORÁRIA conforme a jornada:
+//   - EMBARQUE/COSTADO: um valor por dia da semana (layout oficial: 7h20 / 6h).
+//   - AMBAS: legenda com os dois tipos, deixando claro qual carga é de cada um.
+const CARGA_WEEKDAYS = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "DOMINGO", "FERIADOS"];
+function cargaEntries(jornada?: JornadaFilter): [string, string][] {
+  if (jornada === "AMBAS") {
+    return [["EMBARQUE", fmtHHMM(CARGA_DIARIA_MIN)], ["COSTADO", fmtHHMM(COSTADO_DIARIA_MIN)]];
+  }
+  const v = fmtHHMM(jornada === "COSTADO" ? COSTADO_DIARIA_MIN : CARGA_DIARIA_MIN);
+  return CARGA_WEEKDAYS.map((w) => [w, v]);
 }
 
 // Constrói a worksheet de um colaborador.
-function buildSheet(emp: FolhaEmployee, year: number, month1: number, jornada?: WorkedKind): XLSX.WorkSheet {
+function buildSheet(emp: FolhaEmployee, year: number, month1: number, jornada?: JornadaFilter): XLSX.WorkSheet {
   const { rows: dayRows, totals: monthTotals } = computeFolha(emp.id, emp.worked, year, month1, jornada);
   const COLS = 16; // A..P
   const blankRow = () => Array(COLS).fill(null) as (string | number | null)[];
@@ -80,7 +83,7 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number, jornada?: 
   aoa.push(headRow);
   const HEAD_ROW = 5;
 
-  const cargaLabels = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "DOMINGO", "FERIADOS"];
+  const carga = cargaEntries(jornada);
 
   const dayMeta: { row: number; highlight: boolean }[] = [];
   for (const dr of dayRows) {
@@ -109,11 +112,11 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number, jornada?: 
   }
 
   // Tabela lateral CARGA HORÁRIA (coluna O/P) a partir da linha de cabeçalho.
-  for (let i = 0; i < cargaLabels.length; i++) {
+  for (let i = 0; i < carga.length; i++) {
     const r = HEAD_ROW + i;
     while (aoa.length <= r) aoa.push(blankRow());
-    aoa[r][14] = cargaLabels[i];
-    aoa[r][15] = cargaLabelValue(jornada);
+    aoa[r][14] = carga[i][0];
+    aoa[r][15] = carga[i][1];
   }
 
   const totalRow = blankRow();
@@ -152,7 +155,7 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number, jornada?: 
   const headStyle = { font: { name: F, sz: 10, bold: true, color: { rgb: NAVY } }, fill: { patternType: "solid", fgColor: { rgb: GREY_HEAD } }, alignment: { horizontal: "center", vertical: "center", wrapText: true }, border: borderAll };
   for (let c = 0; c <= 12; c++) set(HEAD_ROW, c, headStyle);
 
-  for (let i = 0; i < cargaLabels.length; i++) {
+  for (let i = 0; i < carga.length; i++) {
     const r = HEAD_ROW + i;
     set(r, 14, { font: { name: F, sz: 10, bold: true }, fill: { patternType: "solid", fgColor: { rgb: GREY_HEAD } }, alignment: { horizontal: "left", vertical: "center" }, border: borderAll });
     set(r, 15, { font: { name: F, sz: 10, bold: true, color: { rgb: NAVY } }, fill: { patternType: "solid", fgColor: { rgb: YELLOW } }, alignment: { horizontal: "center", vertical: "center" }, border: borderAll });
@@ -237,7 +240,7 @@ export function buildFolhaPontoXlsx(
   employees: FolhaEmployee[],
   year: number,
   month1: number,
-  jornada?: WorkedKind,
+  jornada?: JornadaFilter,
 ): Buffer {
   const wb = XLSX.utils.book_new();
   const used = new Set<string>();
