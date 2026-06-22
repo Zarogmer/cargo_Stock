@@ -468,7 +468,6 @@ function HistoricoView({
     return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
   }, [allocations, periodMarks]);
 
-  const totalShifts = summary.reduce((acc, s) => acc + s.total_shifts, 0);
   const totalUniqueDays = new Set(allocations.map((a) => a.shift_date?.slice(0, 10))).size;
   const totalPeople = summary.length;
   // Períodos solicitados = pares (dia, período) com equipe real escalada. É a
@@ -478,6 +477,17 @@ function HistoricoView({
       .filter((a) => a.shift_date && a.shift_period)
       .map((a) => `${a.shift_date!.slice(0, 10)}|${a.shift_period}`),
   ).size;
+  // Períodos NÃO solicitados = células (dia, período) tratadas como NÃO REQ. no
+  // histórico: marcadas à mão OU dia já passou sem equipe (auto). Conta só dentro
+  // dos dias que aparecem no histórico (que tiveram alguma atividade ou marca).
+  let totalPeriodsNotRequested = 0;
+  for (const [date, byPeriod] of byDate) {
+    const past = date < todayISOStr;
+    for (const p of SHIFT_PERIODS) {
+      if (byPeriod[p].length > 0) continue;
+      if (markedKeys.has(`${date}|${p}`) || past) totalPeriodsNotRequested++;
+    }
+  }
 
   if (allocations.length === 0) {
     return (
@@ -516,8 +526,9 @@ function HistoricoView({
           <p className="text-[10px] text-text-light mt-0.5">base do valor do navio</p>
         </div>
         <div className="bg-card rounded-xl border border-border p-4">
-          <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Total de turnos</p>
-          <p className="text-2xl font-bold text-text mt-1">{totalShifts}</p>
+          <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Turnos não solicitados</p>
+          <p className="text-2xl font-bold text-text mt-1">{totalPeriodsNotRequested}</p>
+          <p className="text-[10px] text-text-light mt-0.5">períodos não requisitados</p>
         </div>
         <div className="bg-card rounded-xl border border-border p-4">
           <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Dias trabalhados</p>
