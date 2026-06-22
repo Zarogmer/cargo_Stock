@@ -34,6 +34,15 @@ const PERIOD_TONES: Record<ShiftPeriod, string> = {
   "01-07": "border-slate-200 bg-slate-50/40",
 };
 
+// Quando um período fica vazio, ele "repete" (transparente) o turno anterior do
+// mesmo bloco de 12h: manhã→tarde e noite→madrugada. Os períodos âncora (07-13 e
+// 19-01) não repetem ninguém. É só sugestão visual — não é salva nem conta como
+// período solicitado (o valor do navio sai dos períodos com equipe real).
+const REPEAT_SOURCE: Partial<Record<ShiftPeriod, ShiftPeriod>> = {
+  "13-19": "07-13",
+  "01-07": "19-01",
+};
+
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -199,6 +208,10 @@ export function EscalacaoCostadoPage() {
     [shipJob, periodStatus],
   );
 
+  // Quantos dos 4 períodos do dia têm equipe real escalada (= períodos
+  // solicitados do dia). É a base do valor do navio; repetição transparente não entra.
+  const periodsRequestedToday = SHIFT_PERIODS.filter((p) => allocationsByPeriod[p].length > 0).length;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -268,9 +281,17 @@ export function EscalacaoCostadoPage() {
               className="w-full md:w-64 bg-card border border-border rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-primary outline-none"
             />
           </div>
+          <p className="text-xs text-text-light">
+            <strong className="text-text">{periodsRequestedToday}</strong> de 4 períodos solicitados neste dia
+            <span> · base do valor do navio</span>
+          </p>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
             {SHIFT_PERIODS.map((period) => {
               const crew = allocationsByPeriod[period];
+              // Período vazio mostra (transparente) a equipe do turno anterior do
+              // mesmo bloco — só sugestão, não conta nem é salva. Some ao escalar alguém.
+              const sourcePeriod = REPEAT_SOURCE[period];
+              const ghostCrew = crew.length === 0 && sourcePeriod ? allocationsByPeriod[sourcePeriod] : [];
               return (
                 <section key={period} className={`rounded-xl border ${PERIOD_TONES[period]} flex flex-col`}>
                   <header className="px-4 pt-3 pb-2 border-b border-border flex items-center justify-between">
@@ -283,11 +304,7 @@ export function EscalacaoCostadoPage() {
                     </span>
                   </header>
                   <ul className="flex-1 divide-y divide-border/60 min-h-[60px]">
-                    {crew.length === 0 ? (
-                      <li className="px-4 py-6 text-center text-xs text-text-light italic">
-                        Ninguém escalado neste turno
-                      </li>
-                    ) : (
+                    {crew.length > 0 ? (
                       crew.map((a, idx) => (
                         <li key={a.id} className="px-4 py-2 flex items-center justify-between gap-2">
                           <div className="min-w-0">
@@ -305,6 +322,24 @@ export function EscalacaoCostadoPage() {
                           )}
                         </li>
                       ))
+                    ) : ghostCrew.length > 0 ? (
+                      <>
+                        <li className="px-4 pt-2 pb-1">
+                          <p className="text-[10px] text-text-light italic">
+                            ↑ Repete {PERIOD_LABELS[sourcePeriod!]} — sugestão, não conta como solicitado
+                          </p>
+                        </li>
+                        {ghostCrew.map((a, idx) => (
+                          <li key={a.id} className="px-4 py-2 opacity-40">
+                            <p className="text-sm font-medium truncate">{idx + 1}. {a.employees?.name || "—"}</p>
+                            <p className="text-[10px] text-text-light">{a.job_functions?.name || "—"}</p>
+                          </li>
+                        ))}
+                      </>
+                    ) : (
+                      <li className="px-4 py-6 text-center text-xs text-text-light italic">
+                        Ninguém escalado neste turno
+                      </li>
                     )}
                   </ul>
                   {canEdit && (
@@ -436,6 +471,13 @@ function HistoricoView({
   const totalShifts = summary.reduce((acc, s) => acc + s.total_shifts, 0);
   const totalUniqueDays = new Set(allocations.map((a) => a.shift_date?.slice(0, 10))).size;
   const totalPeople = summary.length;
+  // Períodos solicitados = pares (dia, período) com equipe real escalada. É a
+  // base do valor do navio (cobra-se por período solicitado, não por turno/pessoa).
+  const totalPeriodsRequested = new Set(
+    allocations
+      .filter((a) => a.shift_date && a.shift_period)
+      .map((a) => `${a.shift_date!.slice(0, 10)}|${a.shift_period}`),
+  ).size;
 
   if (allocations.length === 0) {
     return (
@@ -467,7 +509,12 @@ function HistoricoView({
   return (
     <div className="space-y-4">
       {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-card rounded-xl border border-border p-4">
+          <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Períodos solicitados</p>
+          <p className="text-2xl font-bold text-text mt-1">{totalPeriodsRequested}</p>
+          <p className="text-[10px] text-text-light mt-0.5">base do valor do navio</p>
+        </div>
         <div className="bg-card rounded-xl border border-border p-4">
           <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Total de turnos</p>
           <p className="text-2xl font-bold text-text mt-1">{totalShifts}</p>
@@ -494,12 +541,10 @@ function HistoricoView({
           {byDate.map(([date, byPeriod]) => {
             const isOpen = expandedDates.has(date);
             const past = isPastDate(date);
-            // Period is "accounted for" if it has crew, is manually marked NR,
-            // OR the day already passed (auto-NR — see request below the form).
-            const isAccounted = (p: ShiftPeriod) =>
-              byPeriod[p].length > 0 || isMarked(date, p) || past;
-            const periodsAccounted = SHIFT_PERIODS.reduce(
-              (acc, p) => acc + (isAccounted(p) ? 1 : 0),
+            // "Períodos solicitados" do dia = períodos com equipe real escalada.
+            // É a base do valor do navio; NR/auto-NR e repetição não contam.
+            const periodsRequested = SHIFT_PERIODS.reduce(
+              (acc, p) => acc + (byPeriod[p].length > 0 ? 1 : 0),
               0,
             );
             return (
@@ -512,7 +557,7 @@ function HistoricoView({
                   <div className="flex items-center gap-3">
                     <span className="text-base font-semibold tabular-nums">{date.split("-").reverse().join("/")}</span>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-text-light font-medium">
-                      {periodsAccounted} de 4 {periodsAccounted === 1 ? "período" : "períodos"}
+                      {periodsRequested} de 4 {periodsRequested === 1 ? "período" : "períodos"} solicitado{periodsRequested === 1 ? "" : "s"}
                     </span>
                   </div>
                   <span className="text-xs text-text-light">{isOpen ? "▲" : "▼"}</span>
