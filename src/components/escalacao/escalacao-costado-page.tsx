@@ -326,7 +326,7 @@ export function EscalacaoCostadoPage() {
                       <>
                         <li className="px-4 pt-2 pb-1">
                           <p className="text-[10px] text-text-light italic">
-                            ↑ Repete {PERIOD_LABELS[sourcePeriod!]} — sugestão, não conta como solicitado
+                            Repete {PERIOD_LABELS[sourcePeriod!]} — sugestão, não conta como solicitado
                           </p>
                         </li>
                         {ghostCrew.map((a, idx) => (
