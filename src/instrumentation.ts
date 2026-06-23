@@ -20,11 +20,19 @@ export async function register() {
   g.__cargoSchedulerStarted = true;
 
   const { runDueScheduledMessages } = await import("./lib/services/scheduler");
+  const { runDueBirthdayMessages } = await import("./lib/services/birthday-message");
   const tick = async () => {
     try {
       await runDueScheduledMessages();
     } catch (err) {
       console.error("[scheduler] tick error:", (err as Error).message);
+    }
+    // Parabéns de aniversário (10h SP). Isolado das agendas: um erro aqui não
+    // atrapalha os boletins de grupo, e vice-versa.
+    try {
+      await runDueBirthdayMessages();
+    } catch (err) {
+      console.error("[birthday] tick error:", (err as Error).message);
     }
   };
 

@@ -302,6 +302,13 @@ export default function MensagensPage() {
   const [cfgFunctions, setCfgFunctions] = useState<FunctionLite[]>([]);
   const [cfgEmployees, setCfgEmployees] = useState<EmployeeRoleLite[]>([]);
 
+  // Mensagem de aniversário (parabéns automático às 10h, no dia do aniversário)
+  const [bdayEnabled, setBdayEnabled] = useState(false);
+  const [bdayTemplate, setBdayTemplate] = useState("");
+  const [loadingBday, setLoadingBday] = useState(true);
+  const [savingBday, setSavingBday] = useState(false);
+  const [bdayMsg, setBdayMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
   const loadStatus = useCallback(async () => {
     setLoadingStatus(true);
     try {
@@ -377,6 +384,48 @@ export default function MensagensPage() {
     }
   }, []);
 
+  const loadBirthdayConfig = useCallback(async () => {
+    setLoadingBday(true);
+    try {
+      const res = await fetch("/api/birthday-message");
+      const body = await res.json();
+      if (res.ok && body.config) {
+        setBdayEnabled(!!body.config.enabled);
+        setBdayTemplate(String(body.config.template || ""));
+      }
+    } catch (err) {
+      console.error("Erro ao carregar mensagem de aniversário:", err);
+    } finally {
+      setLoadingBday(false);
+    }
+  }, []);
+
+  const saveBirthdayConfig = useCallback(async () => {
+    setSavingBday(true);
+    setBdayMsg(null);
+    try {
+      const res = await fetch("/api/birthday-message", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: bdayEnabled, template: bdayTemplate }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setBdayMsg({ kind: "err", text: body.error || "Falha ao salvar." });
+      } else {
+        if (body.config) {
+          setBdayEnabled(!!body.config.enabled);
+          setBdayTemplate(String(body.config.template || ""));
+        }
+        setBdayMsg({ kind: "ok", text: "Mensagem de aniversário salva." });
+      }
+    } catch (err) {
+      setBdayMsg({ kind: "err", text: (err as Error).message });
+    } finally {
+      setSavingBday(false);
+    }
+  }, [bdayEnabled, bdayTemplate]);
+
   // Funções (job_functions ativas) + colaboradores (com função) pra montar o
   // seletor e o "ver quem está na função".
   const loadFunctions = useCallback(async () => {
@@ -401,9 +450,10 @@ export default function MensagensPage() {
     loadSchedules();
     loadNotifyConfig();
     loadFunctions();
+    loadBirthdayConfig();
     const interval = setInterval(loadStatus, 10000);
     return () => clearInterval(interval);
-  }, [canView, loadStatus, loadEmployees, loadGroups, loadSchedules, loadNotifyConfig, loadFunctions]);
+  }, [canView, loadStatus, loadEmployees, loadGroups, loadSchedules, loadNotifyConfig, loadFunctions, loadBirthdayConfig]);
 
   const teams = useMemo(() => {
     const set = new Set<string>();
@@ -1170,6 +1220,66 @@ export default function MensagensPage() {
         <div className="flex justify-end">
           <Button type="button" onClick={saveNotifyConfig} disabled={savingCfg || loadingCfg || !notifyCfg}>
             {savingCfg ? "Salvando..." : "Salvar configuração"}
+          </Button>
+        </div>
+      </section>
+
+      {/* Mensagem de aniversário */}
+      <section className="bg-card rounded-2xl border border-border p-6 space-y-4">
+        <div>
+          <h2 className="text-lg font-bold text-text">Mensagem de Aniversário 🎂</h2>
+          <p className="text-sm text-text-light">
+            Todo dia, às <strong>10h</strong>, o sistema manda um WhatsApp de parabéns para quem
+            faz aniversário — colaboradores <strong>ativos</strong> e <strong>com pendência</strong>
+            {" "}(demitidos não recebem). O texto abaixo é enviado para o número de cada um.
+          </p>
+        </div>
+
+        {bdayMsg && (
+          <div className={`rounded-lg px-3 py-2 text-sm border ${
+            bdayMsg.kind === "ok"
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : "bg-red-50 border-red-200 text-red-900"
+          }`}>
+            {bdayMsg.text}
+          </div>
+        )}
+
+        <label className="flex items-center gap-2 text-sm font-medium cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={bdayEnabled}
+            onChange={(e) => setBdayEnabled(e.target.checked)}
+            disabled={loadingBday}
+            className="w-4 h-4 accent-primary"
+          />
+          Enviar parabéns automaticamente
+          <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${bdayEnabled ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-600"}`}>
+            {bdayEnabled ? "Ativo" : "Desligado"}
+          </span>
+        </label>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">Texto da mensagem</label>
+          <textarea
+            value={bdayTemplate}
+            onChange={(e) => setBdayTemplate(e.target.value)}
+            disabled={loadingBday}
+            rows={7}
+            placeholder="🎉 Feliz aniversário, {nome}!"
+            className="w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none font-mono"
+          />
+          <p className="text-[11px] text-text-light mt-1">
+            Use <code className="px-1 rounded bg-gray-100">{"{nome}"}</code> (primeiro nome),{" "}
+            <code className="px-1 rounded bg-gray-100">{"{nome_completo}"}</code> e{" "}
+            <code className="px-1 rounded bg-gray-100">{"{idade}"}</code> — o sistema troca pelos dados de
+            cada colaborador. Negrito do WhatsApp: *texto*.
+          </p>
+        </div>
+
+        <div className="flex justify-end">
+          <Button type="button" onClick={saveBirthdayConfig} disabled={savingBday || loadingBday}>
+            {savingBday ? "Salvando..." : "Salvar mensagem"}
           </Button>
         </div>
       </section>

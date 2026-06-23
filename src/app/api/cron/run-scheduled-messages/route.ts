@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runDueScheduledMessages } from "@/lib/services/scheduler";
+import { runDueBirthdayMessages } from "@/lib/services/birthday-message";
 
 // Disparo manual/externo do runner de agendas. Protegido por segredo (sem
 // sessão — funciona via curl/cron). Serve pra testar sem esperar o relógio e
@@ -19,7 +20,15 @@ async function handle(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const result = await runDueScheduledMessages();
-  return NextResponse.json({ ok: true, ...result });
+  // Parabéns de aniversário (10h SP) — isolado pra um erro aqui não derrubar o
+  // resultado das agendas de grupo.
+  let birthday;
+  try {
+    birthday = await runDueBirthdayMessages();
+  } catch (err) {
+    birthday = { error: (err as Error).message };
+  }
+  return NextResponse.json({ ok: true, ...result, birthday });
 }
 
 export async function GET(request: NextRequest) {
