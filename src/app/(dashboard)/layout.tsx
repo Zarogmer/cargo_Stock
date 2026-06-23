@@ -3,11 +3,29 @@
 import { useState, useEffect } from "react";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { Sidebar } from "@/components/sidebar";
-import { MenuIcon } from "@/components/icons";
+import { MenuIcon, ChevronLeftIcon } from "@/components/icons";
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const { user, profile, loading } = useAuth();
+
+  // Restaura a preferência de recolher a sidebar (desktop) entre sessões.
+  useEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem("cs.sidebarCollapsed") === "1");
+    } catch {}
+  }, []);
+
+  function toggleCollapsed() {
+    setCollapsed((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem("cs.sidebarCollapsed", next ? "1" : "0");
+      } catch {}
+      return next;
+    });
+  }
 
   // When loading finishes and there's no user, redirect to login
   useEffect(() => {
@@ -57,9 +75,20 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="h-screen flex bg-bg overflow-hidden">
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} collapsed={collapsed} />
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="relative flex-1 flex flex-col min-w-0">
+        {/* Desktop: alça pra recolher/expandir a sidebar e ganhar espaço de
+            tela. Fica grudada na emenda (borda direita da sidebar). */}
+        <button
+          onClick={toggleCollapsed}
+          title={collapsed ? "Expandir menu" : "Recolher menu"}
+          aria-label={collapsed ? "Expandir menu" : "Recolher menu"}
+          className="hidden md:flex absolute left-0 top-1/2 -translate-y-1/2 z-30 items-center justify-center w-6 h-12 rounded-r-lg bg-white border border-l-0 border-border shadow-md text-text-light hover:text-primary hover:bg-gray-50 transition-colors"
+        >
+          <ChevronLeftIcon className={`w-4 h-4 transition-transform ${collapsed ? "rotate-180" : ""}`} />
+        </button>
+
         {/* Top bar (mobile) */}
         <header className="md:hidden flex items-center justify-between bg-white border-b border-border px-4 py-3 sticky top-0 z-30 shadow-sm">
           <button

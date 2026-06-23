@@ -18,6 +18,7 @@ import {
   Trash2,
   Search,
   ChevronDown,
+  ChevronLeft,
   MessageCircle,
   Send,
   MessagesSquare,
@@ -102,6 +103,10 @@ export function SearchIcon({ className = "w-5 h-5" }: IconProps) {
 
 export function ChevronDownIcon({ className = "w-4 h-4" }: IconProps) {
   return <ChevronDown className={className} />;
+}
+
+export function ChevronLeftIcon({ className = "w-4 h-4" }: IconProps) {
+  return <ChevronLeft className={className} />;
 }
 
 export function MarketingIcon({ className = "w-5 h-5" }: IconProps) {

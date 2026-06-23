@@ -175,9 +175,11 @@ function NavEntry({
 interface SidebarProps {
   open: boolean;
   onClose: () => void;
+  /** Desktop: quando true a sidebar recolhe (largura 0) pra dar mais tela. */
+  collapsed?: boolean;
 }
 
-export function Sidebar({ open, onClose }: SidebarProps) {
+export function Sidebar({ open, onClose, collapsed = false }: SidebarProps) {
   const { profile, signOut } = useAuth();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -212,11 +214,14 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
       {/* Sidebar */}
       <aside
-        className={`fixed top-0 left-0 h-full w-64 bg-sidebar text-white z-50 transform transition-transform duration-300 ease-in-out
+        className={`fixed top-0 left-0 h-full w-64 bg-sidebar text-white z-50 transform overflow-hidden transition-[transform,width] duration-300 ease-in-out
           ${open ? "translate-x-0" : "-translate-x-full"}
-          md:translate-x-0 md:sticky md:top-0 md:z-auto md:shrink-0 md:h-screen`}
+          md:translate-x-0 md:sticky md:top-0 md:z-auto md:shrink-0 md:h-screen
+          ${collapsed ? "md:w-0" : "md:w-64"}`}
       >
-        <div className="flex flex-col h-full">
+        {/* Largura fixa interna: quando o aside recolhe pra 0 o conteúdo é
+            cortado (overflow-hidden) em vez de reflowar/espremer. */}
+        <div className="flex flex-col h-full w-64">
           {/* Header */}
           <div className="flex items-center justify-between p-5 border-b border-white/5">
             <Link
@@ -230,7 +235,6 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               </div>
               <div>
                 <h2 className="font-bold text-sm tracking-wide">Cargo Stock</h2>
-                <p className="text-[10px] text-gray-500 uppercase tracking-widest">v2.0</p>
               </div>
             </Link>
             <button onClick={onClose} className="md:hidden p-1.5 hover:bg-sidebar-hover rounded-lg transition">
