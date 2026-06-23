@@ -13,7 +13,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatPhone, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, type NrCode } from "@/lib/utils";
 import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
-import type { Employee } from "@/types/database";
+import type { Employee, JobFunction } from "@/types/database";
 import { DocumentosTab } from "./documentos-tab";
 
 export default function ColaboradoresPage() {
@@ -36,12 +36,20 @@ export default function ColaboradoresPage() {
   const canCreate = hasPermission(role, "EPI", "create");
   const canEdit = hasPermission(role, "EPI", "edit");
   const canDelete = hasPermission(role, "EPI", "delete");
+  // "Paga" (valor por função, igual à aba Valores do Financeiro) só Executivo e
+  // Tecnologia podem alterar; RH e os demais apenas observam. Pedido do Guilherme.
+  const canEditPaga = role === "EXECUTIVO" || role === "TECNOLOGIA";
 
   // --- EMPLOYEES ---
   const [employees, setEmployees] = useState<Employee[]>([]);
   // Funções vindas do Financeiro (tabela job_functions) — fonte única, usada no
   // formulário de cadastro pra manter Colaboradores e Financeiro em sincronia.
   const [jobRoleOptions, setJobRoleOptions] = useState<string[]>([]);
+  // Funções completas (id + valor padrão) e o mapa de valores especiais por
+  // colaborador ("empId-fnId" → rate), pra o modal e o detalhe mostrarem a
+  // "Paga" certa conforme a função, sem fetch assíncrono ao abrir.
+  const [jobFunctions, setJobFunctions] = useState<JobFunction[]>([]);
+  const [specialRates, setSpecialRates] = useState<Map<string, number>>(new Map());
   const [empSearch, setEmpSearch] = useState("");
   const [empTeamFilter, setEmpTeamFilter] = useState("Todos");
   const [empStatusFilter, setEmpStatusFilter] = useState<"Todos" | "ATIVO" | "INATIVO" | "PENDENCIA">("Todos");
@@ -78,10 +86,11 @@ export default function ColaboradoresPage() {
         console.warn("[colaboradores] auto-release failed:", (err as Error).message);
       }
 
-      const [empRes, allocRes, fnRes] = await Promise.all([
+      const [empRes, allocRes, fnRes, rateRes] = await Promise.all([
         db.from("employees").select("*").order("name"),
         db.from("job_allocations").select("employee_id, kind, status").eq("status", "ATIVO"),
-        db.from("job_functions").select("name").order("name"),
+        db.from("job_functions").select("id, name, default_rate").order("name"),
+        db.from("employee_function_rates").select("employee_id, function_id, rate"),
       ]);
 
       if (empRes.error) {
@@ -90,11 +99,17 @@ export default function ColaboradoresPage() {
       }
 
       setEmployees(empRes.data || []);
+      const fns = (fnRes.data as JobFunction[] | null) || [];
+      setJobFunctions(fns);
       setJobRoleOptions(
-        ((fnRes.data as Array<{ name: string }> | null) || [])
-          .map((f) => (f.name || "").trim())
-          .filter(Boolean)
+        fns.map((f) => (f.name || "").trim()).filter(Boolean)
       );
+      // Mapa "empId-fnId" → valor especial. O modal/detalhe usam pra puxar a Paga.
+      const ratesMap = new Map<string, number>();
+      ((rateRes.data as Array<{ employee_id: number; function_id: number; rate: string | number }> | null) || []).forEach((r) => {
+        ratesMap.set(`${r.employee_id}-${r.function_id}`, Number(r.rate));
+      });
+      setSpecialRates(ratesMap);
 
       // Build escalação status map. EMBARQUE wins over COSTADO if both exist.
       const statusMap = new Map<number, "EMBARQUE" | "COSTADO">();
@@ -202,22 +217,95 @@ export default function ColaboradoresPage() {
   }
 
   // --- SAVE handlers ---
-  async function saveEmployee(data: Partial<Employee>) {
+  async function saveEmployee(data: Partial<Employee>, paga?: { functionId: number | null; rate: number | null }) {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
     const payload = { ...data, updated_by: actor } as any;
-    const { error } = editEmp
+    const { data: saved, error } = editEmp
       ? await db.from("employees").update(payload).eq("id", editEmp.id)
       : await db.from("employees").insert(payload);
-    setSaving(false);
     if (error) {
       // Antes o erro era engolido e o modal fechava como se tivesse salvado —
       // por isso "alterar a função" parecia não funcionar. Agora avisa e mantém
       // o modal aberto pra não perder o que foi digitado.
+      setSaving(false);
       alert(`Não foi possível salvar o colaborador: ${error.message}`);
       return;
     }
+    // "Paga": grava o valor especial por função (employee_function_rates), igual
+    // à aba Valores do Financeiro. Só Executivo/Tecnologia chegam aqui com `paga`.
+    if (canEditPaga && paga && paga.functionId != null) {
+      const empId = editEmp ? editEmp.id : (saved as any)?.id;
+      if (empId != null) {
+        const pagaErr = await saveSpecialRate(empId, paga.functionId, paga.rate);
+        if (pagaErr) {
+          setSaving(false);
+          alert(`Colaborador salvo, mas não foi possível salvar a Paga: ${pagaErr}`);
+          setEmpForm(false); setEditEmp(null); loadAll();
+          return;
+        }
+      }
+    }
+    setSaving(false);
     setEmpForm(false); setEditEmp(null); loadAll();
+  }
+
+  // Grava/atualiza/remove o valor especial de um colaborador numa função e
+  // propaga pros pagamentos em aberto — mesma lógica da aba Valores do
+  // Financeiro. Retorna mensagem de erro (string) ou null em caso de sucesso.
+  async function saveSpecialRate(employeeId: number, functionId: number, rate: number | null): Promise<string | null> {
+    const fn = jobFunctions.find((f) => f.id === functionId);
+    const defaultRate = fn ? Number(fn.default_rate) : NaN;
+    const hasValue = rate != null && Number.isFinite(rate) && rate > 0;
+    const isOverride = hasValue && rate !== defaultRate;
+
+    const { data: existing } = await db
+      .from("employee_function_rates")
+      .select("id, rate")
+      .eq("employee_id", employeeId)
+      .eq("function_id", functionId);
+    const row = ((existing as Array<{ id: number; rate: string | number }> | null) || [])[0];
+
+    if (!row && !isOverride) return null; // já estava no valor padrão — nada a fazer
+
+    let changed = false;
+    if (isOverride) {
+      if (row) {
+        if (Number(row.rate) !== rate) {
+          const res = await db.from("employee_function_rates").update({ rate }).eq("id", row.id);
+          if (res?.error) return res.error.message;
+          changed = true;
+        }
+      } else {
+        const res = await db.from("employee_function_rates").insert({
+          employee_id: employeeId, function_id: functionId, rate,
+        });
+        if (res?.error) return res.error.message;
+        changed = true;
+      }
+    } else if (row) {
+      // Voltou pro valor padrão da função → remove o override.
+      const res = await db.from("employee_function_rates").delete().eq("id", row.id);
+      if (res?.error) return res.error.message;
+      changed = true;
+    }
+    if (!changed) return null;
+
+    // Propaga pros pagamentos em aberto (jobs não fechados): as alocações desse
+    // colaborador+função recebem o novo rate efetivo, igual ao Financeiro.
+    const effective = isOverride ? (rate as number) : defaultRate;
+    if (Number.isFinite(effective)) {
+      const { data: openJobs } = await db
+        .from("jobs").select("id").in("status", ["ABERTO", "EM_ANDAMENTO", "VERIFICADO"]);
+      const openJobIds = ((openJobs as { id: number }[] | null) || []).map((j) => j.id);
+      if (openJobIds.length > 0) {
+        await db.from("job_allocations").update({ rate: effective })
+          .eq("employee_id", employeeId)
+          .eq("function_id", functionId)
+          .in("job_id", openJobIds);
+      }
+    }
+    return null;
   }
 
   // --- COLUMNS ---
@@ -444,7 +532,7 @@ export default function ColaboradoresPage() {
       <Tabs tabs={tabs} defaultTab={initialTab} hideHeader />
 
       {/* Employee Form */}
-      <EmployeeFormModal open={empForm} onClose={() => { setEmpForm(false); setEditEmp(null); }} onSave={saveEmployee} item={editEmp} saving={saving} roleOptions={jobRoleOptions} />
+      <EmployeeFormModal open={empForm} onClose={() => { setEmpForm(false); setEditEmp(null); }} onSave={saveEmployee} item={editEmp} saving={saving} roleOptions={jobRoleOptions} functions={jobFunctions} specialRates={specialRates} canEditPaga={canEditPaga} />
       <ConfirmDialog open={!!deleteEmp} onClose={() => setDeleteEmp(null)} onConfirm={async () => { setSaving(true); await db.from("employees").delete().eq("id", deleteEmp!.id); setSaving(false); setDeleteEmp(null); loadAll(); }} title="Excluir Colaborador" message={`Excluir "${deleteEmp?.name}"?`} loading={saving} />
 
       {/* Employee Detail */}
@@ -497,7 +585,11 @@ export default function ColaboradoresPage() {
               {selectedEmp.birth_date && <div><span className="text-text-light">Nascimento:</span> <span className="font-medium">{selectedEmp.birth_date.slice(0, 10)}</span></div>}
               {selectedEmp.admission_date && <div><span className="text-text-light">Admissão:</span> <span className="font-medium">{selectedEmp.admission_date.slice(0, 10)}</span></div>}
               {selectedEmp.email && <div className="col-span-2"><span className="text-text-light">Email:</span> <span className="font-medium">{selectedEmp.email}</span></div>}
-              {selectedEmp.salary != null && <div><span className="text-text-light">Salário:</span> <span className="font-medium text-emerald-700">R$ {Number(selectedEmp.salary).toFixed(2)}</span></div>}
+              {(() => {
+                const p = effectivePaga(jobFunctions, specialRates, selectedEmp.id, selectedEmp.role);
+                if (!p) return null;
+                return <div><span className="text-text-light">Paga:</span> <span className="font-medium text-emerald-700">R$ {p.rate.toFixed(2)}{p.isSpecial ? " (especial)" : ""}</span></div>;
+              })()}
             </div>
 
             {/* Banco */}
@@ -621,7 +713,23 @@ function formatPhoneMask(value: string): string {
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
 }
 
-function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions }: { open: boolean; onClose: () => void; onSave: (d: Partial<Employee>) => void; item: Employee | null; saving: boolean; roleOptions: string[] }) {
+// Paga efetiva = valor especial do colaborador na função (se houver) ou o valor
+// padrão da função. Fonte única usada no modal e no detalhe do colaborador.
+function effectivePaga(
+  functions: JobFunction[],
+  specialRates: Map<string, number>,
+  employeeId: number | null | undefined,
+  roleName: string | null | undefined,
+): { rate: number; isSpecial: boolean; functionId: number } | null {
+  const fn = functions.find((f) => f.name === roleName);
+  if (!fn) return null;
+  const special = employeeId != null ? specialRates.get(`${employeeId}-${fn.id}`) : undefined;
+  const rate = special != null ? special : Number(fn.default_rate);
+  if (!Number.isFinite(rate)) return null;
+  return { rate, isSpecial: special != null, functionId: fn.id };
+}
+
+function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, functions, specialRates, canEditPaga }: { open: boolean; onClose: () => void; onSave: (d: Partial<Employee>, paga?: { functionId: number | null; rate: number | null }) => void; item: Employee | null; saving: boolean; roleOptions: string[]; functions: JobFunction[]; specialRates: Map<string, number>; canEditPaga: boolean }) {
   // Pessoais
   const [name, setName] = useState("");
   const [team, setTeam] = useState<string>("");
@@ -639,7 +747,9 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions }:
   const [status, setStatus] = useState<string>("ATIVO");
   const [sector, setSector] = useState<string>("");
   const [role, setRole] = useState("");
-  const [salary, setSalary] = useState("");
+  // "Paga" — valor por função (especial do colaborador ou padrão da função).
+  // Substitui o antigo campo "Salário" no formulário.
+  const [paga, setPaga] = useState("");
   const [admissionDate, setAdmissionDate] = useState("");
   const [contractType, setContractType] = useState<string>("");
   // Bancários
@@ -676,7 +786,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions }:
       setStatus(item.status || "ATIVO");
       setSector(item.sector || "");
       setRole(item.role || "");
-      setSalary(item.salary?.toString() || "");
+      { const p = effectivePaga(functions, specialRates, item.id, item.role); setPaga(p ? String(p.rate) : ""); }
       setAdmissionDate(item.admission_date?.slice(0, 10) || "");
       setContractType(item.contract_type || "");
       setBankName(item.bank_name || ""); setBankAgency(item.bank_agency || "");
@@ -698,7 +808,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions }:
       setName(""); setTeam(""); setPhone(""); setEmail(""); setBirthDate("");
       setFamilyPhone(""); setNotes("");
       setCpf(""); setRg(""); setIspsCode(""); setESocial("");
-      setStatus("ATIVO"); setSector(""); setRole(""); setSalary(""); setAdmissionDate(""); setContractType("");
+      setStatus("ATIVO"); setSector(""); setRole(""); setPaga(""); setAdmissionDate(""); setContractType("");
       setBankName(""); setBankAgency(""); setBankAccount(""); setBankAccountType("");
       setHasVaccinationCard(false); setHasCnh(false);
       setNrsTraining(""); setMeioAmbienteTraining("");
@@ -743,6 +853,9 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions }:
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    const selectedFn = functions.find((f) => f.name === role);
+    const parsedPaga = paga.trim() === "" ? null : Number(paga.replace(",", "."));
+    const pagaRate = parsedPaga != null && Number.isFinite(parsedPaga) ? parsedPaga : null;
     onSave({
       name, team: (team as any) || null, phone: phone || null,
       email: email || null, birth_date: birthDate || null,
@@ -754,7 +867,6 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions }:
       status: (status as any) || "ATIVO",
       sector: (sector as any) || null,
       role: role || null,
-      salary: salary || null,
       admission_date: admissionDate || null,
       contract_type: (contractType as any) || null,
       bank_name: bankName || null, bank_agency: bankAgency || null,
@@ -773,7 +885,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions }:
       aso_status: asoStatus || null,
       realiza_limpeza: realizaLimpeza,
       does_costado: doesCostado,
-    });
+    }, { functionId: selectedFn?.id ?? null, rate: pagaRate });
   }
 
   const tabs = [
@@ -844,7 +956,18 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions }:
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Função</label>
-              <select value={role} onChange={(e) => setRole(e.target.value)} className={inputCls}>
+              <select
+                value={role}
+                onChange={(e) => {
+                  const newRole = e.target.value;
+                  setRole(newRole);
+                  // A Paga acompanha a função: puxa o valor especial do colaborador
+                  // nessa função ou, na falta dele, o valor padrão da função.
+                  const p = effectivePaga(functions, specialRates, item?.id ?? null, newRole);
+                  setPaga(p ? String(p.rate) : "");
+                }}
+                className={inputCls}
+              >
                 <option value="">Selecionar...</option>
                 {roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
                 {/* Mantém o valor atual visível mesmo que não esteja na lista de
@@ -852,7 +975,37 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions }:
                 {role && !roleOptions.includes(role) && <option value={role}>{role}</option>}
               </select>
             </div>
-            <div><label className="block text-sm font-medium mb-1">Salário (R$)</label><input type="number" step="0.01" value={salary} onChange={(e) => setSalary(e.target.value)} placeholder="0,00" className={inputCls} /></div>
+            <div>
+              <label className="block text-sm font-medium mb-1 flex items-center gap-2">
+                Paga (R$)
+                {(() => {
+                  const p = effectivePaga(functions, specialRates, item?.id ?? null, role);
+                  if (!p) return null;
+                  return (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${p.isSpecial ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
+                      {p.isSpecial ? "valor especial" : "valor da função"}
+                    </span>
+                  );
+                })()}
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                value={paga}
+                onChange={(e) => setPaga(e.target.value)}
+                placeholder="0,00"
+                disabled={!canEditPaga || !role}
+                title={!canEditPaga ? "Somente Executivo e Tecnologia podem alterar a Paga" : (!role ? "Selecione a função primeiro" : undefined)}
+                className={`${inputCls}${(!canEditPaga || !role) ? " bg-gray-50 text-text-light cursor-not-allowed" : ""}`}
+              />
+              <p className="text-[10px] text-text-light mt-1">
+                {!canEditPaga
+                  ? "Somente leitura · valor por função (Executivo/Tecnologia editam)."
+                  : !role
+                    ? "Selecione a função pra ver/editar a paga."
+                    : "Vazio ou igual ao padrão remove o valor especial."}
+              </p>
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Tipo de Contrato</label>
