@@ -588,7 +588,7 @@ export default function ColaboradoresPage() {
               {(() => {
                 const p = effectivePaga(jobFunctions, specialRates, selectedEmp.id, selectedEmp.role);
                 if (!p) return null;
-                return <div><span className="text-text-light">Paga:</span> <span className="font-medium text-emerald-700">R$ {p.rate.toFixed(2)}{p.isSpecial ? " (especial)" : ""}</span></div>;
+                return <div><span className="text-text-light">Paga:</span> <span className="font-medium text-emerald-700">R$ {formatRateBR(p.rate)}{p.isSpecial ? " (especial)" : ""}</span></div>;
               })()}
             </div>
 
@@ -713,6 +713,11 @@ function formatPhoneMask(value: string): string {
   return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
 }
 
+// Formata um valor em reais no padrão BR: 2 casas e vírgula decimal (320 → "320,00").
+function formatRateBR(n: number): string {
+  return Number.isFinite(n) ? n.toFixed(2).replace(".", ",") : "";
+}
+
 // Paga efetiva = valor especial do colaborador na função (se houver) ou o valor
 // padrão da função. Fonte única usada no modal e no detalhe do colaborador.
 function effectivePaga(
@@ -786,7 +791,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       setStatus(item.status || "ATIVO");
       setSector(item.sector || "");
       setRole(item.role || "");
-      { const p = effectivePaga(functions, specialRates, item.id, item.role); setPaga(p ? String(p.rate) : ""); }
+      { const p = effectivePaga(functions, specialRates, item.id, item.role); setPaga(p ? formatRateBR(p.rate) : ""); }
       setAdmissionDate(item.admission_date?.slice(0, 10) || "");
       setContractType(item.contract_type || "");
       setBankName(item.bank_name || ""); setBankAgency(item.bank_agency || "");
@@ -964,7 +969,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
                   // A Paga acompanha a função: puxa o valor especial do colaborador
                   // nessa função ou, na falta dele, o valor padrão da função.
                   const p = effectivePaga(functions, specialRates, item?.id ?? null, newRole);
-                  setPaga(p ? String(p.rate) : "");
+                  setPaga(p ? formatRateBR(p.rate) : "");
                 }}
                 className={inputCls}
               >
@@ -989,10 +994,16 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
                 })()}
               </label>
               <input
-                type="number"
-                step="0.01"
+                type="text"
+                inputMode="decimal"
                 value={paga}
                 onChange={(e) => setPaga(e.target.value)}
+                onBlur={() => {
+                  const raw = paga.trim().replace(",", ".");
+                  if (raw === "") return;
+                  const n = Number(raw);
+                  if (Number.isFinite(n)) setPaga(formatRateBR(n));
+                }}
                 placeholder="0,00"
                 disabled={!canEditPaga || !role}
                 title={!canEditPaga ? "Somente Executivo e Tecnologia podem alterar a Paga" : (!role ? "Selecione a função primeiro" : undefined)}
