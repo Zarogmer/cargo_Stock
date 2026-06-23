@@ -27,6 +27,16 @@ const PERIOD_LABELS: Record<ShiftPeriod, string> = {
   "01-07": "01h às 07h",
 };
 
+// Numeração operacional do período (não é a ordem dos cards): o dia de trabalho
+// começa de manhã (1) e a madrugada é o último (4). É só rótulo — os cards
+// continuam na ordem cronológica (01-07 primeiro).
+const PERIOD_NUMBER: Record<ShiftPeriod, number> = {
+  "07-13": 1,
+  "13-19": 2,
+  "19-01": 3,
+  "01-07": 4,
+};
+
 const PERIOD_TONES: Record<ShiftPeriod, string> = {
   "07-13": "border-amber-200 bg-amber-50/40",
   "13-19": "border-orange-200 bg-orange-50/40",
@@ -299,8 +309,11 @@ export function EscalacaoCostadoPage() {
                       <p className="text-[10px] uppercase tracking-wider text-text-light font-semibold">Turno</p>
                       <h3 className="text-base font-bold text-text">{PERIOD_LABELS[period]}</h3>
                     </div>
-                    <span className="text-xs px-2 py-1 rounded-full bg-white border border-border font-semibold text-text">
-                      {crew.length}
+                    <span
+                      className="text-xs px-2 py-1 rounded-full bg-white border border-border font-semibold text-text"
+                      title={`Período ${PERIOD_NUMBER[period]}`}
+                    >
+                      {PERIOD_NUMBER[period]}
                     </span>
                   </header>
                   <ul className="flex-1 divide-y divide-border/60 min-h-[60px]">
