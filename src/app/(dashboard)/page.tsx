@@ -315,13 +315,14 @@ export default function DashboardPage() {
       alerts.sort((a, b) => a.days_until - b.days_until);
       setTrainingAlerts(alerts);
 
-      // Aniversariantes do mês — todos os colaboradores ATIVOS que fazem
-      // aniversário no mês corrente, ordenados por dia (já passados primeiro,
-      // depois os de hoje, depois os próximos).
+      // Aniversariantes do mês — colaboradores que fazem aniversário no mês
+      // corrente, ordenados por dia. Inclui ATIVO e PENDENCIA: uma pendência
+      // (ex.: ASO/treinamento vencido) não tira o aniversário de ninguém — antes
+      // o filtro só-ATIVO sumia com esses. Só demitidos (INATIVO) ficam de fora.
       const birthdayRes = await db
         .from("employees")
         .select("id, name, birth_date, status")
-        .eq("status", "ATIVO");
+        .neq("status", "INATIVO");
       const currentMonth = today.getMonth() + 1;
       const currentDay = today.getDate();
       const currentYear = today.getFullYear();
@@ -665,14 +666,14 @@ export default function DashboardPage() {
               return (
                 <li
                   key={b.employee_id}
-                  className={`px-6 py-3 flex items-center justify-between gap-3 ${today ? "bg-pink-50/60" : ""}`}
+                  className={`px-6 py-3 flex items-center justify-between gap-3 ${today ? "bg-pink-100/70 border-l-4 border-pink-500" : ""}`}
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-10 h-10 rounded-full bg-pink-100 text-pink-600 flex items-center justify-center text-lg shrink-0">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 ${today ? "bg-pink-500 text-white shadow-sm" : "bg-pink-100 text-pink-600"}`}>
                       🎂
                     </div>
                     <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">{b.employee_name}</p>
+                      <p className={`text-sm truncate ${today ? "font-bold text-pink-700" : "font-medium"}`}>{b.employee_name}</p>
                       <p className="text-[11px] text-text-light">
                         Dia {String(b.day).padStart(2, "0")}/{String(b.month).padStart(2, "0")}
                         {b.turning_age !== null && b.turning_age > 0 && (
