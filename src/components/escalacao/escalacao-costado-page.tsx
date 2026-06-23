@@ -27,14 +27,13 @@ const PERIOD_LABELS: Record<ShiftPeriod, string> = {
   "01-07": "01h às 07h",
 };
 
-// Numeração operacional do período (não é a ordem dos cards): o dia de trabalho
-// começa de manhã (1) e a madrugada é o último (4). É só rótulo — os cards
-// continuam na ordem cronológica (01-07 primeiro).
+// Numeração do período segue a ordem cronológica dos cards, começando na
+// madrugada: 01-07 é o 1º turno e 19-01 é o último (4).
 const PERIOD_NUMBER: Record<ShiftPeriod, number> = {
-  "07-13": 1,
-  "13-19": 2,
-  "19-01": 3,
-  "01-07": 4,
+  "01-07": 1,
+  "07-13": 2,
+  "13-19": 3,
+  "19-01": 4,
 };
 
 const PERIOD_TONES: Record<ShiftPeriod, string> = {
