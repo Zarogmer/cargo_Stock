@@ -84,9 +84,15 @@ function fill(text: string, key: string, value: string): string {
   return text.split(`{${key}}`).join(value);
 }
 
+// "IVAN" → "Ivan". Os nomes vêm em caixa alta do cadastro; no primeiro nome a
+// capitalização simples fica boa ("Feliz aniversário, Ivan!" em vez de "IVAN!").
+function capitalizeFirstName(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
+}
+
 export function renderBirthdayMessage(template: string, p: { fullName: string; age: number | null }): string {
   const full = (p.fullName || "").trim();
-  const first = full.split(/\s+/)[0] || full;
+  const first = capitalizeFirstName(full.split(/\s+/)[0] || full);
   let out = fill(template, "nome", first);
   out = fill(out, "primeiro_nome", first);
   out = fill(out, "nome_completo", full);
