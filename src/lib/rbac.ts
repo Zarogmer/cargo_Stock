@@ -98,6 +98,11 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   RH: {
     DASHBOARD: ["view"],
     ALMOXARIFADO: ["view"],
+    // 2026-06: a pedido do Guilherme, o RH passa a operar também Escalação
+    // (EMBARQUE), Marketing e Controle (SOLICITACOES completo) — Navios já tinha.
+    // A única restrição extra é a "Paga" do colaborador (valor por função), que
+    // segue só pra Executivo/Tecnologia (ver canEditPaga em colaboradores/page).
+    EMBARQUE: ["view", "embarcar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
     // Almoxarifado unificado: RH passa a gerenciar também Estoque, Ferramentas
     // e Maquinário (antes só via EPI/Uniforme).
@@ -106,7 +111,8 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
     ELETRICA: ["view", "create", "edit", "delete", "baixar"],
     NAVIOS: ["view", "create", "edit", "delete"],
-    SOLICITACOES: ["view"],
+    MARKETING: ["view", "create", "edit", "delete"],
+    SOLICITACOES: ["view", "create", "edit", "delete"],
     // Mensagens restrito a Tecnologia, Executivo e Financeiro — RH fica de fora.
     CONVERSAS: ["view", "create"],
   },
@@ -174,13 +180,15 @@ export interface NavSubItem {
 // Papéis que enxergam "Controle de Compras" (o registro/ledger de compras).
 // Manutenção fica de fora de propósito: o pessoal de manutenção usa a aba
 // Solicitações só pra PEDIR material — quem controla as compras é a gestão.
-// RH (acesso só-leitura em Solicitações) também não entra nessa lista.
+// 2026-06: RH foi liberado no Controle (ganhou SOLICITACOES completo), então
+// passa a entrar também aqui.
 // Fonte única: o menu (rbac) e a própria página de Solicitações filtram por isto.
-export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "FINANCEIRO"];
+export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "FINANCEIRO", "RH"];
 
 // Papéis que enxergam "Lista de Produtos" (catálogo de produtos do Controle).
-// Era exclusivo da Tecnologia; Guilherme liberou também Executivo e Financeiro.
-export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "EXECUTIVO", "FINANCEIRO"];
+// Era exclusivo da Tecnologia; depois Executivo e Financeiro; em 2026-06 o RH
+// também (acesso completo ao Controle).
+export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "EXECUTIVO", "FINANCEIRO", "RH"];
 
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/", icon: "dashboard", module: "DASHBOARD" },
