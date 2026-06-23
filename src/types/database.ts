@@ -309,9 +309,10 @@ export interface Job {
 export type AllocationStatus = "ATIVO" | "REMOVIDO" | "SUBSTITUIDO";
 export type AllocationKind = "EMBARQUE" | "COSTADO";
 export type ShiftPeriod = "07-13" | "13-19" | "19-01" | "01-07";
-// Ordem cronológica do dia: começa na madrugada (01h). É a ordem em que os
-// turnos aparecem na Escalação de Costado e no seletor de período (Navios).
-export const SHIFT_PERIODS: ShiftPeriod[] = ["01-07", "07-13", "13-19", "19-01"];
+// Ordem dos turnos no dia: começa de manhã (07h) e a madrugada (01-07) é o
+// último. Define a ordem dos cards na Escalação de Costado e do seletor de
+// período (Navios).
+export const SHIFT_PERIODS: ShiftPeriod[] = ["07-13", "13-19", "19-01", "01-07"];
 
 export interface JobAllocation {
   id: number;

@@ -27,13 +27,13 @@ const PERIOD_LABELS: Record<ShiftPeriod, string> = {
   "01-07": "01h às 07h",
 };
 
-// Numeração do período segue a ordem cronológica dos cards, começando na
-// madrugada: 01-07 é o 1º turno e 19-01 é o último (4).
+// Numeração do período segue a ordem dos cards: o dia de trabalho começa de
+// manhã (07-13 = 1) e a madrugada (01-07) é o último (4).
 const PERIOD_NUMBER: Record<ShiftPeriod, number> = {
-  "01-07": 1,
-  "07-13": 2,
-  "13-19": 3,
-  "19-01": 4,
+  "07-13": 1,
+  "13-19": 2,
+  "19-01": 3,
+  "01-07": 4,
 };
 
 const PERIOD_TONES: Record<ShiftPeriod, string> = {
@@ -338,7 +338,7 @@ export function EscalacaoCostadoPage() {
                       <>
                         <li className="px-4 pt-2 pb-1">
                           <p className="text-[10px] text-text-light italic">
-                            Repete {PERIOD_LABELS[sourcePeriod!]} — sugestão, não conta como solicitado
+                            ↑ Repete {PERIOD_LABELS[sourcePeriod!]} — sugestão, não conta como solicitado
                           </p>
                         </li>
                         {ghostCrew.map((a, idx) => (
