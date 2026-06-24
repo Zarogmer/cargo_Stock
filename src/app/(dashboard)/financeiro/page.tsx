@@ -1840,9 +1840,14 @@ function TrabalhosTab({
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-semibold">{j.name}</h3>
                       <ShipStatusBadge status={shipStatusOf(j)} />
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[j.status]}`}>
-                        {STATUS_LABELS[j.status]}
-                      </span>
+                      {/* Navios mostram só a situação operacional (Em Operação/Concluído),
+                          igual à aba Navios. O status de pagamento (Em Andamento/Pago) fica
+                          só para pagamentos avulsos sem navio. */}
+                      {!shipStatusOf(j) && (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[j.status]}`}>
+                          {STATUS_LABELS[j.status]}
+                        </span>
+                      )}
                       {j.ships?.name && <span className="text-xs text-text-light">⚓ {j.ships.name}</span>}
                     </div>
                     <p className="text-xs text-text-light mt-1">
@@ -4733,9 +4738,14 @@ function CostadoTab({
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-semibold">{j.name}</h3>
                       <ShipStatusBadge status={shipStatusOf(j)} />
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[j.status]}`}>
-                        {STATUS_LABELS[j.status]}
-                      </span>
+                      {/* Navios mostram só a situação operacional (Em Operação/Concluído),
+                          igual à aba Navios. O status de pagamento (Em Andamento/Pago) fica
+                          só para pagamentos avulsos sem navio. */}
+                      {!shipStatusOf(j) && (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[j.status]}`}>
+                          {STATUS_LABELS[j.status]}
+                        </span>
+                      )}
                       {j.ships?.name && <span className="text-xs text-text-light">⚓ {j.ships.name}</span>}
                     </div>
                     <p className="text-xs text-text-light mt-1">
