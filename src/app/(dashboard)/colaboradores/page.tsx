@@ -56,6 +56,8 @@ export default function ColaboradoresPage() {
   const [empEscalaFilter, setEmpEscalaFilter] = useState<"Todos" | "DISPONIVEL" | "EMBARCADO" | "COSTADO">("Todos");
   const [empRoleFilter, setEmpRoleFilter] = useState("Todos");
   const [empViewMode, setEmpViewMode] = useState<"cards" | "spreadsheet">("cards");
+  // Área de filtros recolhível — começa fechada pra deixar a lista mais limpa.
+  const [showFilters, setShowFilters] = useState(false);
   const [exportingXlsx, setExportingXlsx] = useState(false);
   const [empForm, setEmpForm] = useState(false);
   const [editEmp, setEditEmp] = useState<Employee | null>(null);
@@ -324,7 +326,7 @@ export default function ColaboradoresPage() {
             {e.team && <span className={`px-1.5 py-0.5 rounded-full font-medium ${teamColors[e.team] || ""}`}>{teamLabels[e.team]}</span>}
             {k === "EMBARQUE" && <span className="px-1.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">⚓ Embarcado</span>}
             {k === "COSTADO" && <span className="px-1.5 py-0.5 rounded-full font-medium bg-cyan-100 text-cyan-700">⛏️ Costado</span>}
-            {!k && <span className="px-1.5 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>}
+            {!k && effectiveEmployeeStatus(e) !== "INATIVO" && <span className="px-1.5 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>}
             {e.sector && <span className="px-1.5 py-0.5 rounded-full font-medium bg-purple-100 text-purple-700">{e.sector}</span>}
           </div>
           {phone && <span className="md:hidden text-[11px] text-text-light font-mono">{phone}</span>}
@@ -359,6 +361,8 @@ export default function ColaboradoresPage() {
       const k = escalaStatus.get(e.id);
       if (k === "EMBARQUE") return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">⚓ Embarcado</span>;
       if (k === "COSTADO") return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-cyan-100 text-cyan-700">⛏️ Costado</span>;
+      // Demitido não está "disponível para escalação" — o badge verde não fazia sentido.
+      if (effectiveEmployeeStatus(e) === "INATIVO") return <span className="text-text-light text-xs">—</span>;
       return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>;
     }},
     { key: "phone", label: "Telefone", hideOnMobile: true, render: (e: Employee) => formatPhone(e.phone) },
@@ -390,16 +394,30 @@ export default function ColaboradoresPage() {
             empTeamFilter === "Sem equipe" ? !e.team : true;
           const k = escalaStatus.get(e.id);
           const escalaMatch = empEscalaFilter === "Todos" ? true :
-            empEscalaFilter === "DISPONIVEL" ? !k :
+            // "Disponível" exclui demitidos — coerente com a coluna Escalação.
+            empEscalaFilter === "DISPONIVEL" ? (!k && effectiveEmployeeStatus(e) !== "INATIVO") :
             empEscalaFilter === "EMBARCADO" ? k === "EMBARQUE" :
             empEscalaFilter === "COSTADO" ? k === "COSTADO" : true;
           const roleMatch = empRoleFilter === "Todos" ? true : (e.role || "").trim() === empRoleFilter;
           return nameMatch && statusMatch && teamMatch && escalaMatch && roleMatch;
         });
+
+        // Filtros ativos (fora "Todos") — alimentam o contador do botão "Filtros" e
+        // os chips de resumo exibidos quando a área de filtros está recolhida, pra
+        // o usuário nunca perder de vista que a lista está filtrada.
+        const escalaLabels: Record<string, string> = { DISPONIVEL: "Disponível", EMBARCADO: "Embarcado", COSTADO: "Costado" };
+        const activeFilters: { label: string; clear: () => void }[] = [];
+        if (empStatusFilter !== "Todos") activeFilters.push({ label: `Status: ${employeeStatusLabel(empStatusFilter)}`, clear: () => setEmpStatusFilter("Todos") });
+        if (empTeamFilter !== "Todos") activeFilters.push({ label: `Equipe: ${empTeamFilter}`, clear: () => setEmpTeamFilter("Todos") });
+        if (empEscalaFilter !== "Todos") activeFilters.push({ label: `Escalação: ${escalaLabels[empEscalaFilter] || empEscalaFilter}`, clear: () => setEmpEscalaFilter("Todos") });
+        if (empRoleFilter !== "Todos") activeFilters.push({ label: `Função: ${empRoleFilter}`, clear: () => setEmpRoleFilter("Todos") });
+        const activeFilterCount = activeFilters.length;
+        const clearAllFilters = () => { setEmpStatusFilter("Todos"); setEmpTeamFilter("Todos"); setEmpEscalaFilter("Todos"); setEmpRoleFilter("Todos"); };
+
         return (
           <div className="space-y-3">
             <div className="flex gap-2 flex-wrap items-center justify-between">
-              <div className="flex gap-2 items-center">
+              <div className="flex gap-2 items-center flex-wrap">
                 <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Visualização:</span>
                 <div className="inline-flex rounded-lg border border-border overflow-hidden">
                   <button onClick={() => setEmpViewMode("cards")}
@@ -411,6 +429,14 @@ export default function ColaboradoresPage() {
                     📋 Planilha
                   </button>
                 </div>
+                <button onClick={() => setShowFilters((v) => !v)}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition ${showFilters || activeFilterCount > 0 ? "bg-blue-50 border-primary text-primary" : "bg-card border-border text-text-light hover:bg-gray-50"}`}>
+                  🔧 Filtros
+                  {activeFilterCount > 0 && (
+                    <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-white text-[10px] font-bold">{activeFilterCount}</span>
+                  )}
+                  <span className="text-[9px]">{showFilters ? "▲" : "▼"}</span>
+                </button>
               </div>
               <button onClick={() => handleExportXlsx(filteredEmployees)}
                 disabled={exportingXlsx || filteredEmployees.length === 0}
@@ -419,53 +445,70 @@ export default function ColaboradoresPage() {
               </button>
             </div>
 
-            <div className="flex gap-2 flex-wrap items-center">
-              <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Status:</span>
-              {(["Todos", "ATIVO", "INATIVO", "PENDENCIA"] as const).map((t) => (
-                <button key={t} onClick={() => setEmpStatusFilter(t)}
-                  className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${empStatusFilter === t ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}>
-                  {t === "Todos" ? "Todos" : employeeStatusLabel(t)}
-                </button>
-              ))}
-            </div>
-            <div className="flex gap-2 flex-wrap items-center">
-              <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Equipe:</span>
-              {["Todos", "Equipe 1", "Equipe 2", "Equipe 3", "Costado", "Sem equipe"].map((t) => (
-                <button key={t} onClick={() => setEmpTeamFilter(t)}
-                  className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${empTeamFilter === t ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}>
-                  {t}
-                </button>
-              ))}
-            </div>
-            <div className="flex gap-2 flex-wrap items-center">
-              <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Escalação:</span>
-              {([
-                { key: "Todos", label: "Todos" },
-                { key: "DISPONIVEL", label: "✓ Disponível" },
-                { key: "EMBARCADO", label: "⚓ Embarcado" },
-                { key: "COSTADO", label: "⛏️ Costado" },
-              ] as const).map((t) => (
-                <button key={t.key} onClick={() => setEmpEscalaFilter(t.key as typeof empEscalaFilter)}
-                  className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${empEscalaFilter === t.key ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}>
-                  {t.label}
-                </button>
-              ))}
-            </div>
-            <div className="flex gap-2 flex-wrap items-center">
-              <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Função:</span>
-              <select value={empRoleFilter} onChange={(e) => setEmpRoleFilter(e.target.value)}
-                className={`px-3 py-1.5 text-xs rounded-full font-medium border outline-none transition focus:ring-2 focus:ring-primary cursor-pointer ${empRoleFilter !== "Todos" ? "bg-primary text-white border-primary" : "bg-gray-100 text-text-light border-transparent hover:bg-gray-200"}`}>
-                <option value="Todos">Todas as funções</option>
-                {availableRoles.map((r) => <option key={r} value={r}>{r}</option>)}
-              </select>
-              {empRoleFilter !== "Todos" && (
-                <button onClick={() => setEmpRoleFilter("Todos")}
-                  className="px-2 py-1.5 text-xs rounded-full font-medium text-text-light hover:bg-gray-200 transition"
-                  title="Limpar filtro de função">
-                  ✕ Limpar
-                </button>
-              )}
-            </div>
+            {/* Recolhido + filtros ativos: mostra chips pra não esconder que a lista está filtrada */}
+            {!showFilters && activeFilterCount > 0 && (
+              <div className="flex gap-2 flex-wrap items-center">
+                {activeFilters.map((f, i) => (
+                  <button key={i} onClick={f.clear}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-full font-medium bg-blue-50 text-primary hover:bg-blue-100 transition"
+                    title="Remover este filtro">
+                    {f.label}<span className="text-primary/50">✕</span>
+                  </button>
+                ))}
+                <button onClick={clearAllFilters} className="px-2 py-1 text-xs text-text-light hover:text-text transition">Limpar tudo</button>
+              </div>
+            )}
+
+            {showFilters && (
+              <div className="space-y-3 bg-gray-50/70 border border-border rounded-lg p-3">
+                <div className="flex gap-2 flex-wrap items-center">
+                  <span className="text-xs text-text-light font-semibold uppercase tracking-wider w-20 shrink-0">Status:</span>
+                  {(["Todos", "ATIVO", "INATIVO", "PENDENCIA"] as const).map((t) => (
+                    <button key={t} onClick={() => setEmpStatusFilter(t)}
+                      className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${empStatusFilter === t ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}>
+                      {t === "Todos" ? "Todos" : employeeStatusLabel(t)}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex gap-2 flex-wrap items-center">
+                  <span className="text-xs text-text-light font-semibold uppercase tracking-wider w-20 shrink-0">Equipe:</span>
+                  {["Todos", "Equipe 1", "Equipe 2", "Equipe 3", "Costado", "Sem equipe"].map((t) => (
+                    <button key={t} onClick={() => setEmpTeamFilter(t)}
+                      className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${empTeamFilter === t ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex gap-2 flex-wrap items-center">
+                  <span className="text-xs text-text-light font-semibold uppercase tracking-wider w-20 shrink-0">Escalação:</span>
+                  {([
+                    { key: "Todos", label: "Todos" },
+                    { key: "DISPONIVEL", label: "✓ Disponível" },
+                    { key: "EMBARCADO", label: "⚓ Embarcado" },
+                    { key: "COSTADO", label: "⛏️ Costado" },
+                  ] as const).map((t) => (
+                    <button key={t.key} onClick={() => setEmpEscalaFilter(t.key as typeof empEscalaFilter)}
+                      className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${empEscalaFilter === t.key ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}>
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex gap-2 flex-wrap items-center">
+                  <span className="text-xs text-text-light font-semibold uppercase tracking-wider w-20 shrink-0">Função:</span>
+                  <select value={empRoleFilter} onChange={(e) => setEmpRoleFilter(e.target.value)}
+                    className={`px-3 py-1.5 text-xs rounded-full font-medium border outline-none transition focus:ring-2 focus:ring-primary cursor-pointer ${empRoleFilter !== "Todos" ? "bg-primary text-white border-primary" : "bg-gray-100 text-text-light border-transparent hover:bg-gray-200"}`}>
+                    <option value="Todos">Todas as funções</option>
+                    {availableRoles.map((r) => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </div>
+                {activeFilterCount > 0 && (
+                  <button onClick={clearAllFilters}
+                    className="px-3 py-1.5 text-xs rounded-full font-medium bg-gray-200 text-text hover:bg-gray-300 transition">
+                    ✕ Limpar todos os filtros
+                  </button>
+                )}
+              </div>
+            )}
 
             {empViewMode === "cards" ? (
               <DataTable columns={empColumns} data={filteredEmployees}
@@ -570,6 +613,8 @@ export default function ColaboradoresPage() {
                 const k = escalaStatus.get(selectedEmp.id);
                 if (k === "EMBARQUE") return <span className="text-xs px-2 py-1 rounded-full font-medium bg-amber-100 text-amber-700">⚓ Embarcado</span>;
                 if (k === "COSTADO") return <span className="text-xs px-2 py-1 rounded-full font-medium bg-cyan-100 text-cyan-700">⛏️ Escalado no Costado</span>;
+                // Demitido não aparece como "disponível".
+                if (effectiveEmployeeStatus(selectedEmp) === "INATIVO") return null;
                 return <span className="text-xs px-2 py-1 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>;
               })()}
             </div>
