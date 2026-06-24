@@ -234,6 +234,22 @@ export default function ColaboradoresPage() {
       alert(`Não foi possível salvar o colaborador: ${error.message}`);
       return;
     }
+    // Demitido sai da escalação: ao marcar o colaborador como Demitido (com a
+    // data de demissão), encerra as alocações ATIVAS dele pra não continuar
+    // aparecendo como Embarcado/Costado em escalas em aberto. Idempotente — só
+    // toca em quem ainda está ATIVO. Pedido do Guilherme.
+    if (editEmp && data.status === "INATIVO") {
+      await db
+        .from("job_allocations")
+        .update({
+          status: "REMOVIDO",
+          removed_at: new Date().toISOString(),
+          removed_by: actor,
+          removal_reason: "Colaborador demitido",
+        })
+        .eq("employee_id", editEmp.id)
+        .eq("status", "ATIVO");
+    }
     // "Paga": grava o valor especial por função (employee_function_rates), igual
     // à aba Valores do Financeiro. Só Executivo/Tecnologia chegam aqui com `paga`.
     if (canEditPaga && paga && paga.functionId != null) {
