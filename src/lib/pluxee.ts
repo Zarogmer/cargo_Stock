@@ -170,6 +170,7 @@ export function buildPluxeeBeneficiaries({
 export async function downloadPluxeeXlsx(
   beneficiaries: PluxeeBeneficiary[],
   clientCode: string,
+  shipName?: string,
 ): Promise<void> {
   const XLSX = await import("xlsx");
   const res = await fetch(TEMPLATE_URL);
@@ -213,5 +214,10 @@ export async function downloadPluxeeXlsx(
   ws["!ref"] = `A1:AC${lastRow + 1}`;
 
   const cc = onlyDigits(clientCode) || (clientCode || "").replace(/[^0-9A-Za-z_-]/g, "") || "CLIENTE";
-  XLSX.writeFile(wb, `PLANSIP4C_${cc}.xlsx`);
+  // Acrescenta o nome do navio no arquivo pra identificar de qual navio é o
+  // Pluxee (pedido do Guilherme). Sanitiza pro nome de arquivo; se vier vazio,
+  // mantém só o código do cliente.
+  const safeShip = (shipName || "").replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+  const suffix = safeShip ? `_${safeShip}` : "";
+  XLSX.writeFile(wb, `PLANSIP4C_${cc}${suffix}.xlsx`);
 }
