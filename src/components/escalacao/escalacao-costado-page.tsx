@@ -74,6 +74,7 @@ export function EscalacaoCostadoPage() {
   const [loading, setLoading] = useState(true);
 
   const [addPeriod, setAddPeriod] = useState<ShiftPeriod | null>(null);
+  const [repeatingPeriod, setRepeatingPeriod] = useState<ShiftPeriod | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -185,6 +186,46 @@ export function EscalacaoCostadoPage() {
       removal_reason: "Removido da escalação de costado",
     }).eq("id", alloc.id);
     loadData();
+  }
+
+  // Repete (de verdade) o turno-âncora no período vazio do mesmo bloco de 12h:
+  // manhã→tarde e noite→madrugada (ver REPEAT_SOURCE). Cria allocations COSTADO
+  // reais com os mesmos funcionários/valores, então o período passa a contar
+  // como solicitado e entra no valor do navio. Só roda quando o usuário aperta
+  // o botão — sem clique, a repetição continua sendo só a sugestão transparente.
+  async function repeatPeriod(targetPeriod: ShiftPeriod) {
+    const sourcePeriod = REPEAT_SOURCE[targetPeriod];
+    if (!sourcePeriod) return;
+    const sourceCrew = allocationsByPeriod[sourcePeriod];
+    // Período já tem gente ou não há nada pra copiar → não faz nada.
+    if (sourceCrew.length === 0 || allocationsByPeriod[targetPeriod].length > 0) return;
+    setRepeatingPeriod(targetPeriod);
+    try {
+      const jobId = await ensureJob();
+      const now = new Date().toISOString();
+      for (const a of sourceCrew) {
+        await db.from("job_allocations").insert({
+          job_id: jobId,
+          function_id: a.function_id, // mesma função (COSTADO)
+          employee_id: a.employee_id,
+          quantity: a.quantity,
+          rate: a.rate, // mesmo valor por turno do período de origem
+          pluxee_value: 0,
+          status: "ATIVO",
+          kind: "COSTADO",
+          shift_date: selectedDate,
+          shift_period: targetPeriod,
+          added_by: profileName,
+          added_at: now,
+        });
+      }
+      await loadData();
+    } catch (err) {
+      console.error("Repeat period error:", err);
+      alert("Não consegui repetir o período. Tente de novo.");
+    } finally {
+      setRepeatingPeriod(null);
+    }
   }
 
   // Mark/unmark a (date, period) as "não requisitado" — toggles the row.
@@ -336,9 +377,26 @@ export function EscalacaoCostadoPage() {
                       ))
                     ) : ghostCrew.length > 0 ? (
                       <>
-                        <li className="px-4 pt-2 pb-1">
-                          <p className="text-[10px] text-text-light italic">
-                            ↑ Repete {PERIOD_LABELS[sourcePeriod!]} — sugestão, não conta como solicitado
+                        <li className="px-3 pt-2.5 pb-1.5">
+                          {canEdit ? (
+                            <button
+                              type="button"
+                              onClick={() => repeatPeriod(period)}
+                              disabled={repeatingPeriod === period}
+                              title={`Copiar a equipe de ${PERIOD_LABELS[sourcePeriod!]} para este turno`}
+                              className="w-full flex items-center justify-center gap-1.5 text-[11px] font-semibold px-2 py-2 rounded-lg border border-dashed border-primary/50 text-primary hover:bg-primary/5 disabled:opacity-50 disabled:cursor-wait transition"
+                            >
+                              {repeatingPeriod === period
+                                ? "Repetindo..."
+                                : `↻ Repetir ${PERIOD_LABELS[sourcePeriod!]}`}
+                            </button>
+                          ) : (
+                            <p className="text-[10px] text-text-light italic">
+                              ↑ Repete {PERIOD_LABELS[sourcePeriod!]}
+                            </p>
+                          )}
+                          <p className="text-[10px] text-text-light italic text-center mt-1.5">
+                            Sugestão · só conta se confirmar
                           </p>
                         </li>
                         {ghostCrew.map((a, idx) => (
