@@ -179,6 +179,7 @@ model Employee {
   role                 String?                                // WAP, AJUDANTE, ESFREGAO, ANALISTA_RH, OPERACIONAL...
   salary               Decimal?  @db.Decimal(10, 2)           // futuro: cálculo de folha
   admission_date       DateTime? @db.Date
+  dismissal_date       DateTime? @db.Date                     // data de demissão (preenchida quando status = INATIVO)
   contract_type        String?                                // REGISTRADO, INTERMITENTE
 
   // ── Treinamentos (datas em texto livre vindas da planilha) ─────────────────

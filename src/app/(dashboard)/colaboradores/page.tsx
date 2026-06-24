@@ -584,6 +584,7 @@ export default function ColaboradoresPage() {
               {selectedEmp.family_phone && <div><span className="text-text-light">Tel. Familiar:</span> <span className="font-medium">{formatPhone(selectedEmp.family_phone)}</span></div>}
               {selectedEmp.birth_date && <div><span className="text-text-light">Nascimento:</span> <span className="font-medium">{selectedEmp.birth_date.slice(0, 10)}</span></div>}
               {selectedEmp.admission_date && <div><span className="text-text-light">Admissão:</span> <span className="font-medium">{selectedEmp.admission_date.slice(0, 10)}</span></div>}
+              {selectedEmp.dismissal_date && <div><span className="text-text-light">Demissão:</span> <span className="font-medium text-red-700">{selectedEmp.dismissal_date.slice(0, 10)}</span></div>}
               {selectedEmp.email && <div className="col-span-2"><span className="text-text-light">Email:</span> <span className="font-medium">{selectedEmp.email}</span></div>}
               {(() => {
                 const p = effectivePaga(jobFunctions, specialRates, selectedEmp.id, selectedEmp.role);
@@ -756,6 +757,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
   // Substitui o antigo campo "Salário" no formulário.
   const [paga, setPaga] = useState("");
   const [admissionDate, setAdmissionDate] = useState("");
+  const [dismissalDate, setDismissalDate] = useState("");
   const [contractType, setContractType] = useState<string>("");
   // Bancários
   const [bankName, setBankName] = useState("");
@@ -793,6 +795,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       setRole(item.role || "");
       { const p = effectivePaga(functions, specialRates, item.id, item.role); setPaga(p ? formatRateBR(p.rate) : ""); }
       setAdmissionDate(item.admission_date?.slice(0, 10) || "");
+      setDismissalDate(item.dismissal_date?.slice(0, 10) || "");
       setContractType(item.contract_type || "");
       setBankName(item.bank_name || ""); setBankAgency(item.bank_agency || "");
       setBankAccount(item.bank_account || ""); setBankAccountType(item.bank_account_type || "");
@@ -813,7 +816,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       setName(""); setTeam(""); setPhone(""); setEmail(""); setBirthDate("");
       setFamilyPhone(""); setNotes("");
       setCpf(""); setRg(""); setIspsCode(""); setESocial("");
-      setStatus("ATIVO"); setSector(""); setRole(""); setPaga(""); setAdmissionDate(""); setContractType("");
+      setStatus("ATIVO"); setSector(""); setRole(""); setPaga(""); setAdmissionDate(""); setDismissalDate(""); setContractType("");
       setBankName(""); setBankAgency(""); setBankAccount(""); setBankAccountType("");
       setHasVaccinationCard(false); setHasCnh(false);
       setNrsTraining(""); setMeioAmbienteTraining("");
@@ -873,6 +876,9 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       sector: (sector as any) || null,
       role: role || null,
       admission_date: admissionDate || null,
+      // Só guarda data de demissão quando o status é Demitido (INATIVO). Se o
+      // colaborador for reativado, a data antiga é limpa pra não confundir.
+      dismissal_date: status === "INATIVO" ? (dismissalDate || null) : null,
       contract_type: (contractType as any) || null,
       bank_name: bankName || null, bank_agency: bankAgency || null,
       bank_account: bankAccount || null,
@@ -958,6 +964,18 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
             </div>
             <div><label className="block text-sm font-medium mb-1">Admissão</label><input type="date" value={admissionDate} onChange={(e) => setAdmissionDate(e.target.value)} className={inputCls} /></div>
           </div>
+          {status === "INATIVO" && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <label className="block text-sm font-medium mb-1 text-red-800">Data de Demissão</label>
+              <input
+                type="date"
+                value={dismissalDate}
+                onChange={(e) => setDismissalDate(e.target.value)}
+                className="w-full md:w-64 px-3 py-2.5 border border-red-200 rounded-lg text-sm focus:ring-2 focus:ring-red-300 outline-none bg-white"
+              />
+              <p className="text-[11px] text-red-700/80 mt-1.5">Quando o colaborador foi demitido. Reativar o status limpa esta data.</p>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Função</label>
