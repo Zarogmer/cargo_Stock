@@ -49,7 +49,7 @@ if (typeof window !== "undefined") {
   }
 }
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { hasPermission } from "@/lib/rbac";
@@ -102,6 +102,35 @@ const STATUS_COLORS: Record<JobStatus, string> = {
   FECHADO: "bg-emerald-100 text-emerald-700",
   CANCELADO: "bg-red-100 text-red-700",
 };
+
+// Situação operacional do navio (espelha a aba Navios). Mostrada no Financeiro
+// pra acompanhar Agendado/Em Operação/Concluído sem precisar fechar o navio.
+const SHIP_STATUS_LABELS: Record<string, string> = {
+  AGENDADO: "Agendado",
+  EM_OPERACAO: "Em Operação",
+  CONCLUIDO: "Concluído",
+  CANCELADO: "Cancelado",
+};
+const SHIP_STATUS_COLORS: Record<string, string> = {
+  AGENDADO: "bg-blue-100 text-blue-700",
+  EM_OPERACAO: "bg-amber-100 text-amber-700",
+  CONCLUIDO: "bg-emerald-100 text-emerald-700",
+  CANCELADO: "bg-red-100 text-red-700",
+};
+
+function shipStatusOf(job: Job): string | null {
+  return (job as Job & { ships?: { status?: string | null } }).ships?.status ?? null;
+}
+
+// Badge da situação operacional do navio.
+function ShipStatusBadge({ status }: { status?: string | null }) {
+  if (!status) return null;
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${SHIP_STATUS_COLORS[status] || "bg-gray-100 text-gray-600"}`} title="Situação do navio">
+      {SHIP_STATUS_LABELS[status] || status}
+    </span>
+  );
+}
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return "—";
@@ -188,6 +217,78 @@ function calcJobCost(job: Job, allocations: JobAllocation[], adjustments: JobAdj
   return { base, adj, total: base + adj };
 }
 
+// Fecha o navio a partir do Financeiro: marca CONCLUIDO + data de saída (igual
+// à aba Navios) e, diferente do Navios, grava o Valor do Contrato no pagamento.
+function CloseShipModal({
+  job, onClose, onClosed,
+}: {
+  job: Job | null;
+  onClose: () => void;
+  onClosed: () => void;
+}) {
+  const [closeDate, setCloseDate] = useState(isoDate(new Date()));
+  const [contractValue, setContractValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (job) {
+      setCloseDate(job.end_date?.slice(0, 10) || isoDate(new Date()));
+      setContractValue(job.contract_value != null ? String(job.contract_value) : "");
+      setErr(null);
+    }
+  }, [job]);
+
+  if (!job) return null;
+
+  async function handleConfirm() {
+    if (!job!.ship_id) { setErr("Este pagamento não está ligado a um navio."); return; }
+    setSaving(true);
+    setErr(null);
+    try {
+      const cv = contractValue.trim() === "" ? null : parseFloat(contractValue.replace(",", "."));
+      const shipRes = await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate }).eq("id", job!.ship_id);
+      if (shipRes.error) throw new Error(shipRes.error.message);
+      // Fecha a ponta dos pagamentos do navio e grava o contrato neste pagamento.
+      await db.from("jobs").update({ end_date: closeDate }).eq("ship_id", job!.ship_id);
+      await db.from("jobs").update({ contract_value: cv }).eq("id", job!.id);
+      onClosed();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+  return (
+    <Modal open={!!job} onClose={onClose} title={`Fechar navio · ${job.ships?.name || job.name}`} maxWidth="max-w-md">
+      <div className="space-y-4">
+        <p className="text-xs text-text-light">
+          Marca o navio como <strong>Concluído</strong> e registra a Data de Saída (igual ao botão da aba
+          Navios). A diferença aqui é que você também grava o <strong>Valor do Contrato</strong> deste pagamento.
+        </p>
+        <div>
+          <label className="block text-sm font-medium mb-1">Data de Saída *</label>
+          <input type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} className={inputCls} />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Valor do Contrato (R$)</label>
+          <input type="number" step="0.01" value={contractValue} onChange={(e) => setContractValue(e.target.value)} placeholder="0,00" className={inputCls} />
+          <p className="text-[11px] text-text-light mt-1">Quanto o cliente paga pela operação. Pode deixar em branco e preencher depois.</p>
+        </div>
+        {err && <p className="text-xs text-danger bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</p>}
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="button" onClick={handleConfirm} disabled={saving || !closeDate}>
+            {saving ? "Fechando..." : "🏁 Fechar Navio"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Page ───────────────────────────────────────────────────────────────────
 
 export default function FinanceiroPage() {
@@ -257,6 +358,23 @@ export default function FinanceiroPage() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // Garante que todo navio apareça no Financeiro sem precisar fechar: se houver
+  // navio sem Pagamento, cria os faltantes uma vez (mesmo backfill do botão
+  // "Sincronizar navios"). Idempotente; roda só com permissão de edição.
+  const didAutoSync = useRef(false);
+  useEffect(() => {
+    if (loading || didAutoSync.current || !canEdit) return;
+    const linked = new Set(jobs.map((j) => j.ship_id).filter(Boolean) as string[]);
+    if (!ships.some((s) => !linked.has(s.id))) return;
+    didAutoSync.current = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/financeiro/jobs/backfill", { method: "POST" });
+        if (res.ok) loadAll();
+      } catch { /* silencioso — o botão "Sincronizar navios" continua disponível */ }
+    })();
+  }, [loading, ships, jobs, canEdit, loadAll]);
 
   // ── KPIs ──────────────────────────────────────────────────────────────────
 
@@ -1585,6 +1703,7 @@ function TrabalhosTab({
   const [showJobForm, setShowJobForm] = useState(false);
   const [detailJob, setDetailJob] = useState<Job | null>(null);
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
+  const [closeShipJob, setCloseShipJob] = useState<Job | null>(null);
   const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("TODOS");
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -1593,11 +1712,12 @@ function TrabalhosTab({
   const costadoShipIds = new Set(
     ships.filter((s) => (s.services || []).includes("COSTADO")).map((s) => s.id)
   );
-  // Só navios fechados (CONCLUIDO) entram no Financeiro. Jobs sem navio
+  // Todo navio (não-Costado) entra no Financeiro, em qualquer situação — não
+  // precisa fechar antes. Só esconde navio Cancelado. Jobs sem navio
   // (lançamentos manuais) sempre aparecem.
   const embarqueJobs = jobs.filter((j) =>
     (!j.ship_id || !costadoShipIds.has(j.ship_id)) &&
-    (!j.ship_id || (j as any).ships?.status === "CONCLUIDO"),
+    (!j.ship_id || shipStatusOf(j) !== "CANCELADO"),
   );
   // O filtro "EM_ANDAMENTO" pega qualquer status que NÃO é Pago nem Cancelado
   // (cobre os legados ABERTO/VERIFICADO).
@@ -1686,6 +1806,7 @@ function TrabalhosTab({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-semibold">{j.name}</h3>
+                      <ShipStatusBadge status={shipStatusOf(j)} />
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[j.status]}`}>
                         {STATUS_LABELS[j.status]}
                       </span>
@@ -1711,7 +1832,16 @@ function TrabalhosTab({
                       </div>
                     )}
                     {canEdit && (
-                      <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex gap-1 items-center" onClick={(e) => e.stopPropagation()}>
+                        {j.ship_id && shipStatusOf(j) && shipStatusOf(j) !== "CONCLUIDO" && shipStatusOf(j) !== "CANCELADO" && (
+                          <button
+                            onClick={() => setCloseShipJob(j)}
+                            className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700"
+                            title="Fecha o navio (Concluído) e grava o valor do contrato"
+                          >
+                            🏁 Fechar Navio
+                          </button>
+                        )}
                         <button onClick={() => { setEditJob(j); setShowJobForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded">
                           <EditIcon />
                         </button>
@@ -1761,6 +1891,12 @@ function TrabalhosTab({
         }}
         title="Excluir Pagamento"
         message={`Excluir "${deleteJob?.name}"? As alocações e ajustes vinculados também serão removidos.`}
+      />
+
+      <CloseShipModal
+        job={closeShipJob}
+        onClose={() => setCloseShipJob(null)}
+        onClosed={() => { setCloseShipJob(null); onChange(); }}
       />
     </div>
   );
@@ -4476,6 +4612,7 @@ function CostadoTab({
   const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("TODOS");
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
+  const [closeShipJob, setCloseShipJob] = useState<Job | null>(null);
 
   // Costado jobs = jobs whose ship is marked as Costado OR that have any COSTADO allocation.
   const costadoShipIds = new Set(
@@ -4484,10 +4621,11 @@ function CostadoTab({
   const jobsWithCostadoAlloc = new Set(
     allocations.filter((a) => a.kind === "COSTADO").map((a) => a.job_id)
   );
-  // Só navios fechados (CONCLUIDO) entram no Financeiro; jobs sem navio sempre.
+  // Todo navio de Costado entra no Financeiro em qualquer situação — não precisa
+  // fechar antes. Só esconde navio Cancelado; jobs sem navio sempre aparecem.
   const costadoJobs = jobs.filter(
     (j) => ((j.ship_id && costadoShipIds.has(j.ship_id)) || jobsWithCostadoAlloc.has(j.id))
-      && (!j.ship_id || (j as any).ships?.status === "CONCLUIDO"),
+      && (!j.ship_id || shipStatusOf(j) !== "CANCELADO"),
   );
   const filtered = costadoJobs.filter((j) => {
     if (statusFilter === "TODOS") return true;
@@ -4558,6 +4696,7 @@ function CostadoTab({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-semibold">{j.name}</h3>
+                      <ShipStatusBadge status={shipStatusOf(j)} />
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[j.status]}`}>
                         {STATUS_LABELS[j.status]}
                       </span>
@@ -4573,7 +4712,16 @@ function CostadoTab({
                       <p className="font-semibold text-red-700">{brl(total)}</p>
                     </div>
                     {canEdit && (
-                      <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex gap-1 items-center" onClick={(e) => e.stopPropagation()}>
+                        {j.ship_id && shipStatusOf(j) && shipStatusOf(j) !== "CONCLUIDO" && shipStatusOf(j) !== "CANCELADO" && (
+                          <button
+                            onClick={() => setCloseShipJob(j)}
+                            className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700"
+                            title="Fecha o navio (Concluído) e grava o valor do contrato"
+                          >
+                            🏁 Fechar Navio
+                          </button>
+                        )}
                         <button
                           onClick={() => setDeleteJob(j)}
                           className="p-1.5 text-danger hover:bg-red-50 rounded"
@@ -4643,6 +4791,12 @@ function CostadoTab({
         kindFilter="COSTADO"
         onClose={() => setDetailJob(null)}
         onChange={() => { onChange(); }}
+      />
+
+      <CloseShipModal
+        job={closeShipJob}
+        onClose={() => setCloseShipJob(null)}
+        onClosed={() => { setCloseShipJob(null); onChange(); }}
       />
     </div>
   );
