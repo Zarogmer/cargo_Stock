@@ -217,6 +217,35 @@ function calcJobCost(job: Job, allocations: JobAllocation[], adjustments: JobAdj
   return { base, adj, total: base + adj };
 }
 
+// EMBARQUE: faz a função e o valor de cada escala virem SEMPRE do cadastro do
+// colaborador (cargo em RH › Colaboradores + valor especial/padrão da função),
+// e não de um snapshot gravado na alocação. Assim todo navio reflete o cadastro
+// atual, sem valor "preso" por navio. Não grava nada — ajusta só em memória, na
+// leitura, então não reescreve histórico. Costado fica de fora: lá todos entram
+// na função fixa "COSTADO" (valor único definido em Valores).
+function applyCadastroToAllocations(
+  allocs: JobAllocation[],
+  employees: Employee[],
+  functions: JobFunction[],
+  specialRates: Map<string, number>,
+): JobAllocation[] {
+  const empById = new Map<number, Employee>(employees.map((e) => [e.id, e]));
+  const fnByName = new Map<string, JobFunction>(
+    functions.map((f) => [f.name.trim().toUpperCase(), f]),
+  );
+  return allocs.map((a) => {
+    if ((a.kind || "EMBARQUE") !== "EMBARQUE" || a.employee_id == null) return a;
+    const role = (empById.get(a.employee_id)?.role || "").trim().toUpperCase();
+    if (!role) return a;
+    const fn = fnByName.get(role);
+    if (!fn) return a;
+    const special = specialRates.get(`${a.employee_id}-${fn.id}`);
+    const rate = special != null ? special : Number(fn.default_rate);
+    if (!Number.isFinite(rate)) return a;
+    return { ...a, function_id: fn.id, rate, job_functions: { name: fn.name, unit: fn.unit } };
+  });
+}
+
 // Fecha o navio a partir do Financeiro: marca CONCLUIDO + data de saída (igual
 // à aba Navios) e, diferente do Navios, grava o Valor do Contrato no pagamento.
 function CloseShipModal({
@@ -345,15 +374,19 @@ export default function FinanceiroPage() {
     setFunctions(allFunctions);
     setRates((rtRes.data as JobFunctionRate[]) || []);
     setJobs((jbRes.data as Job[]) || []);
-    setAllocations((alRes.data as JobAllocation[]) || []);
-    setAdjustments((adRes.data as JobAdjustment[]) || []);
-    setShips((shRes.data as Ship[]) || []);
-    setEmployees((emRes.data as Employee[]) || []);
+    const emps = (emRes.data as Employee[]) || [];
+    setEmployees(emps);
     const srMap = new Map<string, number>();
     for (const r of (srRes.data || []) as { employee_id: number; function_id: number; rate: string | number }[]) {
       srMap.set(`${r.employee_id}-${r.function_id}`, Number(r.rate));
     }
     setSpecialRates(srMap);
+    // Função e valor de embarque vêm sempre do cadastro do colaborador — todo
+    // navio reflete o cadastro atual (ver applyCadastroToAllocations).
+    const rawAllocs = (alRes.data as JobAllocation[]) || [];
+    setAllocations(applyCadastroToAllocations(rawAllocs, emps, allFunctions, srMap));
+    setAdjustments((adRes.data as JobAdjustment[]) || []);
+    setShips((shRes.data as Ship[]) || []);
     setLoading(false);
   }, []);
 
@@ -3375,13 +3408,16 @@ function JobDetailModal({
                               autoFocus
                               className="w-24 text-right px-1 py-0.5 border-2 border-primary rounded outline-none"
                             />
-                          ) : isCostado ? (
-                            // Costado: rate vem sempre de Valores > COSTADO,
-                            // não editável por linha. Stored rate (mesmo se
-                            // legado errado) é ignorado silenciosamente.
+                          ) : isCostado || isEmbarque ? (
+                            // Embarque e Costado: o valor/porão vem sempre do
+                            // cadastro do colaborador (cargo + valor especial/
+                            // padrão da função), não é editável por navio. O
+                            // stored rate (mesmo legado) é ignorado silenciosamente.
                             <span
                               className="text-text"
-                              title="Valor da função COSTADO definido em Valores"
+                              title={isEmbarque
+                                ? "Valor vem do cadastro do colaborador (RH › Colaboradores)"
+                                : "Valor da função COSTADO definido em Valores"}
                             >
                               {brl(displayRate)}
                             </span>

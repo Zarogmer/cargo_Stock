@@ -250,36 +250,6 @@ export default function ColaboradoresPage() {
         .eq("employee_id", editEmp.id)
         .eq("status", "ATIVO");
     }
-    // Mudança de FUNÇÃO propaga pras escalas de EMBARQUE em aberto: se o cargo do
-    // colaborador mudou no cadastro, as alocações em que ele estava escalado na
-    // função ANTIGA passam pra função NOVA, já com o valor efetivo dela (especial
-    // do colaborador ou padrão da função). Só toca EMBARQUE — no Costado todos
-    // entram como a função fixa "COSTADO", então não se aplica — e só em jobs não
-    // fechados. Casa com a propagação de Paga (saveSpecialRate). Pedido do Guilherme.
-    if (editEmp && data.status !== "INATIVO" && data.role && data.role !== editEmp.role) {
-      const norm = (s?: string | null) => (s || "").trim().toUpperCase();
-      const oldFn = jobFunctions.find((f) => norm(f.name) === norm(editEmp.role));
-      const newFn = jobFunctions.find((f) => norm(f.name) === norm(data.role));
-      if (oldFn && newFn && oldFn.id !== newFn.id) {
-        const special = specialRates.get(`${editEmp.id}-${newFn.id}`);
-        const newRate = special != null ? special : Number(newFn.default_rate);
-        if (Number.isFinite(newRate)) {
-          const { data: openJobs } = await db
-            .from("jobs").select("id").in("status", ["ABERTO", "EM_ANDAMENTO", "VERIFICADO"]);
-          const openJobIds = ((openJobs as { id: string }[] | null) || []).map((j) => j.id);
-          if (openJobIds.length > 0) {
-            await db
-              .from("job_allocations")
-              .update({ function_id: newFn.id, rate: newRate })
-              .eq("employee_id", editEmp.id)
-              .eq("function_id", oldFn.id)
-              .eq("kind", "EMBARQUE")
-              .eq("status", "ATIVO")
-              .in("job_id", openJobIds);
-          }
-        }
-      }
-    }
     // "Paga": grava o valor especial por função (employee_function_rates), igual
     // à aba Valores do Financeiro. Só Executivo/Tecnologia chegam aqui com `paga`.
     if (canEditPaga && paga && paga.functionId != null) {
