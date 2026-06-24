@@ -164,13 +164,20 @@ export function buildPluxeeBeneficiaries({
   };
 }
 
+// Nome do arquivo Pluxee = só o nome do navio (ex.: "MV GCL PARADIP.xlsx").
+// Remove apenas os caracteres inválidos pra nome de arquivo, preservando
+// espaços e acentos. Fallback "Pluxee" se vier vazio.
+export function pluxeeFileName(shipName: string): string {
+  const safe = (shipName || "").replace(/[\\/:*?"<>|]/g, "").trim();
+  return `${safe || "Pluxee"}.xlsx`;
+}
+
 // Gera e baixa o .xlsx no formato PLANSIP4C (client-side). Carrega o modelo
 // oficial e injeta as linhas de dados a partir da linha 8, preservando o
 // cabeçalho fixo e as abas auxiliares do modelo.
 export async function downloadPluxeeXlsx(
   beneficiaries: PluxeeBeneficiary[],
-  clientCode: string,
-  shipName?: string,
+  shipName: string,
 ): Promise<void> {
   const XLSX = await import("xlsx");
   const res = await fetch(TEMPLATE_URL);
@@ -213,11 +220,5 @@ export async function downloadPluxeeXlsx(
   const lastRow = DATA_START_ROW - 1 + Math.max(beneficiaries.length, 1);
   ws["!ref"] = `A1:AC${lastRow + 1}`;
 
-  const cc = onlyDigits(clientCode) || (clientCode || "").replace(/[^0-9A-Za-z_-]/g, "") || "CLIENTE";
-  // Acrescenta o nome do navio no arquivo pra identificar de qual navio é o
-  // Pluxee (pedido do Guilherme). Sanitiza pro nome de arquivo; se vier vazio,
-  // mantém só o código do cliente.
-  const safeShip = (shipName || "").replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
-  const suffix = safeShip ? `_${safeShip}` : "";
-  XLSX.writeFile(wb, `PLANSIP4C_${cc}${suffix}.xlsx`);
+  XLSX.writeFile(wb, pluxeeFileName(shipName));
 }

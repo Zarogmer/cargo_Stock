@@ -39,7 +39,7 @@ export function GerarPluxeeButton({
       if (res.activeCount === 0) warns.push("• Nenhuma pessoa com valor Pluxee neste navio (a folha já foi importada?).");
       if (res.missingCpf.length) warns.push(`• ${res.missingCpf.length} colaborador(es) sem CPF ficaram de fora.`);
       if (warns.length && !confirm(`Atenção:\n${warns.join("\n")}\n\nGerar o arquivo Pluxee mesmo assim?`)) return;
-      await downloadPluxeeXlsx(res.beneficiaries, config.client_code, job.name);
+      await downloadPluxeeXlsx(res.beneficiaries, job.name);
     } catch (e) {
       alert("Falha ao gerar Pluxee: " + (e as Error).message);
     } finally {

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import {
   buildPluxeeBeneficiaries,
   downloadPluxeeXlsx,
+  pluxeeFileName,
   type PluxeeBuildResult,
 } from "@/lib/pluxee";
 import type { Job, JobAllocation, Employee, PluxeeConfig } from "@/types/database";
@@ -126,7 +127,7 @@ export function DocumentosTab({
     }
     setGenerating(true);
     try {
-      await downloadPluxeeXlsx(preview.beneficiaries, config.client_code, selectedJob.name);
+      await downloadPluxeeXlsx(preview.beneficiaries, selectedJob.name);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -233,7 +234,7 @@ export function DocumentosTab({
 
         <div className="flex items-center justify-between gap-2">
           <p className="text-[11px] text-text-light">
-            Arquivo: <strong>PLANSIP4C_{config?.client_code?.trim() || "CLIENTE"}{selectedJob ? `_${selectedJob.name.replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "")}` : ""}.xlsx</strong>
+            Arquivo: <strong>{selectedJob ? pluxeeFileName(selectedJob.name) : "—"}</strong>
           </p>
           <Button onClick={handleGenerate} disabled={generating || !selectedJobId}>
             {generating ? "Gerando…" : "📥 Gerar arquivo Pluxee (.xlsx)"}
