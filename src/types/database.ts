@@ -351,6 +351,29 @@ export interface CostadoPeriodStatus {
   created_at: string;
 }
 
+// Linha única com os dados fixos da empresa pro arquivo Pluxee (PLANSIP4C).
+export interface PluxeeConfig {
+  id: number;
+  client_code: string | null;
+  order_type: string | null;
+  product: string | null;
+  delivery_place: string | null;
+  cep: string | null;
+  address: string | null;
+  number: string | null;
+  complement: string | null;
+  reference: string | null;
+  neighborhood: string | null;
+  city: string | null;
+  uf: string | null;
+  responsible_name: string | null;
+  responsible_ddd: string | null;
+  responsible_phone: string | null;
+  inactive_value: string | number | null;
+  updated_at: string;
+  updated_by: string | null;
+}
+
 export interface JobAdjustment {
   id: number;
   job_id: string;

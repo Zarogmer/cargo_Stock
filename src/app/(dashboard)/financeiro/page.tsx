@@ -59,6 +59,8 @@ import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
+import { DocumentosTab } from "./documentos-tab";
+import { GerarPluxeeButton } from "./gerar-pluxee-button";
 import type {
   JobFunction,
   JobFunctionRate,
@@ -217,7 +219,7 @@ export default function FinanceiroPage() {
       db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)"),
       db.from("job_adjustments").select("*").order("created_at", { ascending: false }),
       db.from("ships").select("id, name, status, services").order("arrival_date", { ascending: false }).limit(50),
-      db.from("employees").select("id, name, role, bank_name, bank_agency, bank_account, bank_account_type, status").order("name"),
+      db.from("employees").select("id, name, role, cpf, birth_date, bank_name, bank_agency, bank_account, bank_account_type, status").order("name"),
       db.from("employee_function_rates").select("employee_id, function_id, rate"),
     ]);
     let allFunctions = (fnRes.data as JobFunction[]) || [];
@@ -352,6 +354,19 @@ export default function FinanceiroPage() {
           allocations={allocations}
           adjustments={adjustments}
           functions={functions}
+        />
+      ),
+    },
+    {
+      key: "documentos",
+      label: "📄 Documentos",
+      content: (
+        <DocumentosTab
+          jobs={jobs}
+          allocations={allocations}
+          employees={employees}
+          canEdit={canEdit}
+          profileName={profile?.full_name || "Sistema"}
         />
       ),
     },
@@ -2640,6 +2655,9 @@ function JobDetailModal({
                 >
                   {exporting ? "Gerando…" : "📥 Exportar Excel"}
                 </button>
+              )}
+              {job && allocations.length > 0 && (
+                <GerarPluxeeButton job={job} allocations={allocations} employees={employees} />
               )}
               {canEdit && !isReadOnly && !peopleReadOnly && !showAddAlloc && (
                 <button onClick={() => setShowAddAlloc(true)} className="text-xs px-2 py-1 bg-primary text-white rounded hover:bg-primary-dark">

@@ -32,6 +32,7 @@ const TABLE_MAP: Record<string, string> = {
   job_adjustments: "jobAdjustment",
   costado_period_status: "costadoPeriodStatus",
   boarding_situation_templates: "boardingSituationTemplate",
+  pluxee_config: "pluxeeConfig",
   // Also support "profiles" alias -> reads from users table
   profiles: "user",
   // WhatsApp
