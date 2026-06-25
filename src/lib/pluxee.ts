@@ -164,6 +164,18 @@ export function buildPluxeeBeneficiaries({
   };
 }
 
+// Data de crédito do Pluxee = 20 dias após o término (end_date) do navio. Se o
+// navio ainda não foi fechado (sem end_date), retorna "" → o arquivo sai sem
+// data de crédito. Vale pra embarque e costado.
+export function pluxeeCreditDate(endDate: string | null | undefined): string {
+  const iso = (endDate || "").slice(0, 10);
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return "";
+  const dt = new Date(Date.UTC(y, m - 1, d + 20));
+  return dt.toISOString().slice(0, 10);
+}
+
 // Nome do arquivo Pluxee = só o nome do navio (ex.: "MV GCL PARADIP.xlsx").
 // Remove apenas os caracteres inválidos pra nome de arquivo, preservando
 // espaços e acentos. Fallback "Pluxee" se vier vazio.
@@ -179,17 +191,21 @@ export async function downloadPluxeeXlsx(
   beneficiaries: PluxeeBeneficiary[],
   shipName: string,
 ): Promise<void> {
-  const XLSX = await import("xlsx");
+  // xlsx-js-style + cellStyles preservam as cores/formatação do modelo no
+  // round-trip (o "xlsx" puro descarta os estilos e o arquivo sai todo branco).
+  const XLSX = (await import("xlsx-js-style")).default;
   const res = await fetch(TEMPLATE_URL);
   if (!res.ok) throw new Error("Não consegui carregar o modelo PLANSIP4C (public/templates).");
-  const wb = XLSX.read(await res.arrayBuffer());
+  const wb = XLSX.read(await res.arrayBuffer(), { cellStyles: true });
   const ws = wb.Sheets[PLUXEE_SHEET];
   if (!ws) throw new Error(`Aba "${PLUXEE_SHEET}" não encontrada no modelo.`);
 
   const set = (r: number, c: number, v: string | number, t: "s" | "n" = "s", z?: string) => {
     const addr = XLSX.utils.encode_cell({ r, c });
     if (v === "" || v === null || v === undefined) { delete ws[addr]; return; }
-    ws[addr] = z ? { t, v, z } : { t, v };
+    // Preserva o estilo (cor/borda) que a célula já tinha no modelo.
+    const prev = ws[addr] as Record<string, unknown> | undefined;
+    ws[addr] = z ? { ...prev, t, v, z } : { ...prev, t, v };
   };
 
   beneficiaries.forEach((b, i) => {

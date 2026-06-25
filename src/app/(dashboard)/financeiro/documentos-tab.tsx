@@ -7,6 +7,7 @@ import {
   buildPluxeeBeneficiaries,
   downloadPluxeeXlsx,
   pluxeeFileName,
+  pluxeeCreditDate,
   type PluxeeBuildResult,
 } from "@/lib/pluxee";
 import type { Job, JobAllocation, Employee, PluxeeConfig } from "@/types/database";
@@ -97,7 +98,7 @@ export function DocumentosTab({
   useEffect(() => {
     if (!selectedJobId && sortedJobs.length > 0) {
       setSelectedJobId(sortedJobs[0].id);
-      setCreditDate(jobDateISO(sortedJobs[0]) || new Date().toISOString().slice(0, 10));
+      setCreditDate(pluxeeCreditDate(sortedJobs[0].end_date));
     }
   }, [sortedJobs, selectedJobId]);
 
@@ -162,7 +163,7 @@ export function DocumentosTab({
               onChange={(e) => {
                 setSelectedJobId(e.target.value);
                 const j = jobs.find((x) => x.id === e.target.value);
-                if (j) setCreditDate(jobDateISO(j) || new Date().toISOString().slice(0, 10));
+                if (j) setCreditDate(pluxeeCreditDate(j.end_date));
               }}
               className={fieldCls}
             >
@@ -184,7 +185,7 @@ export function DocumentosTab({
               onChange={(e) => setCreditDate(e.target.value)}
               className={fieldCls}
             />
-            <p className="text-[11px] text-text-light mt-1">Quando o valor cai no cartão.</p>
+            <p className="text-[11px] text-text-light mt-1">Quando o valor cai no cartão — padrão: 20 dias após o término do navio (navio ainda aberto fica sem data).</p>
           </div>
         </div>
 

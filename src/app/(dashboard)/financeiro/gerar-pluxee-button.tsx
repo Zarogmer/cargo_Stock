@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { db } from "@/lib/db";
-import { buildPluxeeBeneficiaries, downloadPluxeeXlsx } from "@/lib/pluxee";
+import { buildPluxeeBeneficiaries, downloadPluxeeXlsx, pluxeeCreditDate } from "@/lib/pluxee";
 import type { Job, JobAllocation, Employee, PluxeeConfig } from "@/types/database";
 
 // Botão "Gerar Pluxee" usado dentro do pagamento (embarque e costado). Carrega
@@ -28,8 +28,9 @@ export function GerarPluxeeButton({
         alert("Configure o Código Cliente Pluxee em Financeiro › Documentos antes de gerar.");
         return;
       }
-      const creditDate =
-        (job.end_date || job.start_date || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
+      // Data de crédito = 20 dias após o término do navio; navio ainda aberto
+      // (sem data de saída) gera sem data. Vale pra embarque e costado.
+      const creditDate = pluxeeCreditDate(job.end_date);
       const res = buildPluxeeBeneficiaries({ employees, allocations, config, creditDate });
       if (res.beneficiaries.length === 0) {
         alert("Nenhum beneficiário com CPF válido para gerar.");
