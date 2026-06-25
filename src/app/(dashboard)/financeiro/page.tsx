@@ -960,9 +960,29 @@ function FuncoesTab({
                       onSave={(v) => saveRateInline(f, v)}
                     />
                   </td>
-                  <td className="px-4 py-2.5 text-text-light text-xs">{UNIT_LABELS[f.unit]}</td>
+                  <td className="px-4 py-2.5 text-text-light text-xs">{f.name.trim().toUpperCase() === "ADMINISTRATIVO" ? "Por Navio" : UNIT_LABELS[f.unit]}</td>
                   <td className="px-4 py-2.5 text-text-light text-xs">
                     {(() => {
+                      // Administrativo agrupa pelo SETOR (não pela role) — o pessoal
+                      // de escritório tem cargos variados (Analista RH, etc.).
+                      const isAdmin = f.name.trim().toUpperCase() === "ADMINISTRATIVO";
+                      if (isAdmin) {
+                        const adminPeople = employees.filter((e) => e.sector === "ADMINISTRATIVO" && (e.status ?? "ATIVO") !== "INATIVO");
+                        if (adminPeople.length === 0) return <span className="text-text-light/60">— ninguém no setor</span>;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => setViewEmpsFn(f)}
+                            className="inline-flex items-center gap-1 px-2 py-1 -mx-2 -my-1 rounded hover:bg-blue-50 hover:text-primary transition cursor-pointer"
+                            title="Ver pessoal do administrativo"
+                          >
+                            <span>🏢</span>
+                            <strong className="text-text">{adminPeople.length}</strong>
+                            <span>do administrativo</span>
+                            <span className="text-[10px] opacity-60">▸</span>
+                          </button>
+                        );
+                      }
                       // Costado é uma atividade, não uma role — qualquer
                       // colaborador operacional pode ser escalado. Mostra
                       // total de ativos em vez do match por role (que daria 0).
@@ -1342,9 +1362,19 @@ function EmployeesByFunctionModal({
   const list = useMemo(() => {
     if (!fn) return [];
     const target = fn.name.trim().toUpperCase();
+    // Administrativo agrupa pelo SETOR (não pela role). E como o pessoal de
+    // escritório pode estar como PENDENCIA (ex.: Lucas Nunes), o filtro "Só ativos"
+    // aqui significa "não demitido" pra não esconder ninguém do setor.
+    const isAdmin = target === "ADMINISTRATIVO";
     return employees
-      .filter((e) => (e.role || "").trim().toUpperCase() === target)
-      .filter((e) => (statusFilter === "ATIVO" ? (e.status ?? "ATIVO") === "ATIVO" : true))
+      .filter((e) => (isAdmin ? e.sector === "ADMINISTRATIVO" : (e.role || "").trim().toUpperCase() === target))
+      .filter((e) =>
+        statusFilter === "TODOS"
+          ? true
+          : isAdmin
+            ? (e.status ?? "ATIVO") !== "INATIVO"
+            : (e.status ?? "ATIVO") === "ATIVO",
+      )
       .filter((e) => {
         if (!search.trim()) return true;
         return e.name.toLowerCase().includes(search.toLowerCase());
@@ -1463,7 +1493,7 @@ function EmployeeRatesModal({
   onClose: () => void;
   onChange?: () => void;
 }) {
-  const [employees, setEmployees] = useState<{ id: number; name: string; status: string | null; role: string | null }[]>([]);
+  const [employees, setEmployees] = useState<{ id: number; name: string; status: string | null; role: string | null; sector: string | null }[]>([]);
   // Por padrão a lista mostra só os funcionários DESTA função (cargo base de
   // Colaboradores); marcar este checkbox revela todos — pra quando um navio
   // escala alguém numa função diferente da dele. Reinicia desmarcado ao abrir.
@@ -1481,14 +1511,14 @@ function EmployeeRatesModal({
     if (!fn) return;
     setLoading(true);
     const [empRes, rateRes] = await Promise.all([
-      db.from("employees").select("id, name, status, role").order("name"),
+      db.from("employees").select("id, name, status, role, sector").order("name"),
       db.from("employee_function_rates").select("*").eq("function_id", fn!.id),
     ]);
     // Carrega TODOS os ativos (com o cargo base de Colaboradores). A lista filtra
     // por padrão só os DESTA função; o checkbox "mostrar todos" revela o resto.
     // Pré-popula overrides pra todos, então alternar a visão não recarrega e o
     // Save cobre quem tem valor especial mesmo sem estar visível. Inativos fora.
-    const emps = ((empRes.data as { id: number; name: string; status: string | null; role: string | null }[]) || [])
+    const emps = ((empRes.data as { id: number; name: string; status: string | null; role: string | null; sector: string | null }[]) || [])
       .filter((e) => e.status !== "INATIVO");
     setEmployees(emps);
     const defaultStr = Number(fn.default_rate).toFixed(2).replace(".", ",");
@@ -1615,8 +1645,13 @@ function EmployeeRatesModal({
   // Por padrão lista só os funcionários cujo cargo base é esta função; o checkbox
   // "mostrar todos" libera o resto (navio escalando alguém em outra função).
   const fnTarget = (fn?.name || "").trim().toUpperCase();
+  const isAdminFn = fnTarget === "ADMINISTRATIVO";
   const filtered = employees.filter((e) => {
-    if (!showAll && (e.role || "").trim().toUpperCase() !== fnTarget) return false;
+    if (!showAll) {
+      // Administrativo agrupa pelo SETOR; as demais funções, pela role (cargo base).
+      const inGroup = isAdminFn ? e.sector === "ADMINISTRATIVO" : (e.role || "").trim().toUpperCase() === fnTarget;
+      if (!inGroup) return false;
+    }
     return e.name.toLowerCase().includes(search.toLowerCase());
   });
   const defaultRate = Number(fn?.default_rate || 0);
