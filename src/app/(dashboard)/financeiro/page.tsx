@@ -2028,11 +2028,19 @@ function JobFormModal({
           <p className={sectionTitle}>Identificação</p>
           <div>
             <label className="block text-sm font-medium mb-1">Navio *</label>
-            <select value={shipId} onChange={(e) => setShipId(e.target.value)} required className={inputCls}>
-              <option value="">Selecione o navio...</option>
-              {ships.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-            <p className="text-[10px] text-text-light mt-1">O nome do pagamento é o nome do navio.</p>
+            {item ? (
+              <div className={`${inputCls} bg-gray-50 text-text cursor-not-allowed`}>
+                {ships.find((s) => s.id === shipId)?.name || item.name}
+              </div>
+            ) : (
+              <>
+                <select value={shipId} onChange={(e) => setShipId(e.target.value)} required className={inputCls}>
+                  <option value="">Selecione o navio...</option>
+                  {ships.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <p className="text-[10px] text-text-light mt-1">O nome do pagamento é o nome do navio.</p>
+              </>
+            )}
           </div>
           <div className="mt-3 p-2 bg-gray-50 border border-border rounded-lg text-xs text-text-light">
             <span className="font-medium text-text">Supervisor:</span> {profileName} <span className="text-[10px]">(usuário logado)</span>
