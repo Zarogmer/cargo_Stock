@@ -329,6 +329,9 @@ export interface JobAllocation {
   notes: string | null;
   status: AllocationStatus;
   kind: AllocationKind;
+  // Override de função travado pelo executivo só neste navio (a normalização não
+  // reescreve quando true). Opcional: ausente em clientes antigos = false.
+  function_locked?: boolean | null;
   shift_date: string | null;
   shift_period: ShiftPeriod | null;
   replaces_id: number | null;

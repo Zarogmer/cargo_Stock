@@ -530,6 +530,10 @@ model JobAllocation {
   extra_reason  String? // ex: "Rateio: 1 WAP faltou, valor dividido entre 3"
   notes         String?
   kind          String      @default("EMBARQUE") // EMBARQUE ou COSTADO — qual escalação
+  // Override de função TRAVADO pelo executivo só neste navio: quando true, a
+  // normalização (função/valor vêm do cadastro) NÃO reescreve esta alocação —
+  // function_id e rate ficam como o executivo definiu aqui.
+  function_locked Boolean   @default(false)
 
   // ── Costado: turno (somente quando kind=COSTADO) ────────────────────────
   shift_date    DateTime? @db.Date           // dia da escala

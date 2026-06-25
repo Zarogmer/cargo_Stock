@@ -239,6 +239,9 @@ function applyCadastroToAllocations(
     functions.map((f) => [f.name.trim().toUpperCase(), f]),
   );
   return allocs.map((a) => {
+    // Override travado pelo executivo (só neste navio): mantém function_id/rate
+    // como ele definiu, não deriva do cadastro.
+    if (a.function_locked) return a;
     if ((a.kind || "EMBARQUE") !== "EMBARQUE" || a.employee_id == null) return a;
     const role = (empById.get(a.employee_id)?.role || "").trim().toUpperCase();
     if (!role) return a;
@@ -331,6 +334,9 @@ export default function FinanceiroPage() {
   const initialTab = searchParams.get("tab") || "funcoes";
   const role = profile?.role || "FINANCEIRO";
   const canEdit = hasPermission(role, "FINANCEIRO_MOD", "edit") || hasPermission(role, "FINANCEIRO_MOD", "create");
+  // Trocar a função de um colaborador só neste navio (override travado) é só
+  // Executivo/Tecnologia — mesma régua da "Paga" em Colaboradores.
+  const canEditFunction = role === "EXECUTIVO" || role === "TECNOLOGIA";
 
   const [functions, setFunctions] = useState<JobFunction[]>([]);
   const [rates, setRates] = useState<JobFunctionRate[]>([]);
@@ -478,6 +484,7 @@ export default function FinanceiroPage() {
           employees={employees}
           specialRates={specialRates}
           canEdit={canEdit}
+          canEditFunction={canEditFunction}
           profileName={profile?.full_name || "Sistema"}
           onChange={loadAll}
           loading={loading}
@@ -1778,7 +1785,7 @@ function EmployeeRatesModal({
 // ─── TRABALHOS TAB ──────────────────────────────────────────────────────────
 
 function TrabalhosTab({
-  jobs, allocations, adjustments, functions, ships, employees, specialRates, canEdit, profileName, onChange, loading,
+  jobs, allocations, adjustments, functions, ships, employees, specialRates, canEdit, canEditFunction, profileName, onChange, loading,
 }: {
   jobs: Job[];
   allocations: JobAllocation[];
@@ -1788,6 +1795,7 @@ function TrabalhosTab({
   employees: Employee[];
   specialRates: Map<string, number>;
   canEdit: boolean;
+  canEditFunction: boolean;
   profileName: string;
   onChange: () => void;
   loading: boolean;
@@ -1978,6 +1986,7 @@ function TrabalhosTab({
         employees={employees}
         specialRates={specialRates}
         canEdit={canEdit}
+        canEditFunction={canEditFunction}
         profileName={profileName}
         kindFilter="EMBARQUE"
         onClose={() => setDetailJob(null)}
@@ -2168,7 +2177,7 @@ interface PurchaseOrderLite {
 }
 
 function JobDetailModal({
-  open, job, allocations, adminAllocations = [], adjustments, functions, employees, specialRates, canEdit, profileName, kindFilter, onClose, onChange,
+  open, job, allocations, adminAllocations = [], adjustments, functions, employees, specialRates, canEdit, canEditFunction = false, profileName, kindFilter, onClose, onChange,
 }: {
   open: boolean;
   job: Job | null;
@@ -2181,6 +2190,8 @@ function JobDetailModal({
   employees: Employee[];
   specialRates: Map<string, number>;
   canEdit: boolean;
+  // Executivo+ pode trocar a função de um colaborador só neste navio (override travado).
+  canEditFunction?: boolean;
   profileName: string;
   // When set, people come from Escalação (read-only); modal only edits financial layer.
   kindFilter?: "EMBARQUE" | "COSTADO";
@@ -2544,6 +2555,28 @@ function JobDetailModal({
     } finally {
       setPullingPurchases(false);
     }
+  }
+
+  // Executivo+: troca a função de um colaborador SÓ neste navio. Trava o override
+  // (function_locked) pra a normalização não reverter pro cadastro, e puxa o valor
+  // da função escolhida (especial da pessoa nessa função, senão o padrão da função).
+  async function handleChangeAllocFunction(a: JobAllocation, newFnId: number) {
+    const fn = functions.find((f) => f.id === newFnId);
+    if (!fn || newFnId === a.function_id) return;
+    const special = a.employee_id != null ? specialRates.get(`${a.employee_id}-${fn.id}`) : undefined;
+    const rate = special != null ? special : Number(fn.default_rate);
+    const res: any = await db.from("job_allocations")
+      .update({ function_id: fn.id, rate: Number.isFinite(rate) ? rate : 0, function_locked: true })
+      .eq("id", a.id);
+    if (res?.error) { alert(`Não consegui trocar a função: ${res.error.message}`); return; }
+    onChange();
+  }
+
+  // Destrava o override → a alocação volta a seguir a função/valor do cadastro.
+  async function handleUnlockFunction(a: JobAllocation) {
+    const res: any = await db.from("job_allocations").update({ function_locked: false }).eq("id", a.id);
+    if (res?.error) { alert(`Não consegui destravar a função: ${res.error.message}`); return; }
+    onChange();
   }
 
   // Rateio (Pagamento Embarque): pega o valor FIXO da função × porões × quem faltou
@@ -3544,7 +3577,32 @@ function JobDetailModal({
                         <td className="px-2 py-2 text-text-light">{idx + 1}</td>
                         <td className="px-2 py-2">
                           <p className="font-medium whitespace-nowrap">{a.employees?.name || a.job_functions?.name || `#${a.function_id}`}</p>
-                          {a.employees?.name && <p className="text-[10px] text-text-light">{a.job_functions?.name}</p>}
+                          {a.employees?.name && (
+                            canEditFunction && isEmbarque && !isReadOnly ? (
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <select
+                                  value={a.function_id}
+                                  onChange={(e) => handleChangeAllocFunction(a, parseInt(e.target.value, 10))}
+                                  className="text-[10px] text-text-light border border-border rounded px-1 py-0.5 bg-white max-w-[10rem]"
+                                  title="Trocar a função só neste navio — o valor passa a ser o da função escolhida"
+                                >
+                                  {functions
+                                    .filter((f) => f.name.trim().toUpperCase() !== "COSTADO")
+                                    .map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                                </select>
+                                {a.function_locked && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUnlockFunction(a)}
+                                    className="text-[10px] text-amber-700 hover:text-amber-900 whitespace-nowrap"
+                                    title="Função travada só neste navio. Clique para voltar a seguir o cadastro."
+                                  >🔒 ↺</button>
+                                )}
+                              </div>
+                            ) : (
+                              <p className="text-[10px] text-text-light">{a.job_functions?.name}</p>
+                            )
+                          )}
                           {specialDelta !== 0 && (
                             <p className="text-[10px] text-blue-700 italic mt-0.5" title={`Valor especial: ${brl(actualRate)}/porão (padrão ${brl(defaultRate)})`}>
                               💰 Valor especial {brl(actualRate)}/porão
