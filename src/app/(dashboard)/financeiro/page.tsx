@@ -2946,6 +2946,9 @@ function JobDetailModal({
   return (
     <Modal open={open} onClose={onClose} title={job.name} maxWidth="max-w-6xl">
       <div className="space-y-4">
+        {/* Topo fixo — Cliente/Carga + resumo financeiro seguem visíveis ao rolar.
+            -mx-6/-mt-4 cancelam o padding do corpo do Modal pra grudar no topo. */}
+        <div className="sticky top-0 z-10 -mx-6 -mt-4 px-6 pt-4 pb-3 bg-white border-b border-border space-y-3">
         {/* Header com cliente/supervisor/cargo/porões */}
         {(job.client || job.supervisor || job.cargo_type || job.holds_count) && (
           <div className="bg-gray-50 rounded-lg p-3 flex flex-wrap gap-3 text-xs">
@@ -2985,6 +2988,7 @@ function JobDetailModal({
             <p className={`text-lg font-bold ${folhaValue > 0 ? (liquidValue >= 0 ? "text-emerald-700" : "text-red-700") : "text-text-light"}`}>{folhaValue > 0 ? brl(liquidValue) : "—"}</p>
             <p className="text-[10px] text-text-light">total − folha</p>
           </div>
+        </div>
         </div>
 
         {/* Audit trail */}
