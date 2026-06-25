@@ -2092,6 +2092,17 @@ function JobFormModal({
 
 // ─── Job Detail Modal (alocações + ajustes) ─────────────────────────────────
 
+// Compra do Controle de Compras (subset de purchase_orders) — usada no seletor
+// "Puxar do Controle de Compras" das Despesas do navio.
+interface PurchaseOrderLite {
+  id: string;
+  description: string;
+  supplier: string | null;
+  purchase_date: string | null;
+  total_value: string | number;
+  ship_name: string | null;
+}
+
 function JobDetailModal({
   open, job, allocations, adjustments, functions, employees, specialRates, canEdit, profileName, kindFilter, onClose, onChange,
 }: {
@@ -2139,6 +2150,15 @@ function JobDetailModal({
   const [adjCategory, setAdjCategory] = useState<ExpenseCategory>("COMPRAS");
   const [adjDesc, setAdjDesc] = useState("");
   const [adjAmt, setAdjAmt] = useState("");
+
+  // "Puxar do Controle de Compras": seletor das últimas compras (purchase_orders)
+  // pra lançar como Despesa do navio (job_adjustment ADICIONAL/COMPRAS).
+  const [showPullPurchases, setShowPullPurchases] = useState(false);
+  const [recentPurchases, setRecentPurchases] = useState<PurchaseOrderLite[]>([]);
+  const [purchasesLoading, setPurchasesLoading] = useState(false);
+  const [selectedPurchaseIds, setSelectedPurchaseIds] = useState<Set<string>>(new Set());
+  const [pullingPurchases, setPullingPurchases] = useState(false);
+  const [pullError, setPullError] = useState<string | null>(null);
 
   // Rateio: distribute the no-show person's pay among the rest of the same role.
   const [showRateio, setShowRateio] = useState(false);
@@ -2335,6 +2355,58 @@ function JobDetailModal({
     setShowAddAdj(false);
     setAdjDesc(""); setAdjAmt("");
     onChange();
+  }
+
+  // Abre o seletor e (re)carrega as últimas compras do Controle de Compras.
+  async function openPullPurchases() {
+    setShowAddAdj(false);
+    setShowPullPurchases(true);
+    setPullError(null);
+    setSelectedPurchaseIds(new Set());
+    setPurchasesLoading(true);
+    try {
+      const { data } = await db
+        .from("purchase_orders")
+        .select("id, description, supplier, purchase_date, total_value, ship_name")
+        .order("purchase_date", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(40);
+      setRecentPurchases((data as PurchaseOrderLite[]) || []);
+    } catch (err) {
+      setPullError((err as Error).message || "Falha ao carregar as compras.");
+      setRecentPurchases([]);
+    } finally {
+      setPurchasesLoading(false);
+    }
+  }
+
+  // Lança as compras escolhidas como Despesa (ADICIONAL/COMPRAS) do navio — igual
+  // ao "Puxar do Controle de Compras" da aba Navios; entra no custo da operação.
+  async function handlePullPurchases() {
+    if (!job || selectedPurchaseIds.size === 0) return;
+    setPullingPurchases(true);
+    setPullError(null);
+    try {
+      const chosen = recentPurchases.filter((p) => selectedPurchaseIds.has(p.id));
+      for (const p of chosen) {
+        const desc = p.supplier ? `${p.description} (${p.supplier})` : p.description;
+        const res: any = await db.from("job_adjustments").insert({
+          job_id: job.id,
+          type: "ADICIONAL",
+          category: "COMPRAS",
+          description: desc,
+          amount: Number(p.total_value) || 0,
+        });
+        if (res?.error) throw new Error(res.error.message);
+      }
+      setShowPullPurchases(false);
+      setSelectedPurchaseIds(new Set());
+      onChange();
+    } catch (err) {
+      setPullError((err as Error).message || "Falha ao puxar as compras.");
+    } finally {
+      setPullingPurchases(false);
+    }
   }
 
   // Rateio (Pagamento Embarque): pega o valor FIXO da função × porões × quem faltou
@@ -3632,10 +3704,15 @@ function JobDetailModal({
         <div>
           <div className="flex justify-between items-center mb-2">
             <h3 className="text-sm font-semibold">🪙 Despesas</h3>
-            {canEdit && !isReadOnly && !showAddAdj && (
-              <button onClick={() => setShowAddAdj(true)} className="text-xs px-2 py-1 bg-primary text-white rounded hover:bg-primary-dark">
-                + Adicionar
-              </button>
+            {canEdit && !isReadOnly && !showAddAdj && !showPullPurchases && (
+              <div className="flex gap-1.5">
+                <button onClick={openPullPurchases} className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700" title="Puxar compras salvas do Controle de Compras como despesa do navio">
+                  🛒 Puxar Compras
+                </button>
+                <button onClick={() => setShowAddAdj(true)} className="text-xs px-2 py-1 bg-primary text-white rounded hover:bg-primary-dark">
+                  + Adicionar
+                </button>
+              </div>
             )}
           </div>
 
@@ -3679,6 +3756,61 @@ function JobDetailModal({
                 <Button size="sm" type="submit">Adicionar</Button>
               </div>
             </form>
+          )}
+
+          {/* Puxar do Controle de Compras: escolhe uma ou mais compras salvas
+              (purchase_orders) pra lançar como Despesa (ADICIONAL/COMPRAS) do navio. */}
+          {showPullPurchases && (
+            <div className="bg-gray-50 rounded-lg p-3 mb-2 border border-border space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-text">🛒 Últimas compras do Controle de Compras</p>
+                <button onClick={() => setShowPullPurchases(false)} className="text-text-light hover:text-text text-xs px-1">✕</button>
+              </div>
+              {purchasesLoading ? (
+                <p className="text-xs text-text-light italic">Carregando compras…</p>
+              ) : recentPurchases.length === 0 ? (
+                <p className="text-xs text-text-light italic">Nenhuma compra registrada no Controle de Compras.</p>
+              ) : (
+                <>
+                  <ul className="space-y-1 max-h-56 overflow-auto">
+                    {recentPurchases.map((p) => {
+                      const checked = selectedPurchaseIds.has(p.id);
+                      return (
+                        <li key={p.id}>
+                          <label className={`flex items-start gap-2 px-2 py-1.5 rounded-lg cursor-pointer ${checked ? "bg-emerald-50" : "hover:bg-white"}`}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => setSelectedPurchaseIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
+                                return next;
+                              })}
+                              className="mt-0.5 w-4 h-4 accent-emerald-600 shrink-0"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-text truncate">{p.description}</p>
+                              <p className="text-[10px] text-text-light truncate">
+                                {[p.supplier, p.purchase_date ? formatJobDate(p.purchase_date) : null, p.ship_name ? `🚢 ${p.ship_name}` : null].filter(Boolean).join(" · ") || "—"}
+                              </p>
+                            </div>
+                            <span className="text-sm font-semibold text-text whitespace-nowrap">{brl(Number(p.total_value) || 0)}</span>
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {pullError && <p className="text-xs text-danger">{pullError}</p>}
+                  <div className="flex items-center gap-2 justify-end">
+                    <span className="text-[10px] text-text-light mr-auto">{selectedPurchaseIds.size} selecionada(s)</span>
+                    <Button variant="secondary" size="sm" type="button" onClick={() => setShowPullPurchases(false)} disabled={pullingPurchases}>Cancelar</Button>
+                    <Button size="sm" type="button" onClick={handlePullPurchases} disabled={pullingPurchases || selectedPurchaseIds.size === 0}>
+                      {pullingPurchases ? "Adicionando…" : "Adicionar como despesa"}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
           )}
 
           {adjustments.length === 0 ? (
