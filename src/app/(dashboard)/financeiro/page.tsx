@@ -630,7 +630,10 @@ function InlineRateEditor({ value, canEdit, onSave }: { value: number; canEdit: 
 
   if (editing) {
     return (
-      <div className="flex items-center gap-1">
+      // inline-flex (não flex) pra respeitar o text-align da célula — assim o
+      // input fica no mesmo lugar do número (à direita na coluna Valor/Operação,
+      // à esquerda na aba Valores) e não "pula" ao clicar.
+      <div className="inline-flex items-center gap-1 align-middle">
         <span className="text-emerald-700 font-semibold">R$</span>
         <input
           type="number"
