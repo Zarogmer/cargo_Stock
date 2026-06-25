@@ -9,7 +9,7 @@ import {
 // Mesmos papéis que veem grupos/estoque nas outras rotas de WhatsApp — este
 // endpoint expõe estoque de EPI/uniforme e prontidão, então não fica aberto a
 // qualquer usuário logado.
-const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
 const VALID_KINDS: TemplateKind[] = ["EPI", "UNIFORME", "PRONTIDAO", "COMPRAS"];
 const VALID_TEAMS: ProntidaoTeam[] = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_3", "ALL"];

@@ -9,7 +9,7 @@ import {
 // Papéis que podem EDITAR a mensagem de aniversário — os mesmos que gerenciam a
 // aba Mensagens (ver MENSAGENS em src/lib/rbac.ts). Defesa em profundidade: a UI
 // já só aparece pra esses papéis, mas o PUT recusa qualquer outro mesmo assim.
-const EDIT_ROLES = new Set(["TECNOLOGIA", "EXECUTIVO", "FINANCEIRO"]);
+const EDIT_ROLES = new Set(["TECNOLOGIA", "ESTAGIO", "EXECUTIVO", "FINANCEIRO"]);
 
 // GET /api/birthday-message → { config } (com defaults aplicados).
 export async function GET() {

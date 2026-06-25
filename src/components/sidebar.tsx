@@ -200,6 +200,7 @@ export function Sidebar({ open, onClose, collapsed = false }: SidebarProps) {
     FINANCEIRO: "Financeiro",
     RH: "RH",
     TECNOLOGIA: "Tecnologia",
+    ESTAGIO: "Estágio",
   };
 
   return (

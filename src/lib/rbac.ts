@@ -133,6 +133,25 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     MENSAGENS: ["view", "create"],
     CONVERSAS: ["view", "create"],
   },
+  // "Estágio" — mesmas permissões de TECNOLOGIA (pedido do Guilherme). Manter os
+  // dois blocos em sincronia se as permissões da Tecnologia mudarem.
+  ESTAGIO: {
+    DASHBOARD: ["view"],
+    ALMOXARIFADO: ["view"],
+    EMBARQUE: ["view", "embarcar"],
+    ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
+    EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
+    FERRAMENTAS: ["view", "create", "edit", "delete", "baixar"],
+    MAQUINARIO: ["view", "create", "edit", "delete", "emprestar", "devolver", "manutencao"],
+    ELETRICA: ["view", "create", "edit", "delete", "baixar"],
+    NAVIOS: ["view", "create", "edit", "delete"],
+    MARKETING: ["view", "create", "edit", "delete"],
+    FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
+    SOLICITACOES: ["view", "create", "edit", "delete"],
+    WHATSAPP: ["view", "edit"],
+    MENSAGENS: ["view", "create"],
+    CONVERSAS: ["view", "create"],
+  },
 };
 
 export function hasPermission(
@@ -183,12 +202,12 @@ export interface NavSubItem {
 // 2026-06: RH foi liberado no Controle (ganhou SOLICITACOES completo), então
 // passa a entrar também aqui.
 // Fonte única: o menu (rbac) e a própria página de Solicitações filtram por isto.
-export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "FINANCEIRO", "RH"];
+export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO", "RH"];
 
 // Papéis que enxergam "Lista de Produtos" (catálogo de produtos do Controle).
 // Era exclusivo da Tecnologia; depois Executivo e Financeiro; em 2026-06 o RH
 // também (acesso completo ao Controle).
-export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "EXECUTIVO", "FINANCEIRO", "RH"];
+export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "ESTAGIO", "EXECUTIVO", "FINANCEIRO", "RH"];
 
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/", icon: "dashboard", module: "DASHBOARD" },

@@ -10,7 +10,7 @@ import {
 import { getTeamGroupJid } from "@/lib/services/team-groups";
 import { BOARDING_SAFETY_REMINDER } from "@/lib/services/whatsapp-copy";
 
-const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
 // Where to send: "GROUP" only posts to the ship's WhatsApp group (and skips
 // DMs entirely), "DM" only sends individual messages to each escalated person,

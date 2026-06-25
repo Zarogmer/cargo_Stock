@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
 
-const ADMIN_ROLES = new Set(["TECNOLOGIA", "GESTOR", "EXECUTIVO"]);
+const ADMIN_ROLES = new Set(["TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO"]);
 
 interface StatusResponse {
   configured?: boolean;

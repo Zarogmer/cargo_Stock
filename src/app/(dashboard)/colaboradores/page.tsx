@@ -38,7 +38,7 @@ export default function ColaboradoresPage() {
   const canDelete = hasPermission(role, "EPI", "delete");
   // "Paga" (valor por função, igual à aba Valores do Financeiro) só Executivo e
   // Tecnologia podem alterar; RH e os demais apenas observam. Pedido do Guilherme.
-  const canEditPaga = role === "EXECUTIVO" || role === "TECNOLOGIA";
+  const canEditPaga = role === "EXECUTIVO" || role === "TECNOLOGIA" || role === "ESTAGIO";
 
   // --- EMPLOYEES ---
   const [employees, setEmployees] = useState<Employee[]>([]);

@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
 // Map of all expense categories in the order they should appear on the sheet.
 // Matches the constant on the frontend (src/app/(dashboard)/financeiro/page.tsx).

@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { computeNextRun } from "@/lib/services/scheduler";
 import { parseSchedule, type ScheduleInput } from "@/lib/services/scheduled-message";
 
-const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
 // GET /api/whatsapp/scheduled — lista todos os agendamentos.
 export async function GET() {

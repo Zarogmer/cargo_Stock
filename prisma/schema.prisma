@@ -16,6 +16,7 @@ enum Role {
   FINANCEIRO
   RH
   TECNOLOGIA
+  ESTAGIO // mesmas permissões de TECNOLOGIA (ver rbac); categoria "Estágio"
 }
 
 enum StockCategory {

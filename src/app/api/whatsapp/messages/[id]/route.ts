@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { deleteWhatsappMessageForEveryone, isEvolutionConfigured } from "@/lib/services/evolution-api";
 import { whatsappBus } from "@/lib/services/whatsapp-bus";
 
-const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
 
 // Tipos que NÃO são mensagens reais do WhatsApp (pílulas de evento de grupo,
 // avisos do sistema, ou já apagadas) — "apagar para todos" não se aplica.

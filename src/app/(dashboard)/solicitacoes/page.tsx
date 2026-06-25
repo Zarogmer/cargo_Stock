@@ -353,8 +353,8 @@ export default function SolicitacoesPage() {
   // Aberto pela aba Fornecedores e pelo Nova Solicitação (pedido de cotação).
   const [whatsappTarget, setWhatsappTarget] = useState<WhatsappTarget | null>(null);
 
-  const canApproveRequests = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "FINANCEIRO"].includes(role);
-  const canManageLinks = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "FINANCEIRO"].includes(role);
+  const canApproveRequests = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO"].includes(role);
+  const canManageLinks = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO"].includes(role);
   const canEditRequests = hasPermission(role, "SOLICITACOES", "edit");
   const canDeleteRequests = hasPermission(role, "SOLICITACOES", "delete");
   // Gerir compras (Registrar Compra, Armazenar no estoque, Nova/editar compra) é
