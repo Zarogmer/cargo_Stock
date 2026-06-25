@@ -308,7 +308,7 @@ export interface Job {
 }
 
 export type AllocationStatus = "ATIVO" | "REMOVIDO" | "SUBSTITUIDO";
-export type AllocationKind = "EMBARQUE" | "COSTADO";
+export type AllocationKind = "EMBARQUE" | "COSTADO" | "ADMINISTRATIVO";
 export type ShiftPeriod = "07-13" | "13-19" | "19-01" | "01-07";
 // Ordem dos turnos no dia: começa de manhã (07h) e a madrugada (01-07) é o
 // último. Define a ordem dos cards na Escalação de Costado e do seletor de

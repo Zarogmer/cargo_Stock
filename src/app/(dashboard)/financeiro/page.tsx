@@ -196,6 +196,11 @@ function calcAllocBase(a: JobAllocation, holdsCount: number | null): number {
     const holds = Math.max(1, Number(holdsCount || 1));
     return rate * holds + extra;
   }
+  if (k === "ADMINISTRATIVO") {
+    // Administrativo: valor fixo por operação — não multiplica por porões nem
+    // turnos. Cada navio paga o valor cheio da pessoa.
+    return rate + extra;
+  }
   if (k === "COSTADO") {
     return rate * qty + extra;
   }
@@ -349,7 +354,7 @@ export default function FinanceiroPage() {
       db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)"),
       db.from("job_adjustments").select("*").order("created_at", { ascending: false }),
       db.from("ships").select("id, name, status, services").order("arrival_date", { ascending: false }).limit(50),
-      db.from("employees").select("id, name, role, cpf, birth_date, bank_name, bank_agency, bank_account, bank_account_type, status").order("name"),
+      db.from("employees").select("id, name, role, cpf, birth_date, bank_name, bank_agency, bank_account, bank_account_type, status, sector").order("name"),
       db.from("employee_function_rates").select("employee_id, function_id, rate"),
     ]);
     let allFunctions = (fnRes.data as JobFunction[]) || [];
@@ -367,6 +372,23 @@ export default function FinanceiroPage() {
       } as Record<string, unknown>);
       if (!created.error) {
         // Re-busca pra pegar o id real do registro inserido.
+        const re = await db.from("job_functions").select("*").order("name");
+        allFunctions = (re.data as JobFunction[]) || allFunctions;
+      }
+    }
+    // Auto-cria a função ADMINISTRATIVO (valor fixo por operação) — pessoal de
+    // escritório que entra no custo de cada navio. default_rate 0: o valor de
+    // cada pessoa é definido em Valores › 👤 (valor especial por colaborador).
+    const hasAdmin = allFunctions.some((f) => f.name.trim().toUpperCase() === "ADMINISTRATIVO");
+    if (!hasAdmin) {
+      const created = await db.from("job_functions").insert({
+        name: "ADMINISTRATIVO",
+        description: "Pessoal administrativo — valor fixo por operação (navio). Entra no custo, fora da folha/Pluxee.",
+        default_rate: 0,
+        unit: "POR_OPERACAO",
+        active: true,
+      } as Record<string, unknown>);
+      if (!created.error) {
         const re = await db.from("job_functions").select("*").order("name");
         allFunctions = (re.data as JobFunction[]) || allFunctions;
       }
@@ -1828,8 +1850,11 @@ function TrabalhosTab({
       ) : (
         <div className="grid gap-2">
           {filtered.map((j) => {
-            // Only Embarque allocations contribute to cost in this tab.
-            const embarqueAllocs = allocations.filter((a) => (a.kind || "EMBARQUE") === "EMBARQUE");
+            // Embarque + Administrativo entram no custo desta aba (Costado tem aba própria).
+            const embarqueAllocs = allocations.filter((a) => {
+              const k = a.kind || "EMBARQUE";
+              return k === "EMBARQUE" || k === "ADMINISTRATIVO";
+            });
             const cost = calcJobCost(j, embarqueAllocs, adjustments);
             const revenue = Number(j.contract_value || 0);
             const profit = revenue - cost.total;
@@ -1909,6 +1934,7 @@ function TrabalhosTab({
         open={!!detailJob}
         job={detailJob}
         allocations={allocations.filter((a) => a.job_id === detailJob?.id && (a.kind || "EMBARQUE") === "EMBARQUE")}
+        adminAllocations={allocations.filter((a) => a.job_id === detailJob?.id && (a.kind || "EMBARQUE") === "ADMINISTRATIVO" && a.status === "ATIVO")}
         adjustments={adjustments.filter((a) => a.job_id === detailJob?.id)}
         functions={functions}
         employees={employees}
@@ -2104,11 +2130,14 @@ interface PurchaseOrderLite {
 }
 
 function JobDetailModal({
-  open, job, allocations, adjustments, functions, employees, specialRates, canEdit, profileName, kindFilter, onClose, onChange,
+  open, job, allocations, adminAllocations = [], adjustments, functions, employees, specialRates, canEdit, profileName, kindFilter, onClose, onChange,
 }: {
   open: boolean;
   job: Job | null;
   allocations: JobAllocation[];
+  // Administrativo (kind=ADMINISTRATIVO) deste navio — só usado no modal de Embarque,
+  // renderizado numa seção própria. Vazio em Costado.
+  adminAllocations?: JobAllocation[];
   adjustments: JobAdjustment[];
   functions: JobFunction[];
   employees: Employee[];
@@ -2283,16 +2312,61 @@ function JobDetailModal({
     return Array.from(byEmp.values()).sort((a, b) => b.total - a.total);
   }, [allocations, kindFilter, functions]);
 
+  // Auto-inclui o pessoal administrativo (RH › Setor = Administrativo) quando um
+  // navio de Embarque em aberto é aberto e ainda não tem ninguém do administrativo.
+  // O valor inicial de cada pessoa vem do valor especial por colaborador
+  // (Valores › 👤); sem valor configurado entra como 0 e o usuário ajusta na hora.
+  const adminAutoRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open || !job || kindFilter !== "EMBARQUE" || !canEdit || job.status === "FECHADO") return;
+    if (adminAllocations.length > 0) { adminAutoRef.current = job.id; return; }
+    if (adminAutoRef.current === job.id) return;
+    adminAutoRef.current = job.id; // marca antes do insert pra não duplicar entre renders
+    const adminFnLocal = functions.find((f) => f.name.trim().toUpperCase() === "ADMINISTRATIVO");
+    if (!adminFnLocal) return;
+    // Quem entra automático = quem tem valor de administrativo configurado
+    // (Valores › 👤). Não filtra por status: o pessoal de escritório pode estar
+    // como PENDENCIA e mesmo assim entra no custo de cada navio.
+    const adminEmps = employees.filter((e) => specialRates.has(`${e.id}-${adminFnLocal.id}`));
+    if (adminEmps.length === 0) return;
+    (async () => {
+      const rows = adminEmps.map((e) => {
+        const sr = specialRates.get(`${e.id}-${adminFnLocal.id}`);
+        return {
+          job_id: job.id,
+          function_id: adminFnLocal.id,
+          employee_id: e.id,
+          quantity: 1,
+          rate: sr != null ? sr : (Number(adminFnLocal.default_rate) || 0),
+          pluxee_value: 0,
+          status: "ATIVO",
+          kind: "ADMINISTRATIVO",
+        };
+      });
+      const res = await db.from("job_allocations").insert(rows);
+      if (!res.error) onChange();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, job?.id, adminAllocations.length, kindFilter, canEdit]);
+
   if (!job) return null;
 
   const cost = calcJobCost(job, allocations.map((a) => ({ ...a, job_id: job.id })), adjustments.map((a) => ({ ...a, job_id: job.id })));
+  // Administrativo: pessoal de escritório com valor fixo por operação. Entra no
+  // custo do navio (mão de obra), mas fora da folha/Pluxee (pagos à parte).
+  const adminFn = functions.find((f) => f.name.trim().toUpperCase() === "ADMINISTRATIVO") || null;
+  const adminActive = adminAllocations.filter((a) => a.status === "ATIVO");
+  const adminTotal = adminActive.reduce((s, a) => s + Number(a.rate) + Number(a.extra_value || 0), 0);
   // Folha = soma de (base + extra - pluxee) por funcionário = cost.base - pluxeeTotal.
   // payroll_value no banco nunca é gravado, então o valor vem das próprias
   // alocações pra refletir 1:1 a coluna Folha da tabela.
   const pluxeeTotal = allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
   const folhaValue = cost.base - pluxeeTotal;
+  // Custo da operação inclui o administrativo (que não passa por folha/Pluxee).
+  const custoTotal = cost.total + adminTotal;
+  const custoBase = cost.base + adminTotal;
   // Valor que precisamos = TOTAL - VALOR DA FOLHA (Pluxee + ajustes/despesas)
-  const liquidValue = cost.total - folhaValue;
+  const liquidValue = custoTotal - folhaValue;
 
   async function handleAddAlloc(e: React.FormEvent) {
     e.preventDefault();
@@ -2317,6 +2391,31 @@ function JobDetailModal({
     setShowAddAlloc(false);
     setAllocEmp(""); setAllocFn(""); setAllocDays("1"); setAllocRate(""); setAllocPluxee("0");
     setEditAllocId(null);
+    onChange();
+  }
+
+  // ── Administrativo (valor fixo por operação) ────────────────────────────────
+  async function handleSetAdminRate(allocId: number, rate: number) {
+    await db.from("job_allocations").update({ rate }).eq("id", allocId);
+    onChange();
+  }
+  async function handleRemoveAdmin(allocId: number) {
+    await db.from("job_allocations").delete().eq("id", allocId);
+    onChange();
+  }
+  async function handleAddAdmin(empId: number) {
+    if (!job || !adminFn) return;
+    const sr = specialRates.get(`${empId}-${adminFn.id}`);
+    await db.from("job_allocations").insert({
+      job_id: job.id,
+      function_id: adminFn.id,
+      employee_id: empId,
+      quantity: 1,
+      rate: sr != null ? sr : (Number(adminFn.default_rate) || 0),
+      pluxee_value: 0,
+      status: "ATIVO",
+      kind: "ADMINISTRATIVO",
+    });
     onChange();
   }
 
@@ -2832,8 +2931,9 @@ function JobDetailModal({
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="rounded-lg border border-red-200 bg-red-50 p-3">
             <p className="text-[10px] font-semibold text-red-700 uppercase tracking-wider">Custo Operação</p>
-            <p className="text-lg font-bold text-red-700">{brl(cost.total)}</p>
-            <p className="text-[10px] text-red-600">Mão de obra {brl(cost.base)} {cost.adj !== 0 && (cost.adj > 0 ? "+" : "")}{cost.adj !== 0 ? brl(cost.adj) : ""}</p>
+            <p className="text-lg font-bold text-red-700">{brl(custoTotal)}</p>
+            <p className="text-[10px] text-red-600">Mão de obra {brl(custoBase)} {cost.adj !== 0 && (cost.adj > 0 ? "+" : "")}{cost.adj !== 0 ? brl(cost.adj) : ""}</p>
+            {adminTotal > 0 && <p className="text-[10px] text-red-600">inclui administrativo {brl(adminTotal)}</p>}
           </div>
           <div className={`rounded-lg border p-3 ${cost.adj > 0 ? "border-amber-200 bg-amber-50" : "border-gray-200 bg-gray-50"}`}>
             <p className={`text-[10px] font-semibold uppercase tracking-wider ${cost.adj > 0 ? "text-amber-700" : "text-text-light"}`}>Despesas</p>
@@ -3700,6 +3800,85 @@ function JobDetailModal({
           )}
         </div>
 
+        {/* Administrativo — pessoal de escritório, valor fixo por operação (só Embarque) */}
+        {kindFilter === "EMBARQUE" && (
+          <div>
+            <div className="mb-2">
+              <h3 className="text-sm font-semibold">🧑‍💼 Administrativo ({adminActive.length})</h3>
+              <p className="text-[10px] text-text-light mt-0.5">
+                Valor fixo por operação — entra no custo do navio, fora da folha/Pluxee. O valor padrão de
+                cada um vem de <a href="/financeiro?tab=funcoes" className="underline">Valores › 👤</a> e pode ser ajustado aqui só para este navio.
+              </p>
+            </div>
+            {adminActive.length === 0 ? (
+              <p className="text-xs text-text-light italic text-center py-3 bg-gray-50 border border-border rounded-lg">
+                Ninguém do administrativo neste navio.
+              </p>
+            ) : (
+              <div className="bg-card rounded-xl border border-border overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b border-border bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Colaborador</th>
+                      <th className="px-3 py-2 text-right text-xs font-semibold text-text-light uppercase tracking-wider">Valor / Operação</th>
+                      {canEdit && !isReadOnly && <th className="px-3 py-2 w-10"></th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adminActive.map((a) => {
+                      const emp = employees.find((e) => e.id === a.employee_id);
+                      return (
+                        <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
+                          <td className="px-3 py-2">
+                            <span className="font-medium">{emp?.name || a.employees?.name || "—"}</span>
+                            <span className="block text-[10px] text-text-light uppercase">{emp?.role || "Administrativo"}</span>
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <InlineRateEditor value={Number(a.rate)} canEdit={canEdit && !isReadOnly} onSave={(v) => handleSetAdminRate(a.id, v)} />
+                          </td>
+                          {canEdit && !isReadOnly && (
+                            <td className="px-3 py-2 text-right">
+                              <button onClick={() => handleRemoveAdmin(a.id)} className="p-1.5 text-danger hover:bg-red-50 rounded" title="Remover deste navio">
+                                <TrashIcon />
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot className="border-t border-border bg-gray-50">
+                    <tr>
+                      <td className="px-3 py-2 text-right text-text-light">TOTAL</td>
+                      <td className="px-3 py-2 text-right text-emerald-700 font-semibold">{brl(adminTotal)}</td>
+                      {canEdit && !isReadOnly && <td></td>}
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+            {canEdit && !isReadOnly && (() => {
+              const allocatedIds = new Set(adminActive.map((a) => a.employee_id));
+              const candidates = employees.filter(
+                (e) => e.sector === "ADMINISTRATIVO" && (e.status ?? "ATIVO") !== "INATIVO" && !allocatedIds.has(e.id),
+              );
+              if (candidates.length === 0) return null;
+              return (
+                <div className="mt-2">
+                  <select
+                    value=""
+                    onChange={(e) => { const id = parseInt(e.target.value); if (id) handleAddAdmin(id); }}
+                    className="text-xs px-2 py-1.5 border border-border rounded-lg"
+                  >
+                    <option value="">+ Adicionar administrativo…</option>
+                    {candidates.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                  </select>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
         {/* Ajustes */}
         <div>
           <div className="flex justify-between items-center mb-2">
@@ -4200,7 +4379,7 @@ function FaturarTab({
       <FaturamentoModal
         open={!!selectedJob}
         job={selectedJob}
-        allocations={allocations.filter((a) => a.job_id === selectedJob?.id && a.status === "ATIVO")}
+        allocations={allocations.filter((a) => a.job_id === selectedJob?.id && a.status === "ATIVO" && (a.kind || "EMBARQUE") !== "ADMINISTRATIVO")}
         onClose={() => setSelectedJob(null)}
       />
     </div>
@@ -5123,6 +5302,9 @@ function ControleTab({
       const ship = job?.ship_id ? ships.find((sh) => sh.id === job.ship_id) : null;
       const shipName = ship?.name || job?.name || null;
       const fn = functions.find((f) => f.id === a.function_id);
+      // Administrativo é custo fixo por operação, não produtividade (porões/turnos).
+      // Fica fora deste painel pra não inflar a contagem de porões.
+      if ((a.kind || "EMBARQUE") === "ADMINISTRATIVO") continue;
       const kind: "EMBARQUE" | "COSTADO" = a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE";
       if (activity !== "TODAS" && activity !== kind) continue;
 
