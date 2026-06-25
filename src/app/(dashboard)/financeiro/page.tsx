@@ -336,7 +336,7 @@ export default function FinanceiroPage() {
   const canEdit = hasPermission(role, "FINANCEIRO_MOD", "edit") || hasPermission(role, "FINANCEIRO_MOD", "create");
   // Trocar a função de um colaborador só neste navio (override travado) é só
   // Executivo/Tecnologia — mesma régua da "Paga" em Colaboradores.
-  const canEditFunction = role === "EXECUTIVO" || role === "TECNOLOGIA" || role === "ESTAGIO";
+  const canEditFunction = role === "EXECUTIVO" || role === "TECNOLOGIA";
 
   const [functions, setFunctions] = useState<JobFunction[]>([]);
   const [rates, setRates] = useState<JobFunctionRate[]>([]);

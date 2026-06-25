@@ -8,7 +8,7 @@ import {
 } from "@/lib/services/evolution-api";
 import { clearTeamGroupCache, getTeamGroupJid } from "@/lib/services/team-groups";
 
-const ALLOWED_ROLES = ["TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO"];
+const ALLOWED_ROLES = ["TECNOLOGIA", "GESTOR", "EXECUTIVO"];
 
 // POST /api/whatsapp/groups/diagnose
 //

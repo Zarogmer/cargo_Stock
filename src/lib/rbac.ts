@@ -146,9 +146,12 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     ELETRICA: ["view", "create", "edit", "delete", "baixar"],
     NAVIOS: ["view", "create", "edit", "delete"],
     MARKETING: ["view", "create", "edit", "delete"],
-    FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
+    // Estágio NÃO edita Financeiro nem a WhatsApp API — só visualiza (pedido do
+    // Guilherme). Salários (Paga em Colaboradores + troca de função por navio no
+    // Financeiro) também ficam fora — ver canEditPaga/canEditFunction.
+    FINANCEIRO_MOD: ["view"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
-    WHATSAPP: ["view", "edit"],
+    WHATSAPP: ["view"],
     MENSAGENS: ["view", "create"],
     CONVERSAS: ["view", "create"],
   },
