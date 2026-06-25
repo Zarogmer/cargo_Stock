@@ -184,57 +184,86 @@ export function pluxeeFileName(shipName: string): string {
   return `${safe || "Pluxee"}.xlsx`;
 }
 
-// Gera e baixa o .xlsx no formato PLANSIP4C (client-side). Carrega o modelo
-// oficial e injeta as linhas de dados a partir da linha 8, preservando o
-// cabeçalho fixo e as abas auxiliares do modelo.
+function colLetter(i: number): string {
+  let s = "", n = i + 1;
+  while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+function escapeXml(v: string): string {
+  return String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Gera e baixa o .xlsx PLANSIP4C (client-side). Em vez de RECONSTRUIR o arquivo
+// (o que apagava logo, cores, abas e comentários do modelo — saía todo branco),
+// abre o .xlsx como zip e injeta SÓ os valores nas células de dados que já
+// existem no modelo, preservando o estilo (s=) de cada uma. Todo o resto do
+// arquivo fica intacto — é o que o Pluxee exige ("não exclua/oculte/renomeie").
 export async function downloadPluxeeXlsx(
   beneficiaries: PluxeeBeneficiary[],
   shipName: string,
 ): Promise<void> {
-  // xlsx-js-style + cellStyles preservam as cores/formatação do modelo no
-  // round-trip (o "xlsx" puro descarta os estilos e o arquivo sai todo branco).
-  const XLSX = (await import("xlsx-js-style")).default;
+  const PizZip = (await import("pizzip")).default;
   const res = await fetch(TEMPLATE_URL);
   if (!res.ok) throw new Error("Não consegui carregar o modelo PLANSIP4C (public/templates).");
-  const wb = XLSX.read(await res.arrayBuffer(), { cellStyles: true });
-  const ws = wb.Sheets[PLUXEE_SHEET];
-  if (!ws) throw new Error(`Aba "${PLUXEE_SHEET}" não encontrada no modelo.`);
-
-  const set = (r: number, c: number, v: string | number, t: "s" | "n" = "s", z?: string) => {
-    const addr = XLSX.utils.encode_cell({ r, c });
-    if (v === "" || v === null || v === undefined) { delete ws[addr]; return; }
-    // Preserva o estilo (cor/borda) que a célula já tinha no modelo.
-    const prev = ws[addr] as Record<string, unknown> | undefined;
-    ws[addr] = z ? { ...prev, t, v, z } : { ...prev, t, v };
-  };
+  const zip = new PizZip(await res.arrayBuffer());
+  // sheet1.xml é a aba "Dados dos Beneficiários" (cabeçalho nas linhas 1-7,
+  // dados a partir da 8). As demais abas/recursos não são tocados.
+  const sheetPath = "xl/worksheets/sheet1.xml";
+  const file = zip.file(sheetPath);
+  if (!file) throw new Error("Modelo PLANSIP4C inválido: planilha de dados não encontrada.");
+  let xml = file.asText();
 
   beneficiaries.forEach((b, i) => {
-    const r = DATA_START_ROW - 1 + i; // 0-based
-    set(r, COL.client, b.client);
-    set(r, COL.situacao, b.situacao);
-    set(r, COL.nome, b.nome);
-    set(r, COL.cpf, b.cpf);
-    set(r, COL.nascimento, b.nascimento);
-    set(r, COL.tipoPedido, b.tipoPedido);
-    set(r, COL.produto, b.produto);
-    set(r, COL.valor, b.valor, "n", "0.00");
-    set(r, COL.dataCredito, b.dataCredito);
-    set(r, COL.localEntrega, b.localEntrega);
-    set(r, COL.cep, b.cep);
-    set(r, COL.endereco, b.endereco);
-    set(r, COL.numero, b.numero);
-    set(r, COL.complemento, b.complemento);
-    set(r, COL.referencia, b.referencia);
-    set(r, COL.bairro, b.bairro);
-    set(r, COL.cidade, b.cidade);
-    set(r, COL.uf, b.uf);
-    set(r, COL.responsavel, b.responsavel);
-    set(r, COL.ddd, b.ddd);
-    set(r, COL.telefone, b.telefone);
+    const R = DATA_START_ROW + i;
+    // Preenche uma célula que JÁ EXISTE no modelo, mantendo seus atributos (s=);
+    // só troca o vazio `<c .../>` por `<c ...>valor</c>`. Texto entra como
+    // inlineStr (não mexe no sharedStrings); o valor entra como número.
+    const fill = (c: number, inner: string, inlineStr: boolean) => {
+      const ref = `${colLetter(c)}${R}`;
+      const re = new RegExp(`<c r="${ref}"([^>]*)/>`);
+      xml = xml.replace(re, inlineStr
+        ? `<c r="${ref}"$1 t="inlineStr">${inner}</c>`
+        : `<c r="${ref}"$1>${inner}</c>`);
+    };
+    const put = (c: number, v: string) => {
+      if (v != null && v !== "") fill(c, `<is><t xml:space="preserve">${escapeXml(v)}</t></is>`, true);
+    };
+    put(COL.client, b.client);
+    put(COL.situacao, b.situacao);
+    put(COL.nome, b.nome);
+    put(COL.cpf, b.cpf);
+    put(COL.nascimento, b.nascimento);
+    put(COL.tipoPedido, b.tipoPedido);
+    put(COL.produto, b.produto);
+    if (Number.isFinite(b.valor)) fill(COL.valor, `<v>${b.valor}</v>`, false);
+    put(COL.dataCredito, b.dataCredito);
+    put(COL.localEntrega, b.localEntrega);
+    put(COL.cep, b.cep);
+    put(COL.endereco, b.endereco);
+    put(COL.numero, b.numero);
+    put(COL.complemento, b.complemento);
+    put(COL.referencia, b.referencia);
+    put(COL.bairro, b.bairro);
+    put(COL.cidade, b.cidade);
+    put(COL.uf, b.uf);
+    put(COL.responsavel, b.responsavel);
+    put(COL.ddd, b.ddd);
+    put(COL.telefone, b.telefone);
   });
 
-  const lastRow = DATA_START_ROW - 1 + Math.max(beneficiaries.length, 1);
-  ws["!ref"] = `A1:AC${lastRow + 1}`;
-
-  XLSX.writeFile(wb, pluxeeFileName(shipName));
+  zip.file(sheetPath, xml);
+  const blob = zip.generate({
+    type: "blob",
+    compression: "DEFLATE",
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  }) as Blob;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = pluxeeFileName(shipName);
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
