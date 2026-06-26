@@ -107,7 +107,7 @@ export function ClientsPanel() {
 
   async function handleSave() {
     if (!form.name.trim()) {
-      setFormError("Nome é obrigatório.");
+      setFormError("Empresa é obrigatória.");
       return;
     }
     setSaving(true);
@@ -289,24 +289,12 @@ export function ClientsPanel() {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-text mb-1">Nome / Razão social *</label>
+            <label className="block text-sm font-medium text-text mb-1">Empresa *</label>
             <input
               type="text"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               placeholder="Ex: Transatlântica Comércio Marítimo"
-              className={inputClass}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-text mb-1">
-              Empresa <span className="text-text-light font-normal">(se diferente do nome)</span>
-            </label>
-            <input
-              type="text"
-              value={form.company}
-              onChange={(e) => setForm({ ...form, company: e.target.value })}
               className={inputClass}
             />
           </div>
