@@ -210,8 +210,10 @@ export function EmailComposer() {
   // modelo, tratamos como "não editado" e podemos trocar a saudação ao escolher
   // outro cliente; se o usuário mexeu no texto, não sobrescrevemos.
   const [templateName, setTemplateName] = useState(() => searchParams.get("nome") || "");
-  // Feedback do "Preparar Envio": indica que a mensagem foi copiada pra colar.
+  // Feedback do "Preparar Envio": `copied` mostra a confirmação; `clickable` indica
+  // que a versão com link clicável foi pro clipboard (upgrade opcional via Ctrl+V).
   const [copied, setCopied] = useState(false);
+  const [clickable, setClickable] = useState(false);
 
   // Clientes cadastrados (aba Clientes) pro autocomplete do campo Nome. Carregado
   // uma vez ao montar — é o que permite "digitar o nome e puxar os emails".
@@ -265,12 +267,15 @@ export function EmailComposer() {
     setCopied(false);
   }
 
-  // Copia a mensagem como HTML (com o link clicável) e abre o compose do Outlook
-  // só com destinatário e assunto — o usuário cola o corpo (Ctrl+V), preservando o
-  // hyperlink. Se a cópia falhar, cai no preenchimento antigo (corpo como texto).
+  // O corpo SEMPRE vai preenchido pela URL (&body) — assim aparece sozinho em
+  // qualquer PC, sem depender de colar à mão. Como o deeplink só aceita texto, o
+  // link do site fica como texto normal (não clicável). Além disso, copiamos a
+  // versão HTML (com o link clicável) pro clipboard como upgrade opcional: quem
+  // quiser, seleciona tudo no corpo (Ctrl+A) e cola (Ctrl+V) por cima.
   function enviar() {
     const ok = copyRichText(bodyToHtml(body));
-    setCopied(ok);
+    setClickable(ok);
+    setCopied(true);
     const ccList = cleanEmails(cc);
     const bccList = cleanEmails(bcc);
     const url =
@@ -279,7 +284,7 @@ export function EmailComposer() {
       (ccList ? `&cc=${encodeURIComponent(ccList)}` : "") +
       (bccList ? `&bcc=${encodeURIComponent(bccList)}` : "") +
       `&subject=${encodeURIComponent(subject)}` +
-      (ok ? "" : `&body=${encodeURIComponent(body)}`);
+      `&body=${encodeURIComponent(body)}`;
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
@@ -509,8 +514,14 @@ export function EmailComposer() {
 
         {copied && (
           <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-            ✓ Mensagem copiada! No Outlook que abriu, clique no corpo do email e cole com{" "}
-            <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link do site já vem clicável. Depois arraste o PDF.
+            ✓ Pronto! O Outlook abriu com <strong>Para</strong>, assunto e a <strong>mensagem já preenchida</strong> — é
+            só revisar, arrastar o PDF e clicar em <strong>Enviar</strong>.
+            {clickable && (
+              <>
+                {" "}Dica: se quiser o link do site <strong>clicável</strong>, clique no corpo, selecione tudo com{" "}
+                <strong>Ctrl+A</strong> e cole com <strong>Ctrl+V</strong> (Cmd no Mac).
+              </>
+            )}
           </p>
         )}
       </div>
@@ -521,10 +532,12 @@ export function EmailComposer() {
         <p>
           Escolha o <strong>idioma</strong> (PT ou EN) — assunto, texto e apresentação anexada mudam
           juntos. Clique em <strong>Baixar anexo</strong> para salvar o PDF no seu computador. Depois
-          clique em <strong>Preparar Envio</strong>: a mensagem é copiada (com o link clicável) e o
-          Outlook abre no navegador com <strong>Para</strong>, <strong>Cc</strong>, <strong>Cco</strong> e assunto preenchidos. No corpo do email, cole
-          com <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link vem clicável. Arraste o PDF, confira
-          tudo e clique em <strong>Enviar</strong> no Outlook. Nada é enviado automaticamente pelo sistema.
+          clique em <strong>Preparar Envio</strong>: o Outlook abre no navegador já com{" "}
+          <strong>Para</strong>, <strong>Cc</strong>, <strong>Cco</strong>, assunto <strong>e a mensagem
+          preenchidos</strong>. Arraste o PDF, confira tudo e clique em <strong>Enviar</strong> no Outlook.
+          Nada é enviado automaticamente pelo sistema. <span className="text-blue-700">Opcional:</span> se
+          quiser o link do site clicável, clique no corpo, selecione tudo (<strong>Ctrl+A</strong>) e cole
+          (<strong>Ctrl+V</strong>).
         </p>
       </div>
     </div>
