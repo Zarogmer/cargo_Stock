@@ -252,12 +252,19 @@ export const NAV_ITEMS: NavItem[] = [
         children: [
           { label: "Utensílios", href: "/almoxarifado?tab=estoque" },
           { label: "Rancho", href: "/almoxarifado?tab=rancho" },
-          { label: "EPI", href: "/almoxarifado?tab=epi" },
-          { label: "Uniforme", href: "/almoxarifado?tab=uniforme" },
           { label: "Fluídos", href: "/almoxarifado?tab=fluidos" },
           { label: "Maquinário", href: "/almoxarifado?tab=maquinario" },
           { label: "Ferramenta", href: "/almoxarifado?tab=ferramenta" },
           { label: "Elétrica", href: "/almoxarifado?tab=eletrica" },
+        ],
+      },
+      // "Funcionário" agrupa os itens entregues ao colaborador (EPI e Uniforme).
+      {
+        label: "Funcionário",
+        href: "/almoxarifado?tab=epi",
+        children: [
+          { label: "EPI", href: "/almoxarifado?tab=epi" },
+          { label: "Uniforme", href: "/almoxarifado?tab=uniforme" },
         ],
       },
       { label: "Compras", href: "/almoxarifado?tab=compras" },
