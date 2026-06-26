@@ -5,7 +5,6 @@ import { Tabs } from "@/components/ui/tabs";
 import { EstoquePanel } from "@/components/almoxarifado/estoque-panel";
 import { StockInventoryPanel } from "@/components/almoxarifado/materiais-panel";
 import { SimpleInventoryPanel } from "@/components/almoxarifado/inventory-simple-panel";
-import { ToolsPanel } from "@/components/almoxarifado/tools-panel";
 import { HistoricoPanel } from "@/components/almoxarifado/historico-panel";
 import { ComprasPanel } from "@/components/almoxarifado/compras-panel";
 
@@ -29,9 +28,9 @@ import { ComprasPanel } from "@/components/almoxarifado/compras-panel";
 //
 // Histórico de nomes (jun/2026): a antiga aba "Estoque" (comida) virou "Rancho"
 // e a antiga aba "Ferramentas" (empréstimo) deu lugar à aba "Estoque" —
-// inventário de materiais com quantidade. Ferramenta e Elétrica também são
-// inventário (StockInventoryPanel, team sentinela em stock_items). Só o
-// Maquinário segue com o controle de empréstimo por equipe (tabela `tools`).
+// inventário de materiais com quantidade. Ferramenta, Elétrica, Fluídos e
+// Maquinário também são inventário (StockInventoryPanel, team sentinela em
+// stock_items). A tabela `tools` (empréstimo por equipe) ficou sem uso.
 
 // Chaves das abas internas do grupo Estoque (inventário). A ordem define o que
 // aparece na barra de abas, da esquerda pra direita.
@@ -66,7 +65,7 @@ export default function AlmoxarifadoPage() {
     { key: "epi", label: "EPI", content: <SimpleInventoryPanel kind="EPI" /> },
     { key: "uniforme", label: "Uniforme", content: <SimpleInventoryPanel kind="UNIFORME" /> },
     { key: "fluidos", label: "Fluídos", content: <StockInventoryPanel kind="FLUIDOS" /> },
-    { key: "maquinario", label: "Maquinário", content: <ToolsPanel assetType="MAQUINARIO" /> },
+    { key: "maquinario", label: "Maquinário", content: <StockInventoryPanel kind="MAQUINARIO" /> },
     { key: "ferramenta", label: "Ferramenta", content: <StockInventoryPanel kind="FERRAMENTA" /> },
     { key: "eletrica", label: "Elétrica", content: <StockInventoryPanel kind="ELETRICA" /> },
   ];

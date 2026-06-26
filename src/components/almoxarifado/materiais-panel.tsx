@@ -21,12 +21,12 @@ import type { StockItem } from "@/types/database";
 //   FERRAMENTA → aba "Ferramenta"
 //   ELETRICA   → aba "Elétrica"
 //   FLUIDOS    → aba "Fluídos" (óleos, graxas, químicos, etc.)
+//   MAQUINARIO → aba "Maquinário"
 // (Rancho usa EQUIPE_1/2/3 e o Embarque filtra por equipe — todos ignoram estes
 // sentinelas.) Estes setores NÃO usam categoria — cada um já é uma aba; só o
 // Rancho mantém categoria. `category` é sempre OUTROS (enum fixo) e `location`
-// fica sem uso aqui. Maquinário NÃO usa este painel — é empréstimo por equipe
-// (tabela `tools`, ToolsPanel).
-export type InventoryKind = "GALPAO" | "FERRAMENTA" | "ELETRICA" | "FLUIDOS";
+// fica sem uso aqui.
+export type InventoryKind = "GALPAO" | "FERRAMENTA" | "ELETRICA" | "FLUIDOS" | "MAQUINARIO";
 
 interface KindConfig {
   module: Module;
@@ -55,6 +55,10 @@ const KIND_CONFIG: Record<InventoryKind, KindConfig> = {
   FLUIDOS: {
     module: "ESTOQUE", singular: "Fluído", newTitle: "Novo Fluído", editTitle: "Editar Fluído",
     emptyMsg: "Nenhum fluído encontrado", searchPlaceholder: "Buscar fluído...",
+  },
+  MAQUINARIO: {
+    module: "MAQUINARIO", singular: "Maquinário", newTitle: "Novo Maquinário", editTitle: "Editar Maquinário",
+    emptyMsg: "Nenhum maquinário encontrado", searchPlaceholder: "Buscar maquinário...",
   },
 };
 
