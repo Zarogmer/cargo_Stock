@@ -12,26 +12,62 @@ import { db } from "@/lib/db";
 
 const SITE_URL = "https://cargoshipscleaning.com";
 
+// Idioma do email: muda assunto, corpo e a apresentação anexada (PT ou EN).
+type Lang = "pt" | "en";
+
 // Anexos hospedados em /public/materiais. O deeplink do Outlook NÃO carrega
-// anexos (aceita só to/subject/body), então o botão "Baixar anexos" baixa os 2
-// PDFs e o usuário arrasta para a janela do Outlook antes de enviar.
-const ATTACHMENTS = [
-  {
+// anexos (aceita só to/subject/body), então o botão "Baixar anexo" baixa o PDF
+// e o usuário arrasta para a janela do Outlook antes de enviar. Um anexo por
+// idioma — só a apresentação do idioma escolhido aparece/baixa.
+const ATTACHMENTS: Record<Lang, { label: string; href: string; filename: string }> = {
+  pt: {
     label: "Apresentação institucional (PT)",
     href: "/materiais/cargo-ships-2026-pt.pdf",
     filename: "Cargo Ships Cleaning - Apresentacao.pdf",
   },
-  {
+  en: {
     label: "Company presentation (EN)",
     href: "/materiais/cargo-ships-2026-en.pdf",
     filename: "Cargo Ships Cleaning - Company Presentation.pdf",
   },
-];
+};
 
-const DEFAULT_SUBJECT = "Cargo Ships Cleaning — Lavagem de porão e serviços a bordo";
+const DEFAULT_SUBJECT: Record<Lang, string> = {
+  pt: "Cargo Ships Cleaning — Lavagem de porão e serviços a bordo",
+  en: "Cargo Ships Cleaning — Cargo hold cleaning and onboard services",
+};
 
-function buildDefaultBody(clientName: string): string {
+function buildDefaultBody(clientName: string, lang: Lang): string {
   const trimmed = clientName.trim();
+
+  if (lang === "en") {
+    const greeting = trimmed ? `Dear ${trimmed},` : "Dear Sir/Madam,";
+    return `${greeting}
+
+Cargo Ships Cleaning specializes in cargo hold cleaning and washing for bulk carriers, with over 30 years of experience in the main ports of Brazil and South America.
+
+Why work with us:
+• No Cure, No Pay — if the hold is not approved on inspection, the financial risk is 100% ours
+• 100% biodegradable products, with no risk of contamination to the vessel, the cargo or the sea
+• In-house team, certified and covered by civil liability insurance
+• Port Authority clearance and authorization included
+
+Our services:
+• Cargo hold cleaning and washing
+• Hull (ship side) cleaning
+• Rust removal and hold painting (on demand)
+• Onboard services during the port stay
+
+Please find attached our company presentation. Learn more on our website:
+${SITE_URL}
+
+We remain at your disposal to serve your vessel with agility, safety and guaranteed results.
+
+Best regards,
+Cargo Ships Cleaning Team
+${SITE_URL}`;
+  }
+
   const greeting = trimmed ? `Prezados (${trimmed}),` : "Prezados,";
   return `${greeting}
 
@@ -49,7 +85,7 @@ Nossos serviços:
 • Remoção de ferrugem e pintura de porão (sob demanda)
 • Serviços a bordo durante a estadia no porto
 
-Em anexo enviamos nossa apresentação institucional (PT e EN). Conheça mais em nosso site:
+Em anexo enviamos nossa apresentação institucional. Conheça mais em nosso site:
 ${SITE_URL}
 
 Estamos à disposição para atender a sua embarcação com agilidade, segurança e resultado garantido.
@@ -166,8 +202,10 @@ export function EmailComposer() {
   // qualquer bcc vindo da URL, sem duplicar.
   const [bcc, setBcc] = useState(() => mergeEmails(searchParams.get("bcc") || "", FIXED_BCC));
   const [clientName, setClientName] = useState(() => searchParams.get("nome") || "");
-  const [subject, setSubject] = useState(DEFAULT_SUBJECT);
-  const [body, setBody] = useState(() => buildDefaultBody(searchParams.get("nome") || ""));
+  // Idioma do email (PT padrão). Troca assunto, corpo e a apresentação anexada.
+  const [lang, setLang] = useState<Lang>("pt");
+  const [subject, setSubject] = useState(DEFAULT_SUBJECT.pt);
+  const [body, setBody] = useState(() => buildDefaultBody(searchParams.get("nome") || "", "pt"));
   // Nome que gerou o corpo-modelo atual. Se o corpo ainda for exatamente esse
   // modelo, tratamos como "não editado" e podemos trocar a saudação ao escolher
   // outro cliente; se o usuário mexeu no texto, não sobrescrevemos.
@@ -203,13 +241,28 @@ export function EmailComposer() {
     const display = c.company || c.name;
     setTo(cleanEmails(c.email || ""));
     // Só reescreve a saudação se o corpo ainda for o modelo padrão (não editado).
-    if (body === buildDefaultBody(templateName)) {
-      setBody(buildDefaultBody(display));
+    if (body === buildDefaultBody(templateName, lang)) {
+      setBody(buildDefaultBody(display, lang));
       setTemplateName(display);
     }
     setClientName(display);
     setCopied(false);
     setShowSug(false);
+  }
+
+  // Trocar o idioma do email. Se o corpo/assunto ainda forem o modelo padrão (não
+  // editados à mão), regenera no novo idioma; se o usuário já mexeu, preserva o
+  // texto dele e só troca o anexo. Sempre alterna a apresentação anexada PT/EN.
+  function changeLang(next: Lang) {
+    if (next === lang) return;
+    if (body === buildDefaultBody(templateName, lang)) {
+      setBody(buildDefaultBody(templateName, next));
+    }
+    if (subject === DEFAULT_SUBJECT[lang]) {
+      setSubject(DEFAULT_SUBJECT[next]);
+    }
+    setLang(next);
+    setCopied(false);
   }
 
   // Copia a mensagem como HTML (com o link clicável) e abre o compose do Outlook
@@ -230,25 +283,21 @@ export function EmailComposer() {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  // O deeplink do Outlook não carrega anexos — então baixamos os 2 PDFs para a
-  // máquina do usuário, que arrasta os arquivos para a janela do Outlook.
+  // O deeplink do Outlook não carrega anexos — então baixamos o PDF do idioma
+  // escolhido para a máquina do usuário, que arrasta o arquivo para o Outlook.
   function baixarAnexos() {
-    ATTACHMENTS.forEach((att, i) => {
-      // Pequeno atraso entre downloads para o navegador não agrupar/bloquear.
-      setTimeout(() => {
-        const a = document.createElement("a");
-        a.href = att.href;
-        a.download = att.filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      }, i * 400);
-    });
+    const att = ATTACHMENTS[lang];
+    const a = document.createElement("a");
+    a.href = att.href;
+    a.download = att.filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }
 
   function restoreTemplate() {
-    setSubject(DEFAULT_SUBJECT);
-    setBody(buildDefaultBody(clientName));
+    setSubject(DEFAULT_SUBJECT[lang]);
+    setBody(buildDefaultBody(clientName, lang));
     setTemplateName(clientName);
   }
 
@@ -263,6 +312,33 @@ export function EmailComposer() {
 
       {/* Formulário */}
       <div className="bg-card rounded-xl border border-border p-5 space-y-4">
+        {/* Idioma: alterna assunto, corpo do email e a apresentação anexada (PT/EN). */}
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Idioma do email</label>
+          <div className="inline-flex rounded-lg border border-border overflow-hidden">
+            {([
+              { key: "pt" as Lang, label: "🇧🇷 Português" },
+              { key: "en" as Lang, label: "🇬🇧 English" },
+            ]).map((opt) => (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => changeLang(opt.key)}
+                className={`px-4 py-2 text-sm font-medium transition ${
+                  lang === opt.key
+                    ? "bg-primary text-white"
+                    : "bg-card text-text hover:bg-gray-50"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-text-light mt-1">
+            Troca o assunto, o texto e a apresentação anexada. Se você editar o texto, ele é preservado ao alternar.
+          </p>
+        </div>
+
         {/* Cliente: autocomplete dos cadastrados. Escolher um puxa os emails pro
             campo "Para" automaticamente. */}
         <div className="relative">
@@ -379,23 +455,21 @@ export function EmailComposer() {
           />
         </div>
 
-        {/* Anexos */}
+        {/* Anexo: só a apresentação do idioma escolhido. */}
         <div className="rounded-lg border border-border bg-gray-50 p-3">
-          <p className="text-xs font-medium text-text mb-2">Anexos (2 PDFs)</p>
+          <p className="text-xs font-medium text-text mb-2">Anexo (1 PDF)</p>
           <ul className="space-y-1">
-            {ATTACHMENTS.map((att) => (
-              <li key={att.href} className="flex items-center gap-1.5 text-xs text-text-light">
-                <span aria-hidden>📄</span>
-                <a
-                  href={att.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:text-primary hover:underline"
-                >
-                  {att.label}
-                </a>
-              </li>
-            ))}
+            <li className="flex items-center gap-1.5 text-xs text-text-light">
+              <span aria-hidden>📄</span>
+              <a
+                href={ATTACHMENTS[lang].href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-primary hover:underline"
+              >
+                {ATTACHMENTS[lang].label}
+              </a>
+            </li>
           </ul>
         </div>
 
@@ -413,7 +487,7 @@ export function EmailComposer() {
             className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg hover:bg-gray-50 transition text-sm font-medium text-text"
           >
             <span aria-hidden>📎</span>
-            Baixar anexos (2 PDFs)
+            Baixar anexo (PDF)
           </button>
           <a
             href={SITE_URL}
@@ -436,7 +510,7 @@ export function EmailComposer() {
         {copied && (
           <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
             ✓ Mensagem copiada! No Outlook que abriu, clique no corpo do email e cole com{" "}
-            <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link do site já vem clicável. Depois arraste os 2 PDFs.
+            <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link do site já vem clicável. Depois arraste o PDF.
           </p>
         )}
       </div>
@@ -445,10 +519,11 @@ export function EmailComposer() {
       <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-800">
         <p className="font-medium mb-1">Como funciona</p>
         <p>
-          Clique em <strong>Baixar anexos</strong> para salvar os 2 PDFs no seu computador. Depois
+          Escolha o <strong>idioma</strong> (PT ou EN) — assunto, texto e apresentação anexada mudam
+          juntos. Clique em <strong>Baixar anexo</strong> para salvar o PDF no seu computador. Depois
           clique em <strong>Preparar Envio</strong>: a mensagem é copiada (com o link clicável) e o
           Outlook abre no navegador com <strong>Para</strong>, <strong>Cc</strong>, <strong>Cco</strong> e assunto preenchidos. No corpo do email, cole
-          com <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link vem clicável. Arraste os 2 PDFs, confira
+          com <strong>Ctrl+V</strong> (Cmd+V no Mac) — o link vem clicável. Arraste o PDF, confira
           tudo e clique em <strong>Enviar</strong> no Outlook. Nada é enviado automaticamente pelo sistema.
         </p>
       </div>
