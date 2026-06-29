@@ -288,9 +288,10 @@ export default function DashboardPage() {
       setRecentPurchases((purchasesRes.data as any[]) || []);
 
       // Load training alerts: ASO, NRs, Meio Ambiente — each renewed yearly.
+      // Inativos na escalação (escala_unavailable) ficam de fora, igual demitidos.
       const trainingEmpRes = await db
         .from("employees")
-        .select("id, name, last_aso_date, nrs_training, meio_ambiente_training, status")
+        .select("id, name, last_aso_date, nrs_training, meio_ambiente_training, status, escala_unavailable")
         .eq("status", "ATIVO");
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -312,7 +313,8 @@ export default function DashboardPage() {
           });
         }
       }
-      ((trainingEmpRes.data as Array<{ id: number; name: string; last_aso_date: string | null; nrs_training: string | null; meio_ambiente_training: string | null }> | null) || []).forEach((e) => {
+      ((trainingEmpRes.data as Array<{ id: number; name: string; last_aso_date: string | null; nrs_training: string | null; meio_ambiente_training: string | null; escala_unavailable: boolean | null }> | null) || []).forEach((e) => {
+        if (e.escala_unavailable) return;
         const aso = parseLegacyDate(e.last_aso_date);
         if (aso) pushAlert(e.id, e.name, "ASO", aso);
         const ma = parseLegacyDate(e.meio_ambiente_training);
@@ -328,16 +330,18 @@ export default function DashboardPage() {
       // Aniversariantes do mês — colaboradores que fazem aniversário no mês
       // corrente, ordenados por dia. Inclui ATIVO e PENDENCIA: uma pendência
       // (ex.: ASO/treinamento vencido) não tira o aniversário de ninguém — antes
-      // o filtro só-ATIVO sumia com esses. Só demitidos (INATIVO) ficam de fora.
+      // o filtro só-ATIVO sumia com esses. Demitidos (INATIVO) e inativos na
+      // escalação (escala_unavailable) ficam de fora.
       const birthdayRes = await db
         .from("employees")
-        .select("id, name, birth_date, status")
+        .select("id, name, birth_date, status, escala_unavailable")
         .neq("status", "INATIVO");
       const currentMonth = today.getMonth() + 1;
       const currentDay = today.getDate();
       const currentYear = today.getFullYear();
       const monthBirthdays: Birthday[] = [];
-      ((birthdayRes.data as Array<{ id: number; name: string; birth_date: string | null }> | null) || []).forEach((e) => {
+      ((birthdayRes.data as Array<{ id: number; name: string; birth_date: string | null; escala_unavailable: boolean | null }> | null) || []).forEach((e) => {
+        if (e.escala_unavailable) return;
         if (!e.birth_date) return;
         const d = new Date(e.birth_date);
         if (Number.isNaN(d.getTime())) return;
@@ -361,13 +365,15 @@ export default function DashboardPage() {
       // Limite de férias do mês — colaboradores cujo prazo legal p/ gozo
       // (vacation_limit_date, vindo da Programação de Férias) cai no mês
       // corrente OU já venceu. Vencidas entram sempre porque são as mais
-      // urgentes — férias que deveriam ter sido tiradas. Demitidos ficam fora.
+      // urgentes — férias que deveriam ter sido tiradas. Demitidos e inativos na
+      // escalação (escala_unavailable) ficam fora.
       const vacRes = await db
         .from("employees")
-        .select("id, name, vacation_limit_date, status")
+        .select("id, name, vacation_limit_date, status, escala_unavailable")
         .neq("status", "INATIVO");
       const limits: VacationLimit[] = [];
-      ((vacRes.data as Array<{ id: number; name: string; vacation_limit_date: string | null }> | null) || []).forEach((e) => {
+      ((vacRes.data as Array<{ id: number; name: string; vacation_limit_date: string | null; escala_unavailable: boolean | null }> | null) || []).forEach((e) => {
+        if (e.escala_unavailable) return;
         if (!e.vacation_limit_date) return;
         const iso = e.vacation_limit_date.slice(0, 10);
         const d = new Date(iso + "T00:00:00");
