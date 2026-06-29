@@ -17,7 +17,7 @@ interface FolhaRequestBody {
   employeeIds?: number[];
   month?: number; // 1-12
   year?: number;
-  jornada?: string; // "EMBARQUE" | "COSTADO" | "AMBAS" — filtra a folha por tipo
+  jornada?: string; // "EMBARQUE" | "COSTADO" | "AMBAS" | "ADMINISTRATIVO" — filtra a folha por tipo
 }
 
 // Converte os DateTime (@db.Date, meia-noite UTC) do Prisma em "YYYY-MM-DD".
@@ -43,7 +43,10 @@ export async function POST(request: NextRequest) {
   const month = Number(body.month);
   const year = Number(body.year);
   const jornada: JornadaFilter =
-    body.jornada === "COSTADO" ? "COSTADO" : body.jornada === "AMBAS" ? "AMBAS" : "EMBARQUE";
+    body.jornada === "COSTADO" ? "COSTADO"
+    : body.jornada === "AMBAS" ? "AMBAS"
+    : body.jornada === "ADMINISTRATIVO" ? "ADMINISTRATIVO"
+    : "EMBARQUE";
   if (ids.length === 0) {
     return NextResponse.json({ error: "Selecione ao menos um colaborador." }, { status: 400 });
   }
@@ -103,7 +106,7 @@ export async function POST(request: NextRequest) {
 
   const format = request.nextUrl.searchParams.get("format") === "pdf" ? "pdf" : "xlsx";
   const periodo = `${MESES_PT[month - 1]} ${year}`;
-  const tipoLabel = jornada === "COSTADO" ? "Costado" : jornada === "AMBAS" ? "Ambas" : "Embarque";
+  const tipoLabel = jornada === "COSTADO" ? "Costado" : jornada === "AMBAS" ? "Ambas" : jornada === "ADMINISTRATIVO" ? "Administrativo" : "Embarque";
   const oneName = ordered.length === 1 ? ` ${ordered[0].name.replace(/[\\/:*?"<>|]+/g, "").trim()}` : "";
   const baseName = `Folha de Ponto ${tipoLabel}${oneName} - ${periodo}`;
 

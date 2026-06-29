@@ -174,7 +174,9 @@ export type WorkedMap = Map<string, WorkedDay>;
 
 // Filtro de jornada da folha (o que o RH escolhe na tela). "AMBAS" não filtra:
 // mostra Embarque e Costado juntos na mesma folha (é o que vai pra contabilidade).
-export type JornadaFilter = WorkedKind | "AMBAS";
+// "ADMINISTRATIVO" é um modo da tela que mostra só o pessoal do setor
+// Administrativo (que já tem jornada fixa seg–sex 09:00–18:00, via isAdminSector).
+export type JornadaFilter = WorkedKind | "AMBAS" | "ADMINISTRATIVO";
 
 // Mapa dia (YYYY-MM-DD) → tipo de jornada, a partir das alocações do mês.
 // Costado (turno específico) tem prioridade sobre Embarque (janela ampla); entre

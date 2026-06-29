@@ -61,15 +61,31 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
   }, [employees]);
 
   const filteredEmployees = useMemo(() => {
+    // No modo "Administrativo" a lista mostra só o pessoal do setor Administrativo.
+    const base = jornada === "ADMINISTRATIVO"
+      ? sortedEmployees.filter((e) => isAdminSector(e.sector))
+      : sortedEmployees;
     const q = empSearch.trim().toLowerCase();
-    if (!q) return sortedEmployees;
+    if (!q) return base;
     const qDigits = q.replace(/\D/g, "");
-    return sortedEmployees.filter(
+    return base.filter(
       (e) =>
         e.name.toLowerCase().includes(q) ||
         (qDigits ? (e.cpf || "").replace(/\D/g, "").includes(qDigits) : false)
     );
-  }, [sortedEmployees, empSearch]);
+  }, [sortedEmployees, empSearch, jornada]);
+
+  // Trocar para "Administrativo" descarta da seleção quem não é do Administrativo
+  // (some da lista, então não geraria folha em branco sem querer).
+  useEffect(() => {
+    if (jornada !== "ADMINISTRATIVO") return;
+    setSelectedIds((prev) => {
+      const next = new Set(
+        [...prev].filter((id) => isAdminSector(employees.find((e) => e.id === id)?.sector))
+      );
+      return next.size === prev.size ? prev : next;
+    });
+  }, [jornada, employees]);
 
   const selectedCount = selectedIds.size;
   const yearOptions = useMemo(() => {
@@ -226,7 +242,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
         const a = document.createElement("a");
         a.href = url;
         const periodo = `${MESES[month - 1]} ${year}`;
-        const tipoLabel = jornada === "COSTADO" ? "Costado" : jornada === "AMBAS" ? "Ambas" : "Embarque";
+        const tipoLabel = jornada === "COSTADO" ? "Costado" : jornada === "AMBAS" ? "Ambas" : jornada === "ADMINISTRATIVO" ? "Administrativo" : "Embarque";
         a.download = ids.length === 1
           ? `Folha de Ponto ${tipoLabel} - ${periodo}.${format}`
           : `Folhas de Ponto ${tipoLabel} (${ids.length}) - ${periodo}.${format}`;
@@ -255,8 +271,9 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           <p className="text-xs text-text-light mt-0.5">
             Os dias trabalhados saem dos <strong>navios cadastrados</strong> (o tipo de cada dia vem do
             navio). Escolha a <strong>jornada</strong>: <strong>Embarque</strong> 7h20 (09:00–17:20),{" "}
-            <strong>Costado</strong> 6h (só o 1º turno do dia) ou <strong>Ambas</strong> (Embarque e Costado na
-            mesma folha — a carga horária ao lado diz qual é qual). Vários colaboradores geram um único arquivo
+            <strong>Costado</strong> 6h (só o 1º turno do dia), <strong>Ambas</strong> (Embarque e Costado na
+            mesma folha — a carga horária ao lado diz qual é qual) ou <strong>Administrativo</strong> (mostra só
+            o pessoal do escritório, jornada fixa 8h). Vários colaboradores geram um único arquivo
             com uma aba (ou página) para cada.
           </p>
           <p className="text-xs text-text-light mt-1.5">
@@ -270,7 +287,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
         <div>
           <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Tipo de jornada</label>
           <div className="mt-1 inline-flex rounded-lg border border-border overflow-hidden">
-            {([["AMBAS", "Ambas"], ["EMBARQUE", "Embarque · 7h20"], ["COSTADO", "Costado · 6h"]] as const).map(([val, label]) => (
+            {([["AMBAS", "Ambas"], ["EMBARQUE", "Embarque · 7h20"], ["COSTADO", "Costado · 6h"], ["ADMINISTRATIVO", "Administrativo · 8h"]] as const).map(([val, label]) => (
               <button
                 key={val}
                 type="button"
@@ -322,6 +339,11 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
               </button>
             )}
           </div>
+          {jornada === "ADMINISTRATIVO" && (
+            <p className="mt-1 text-[11px] text-primary">
+              Mostrando só colaboradores do setor <strong>Administrativo</strong>.
+            </p>
+          )}
           <input
             type="text"
             value={empSearch}
