@@ -5,12 +5,13 @@
 // <pageSetup>, garantindo um PDF limpo na conversão via LibreOffice.
 import * as XLSX from "xlsx-js-style";
 import PizZip from "pizzip";
-import { CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, JornadaFilter, MESES_PT, WorkedMap, computeFolha, fmtHHMM } from "./folha-ponto";
+import { ADMIN_DIARIA_MIN, CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, JornadaFilter, MESES_PT, WorkedMap, computeFolha, fmtHHMM } from "./folha-ponto";
 
 export interface FolhaEmployee {
   id: number;
   name: string;
   worked: WorkedMap; // dias trabalhados no mês (origem dos navios)
+  admin?: boolean; // setor Administrativo → jornada fixa 09:00–18:00 (ignora navios)
 }
 
 // ── Estilo ─────────────────────────────────────────────────────────────────────
@@ -48,7 +49,12 @@ function sanitizeSheetName(name: string, used: Set<string>): string {
 //   - EMBARQUE/COSTADO: um valor por dia da semana (layout oficial: 7h20 / 6h).
 //   - AMBAS: legenda com os dois tipos, deixando claro qual carga é de cada um.
 const CARGA_WEEKDAYS = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "DOMINGO", "FERIADOS"];
-function cargaEntries(jornada?: JornadaFilter): [string, string][] {
+const CARGA_FIM_DE_SEMANA = new Set(["SÁBADO", "DOMINGO", "FERIADOS"]);
+function cargaEntries(jornada?: JornadaFilter, admin?: boolean): [string, string][] {
+  // Administrativo: 8h de seg a sex; sábado/domingo/feriado = 0.
+  if (admin) {
+    return CARGA_WEEKDAYS.map((w) => [w, fmtHHMM(CARGA_FIM_DE_SEMANA.has(w) ? 0 : ADMIN_DIARIA_MIN)]);
+  }
   if (jornada === "AMBAS") {
     return [["EMBARQUE", fmtHHMM(CARGA_DIARIA_MIN)], ["COSTADO", fmtHHMM(COSTADO_DIARIA_MIN)]];
   }
@@ -58,7 +64,7 @@ function cargaEntries(jornada?: JornadaFilter): [string, string][] {
 
 // Constrói a worksheet de um colaborador.
 function buildSheet(emp: FolhaEmployee, year: number, month1: number, jornada?: JornadaFilter): XLSX.WorkSheet {
-  const { rows: dayRows, totals: monthTotals } = computeFolha(emp.id, emp.worked, year, month1, jornada);
+  const { rows: dayRows, totals: monthTotals } = computeFolha(emp.id, emp.worked, year, month1, jornada, emp.admin);
   const COLS = 16; // A..P
   const blankRow = () => Array(COLS).fill(null) as (string | number | null)[];
   const aoa: (string | number | null)[][] = [];
@@ -83,7 +89,7 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number, jornada?: 
   aoa.push(headRow);
   const HEAD_ROW = 5;
 
-  const carga = cargaEntries(jornada);
+  const carga = cargaEntries(jornada, emp.admin);
 
   const dayMeta: { row: number; highlight: boolean }[] = [];
   for (const dr of dayRows) {

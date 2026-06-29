@@ -1,12 +1,13 @@
 "use client";
 
 import { useMemo } from "react";
-import { CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, JornadaFilter, MESES_PT, WorkedMap, computeFolha, fmtHHMM } from "@/lib/folha-ponto";
+import { ADMIN_DIARIA_MIN, CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, JornadaFilter, MESES_PT, WorkedMap, computeFolha, fmtHHMM } from "@/lib/folha-ponto";
 
 // Prévia em tela da Folha de Ponto. Usa exatamente a mesma lógica (computeFolha)
 // do arquivo gerado, então o que aparece aqui é o que sai no Excel/PDF.
 
 const CARGA_LABELS = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "DOMINGO", "FERIADOS"];
+const CARGA_FIM_DE_SEMANA = new Set(["SÁBADO", "DOMINGO", "FERIADOS"]);
 
 function ddmm(iso: string): string {
   return `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
@@ -19,6 +20,7 @@ export function FolhaPontoPreview({
   year,
   month,
   jornada,
+  admin = false,
 }: {
   name: string;
   empId: number;
@@ -26,12 +28,14 @@ export function FolhaPontoPreview({
   year: number;
   month: number;
   jornada: JornadaFilter;
+  admin?: boolean;
 }) {
-  const folha = useMemo(() => computeFolha(empId, worked, year, month, jornada), [empId, worked, year, month, jornada]);
-  // Tabela lateral CARGA HORÁRIA: por dia da semana no modo simples; legenda dos
-  // dois tipos no modo AMBAS (deixa claro qual carga é Embarque e qual é Costado).
-  const cargaRows: [string, string][] =
-    jornada === "AMBAS"
+  const folha = useMemo(() => computeFolha(empId, worked, year, month, jornada, admin), [empId, worked, year, month, jornada, admin]);
+  // Tabela lateral CARGA HORÁRIA: Administrativo = 8h seg–sex (0 no fim de
+  // semana/feriado); senão por dia da semana, ou legenda dos dois tipos em AMBAS.
+  const cargaRows: [string, string][] = admin
+    ? CARGA_LABELS.map((l) => [l, fmtHHMM(CARGA_FIM_DE_SEMANA.has(l) ? 0 : ADMIN_DIARIA_MIN)])
+    : jornada === "AMBAS"
       ? [["EMBARQUE", fmtHHMM(CARGA_DIARIA_MIN)], ["COSTADO", fmtHHMM(COSTADO_DIARIA_MIN)]]
       : CARGA_LABELS.map((l) => [l, fmtHHMM(jornada === "COSTADO" ? COSTADO_DIARIA_MIN : CARGA_DIARIA_MIN)]);
 
@@ -127,11 +131,13 @@ export function FolhaPontoPreview({
         <p className="text-[10px] text-gray-400 mt-2">
           Prévia idêntica ao arquivo gerado. Dias em azul = domingo/feriado. Mostrando{" "}
           <strong>
-            {jornada === "AMBAS"
-              ? "Embarque (7h20) e Costado (6h, só o 1º turno)"
-              : jornada === "COSTADO"
-                ? "apenas os dias de Costado (6h, só o 1º turno)"
-                : "apenas os dias de Embarque (7h20, 09:00–17:20)"}
+            {admin
+              ? "jornada Administrativa (seg–sex, 09:00–18:00, 8h) — não usa navios"
+              : jornada === "AMBAS"
+                ? "Embarque (7h20) e Costado (6h, só o 1º turno)"
+                : jornada === "COSTADO"
+                  ? "apenas os dias de Costado (6h, só o 1º turno)"
+                  : "apenas os dias de Embarque (7h20, 09:00–17:20)"}
           </strong>
           .
         </p>

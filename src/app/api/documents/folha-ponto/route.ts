@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { xlsxToPdf } from "@/lib/docx-to-pdf";
-import { AllocInput, JornadaFilter, MESES_PT, expandWorkedDates } from "@/lib/folha-ponto";
+import { AllocInput, JornadaFilter, MESES_PT, expandWorkedDates, isAdminSector } from "@/lib/folha-ponto";
 import { buildFolhaPontoXlsx, FolhaEmployee } from "@/lib/folha-ponto-xlsx";
 
 export const dynamic = "force-dynamic";
@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
   }
 
   const [employees, allocations] = await Promise.all([
-    prisma.employee.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }),
+    prisma.employee.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, sector: true } }),
     prisma.jobAllocation.findMany({
       where: { employee_id: { in: ids }, status: "ATIVO" },
       select: {
@@ -94,6 +94,8 @@ export async function POST(request: NextRequest) {
     .map((emp) => ({
       id: emp.id,
       name: emp.name,
+      // Administrativo tem folha fixa (seg–sex 09:00–18:00) — ignora os navios.
+      admin: isAdminSector(emp.sector),
       worked: expandWorkedDates(allocByEmp.get(emp.id) || [], year, month),
     }));
 

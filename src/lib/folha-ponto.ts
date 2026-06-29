@@ -14,6 +14,10 @@
 export const CARGA_DIARIA_MIN = 7 * 60 + 20; // 440
 // Jornada do turno de Costado: 6h corridas (sem intervalo de almoço).
 export const COSTADO_DIARIA_MIN = 6 * 60; // 360
+// Jornada administrativa: 09:00–18:00 com 1h de almoço = 8h. Independe de navio:
+// quem é do setor Administrativo bate ponto fixo de segunda a sexta (sem
+// fim de semana e sem feriado nacional), nunca a janela do navio escalado.
+export const ADMIN_DIARIA_MIN = 8 * 60; // 480
 // 1ª faixa de hora extra vai até 4h; o que passar cai na 2ª faixa (PREMISSAS).
 export const FAIXA1_LIMITE_MIN = 4 * 60; // 240
 // Tolerância de atraso/extra (PREMISSAS!C13 = 0:00 → sem tolerância).
@@ -43,9 +47,9 @@ export const MESES_PT = [
   "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO",
 ] as const;
 
-// Feriados nacionais de data fixa (MM-DD). Só servem pra pintar a linha (igual a
-// domingo) — a carga continua 7:20. Feriados móveis (Carnaval, Sexta-feira Santa,
-// Corpus Christi) não são marcados automaticamente.
+// Feriados nacionais de data fixa (MM-DD). Pintam a linha (igual a domingo) e, na
+// folha administrativa, contam como dia não trabalhado. Carnaval e Corpus Christi
+// NÃO são feriados nacionais oficiais (são facultativos/municipais) → não entram.
 const FERIADOS_FIXOS = new Set([
   "01-01", "04-21", "05-01", "09-07", "10-12", "11-02", "11-15", "11-20", "12-25",
 ]);
@@ -72,8 +76,34 @@ export function weekdayOf(iso: string): number {
   return new Date(isoToSerial(iso) * 86400000).getUTCDay();
 }
 
+// Domingo de Páscoa (algoritmo de Computus / Meeus–Jones–Butcher). Base do único
+// feriado nacional MÓVEL relevante aqui: a Sexta-feira Santa (Páscoa − 2 dias).
+function easterSundayIso(year: number): string {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31); // 3 = março, 4 = abril
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+// Sexta-feira Santa = Páscoa − 2 dias. Único feriado nacional móvel marcado.
+function goodFridayIso(year: number): string {
+  return serialToIso(isoToSerial(easterSundayIso(year)) - 2);
+}
+
 export function isHoliday(iso: string): boolean {
-  return FERIADOS_FIXOS.has(iso.slice(5, 10));
+  if (FERIADOS_FIXOS.has(iso.slice(5, 10))) return true;
+  return iso === goodFridayIso(Number(iso.slice(0, 4)));
 }
 
 export function isHighlightedDay(iso: string): boolean {
@@ -83,6 +113,31 @@ export function isHighlightedDay(iso: string): boolean {
 
 export function daysInMonth(year: number, month1to12: number): number {
   return new Date(Date.UTC(year, month1to12, 0)).getUTCDate();
+}
+
+// ── Folha administrativa (setor Administrativo) ────────────────────────────────
+// Quem é do Administrativo tem jornada fixa de escritório, não a janela do navio.
+
+export function isAdminSector(sector?: string | null): boolean {
+  return (sector || "").trim().toUpperCase() === "ADMINISTRATIVO";
+}
+
+// Dia útil administrativo: segunda a sexta que não seja feriado nacional. Sábado,
+// domingo e feriado ficam de fora (não trabalhados).
+export function isAdminWorkday(iso: string): boolean {
+  const wd = weekdayOf(iso);
+  return wd >= 1 && wd <= 5 && !isHoliday(iso);
+}
+
+// Quantos dias úteis administrativos há no mês — alimenta o contador da tela.
+export function countAdminWorkdays(year: number, month1to12: number): number {
+  const n = daysInMonth(year, month1to12);
+  let count = 0;
+  for (let d = 1; d <= n; d++) {
+    const iso = `${year}-${String(month1to12).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    if (isAdminWorkday(iso)) count++;
+  }
+  return count;
 }
 
 // ── Quais dias o colaborador trabalhou ─────────────────────────────────────────
@@ -229,6 +284,15 @@ export function timesForDay(seedKey: string, day: WorkedDay): DayTimes {
   return { entrada1, saida1, entrada2, saida2 };
 }
 
+// Horário fixo da jornada administrativa: 09:00–12:00 / 13:00–18:00 (8h, 1h de
+// almoço). Sem variação — é contrato de escritório, não ponto estimado por navio.
+export const ADMIN_TIMES: DayTimes = {
+  entrada1: 9 * 60,
+  saida1: 12 * 60,
+  entrada2: 13 * 60,
+  saida2: 18 * 60,
+};
+
 export interface DayTotals {
   hDiaria: number; // minutos trabalhados no dia
   atraso: number; // minutos abaixo da carga (após tolerância)
@@ -284,7 +348,7 @@ export interface FolhaDayRow {
   dayName: string;
   highlight: boolean; // domingo/feriado → linha realçada
   worked: boolean;
-  kind: WorkedKind | null; // tipo de jornada do dia (null = não trabalhou)
+  kind: WorkedKind | "ADMIN" | null; // tipo de jornada do dia (null = não trabalhou)
   times: DayTimes | null;
   totals: DayTotals | null;
 }
@@ -308,20 +372,39 @@ export function computeFolha(
   year: number,
   month1to12: number,
   jornada?: JornadaFilter,
+  admin?: boolean,
 ): FolhaComputed {
   const nDays = daysInMonth(year, month1to12);
   const rows: FolhaDayRow[] = [];
   let totH = 0, totA = 0, totHE = 0, totF1 = 0, totF2 = 0;
   for (let d = 1; d <= nDays; d++) {
     const iso = `${year}-${String(month1to12).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    const wd = worked.get(iso) ?? null;
-    // Filtra pelo tipo selecionado; "AMBAS" (ou sem filtro) mantém todos os dias.
-    const day = wd && (jornada == null || jornada === "AMBAS" || wd.kind === jornada) ? wd : null;
     let times: DayTimes | null = null;
     let totals: DayTotals | null = null;
-    if (day) {
-      times = timesForDay(seedKey(empId, iso), day);
-      totals = totalsForDay(times, cargaForDay(day));
+    let kind: WorkedKind | "ADMIN" | null = null;
+    let isWorked = false;
+
+    if (admin) {
+      // Administrativo: jornada fixa seg–sex (sem navio, sem fim de semana/feriado).
+      if (isAdminWorkday(iso)) {
+        isWorked = true;
+        kind = "ADMIN";
+        times = ADMIN_TIMES;
+        totals = totalsForDay(times, ADMIN_DIARIA_MIN);
+      }
+    } else {
+      const wd = worked.get(iso) ?? null;
+      // Filtra pelo tipo selecionado; "AMBAS" (ou sem filtro) mantém todos os dias.
+      const day = wd && (jornada == null || jornada === "AMBAS" || wd.kind === jornada) ? wd : null;
+      if (day) {
+        isWorked = true;
+        kind = day.kind;
+        times = timesForDay(seedKey(empId, iso), day);
+        totals = totalsForDay(times, cargaForDay(day));
+      }
+    }
+
+    if (totals) {
       totH += totals.hDiaria; totA += totals.atraso; totHE += totals.he;
       totF1 += totals.faixa1; totF2 += totals.faixa2;
     }
@@ -330,8 +413,8 @@ export function computeFolha(
       day: d,
       dayName: DIAS_SEMANA_PT[weekdayOf(iso)],
       highlight: isHighlightedDay(iso),
-      worked: day != null,
-      kind: day?.kind ?? null,
+      worked: isWorked,
+      kind,
       times,
       totals,
     });

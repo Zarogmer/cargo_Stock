@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob } from "@/lib/print";
 import { db } from "@/lib/db";
-import { AllocInput, JornadaFilter, WorkedMap, countWorkedKind, expandWorkedDates } from "@/lib/folha-ponto";
+import { AllocInput, JornadaFilter, WorkedMap, countAdminWorkdays, countWorkedKind, expandWorkedDates, isAdminSector } from "@/lib/folha-ponto";
 import { FolhaPontoPreview } from "./folha-ponto-preview";
 import type { Employee } from "@/types/database";
 
@@ -175,10 +175,13 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
 
   const totalWorked = useMemo(
     () => [...selectedIds].reduce((acc, id) => {
+      // Administrativo conta dias úteis fixos (seg–sex), não as alocações.
+      const emp = employees.find((e) => e.id === id);
+      if (emp && isAdminSector(emp.sector)) return acc + countAdminWorkdays(year, month);
       const w = workedByEmp[id];
       return acc + (w ? countWorkedKind(w, jornada) : 0);
     }, 0),
-    [selectedIds, workedByEmp, jornada]
+    [selectedIds, workedByEmp, jornada, employees, year, month]
   );
 
   const previewEmp = previewId != null ? employees.find((e) => e.id === previewId) ?? null : null;
@@ -256,6 +259,11 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
             mesma folha — a carga horária ao lado diz qual é qual). Vários colaboradores geram um único arquivo
             com uma aba (ou página) para cada.
           </p>
+          <p className="text-xs text-text-light mt-1.5">
+            <strong>Administrativo:</strong> quem é do setor Administrativo tem folha fixa de escritório
+            (segunda a sexta, <strong>09:00–18:00</strong>, 8h), respeitando feriados nacionais — independe de
+            navio/escala. O tipo de jornada acima é ignorado para esses colaboradores.
+          </p>
         </div>
 
         {/* Tipo de jornada — filtra a folha por tipo de navio */}
@@ -328,7 +336,9 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
               filteredEmployees.map((e) => {
                 const checked = selectedIds.has(e.id);
                 const w = workedByEmp[e.id];
-                const dias = w ? countWorkedKind(w, jornada) : undefined;
+                const dias = isAdminSector(e.sector)
+                  ? countAdminWorkdays(year, month)
+                  : w ? countWorkedKind(w, jornada) : undefined;
                 return (
                   <label
                     key={e.id}
@@ -415,6 +425,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
             year={year}
             month={month}
             jornada={jornada}
+            admin={isAdminSector(previewEmp.sector)}
           />
         </div>
       )}
