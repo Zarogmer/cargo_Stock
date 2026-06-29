@@ -1906,8 +1906,8 @@ function TrabalhosTab({
             const profit = revenue - cost.total;
             return (
               <div key={j.id} className="bg-card rounded-xl border border-border p-4 hover:shadow-md transition cursor-pointer" onClick={() => setDetailJob(j)}>
-                <div className="flex flex-wrap justify-between items-start gap-2">
-                  <div className="min-w-0 flex-1">
+                <div className="flex flex-col sm:flex-row sm:flex-wrap sm:justify-between sm:items-start gap-2">
+                  <div className="min-w-0 sm:flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-semibold">{j.name}</h3>
                       <ShipStatusBadge status={shipStatusOf(j)} />
@@ -5152,8 +5152,8 @@ function CostadoTab({
             const hours = shifts * HOURS_PER_SHIFT;
             return (
               <div key={j.id} className="bg-card rounded-xl border border-border p-4 hover:shadow-md transition cursor-pointer" onClick={() => setDetailJob(j)}>
-                <div className="flex flex-wrap justify-between items-start gap-2">
-                  <div className="min-w-0 flex-1">
+                <div className="flex flex-col sm:flex-row sm:flex-wrap sm:justify-between sm:items-start gap-2">
+                  <div className="min-w-0 sm:flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-semibold">{j.name}</h3>
                       <ShipStatusBadge status={shipStatusOf(j)} />
