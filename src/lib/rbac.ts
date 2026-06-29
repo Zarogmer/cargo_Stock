@@ -113,10 +113,8 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     NAVIOS: ["view", "create", "edit", "delete"],
     MARKETING: ["view", "create", "edit", "delete"],
     SOLICITACOES: ["view", "create", "edit", "delete"],
-    // 2026-06: RH passa a enxergar o Financeiro, mas só leitura (como o Estágio).
-    // Não edita pagamentos nem os valores por função (salários) — coerente com a
-    // restrição da "Paga" do colaborador, que segue só pra Executivo/Tecnologia.
-    FINANCEIRO_MOD: ["view"],
+    // RH NÃO enxerga o Financeiro (pedido do Guilherme — revertido o acesso de
+    // leitura que tinha sido dado em 2026-06).
     // Mensagens restrito a Tecnologia, Executivo e Financeiro — RH fica de fora.
     CONVERSAS: ["view", "create"],
   },
