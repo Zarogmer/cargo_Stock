@@ -180,6 +180,10 @@ model Employee {
   role                 String?                                // WAP, AJUDANTE, ESFREGAO, ANALISTA_RH, OPERACIONAL...
   salary               Decimal?  @db.Decimal(10, 2)           // futuro: cálculo de folha
   admission_date       DateTime? @db.Date
+  // Data limite p/ gozo de férias (coluna "Limite p/ gozo" da Programação de
+  // Férias da contabilidade): prazo legal pra tirar as férias do período
+  // aquisitivo mais antigo em aberto. Passou = férias vencidas.
+  vacation_limit_date  DateTime? @db.Date
   dismissal_date       DateTime? @db.Date                     // data de demissão (preenchida quando status = INATIVO)
   contract_type        String?                                // REGISTRADO, INTERMITENTE
 

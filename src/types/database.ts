@@ -89,6 +89,9 @@ export interface Employee {
   role: string | null;
   salary: string | number | null;
   admission_date: string | null;
+  // Data limite p/ gozo de férias (coluna "Limite p/ gozo" da Programação de
+  // Férias). Prazo legal do período aquisitivo mais antigo em aberto.
+  vacation_limit_date: string | null;
   dismissal_date: string | null;
   contract_type: "REGISTRADO" | "INTERMITENTE" | null;
   // Treinamentos

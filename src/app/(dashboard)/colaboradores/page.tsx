@@ -653,6 +653,7 @@ export default function ColaboradoresPage() {
               {selectedEmp.family_phone && <div><span className="text-text-light">Tel. Familiar:</span> <span className="font-medium">{formatPhone(selectedEmp.family_phone)}</span></div>}
               {selectedEmp.birth_date && <div><span className="text-text-light">Nascimento:</span> <span className="font-medium">{selectedEmp.birth_date.slice(0, 10)}</span></div>}
               {selectedEmp.admission_date && <div><span className="text-text-light">Admissão:</span> <span className="font-medium">{selectedEmp.admission_date.slice(0, 10)}</span></div>}
+              {selectedEmp.vacation_limit_date && <div><span className="text-text-light">Limite de Férias:</span> <span className="font-medium">{selectedEmp.vacation_limit_date.slice(0, 10)}</span></div>}
               {selectedEmp.dismissal_date && <div><span className="text-text-light">Demissão:</span> <span className="font-medium text-red-700">{selectedEmp.dismissal_date.slice(0, 10)}</span></div>}
               {selectedEmp.email && <div className="col-span-2"><span className="text-text-light">Email:</span> <span className="font-medium">{selectedEmp.email}</span></div>}
               {(() => {
@@ -826,6 +827,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
   // Substitui o antigo campo "Salário" no formulário.
   const [paga, setPaga] = useState("");
   const [admissionDate, setAdmissionDate] = useState("");
+  const [vacationLimitDate, setVacationLimitDate] = useState("");
   const [dismissalDate, setDismissalDate] = useState("");
   const [contractType, setContractType] = useState<string>("");
   // Bancários
@@ -866,6 +868,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       setRole(item.role || "");
       { const p = effectivePaga(functions, specialRates, item.id, item.role); setPaga(p ? formatRateBR(p.rate) : ""); }
       setAdmissionDate(item.admission_date?.slice(0, 10) || "");
+      setVacationLimitDate(item.vacation_limit_date?.slice(0, 10) || "");
       setDismissalDate(item.dismissal_date?.slice(0, 10) || "");
       setContractType(item.contract_type || "");
       setBankName(item.bank_name || ""); setBankAgency(item.bank_agency || "");
@@ -888,7 +891,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       setName(""); setTeam(""); setPhone(""); setEmail(""); setBirthDate("");
       setFamilyPhone(""); setNotes("");
       setCpf(""); setRg(""); setIspsCode(""); setESocial("");
-      setStatus("ATIVO"); setSector(""); setRole(""); setPaga(""); setAdmissionDate(""); setDismissalDate(""); setContractType("");
+      setStatus("ATIVO"); setSector(""); setRole(""); setPaga(""); setAdmissionDate(""); setVacationLimitDate(""); setDismissalDate(""); setContractType("");
       setBankName(""); setBankAgency(""); setBankAccount(""); setBankAccountType("");
       setHasVaccinationCard(false); setHasCnh(false);
       setNrsTraining(""); setMeioAmbienteTraining("");
@@ -949,6 +952,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       sector: (sector as any) || null,
       role: role || null,
       admission_date: admissionDate || null,
+      vacation_limit_date: vacationLimitDate || null,
       // Só guarda data de demissão quando o status é Demitido (INATIVO). Se o
       // colaborador for reativado, a data antiga é limpa pra não confundir.
       dismissal_date: status === "INATIVO" ? (dismissalDate || null) : null,
@@ -1037,6 +1041,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
               </select>
             </div>
             <div><label className="block text-sm font-medium mb-1">Admissão</label><input type="date" value={admissionDate} onChange={(e) => setAdmissionDate(e.target.value)} className={inputCls} /></div>
+            <div><label className="block text-sm font-medium mb-1">Limite de Férias</label><input type="date" value={vacationLimitDate} onChange={(e) => setVacationLimitDate(e.target.value)} className={inputCls} /><p className="text-[11px] text-text-light mt-1">Prazo p/ gozo (Programação de Férias)</p></div>
           </div>
           {status === "INATIVO" && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-3">
@@ -1321,6 +1326,7 @@ const SHEET_COLUMNS: { key: keyof Employee | "__index" | "actions"; label: strin
   { key: "isps_code", label: "ISPS", w: "w-20" },
   { key: "birth_date", label: "Nascimento", w: "w-28" },
   { key: "admission_date", label: "Admissão", w: "w-28" },
+  { key: "vacation_limit_date", label: "Limite Férias", w: "w-28" },
   { key: "bank_agency", label: "Agência", w: "w-20" },
   { key: "bank_account", label: "Conta", w: "w-24" },
   { key: "bank_name", label: "Banco", w: "w-24" },
@@ -1349,7 +1355,7 @@ function renderCell(emp: Employee, key: keyof Employee): React.ReactNode {
   if (key === "phone" || key === "family_phone") {
     return formatPhone(String(v));
   }
-  if (key === "birth_date" || key === "admission_date") {
+  if (key === "birth_date" || key === "admission_date" || key === "vacation_limit_date") {
     const s = String(v);
     return s.slice(0, 10).split("-").reverse().join("/");
   }

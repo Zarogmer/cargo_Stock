@@ -73,6 +73,15 @@ interface Birthday {
   turning_age: number | null;
 }
 
+interface VacationLimit {
+  employee_id: number;
+  employee_name: string;
+  limit_date: string; // YYYY-MM-DD
+  // Dias até o limite (negativo = férias vencidas, prazo já passou).
+  days_until: number;
+  overdue: boolean;
+}
+
 interface DollarQuote {
   bid: string;
   ask: string;
@@ -95,6 +104,7 @@ export default function DashboardPage() {
   const [recentPurchases, setRecentPurchases] = useState<{ id: string; tool_name: string; quantity: number; requested_by: string; responded_by: string; updated_at: string }[]>([]);
   const [trainingAlerts, setTrainingAlerts] = useState<TrainingAlert[]>([]);
   const [birthdays, setBirthdays] = useState<Birthday[]>([]);
+  const [vacationLimits, setVacationLimits] = useState<VacationLimit[]>([]);
   const [loading, setLoading] = useState(true);
 
   const loadDashboard = useCallback(async () => {
@@ -347,6 +357,35 @@ export default function DashboardPage() {
       });
       monthBirthdays.sort((a, b) => a.day - b.day);
       setBirthdays(monthBirthdays);
+
+      // Limite de férias do mês — colaboradores cujo prazo legal p/ gozo
+      // (vacation_limit_date, vindo da Programação de Férias) cai no mês
+      // corrente OU já venceu. Vencidas entram sempre porque são as mais
+      // urgentes — férias que deveriam ter sido tiradas. Demitidos ficam fora.
+      const vacRes = await db
+        .from("employees")
+        .select("id, name, vacation_limit_date, status")
+        .neq("status", "INATIVO");
+      const limits: VacationLimit[] = [];
+      ((vacRes.data as Array<{ id: number; name: string; vacation_limit_date: string | null }> | null) || []).forEach((e) => {
+        if (!e.vacation_limit_date) return;
+        const iso = e.vacation_limit_date.slice(0, 10);
+        const d = new Date(iso + "T00:00:00");
+        if (Number.isNaN(d.getTime())) return;
+        const overdue = d.getTime() < today.getTime();
+        const sameMonth = d.getFullYear() === currentYear && d.getMonth() + 1 === currentMonth;
+        if (!overdue && !sameMonth) return;
+        limits.push({
+          employee_id: e.id,
+          employee_name: e.name,
+          limit_date: iso,
+          days_until: Math.round((d.getTime() - today.getTime()) / 86400000),
+          overdue,
+        });
+      });
+      // Mais urgente primeiro (vencidas há mais tempo no topo).
+      limits.sort((a, b) => a.days_until - b.days_until);
+      setVacationLimits(limits);
     } catch (err) {
       console.error("Dashboard load error:", err);
     } finally {
@@ -629,6 +668,70 @@ export default function DashboardPage() {
           </div>
         </CollapsibleSection>
       )}
+
+      {/* Limite de férias — vence no mês ou já venceu. Acima dos aniversários. */}
+      <CollapsibleSection
+        storageKey="vacation-limits-of-month"
+        className="bg-card rounded-2xl border border-teal-200 overflow-hidden"
+        title={`🏖️ Limite de Férias — ${new Date().toLocaleDateString("pt-BR", { month: "long" })}`}
+        subtitle={
+          vacationLimits.length === 0
+            ? "Nenhum limite de férias vencendo ou vencido."
+            : (() => {
+                const venc = vacationLimits.filter((v) => v.overdue).length;
+                const partes: string[] = [];
+                if (venc > 0) partes.push(`${venc} ${venc === 1 ? "vencida" : "vencidas"}`);
+                const noMes = vacationLimits.length - venc;
+                if (noMes > 0) partes.push(`${noMes} vence${noMes === 1 ? "" : "m"} este mês`);
+                return partes.join(" · ");
+              })()
+        }
+      >
+        {vacationLimits.length === 0 ? (
+          <div className="px-6 py-8 text-center text-text-light">
+            <span className="text-3xl block mb-2">🗓️</span>
+            <p className="text-sm">Ninguém com férias vencendo este mês.</p>
+          </div>
+        ) : (
+          <ul className="divide-y divide-border">
+            {vacationLimits.map((v) => {
+              const cls = v.overdue
+                ? "bg-red-100 text-red-700"
+                : v.days_until <= 7
+                  ? "bg-amber-100 text-amber-700"
+                  : "bg-blue-100 text-blue-700";
+              const label = v.overdue
+                ? v.days_until === 0
+                  ? "⚠️ Vence hoje"
+                  : `Venceu há ${Math.abs(v.days_until)}d`
+                : v.days_until === 0
+                  ? "⚠️ Vence hoje"
+                  : `Vence em ${v.days_until}d`;
+              return (
+                <li
+                  key={v.employee_id}
+                  className={`px-6 py-3 flex items-center justify-between gap-3 ${v.overdue ? "bg-red-50/70 border-l-4 border-red-500" : ""}`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 ${v.overdue ? "bg-red-500 text-white shadow-sm" : "bg-teal-100 text-teal-600"}`}>
+                      🏖️
+                    </div>
+                    <div className="min-w-0">
+                      <p className={`text-sm truncate ${v.overdue ? "font-bold text-red-700" : "font-medium"}`}>{v.employee_name}</p>
+                      <p className="text-[11px] text-text-light">
+                        Limite {v.limit_date.split("-").reverse().join("/")}
+                      </p>
+                    </div>
+                  </div>
+                  <span className={`text-xs px-2 py-1 rounded-full font-semibold whitespace-nowrap ${cls}`}>
+                    {label}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </CollapsibleSection>
 
       {/* Aniversariantes do mês — todos os usuários veem */}
       <CollapsibleSection
