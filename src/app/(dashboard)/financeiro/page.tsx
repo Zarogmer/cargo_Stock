@@ -302,11 +302,11 @@ function CloseShipModal({
     <Modal open={!!job} onClose={onClose} title={`Fechar navio · ${job.ships?.name || job.name}`} maxWidth="max-w-md">
       <div className="space-y-4">
         <p className="text-xs text-text-light">
-          Marca o navio como <strong>Concluído</strong> e registra a Data de Saída (igual ao botão da aba
+          Marca o navio como <strong>Concluído</strong> e registra a Data de Término (igual ao botão da aba
           Navios). A diferença aqui é que você também grava o <strong>Valor do Contrato</strong> deste pagamento.
         </p>
         <div>
-          <label className="block text-sm font-medium mb-1">Data de Saída *</label>
+          <label className="block text-sm font-medium mb-1">Data de Término *</label>
           <input type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} className={inputCls} />
         </div>
         <div>

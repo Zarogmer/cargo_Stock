@@ -1792,7 +1792,7 @@ export default function NaviosPage() {
                   </p>
                   <div className="flex flex-col sm:flex-row sm:items-end gap-2">
                     <div className="flex-1">
-                      <label className="block text-xs font-medium text-text mb-1">Data de Saída *</label>
+                      <label className="block text-xs font-medium text-text mb-1">Data de Término *</label>
                       <input
                         type="date"
                         value={closeDate}
