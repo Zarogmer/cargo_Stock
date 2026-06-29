@@ -81,7 +81,7 @@ export function EscalacaoCostadoPage() {
     try {
       const [shipsRes, empRes, fnRes, jobsRes, allocsRes, marksRes] = await Promise.all([
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
-        db.from("employees").select("id, name, role, status, sector").order("name"),
+        db.from("employees").select("id, name, role, status, sector, escala_unavailable").order("name"),
         db.from("job_functions").select("*").order("name"),
         db.from("jobs").select("*"),
         db.from("job_allocations").select("*, job_functions(name, unit), employees(name)").order("added_at", { ascending: true }),
@@ -831,6 +831,8 @@ function AddCostadoCrewModal({
     // ATIVO e PENDENCIA aparecem (PENDENCIA é só sinal de doc vencida, o
     // funcionário ainda pode trabalhar). INATIVO/demitido fica fora.
     .filter((e) => e.status === "ATIVO" || e.status === "PENDENCIA")
+    // Marcado como Inativo na escalação (férias/afastamento) — fica fora.
+    .filter((e) => !e.escala_unavailable)
     // Admin não escala — só entra em grupo de WhatsApp pela caixinha do form de Navio.
     .filter((e) => e.sector !== "ADMINISTRATIVO")
     .filter((e) => !allocatedIds.has(e.id))

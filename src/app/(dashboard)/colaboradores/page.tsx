@@ -53,7 +53,7 @@ export default function ColaboradoresPage() {
   const [empSearch, setEmpSearch] = useState("");
   const [empTeamFilter, setEmpTeamFilter] = useState("Todos");
   const [empStatusFilter, setEmpStatusFilter] = useState<"Todos" | "ATIVO" | "INATIVO" | "PENDENCIA">("Todos");
-  const [empEscalaFilter, setEmpEscalaFilter] = useState<"Todos" | "DISPONIVEL" | "EMBARCADO" | "COSTADO">("Todos");
+  const [empEscalaFilter, setEmpEscalaFilter] = useState<"Todos" | "DISPONIVEL" | "EMBARCADO" | "COSTADO" | "INATIVO">("Todos");
   const [empRoleFilter, setEmpRoleFilter] = useState("Todos");
   const [empViewMode, setEmpViewMode] = useState<"cards" | "spreadsheet">("cards");
   // Área de filtros recolhível — começa fechada pra deixar a lista mais limpa.
@@ -342,7 +342,8 @@ export default function ColaboradoresPage() {
             {e.team && <span className={`px-1.5 py-0.5 rounded-full font-medium ${teamColors[e.team] || ""}`}>{teamLabels[e.team]}</span>}
             {k === "EMBARQUE" && <span className="px-1.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">⚓ Embarcado</span>}
             {k === "COSTADO" && <span className="px-1.5 py-0.5 rounded-full font-medium bg-cyan-100 text-cyan-700">⛏️ Costado</span>}
-            {!k && effectiveEmployeeStatus(e) !== "INATIVO" && <span className="px-1.5 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>}
+            {!k && effectiveEmployeeStatus(e) !== "INATIVO" && e.escala_unavailable && <span className="px-1.5 py-0.5 rounded-full font-medium bg-slate-200 text-slate-600">⛔ Inativo</span>}
+            {!k && effectiveEmployeeStatus(e) !== "INATIVO" && !e.escala_unavailable && <span className="px-1.5 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>}
             {e.sector && <span className="px-1.5 py-0.5 rounded-full font-medium bg-purple-100 text-purple-700">{e.sector}</span>}
           </div>
           {phone && <span className="md:hidden text-[11px] text-text-light font-mono">{phone}</span>}
@@ -379,6 +380,8 @@ export default function ColaboradoresPage() {
       if (k === "COSTADO") return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-cyan-100 text-cyan-700">⛏️ Costado</span>;
       // Demitido não está "disponível para escalação" — o badge verde não fazia sentido.
       if (effectiveEmployeeStatus(e) === "INATIVO") return <span className="text-text-light text-xs">—</span>;
+      // Marcado como indisponível (férias/afastamento) — sai das telas de escalação.
+      if (e.escala_unavailable) return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-slate-200 text-slate-600">⛔ Inativo</span>;
       return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>;
     }},
     { key: "phone", label: "Telefone", hideOnMobile: true, render: (e: Employee) => formatPhone(e.phone) },
@@ -410,10 +413,12 @@ export default function ColaboradoresPage() {
             empTeamFilter === "Sem equipe" ? !e.team : true;
           const k = escalaStatus.get(e.id);
           const escalaMatch = empEscalaFilter === "Todos" ? true :
-            // "Disponível" exclui demitidos — coerente com a coluna Escalação.
-            empEscalaFilter === "DISPONIVEL" ? (!k && effectiveEmployeeStatus(e) !== "INATIVO") :
+            // "Disponível" exclui demitidos e indisponíveis — coerente com a coluna Escalação.
+            empEscalaFilter === "DISPONIVEL" ? (!k && effectiveEmployeeStatus(e) !== "INATIVO" && !e.escala_unavailable) :
             empEscalaFilter === "EMBARCADO" ? k === "EMBARQUE" :
-            empEscalaFilter === "COSTADO" ? k === "COSTADO" : true;
+            empEscalaFilter === "COSTADO" ? k === "COSTADO" :
+            // "Inativo" = indisponível e não escalado nem demitido.
+            empEscalaFilter === "INATIVO" ? (!k && effectiveEmployeeStatus(e) !== "INATIVO" && !!e.escala_unavailable) : true;
           const roleMatch = empRoleFilter === "Todos" ? true : (e.role || "").trim() === empRoleFilter;
           return nameMatch && statusMatch && teamMatch && escalaMatch && roleMatch;
         });
@@ -421,7 +426,7 @@ export default function ColaboradoresPage() {
         // Filtros ativos (fora "Todos") — alimentam o contador do botão "Filtros" e
         // os chips de resumo exibidos quando a área de filtros está recolhida, pra
         // o usuário nunca perder de vista que a lista está filtrada.
-        const escalaLabels: Record<string, string> = { DISPONIVEL: "Disponível", EMBARCADO: "Embarcado", COSTADO: "Costado" };
+        const escalaLabels: Record<string, string> = { DISPONIVEL: "Disponível", EMBARCADO: "Embarcado", COSTADO: "Costado", INATIVO: "Inativo" };
         const activeFilters: { label: string; clear: () => void }[] = [];
         if (empStatusFilter !== "Todos") activeFilters.push({ label: `Status: ${employeeStatusLabel(empStatusFilter)}`, clear: () => setEmpStatusFilter("Todos") });
         if (empTeamFilter !== "Todos") activeFilters.push({ label: `Equipe: ${empTeamFilter}`, clear: () => setEmpTeamFilter("Todos") });
@@ -502,6 +507,7 @@ export default function ColaboradoresPage() {
                     { key: "DISPONIVEL", label: "✓ Disponível" },
                     { key: "EMBARCADO", label: "⚓ Embarcado" },
                     { key: "COSTADO", label: "⛏️ Costado" },
+                    { key: "INATIVO", label: "⛔ Inativo" },
                   ] as const).map((t) => (
                     <button key={t.key} onClick={() => setEmpEscalaFilter(t.key as typeof empEscalaFilter)}
                       className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${empEscalaFilter === t.key ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}>
@@ -631,6 +637,8 @@ export default function ColaboradoresPage() {
                 if (k === "COSTADO") return <span className="text-xs px-2 py-1 rounded-full font-medium bg-cyan-100 text-cyan-700">⛏️ Escalado no Costado</span>;
                 // Demitido não aparece como "disponível".
                 if (effectiveEmployeeStatus(selectedEmp) === "INATIVO") return null;
+                // Indisponível pra escalação (férias/afastamento).
+                if (selectedEmp.escala_unavailable) return <span className="text-xs px-2 py-1 rounded-full font-medium bg-slate-200 text-slate-600">⛔ Inativo na escalação</span>;
                 return <span className="text-xs px-2 py-1 rounded-full font-medium bg-emerald-100 text-emerald-700">✓ Disponível</span>;
               })()}
             </div>
@@ -843,6 +851,8 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
   // Operacional
   const [realizaLimpeza, setRealizaLimpeza] = useState(false);
   const [doesCostado, setDoesCostado] = useState(false);
+  // Escalação: marcado = Inativo (indisponível). Some das telas de Embarque/Costado.
+  const [escalaUnavailable, setEscalaUnavailable] = useState(false);
 
   useEffect(() => {
     if (item) {
@@ -873,6 +883,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       setAsoStatus(item.aso_status || "");
       setRealizaLimpeza(item.realiza_limpeza || false);
       setDoesCostado(item.does_costado || false);
+      setEscalaUnavailable(item.escala_unavailable || false);
     } else {
       setName(""); setTeam(""); setPhone(""); setEmail(""); setBirthDate("");
       setFamilyPhone(""); setNotes("");
@@ -885,6 +896,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       setBootSize(""); setShirtSize(""); setBermudaSize("");
       setLastAsoDate(""); setAsoStatus(""); setRealizaLimpeza(false);
       setDoesCostado(false);
+      setEscalaUnavailable(false);
     }
   }, [item, open]);
 
@@ -957,6 +969,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       aso_status: asoStatus || null,
       realiza_limpeza: realizaLimpeza,
       does_costado: doesCostado,
+      escala_unavailable: escalaUnavailable,
     }, { functionId: selectedFn?.id ?? null, rate: pagaRate });
   }
 
@@ -1104,6 +1117,24 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
               <option value="REGISTRADO">Mensalista</option>
               <option value="INTERMITENTE">Contrato Intermitente</option>
             </select>
+          </div>
+          {/* Disponibilidade na escalação — independente do Status. Marcar como
+              Inativo (indisponível) tira a pessoa das telas de Embarque/Costado
+              sem precisar demiti-la. Útil pra férias/afastamento/atestado. */}
+          <div className="border-t border-border pt-3">
+            <label className="block text-sm font-medium mb-1">Escalação</label>
+            <select
+              value={escalaUnavailable ? "INATIVO" : "DISPONIVEL"}
+              onChange={(e) => setEscalaUnavailable(e.target.value === "INATIVO")}
+              className={inputCls}
+            >
+              <option value="DISPONIVEL">✓ Disponível</option>
+              <option value="INATIVO">⛔ Inativo (indisponível)</option>
+            </select>
+            <p className="text-[11px] text-text-light mt-1">
+              Inativo esconde o colaborador das telas de Embarque e Costado, sem demiti-lo.
+              Embarcado/Costado continuam sendo definidos automaticamente pela escala.
+            </p>
           </div>
         </div>
       ),

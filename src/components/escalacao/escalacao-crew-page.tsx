@@ -61,7 +61,7 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
     try {
       const [shipsRes, empRes, fnRes, jobsRes, allocsRes] = await Promise.all([
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
-        db.from("employees").select("id, name, role, status, sector, bank_name, bank_agency, bank_account, bank_account_type").order("name"),
+        db.from("employees").select("id, name, role, status, sector, escala_unavailable, bank_name, bank_agency, bank_account, bank_account_type").order("name"),
         db.from("job_functions").select("*").order("name"),
         db.from("jobs").select("*"),
         db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)").order("added_at", { ascending: true }),
@@ -562,6 +562,8 @@ function CrewFormModal({
     // ATIVO e PENDENCIA aparecem (PENDENCIA é só sinal de doc vencida, o
     // funcionário ainda pode trabalhar). INATIVO/demitido fica fora.
     .filter((e) => e.status === "ATIVO" || e.status === "PENDENCIA")
+    // Marcado como Inativo na escalação (férias/afastamento) — fica fora.
+    .filter((e) => !e.escala_unavailable)
     // No Embarque o setor Administrativo aparece sim (RH pediu — diferente
     // do Costado, no qual o admin entra só pela caixinha do form do Navio).
     .filter((e) => !allocatedIds.has(e.id))

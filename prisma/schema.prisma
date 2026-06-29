@@ -201,6 +201,7 @@ model Employee {
   // ── Operacional ────────────────────────────────────────────────────────────
   realiza_limpeza      Boolean?  @default(false)
   does_costado         Boolean?  @default(false)
+  escala_unavailable   Boolean?  @default(false)             // marcado = Inativo na escalação: some das telas de Embarque/Costado e mostra "Inativo" na coluna Escalação
 
   updated_at           DateTime  @default(now()) @db.Timestamptz()
   updated_by           String

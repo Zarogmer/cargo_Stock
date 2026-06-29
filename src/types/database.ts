@@ -106,6 +106,7 @@ export interface Employee {
   // Operacional
   realiza_limpeza: boolean | null;
   does_costado: boolean | null;
+  escala_unavailable: boolean | null;
   updated_at: string;
   updated_by: string;
 }
