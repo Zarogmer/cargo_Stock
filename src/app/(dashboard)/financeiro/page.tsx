@@ -573,6 +573,7 @@ export default function FinanceiroPage() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <KpiCard label="Faturamento do Mês" value={brl(kpis.monthRevenue)} accent="blue" />
         <KpiCard label="Custo do Mês" value={brl(kpis.monthCost)} accent="red" />
         <KpiCard label="Receita do Mês" value={brl(kpis.monthRevenue)} accent="emerald" />
         <KpiCard
@@ -580,7 +581,6 @@ export default function FinanceiroPage() {
           value={brl(kpis.monthProfit)}
           accent={kpis.monthProfit >= 0 ? "emerald" : "red"}
         />
-        <KpiCard label="Funções Ativas" value={kpis.activeFunctions.toString()} accent="blue" />
         <KpiCard label="Navios em Aberto" value={kpis.openJobs.toString()} accent="amber" />
       </div>
 
