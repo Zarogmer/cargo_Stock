@@ -620,6 +620,11 @@ export default function NaviosPage() {
         .update(payload)
         .eq("id", editingShip.id);
       if (error) { setFormError(error.message); setSaving(false); return; }
+      // Navio já concluído: mantém o end_date do(s) job(s) em sincronia com a
+      // saída editada, senão o Financeiro continua com a data antiga.
+      if (payload.status === "CONCLUIDO") {
+        await db.from("jobs").update({ end_date: payload.departure_date }).eq("ship_id", editingShip.id);
+      }
       if (selectedShip?.id === editingShip.id) {
         setSelectedShip({ ...editingShip, ...payload });
       }
@@ -1931,9 +1936,24 @@ export default function NaviosPage() {
                   onChange={(e) => setForm({ ...form, arrival_date: e.target.value })}
                   className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
                 />
-                {/* A data de saída não é mais preenchida aqui — ela é registrada
-                    ao "Fechar" o navio (card de navio Em Operação). */}
+                {/* A data de saída normalmente é registrada ao "Fechar" o navio.
+                    Mas num navio já Concluído ela vira editável aqui pra corrigir. */}
               </div>
+
+              {editingShip && form.status === "CONCLUIDO" && (
+                <div>
+                  <label className="block text-sm font-medium text-text mb-1">Data de Saída</label>
+                  <input
+                    type="date"
+                    value={form.departure_date}
+                    onChange={(e) => setForm({ ...form, departure_date: e.target.value })}
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                  />
+                  <p className="text-[10px] text-text-light mt-1">
+                    🏁 Navio já concluído — corrija a saída aqui. A data também é atualizada no Financeiro.
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-text mb-1">Porto / Local</label>
