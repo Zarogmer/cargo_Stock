@@ -60,7 +60,6 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { DocumentosTab } from "./documentos-tab";
-import { GerarPluxeeButton } from "./gerar-pluxee-button";
 import type {
   JobFunction,
   JobFunctionRate,
@@ -2737,169 +2736,162 @@ function JobDetailModal({
     }
   }
 
-  // Exporta a planilha de pagamento no formato da "PLANILHA BASE" usado pela
-  // contabilidade. Usa xlsx-js-style pra aplicar bordas, alinhamento e formato BRL.
-  async function handleExportExcel() {
+  // Gera o Excel de "Fechamento" do navio — modelo operacional da Cargo. Duas abas:
+  //   1) LISTA FUNCIONARIOS — quadro completo de colaboradores (cadastro);
+  //   2) FECHAMENTO — cabeçalho do navio, lista de funcionários do navio + valor,
+  //      MÃO DE OBRA, despesas por categoria, DESPESAS DIVERSAS e TOTAL GERAL.
+  // Usa xlsx-js-style pra aplicar bordas, alinhamento e formato BRL.
+  async function handleExportFechamento() {
     setExporting(true);
     try {
       const XLSX = (await import("xlsx-js-style")).default;
-      const dateLabel = formatDateBR(job!.end_date) || formatDateBR(job!.start_date);
-      const shipLabel = `${job!.name}${job!.holds_count ? ` - ${job!.holds_count} PORÕES` : ""}${job!.cargo_type ? `-${job!.cargo_type}` : ""}${job!.port ? `-${job!.port}` : ""}${job!.start_date ? ` ${formatDateBR(job!.start_date)}` : ""}${job!.end_date ? ` a ${formatDateBR(job!.end_date)}` : ""}${dateLabel ? ` - VENCTO: ${dateLabel}` : ""}`;
 
-      // Estilos reutilizáveis (xlsx-js-style aceita objeto `s` em cada célula).
+      // ── Estilos reutilizáveis ──
       const thin = { style: "thin", color: { rgb: "000000" } };
       const allBorders = { top: thin, bottom: thin, left: thin, right: thin };
       const BRL = 'R$ #,##0.00;R$ -#,##0.00;"R$ -"';
-      const styleTitle = {
-        font: { bold: true, sz: 14, color: { rgb: "1F4E78" } },
-        alignment: { horizontal: "center", vertical: "center" },
-      };
-      const styleClient = {
-        font: { bold: true, sz: 12, color: { rgb: "1F4E78" } },
-        alignment: { horizontal: "center", vertical: "center" },
-      };
-      const styleHeader = {
-        font: { bold: true, sz: 10, color: { rgb: "FFFFFF" } },
-        fill: { patternType: "solid", fgColor: { rgb: "2E75B6" } },
-        alignment: { horizontal: "center", vertical: "center", wrapText: true },
-        border: allBorders,
-      };
-      const styleSubHeader = {
-        font: { bold: true, sz: 10 },
-        fill: { patternType: "solid", fgColor: { rgb: "DDEBF7" } },
-        alignment: { horizontal: "center", vertical: "center", wrapText: true },
-        border: allBorders,
-      };
-      const styleCellCenter = {
-        font: { sz: 10 },
-        alignment: { horizontal: "center", vertical: "center" },
-        border: allBorders,
-      };
-      const styleCellMoney = {
-        font: { sz: 10 },
-        alignment: { horizontal: "right", vertical: "center" },
-        border: allBorders,
-        numFmt: BRL,
-      };
-      const styleTotalLabel = {
-        font: { bold: true, sz: 10 },
-        fill: { patternType: "solid", fgColor: { rgb: "FFE699" } },
-        alignment: { horizontal: "center", vertical: "center" },
-        border: allBorders,
-      };
-      const styleTotalMoney = {
-        font: { bold: true, sz: 10 },
-        fill: { patternType: "solid", fgColor: { rgb: "FFE699" } },
-        alignment: { horizontal: "right", vertical: "center" },
-        border: allBorders,
-        numFmt: BRL,
-      };
-      const styleSummaryLabel = {
-        font: { bold: true, sz: 10 },
-        alignment: { horizontal: "right", vertical: "center" },
-      };
-      const styleSummaryMoney = {
-        font: { bold: true, sz: 10, color: { rgb: "1F4E78" } },
-        alignment: { horizontal: "right", vertical: "center" },
-        numFmt: BRL,
-      };
-      const styleSummaryTitle = {
-        font: { bold: true, sz: 11 },
-        alignment: { horizontal: "left", vertical: "center" },
-      };
+      const styleTitle = { font: { bold: true, sz: 13, color: { rgb: "1F4E78" } }, alignment: { horizontal: "left", vertical: "center" } };
+      const styleInfo = { font: { bold: true, sz: 10, color: { rgb: "404040" } }, alignment: { horizontal: "left", vertical: "center" } };
+      const styleHeader = { font: { bold: true, sz: 10, color: { rgb: "FFFFFF" } }, fill: { patternType: "solid", fgColor: { rgb: "2E75B6" } }, alignment: { horizontal: "center", vertical: "center" }, border: allBorders };
+      const styleCell = { font: { sz: 10 }, alignment: { horizontal: "left", vertical: "center" }, border: allBorders };
+      const styleCellCenter = { font: { sz: 10 }, alignment: { horizontal: "center", vertical: "center" }, border: allBorders };
+      const styleMoney = { font: { sz: 10 }, alignment: { horizontal: "right", vertical: "center" }, border: allBorders, numFmt: BRL };
+      const styleTotalLabel = { font: { bold: true, sz: 10 }, fill: { patternType: "solid", fgColor: { rgb: "FFE699" } }, alignment: { horizontal: "left", vertical: "center" }, border: allBorders };
+      const styleTotalMoney = { font: { bold: true, sz: 10 }, fill: { patternType: "solid", fgColor: { rgb: "FFE699" } }, alignment: { horizontal: "right", vertical: "center" }, border: allBorders, numFmt: BRL };
+      const styleGrandLabel = { font: { bold: true, sz: 11, color: { rgb: "FFFFFF" } }, fill: { patternType: "solid", fgColor: { rgb: "1F4E78" } }, alignment: { horizontal: "left", vertical: "center" }, border: allBorders };
+      const styleGrandMoney = { font: { bold: true, sz: 11, color: { rgb: "FFFFFF" } }, fill: { patternType: "solid", fgColor: { rgb: "1F4E78" } }, alignment: { horizontal: "right", vertical: "center" }, border: allBorders, numFmt: BRL };
+      const styleFooter = { font: { sz: 8, color: { rgb: "808080" } }, alignment: { horizontal: "left", vertical: "center" } };
 
-      // Monta o sheet célula a célula com estilo aplicado.
-      const ws: Record<string, unknown> = {};
-      const set = (
+      const COMPANY = [
+        "CARGO SHIPS CLEANING LTDA.",
+        "Praça Iguatemi Martins, 08, Vila Mathias - Santos/SP",
+        "CARGOSHIPS@CARGOSHIPS.COM.BR",
+      ];
+      const mkSet = (ws: Record<string, unknown>) => (
         addr: string,
-        v: string | number | null,
+        v: string | number,
         s: Record<string, unknown>,
         t: "s" | "n" = typeof v === "number" ? "n" : "s",
-      ) => {
-        if (v === null || v === undefined || v === "") { ws[addr] = { t: "s", v: "", s }; return; }
-        ws[addr] = { t, v, s };
-      };
+      ) => { ws[addr] = { t, v: v === "" ? "" : v, s: { ...s } }; };
 
-      // Linha 3: título "PAGAMENTO EM ..." (mesclado D3:G3 pra caber o texto inteiro)
-      set("D3", `PAGAMENTO EM ${dateLabel || ""}`, styleTitle);
-      // Linha 6: rótulos C=FUNCIONÁRIOS, K=cliente
-      set("C6", "FUNCIONÁRIOS", styleSummaryTitle);
-      set("K6", job!.client || "", styleClient);
-      // Linha 7: cabeçalho da tabela
-      set("C7", "Limpeza de porão", styleSubHeader);
-      set("D7", "AGÊNCIA", styleHeader);
-      set("E7", "CONTA", styleHeader);
-      set("F7", "ITAÚ/SANTANDER", styleHeader);
-      set("G7", "PAGTO PLUXEE", styleHeader);
-      set("H7", "PAGTO NA FOLHA", styleHeader);
-      set("I7", "DESCONTO GERAL", styleHeader);
-      set("J7", "Perda de Material", styleHeader);
-      set("K7", `MV 1: ${shipLabel}`, styleHeader);
-
-      // Funcionários começam na linha 9 (linha 8 fica em branco como no template)
-      let row = 9;
-      let totalPluxee = 0, totalFolha = 0, totalNavio = 0;
-      allocations.forEach((a, idx) => {
-        const e = a.employees;
-        const total = allocTotalPerson(a);
-        const pluxee = Number(a.pluxee_value || 0);
-        const folha = +(total - pluxee).toFixed(2);
-        totalPluxee += pluxee;
-        totalFolha += folha;
-        totalNavio += total;
-        set(`B${row}`, idx + 1, styleCellCenter, "n");
-        set(`C${row}`, e?.name || a.job_functions?.name || `#${a.function_id}`, styleCellCenter);
-        set(`D${row}`, e?.bank_agency || "", styleCellCenter);
-        set(`E${row}`, e?.bank_account || "", styleCellCenter);
-        set(`F${row}`, formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null), styleCellCenter);
-        set(`G${row}`, pluxee, styleCellMoney, "n");
-        set(`H${row}`, folha, styleCellMoney, "n");
-        set(`I${row}`, 0, styleCellMoney, "n");
-        set(`J${row}`, 0, styleCellMoney, "n");
-        set(`K${row}`, total, styleCellMoney, "n");
-        row++;
+      // ════ Aba 1: LISTA FUNCIONARIOS (quadro completo) ════
+      const ws1: Record<string, unknown> = {};
+      const set1 = mkSet(ws1);
+      set1("B2", "LISTA FUNCIONARIOS", styleTitle);
+      set1("B4", "#", styleHeader);
+      set1("C4", "FUNCIONÁRIOS", styleHeader);
+      const roster = [...employees].sort((a, b) => (a.name || "").localeCompare(b.name || "", "pt-BR"));
+      let r1 = 5;
+      roster.forEach((e, i) => {
+        set1(`B${r1}`, i + 1, styleCellCenter, "n");
+        set1(`C${r1}`, e.name || "", styleCell);
+        r1++;
       });
+      r1 += 1;
+      COMPANY.forEach((line) => { set1(`B${r1}`, line, styleFooter); r1++; });
+      ws1["!ref"] = `A1:D${r1 + 1}`;
+      ws1["!cols"] = [{ wch: 3 }, { wch: 5 }, { wch: 42 }, { wch: 4 }];
+      ws1["!merges"] = [{ s: { c: 1, r: 1 }, e: { c: 2, r: 1 } }];
 
-      row++; // linha em branco
-      const totalRow = row;
-      set(`F${totalRow}`, "TOTAL", styleTotalLabel);
-      set(`G${totalRow}`, totalPluxee, styleTotalMoney, "n");
-      set(`H${totalRow}`, totalFolha, styleTotalMoney, "n");
-      set(`I${totalRow}`, 0, styleTotalMoney, "n");
-      set(`J${totalRow}`, 0, styleTotalMoney, "n");
-      set(`K${totalRow}`, totalNavio, styleTotalMoney, "n");
-      row += 2;
+      // ════ Aba 2: FECHAMENTO ════
+      const isCostado = kindFilter === "COSTADO";
+      const shipLabel = [
+        job!.name,
+        job!.holds_count ? `${job!.holds_count} PORÕES` : "",
+        job!.cargo_type || "",
+        job!.port || "",
+        job!.start_date ? `${formatDateBR(job!.start_date)}${job!.end_date ? ` À ${formatDateBR(job!.end_date)}` : ""}` : "",
+      ].filter(Boolean).join(" - ");
 
-      set(`C${row}`, "TOTAL PAGAMENTO DOS MVs s/ desconto:", styleSummaryTitle); row++;
-      set(`C${row}`, "MV 1:", styleSummaryLabel);
-      set(`F${row}`, "TOTAIS:", styleSummaryLabel); row++;
-      set(`C${row}`, totalNavio, styleSummaryMoney, "n");
-      set(`F${row}`, "ADTO:", styleSummaryLabel);
-      set(`G${row}`, 0, styleSummaryMoney, "n"); row++;
-      set(`F${row}`, "PAGTO PLUXEE:", styleSummaryLabel);
-      set(`G${row}`, totalPluxee, styleSummaryMoney, "n"); row++;
-      set(`F${row}`, "PAGTO FOLHA:", styleSummaryLabel);
-      set(`G${row}`, totalFolha, styleSummaryMoney, "n"); row++;
-      set(`F${row}`, "PAGTO NAVIO:", styleSummaryLabel);
-      set(`G${row}`, totalNavio, styleSummaryMoney, "n");
+      // Lista de funcionários do navio com o valor que cada um recebe.
+      // Embarque: alocações (allocTotalPerson) + administrativo. Costado: resumo por pessoa.
+      const workerRows: Array<{ name: string; value: number }> = [];
+      if (isCostado) {
+        for (const row of costadoSummary) workerRows.push({ name: row.name, value: row.total });
+      } else {
+        for (const a of allocations) {
+          workerRows.push({
+            name: a.employees?.name || a.job_functions?.name || `#${a.function_id}`,
+            value: allocTotalPerson(a),
+          });
+        }
+        for (const a of adminActive) {
+          workerRows.push({
+            name: a.employees?.name || "Administrativo",
+            value: Number(a.rate) + Number(a.extra_value || 0),
+          });
+        }
+      }
+      const maoDeObra = +workerRows.reduce((s, w) => s + w.value, 0).toFixed(2);
 
-      ws["!ref"] = `A1:M${row + 2}`;
-      ws["!cols"] = [
-        { wch: 3 }, { wch: 5 }, { wch: 38 }, { wch: 10 }, { wch: 16 },
-        { wch: 18 }, { wch: 14 }, { wch: 15 }, { wch: 14 }, { wch: 16 }, { wch: 70 },
-      ];
-      ws["!rows"] = Array.from({ length: row + 2 }, (_, i) => (i === 6 ? { hpt: 38 } : { hpt: 18 }));
-      ws["!merges"] = [
-        { s: { c: 3, r: 2 }, e: { c: 6, r: 2 } }, // D3:G3 título mesclado (mais largo pra caber "PAGAMENTO EM DD/MM/AA")
+      // Despesas agrupadas por categoria (ADICIONAL soma, DESCONTO subtrai).
+      const byCat = new Map<string, number>();
+      for (const adj of adjustments) {
+        const signed = adj.type === "ADICIONAL" ? Number(adj.amount) : -Number(adj.amount);
+        const cat = adj.category || "OUTROS";
+        byCat.set(cat, +((byCat.get(cat) || 0) + signed).toFixed(2));
+      }
+      const despesasTotal = +Array.from(byCat.values()).reduce((s, v) => s + v, 0).toFixed(2);
+      const totalGeral = +(maoDeObra + despesasTotal).toFixed(2);
+
+      const ws2: Record<string, unknown> = {};
+      const set2 = mkSet(ws2);
+      set2("B2", shipLabel, styleTitle);
+      set2("B3", `CLIENTE: ${job!.client || "—"}${job!.supervisor ? ` - SUPERVISOR: ${job!.supervisor}` : ""}`, styleInfo);
+      set2("B4", "VALOR COBRADO R$", styleInfo);
+      set2("D4", Number(job!.contract_value || 0), styleMoney, "n");
+
+      // Tabela de funcionários do navio
+      set2("B6", "#", styleHeader);
+      set2("C6", "FUNCIONÁRIOS", styleHeader);
+      set2("D6", "VALOR", styleHeader);
+      let r2 = 7;
+      workerRows.forEach((w, i) => {
+        set2(`B${r2}`, i + 1, styleCellCenter, "n");
+        set2(`C${r2}`, w.name, styleCell);
+        set2(`D${r2}`, +w.value.toFixed(2), styleMoney, "n");
+        r2++;
+      });
+      r2 += 1;
+      set2(`C${r2}`, "MÃO DE OBRA", styleTotalLabel);
+      set2(`D${r2}`, maoDeObra, styleTotalMoney, "n");
+      r2 += 2;
+
+      // Bloco de despesas — uma linha por categoria (em branco quando sem lançamento)
+      set2(`C${r2}`, "DESPESAS", styleHeader);
+      set2(`D${r2}`, "VALOR", styleHeader);
+      r2++;
+      for (const cat of EXPENSE_CATEGORIES) {
+        const val = byCat.get(cat.value) || 0;
+        set2(`C${r2}`, cat.label.toUpperCase(), styleCell);
+        if (val !== 0) set2(`D${r2}`, val, styleMoney, "n");
+        else set2(`D${r2}`, "", styleMoney);
+        r2++;
+      }
+      r2 += 1;
+      set2(`C${r2}`, "DESPESAS DIVERSAS", styleTotalLabel);
+      set2(`D${r2}`, despesasTotal, styleTotalMoney, "n");
+      r2 += 2;
+      set2(`C${r2}`, "TOTAL GERAL", styleGrandLabel);
+      set2(`D${r2}`, totalGeral, styleGrandMoney, "n");
+      r2 += 2;
+      COMPANY.forEach((line) => { set2(`B${r2}`, line, styleFooter); r2++; });
+
+      ws2["!ref"] = `A1:E${r2 + 1}`;
+      ws2["!cols"] = [{ wch: 3 }, { wch: 5 }, { wch: 42 }, { wch: 16 }, { wch: 4 }];
+      ws2["!merges"] = [
+        { s: { c: 1, r: 1 }, e: { c: 3, r: 1 } }, // título B2:D2
+        { s: { c: 1, r: 2 }, e: { c: 3, r: 2 } }, // cliente B3:D3
       ];
 
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "PLANILHA BASE");
-      const safeName = (job!.name || "planilha").replace(/[^a-zA-Z0-9_-]+/g, "_");
-      const dateForFile = (job!.end_date || job!.start_date).slice(0, 10);
-      XLSX.writeFile(wb, `${dateForFile}_${safeName}.xlsx`);
+      XLSX.utils.book_append_sheet(wb, ws1, "LISTA FUNCIONARIOS");
+      XLSX.utils.book_append_sheet(wb, ws2, "FECHAMENTO");
+      const safeName = (job!.name || "fechamento").replace(/[^a-zA-Z0-9_-]+/g, "_");
+      const dateForFile = (job!.end_date || job!.start_date || "").slice(0, 10);
+      XLSX.writeFile(wb, `Fechamento_${dateForFile}_${safeName}.xlsx`);
     } catch (err) {
-      alert("Falha ao gerar XLSX: " + (err as Error).message);
+      alert("Falha ao gerar Fechamento: " + (err as Error).message);
     } finally {
       setExporting(false);
     }
@@ -3002,27 +2994,22 @@ function JobDetailModal({
         )}
 
         {/* Resumo financeiro */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <div className="rounded-lg border border-red-200 bg-red-50 p-3">
             <p className="text-[10px] font-semibold text-red-700 uppercase tracking-wider">Custo Operação</p>
             <p className="text-lg font-bold text-red-700">{brl(custoTotal)}</p>
             <p className="text-[10px] text-red-600">Mão de obra {brl(custoBase)} {cost.adj !== 0 && (cost.adj > 0 ? "+" : "")}{cost.adj !== 0 ? brl(cost.adj) : ""}</p>
             {adminTotal > 0 && <p className="text-[10px] text-red-600">inclui administrativo {brl(adminTotal)}</p>}
           </div>
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+            <p className="text-[10px] font-semibold text-blue-700 uppercase tracking-wider">Mão de Obra</p>
+            <p className="text-lg font-bold text-blue-700">{brl(custoBase)}</p>
+            <p className="text-[10px] text-blue-600">{adminTotal > 0 ? `inclui administrativo ${brl(adminTotal)}` : "total dos funcionários"}</p>
+          </div>
           <div className={`rounded-lg border p-3 ${cost.adj > 0 ? "border-amber-200 bg-amber-50" : "border-gray-200 bg-gray-50"}`}>
             <p className={`text-[10px] font-semibold uppercase tracking-wider ${cost.adj > 0 ? "text-amber-700" : "text-text-light"}`}>Despesas</p>
             <p className={`text-lg font-bold ${cost.adj > 0 ? "text-amber-700" : "text-text-light"}`}>{cost.adj > 0 ? brl(cost.adj) : "—"}</p>
             <p className="text-[10px] text-text-light">{adjustments.length === 0 ? "sem despesas" : `${adjustments.length} lançamento${adjustments.length === 1 ? "" : "s"}`}</p>
-          </div>
-          <div className={`rounded-lg border p-3 ${folhaValue > 0 ? "border-purple-200 bg-purple-50" : "border-gray-200 bg-gray-50"}`}>
-            <p className={`text-[10px] font-semibold uppercase tracking-wider ${folhaValue > 0 ? "text-purple-700" : "text-text-light"}`}>Valor da Folha</p>
-            <p className={`text-lg font-bold ${folhaValue > 0 ? "text-purple-700" : "text-text-light"}`}>{folhaValue > 0 ? brl(folhaValue) : "—"}</p>
-            <p className="text-[10px] text-text-light">contabilidade</p>
-          </div>
-          <div className={`rounded-lg border p-3 ${folhaValue > 0 ? (liquidValue >= 0 ? "border-emerald-300 bg-emerald-50" : "border-red-300 bg-red-50") : "border-gray-200 bg-gray-50"}`}>
-            <p className={`text-[10px] font-semibold uppercase tracking-wider ${folhaValue > 0 ? (liquidValue >= 0 ? "text-emerald-700" : "text-red-700") : "text-text-light"}`}>Valor Líquido</p>
-            <p className={`text-lg font-bold ${folhaValue > 0 ? (liquidValue >= 0 ? "text-emerald-700" : "text-red-700") : "text-text-light"}`}>{folhaValue > 0 ? brl(liquidValue) : "—"}</p>
-            <p className="text-[10px] text-text-light">total − folha</p>
           </div>
         </div>
         </div>
@@ -3060,33 +3047,15 @@ function JobDetailModal({
                   ⚖️ Aplicar Rateio
                 </button>
               )}
-              {canEdit && !isReadOnly && allocations.length > 0 && (
-                <label
-                  className={`text-xs px-2 py-1 rounded cursor-pointer ${pdfStatus.kind === "parsing" ? "bg-blue-300 text-white" : "bg-blue-600 text-white hover:bg-blue-700"}`}
-                  title="Importa a Relação de Líquidos (PDF) e preenche a coluna Folha"
-                >
-                  {pdfStatus.kind === "parsing" ? "Lendo…" : "📄 Importar Contabilidade"}
-                  <input
-                    type="file"
-                    accept="application/pdf"
-                    onChange={handlePdfUpload}
-                    disabled={pdfStatus.kind === "parsing"}
-                    className="hidden"
-                  />
-                </label>
-              )}
               {allocations.length > 0 && (
                 <button
-                  onClick={handleExportExcel}
+                  onClick={handleExportFechamento}
                   disabled={exporting}
                   className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-60"
-                  title="Exporta a planilha de pagamento no formato da contabilidade"
+                  title="Gera o Excel de Fechamento do navio (lista de funcionários + valores + despesas)"
                 >
-                  {exporting ? "Gerando…" : "📥 Exportar Excel"}
+                  {exporting ? "Gerando…" : "📥 Gerar Fechamento"}
                 </button>
-              )}
-              {job && allocations.length > 0 && (
-                <GerarPluxeeButton job={job} allocations={allocations} employees={employees} />
               )}
               {canEdit && !isReadOnly && !peopleReadOnly && !showAddAlloc && (
                 <button onClick={() => setShowAddAlloc(true)} className="text-xs px-2 py-1 bg-primary text-white rounded hover:bg-primary-dark">
@@ -3095,29 +3064,6 @@ function JobDetailModal({
               )}
             </div>
           </div>
-
-          {pdfStatus.kind === "done" && (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 mb-2 text-[11px] space-y-1">
-              <p className="text-emerald-800">
-                ✓ PDF importado: <strong>{pdfStatus.matched}</strong> de <strong>{pdfStatus.total}</strong> registros casados com colaboradores.
-              </p>
-              {pdfStatus.unmatched && pdfStatus.unmatched.length > 0 && (
-                <details className="text-amber-800">
-                  <summary className="cursor-pointer">
-                    ⚠ {pdfStatus.unmatched.length} sem match no PDF (preencher manualmente clicando na coluna Folha)
-                  </summary>
-                  <ul className="mt-1 ml-4 list-disc">
-                    {pdfStatus.unmatched.map((u, i) => (
-                      <li key={i}>{u.name} — <strong>{brl(u.value)}</strong></li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          )}
-          {pdfStatus.kind === "error" && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-2 mb-2 text-[11px] text-red-800">{pdfStatus.msg}</div>
-          )}
 
           {showRateio && (() => {
             // Agrupa alocações ativas por função pra montar o seletor + lista de
@@ -3529,8 +3475,6 @@ function JobDetailModal({
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Base</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light" title="Valor especial + rateio">Extra</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Total</th>
-                    <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Pluxee</th>
-                    <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Folha</th>
                     {canEdit && !isReadOnly && !peopleReadOnly && <th className="w-14"></th>}
                   </tr>
                 </thead>
@@ -3570,8 +3514,6 @@ function JobDetailModal({
                     const specialDelta = isEmbarque ? (actualRate - defaultRate) * holdsMultiplier : 0;
                     const rateioExtra = Number(a.extra_value || 0);
                     const extra = specialDelta + rateioExtra;
-                    const pluxee = Number(a.pluxee_value || 0);
-                    const folha = base + extra - pluxee;
                     return (
                       <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
                         <td className="px-2 py-2 text-text-light">{idx + 1}</td>
@@ -3764,73 +3706,6 @@ function JobDetailModal({
                           )}
                         </td>
                         <td className="px-2 py-2 text-right font-semibold text-emerald-700 whitespace-nowrap">{brl(base + extra)}</td>
-                        <td className="px-2 py-2 text-right text-amber-700 whitespace-nowrap">
-                          {editingPluxeeId === a.id && canEdit && !isReadOnly ? (
-                            <input
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              value={pluxeeDraft}
-                              onChange={(e) => setPluxeeDraft(e.target.value)}
-                              onBlur={async () => {
-                                await handleSetPluxee(a.id, pluxeeDraft, pluxee);
-                                setEditingPluxeeId(null);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                                if (e.key === "Escape") { setEditingPluxeeId(null); setPluxeeDraft(""); }
-                              }}
-                              autoFocus
-                              className="w-24 text-right px-1 py-0.5 border-2 border-primary rounded outline-none text-amber-700"
-                            />
-                          ) : (
-                            <button
-                              type="button"
-                              disabled={!canEdit || isReadOnly}
-                              onClick={() => { setPluxeeDraft(pluxee.toString()); setEditingPluxeeId(a.id); }}
-                              className={canEdit && !isReadOnly ? "hover:bg-amber-50 rounded px-1 cursor-text" : ""}
-                              title={canEdit && !isReadOnly ? "Clique para editar" : ""}
-                            >
-                              {brl(pluxee)}
-                            </button>
-                          )}
-                        </td>
-                        <td className="px-2 py-2 text-right whitespace-nowrap">
-                          {editingFolhaId === a.id && canEdit && !isReadOnly ? (
-                            <input
-                              type="number"
-                              step="0.01"
-                              value={folhaDraft}
-                              onChange={(e) => setFolhaDraft(e.target.value)}
-                              onBlur={async () => {
-                                const n = parseFloat(folhaDraft.replace(",", "."));
-                                if (Number.isFinite(n) && n !== folha) {
-                                  await handleSetFolha(a.id, base + extra, n);
-                                }
-                                setEditingFolhaId(null);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                                if (e.key === "Escape") { setEditingFolhaId(null); setFolhaDraft(""); }
-                              }}
-                              autoFocus
-                              className="w-24 text-right px-1 py-0.5 border-2 border-primary rounded text-purple-700 font-semibold outline-none"
-                            />
-                          ) : (
-                            <button
-                              type="button"
-                              disabled={!canEdit || isReadOnly}
-                              onClick={() => {
-                                setFolhaDraft(folha ? folha.toString() : "");
-                                setEditingFolhaId(a.id);
-                              }}
-                              className={`text-purple-700 ${canEdit && !isReadOnly ? "hover:bg-purple-50 rounded px-1 -mx-1 cursor-text" : ""}`}
-                              title={canEdit && !isReadOnly ? "Clique para editar" : ""}
-                            >
-                              {brl(folha)}
-                            </button>
-                          )}
-                        </td>
                         {canEdit && !isReadOnly && !peopleReadOnly && (
                           <td className="px-2 py-2">
                             <div className="flex gap-1 justify-end">
@@ -3873,7 +3748,6 @@ function JobDetailModal({
                       }
                       return s + rateio;
                     }, 0);
-                    const pluxeeTotal = totalAllocs.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
                     // colSpan = "#" + nome + (data+periodo?) + (qty?) + rate = 3 base, +1 cada coluna opcional
                     const labelColSpan = 3
                       + (showCostadoShiftColumns ? 2 : 0)  // Data + Período
@@ -3887,8 +3761,6 @@ function JobDetailModal({
                           {extraTotal === 0 ? "—" : `${extraTotal > 0 ? "+ " : "− "}${brl(Math.abs(extraTotal))}`}
                         </td>
                         <td className="px-2 py-2 text-right text-emerald-700 whitespace-nowrap">{brl(baseTotal + extraTotal)}</td>
-                        <td className="px-2 py-2 text-right text-amber-700 whitespace-nowrap">{brl(pluxeeTotal)}</td>
-                        <td className="px-2 py-2 text-right text-purple-700 whitespace-nowrap">{brl(baseTotal + extraTotal - pluxeeTotal)}</td>
                         {canEdit && !isReadOnly && !peopleReadOnly && <td></td>}
                       </tr>
                     );
