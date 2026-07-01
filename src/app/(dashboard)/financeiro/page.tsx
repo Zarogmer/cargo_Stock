@@ -2925,9 +2925,11 @@ function JobDetailModal({
 
       const COMPANY = [
         "CARGO SHIPS CLEANING LTDA.",
-        "Praça Iguatemi Martins, 08, Vila Mathias - Santos/SP",
+        "Praça Iguatemi Martins, 08, VILA NOVA, SANTOS /SP, CEP: 11013-310",
         "CARGOSHIPS@CARGOSHIPS.COM.BR",
       ];
+      // Linha inicial do conteúdo — deixa as 6 primeiras linhas livres pro logo.
+      const LOGO_ROWS = 6;
       const mkSet = (ws: Record<string, unknown>) => (
         addr: string,
         v: string | number,
@@ -2938,11 +2940,12 @@ function JobDetailModal({
       // ════ Aba 1: LISTA FUNCIONARIOS (quadro completo) ════
       const ws1: Record<string, unknown> = {};
       const set1 = mkSet(ws1);
-      set1("B2", "LISTA FUNCIONARIOS", styleTitle);
-      set1("B4", "#", styleHeader);
-      set1("C4", "FUNCIONÁRIOS", styleHeader);
+      const titleRow1 = LOGO_ROWS + 1; // 7
+      set1(`B${titleRow1}`, "LISTA FUNCIONARIOS", styleTitle);
+      set1(`B${titleRow1 + 1}`, "#", styleHeader);
+      set1(`C${titleRow1 + 1}`, "FUNCIONÁRIOS", styleHeader);
       const roster = [...employees].sort((a, b) => (a.name || "").localeCompare(b.name || "", "pt-BR"));
-      let r1 = 5;
+      let r1 = titleRow1 + 2;
       roster.forEach((e, i) => {
         set1(`B${r1}`, i + 1, styleCellCenter, "n");
         set1(`C${r1}`, e.name || "", styleCell);
@@ -2952,7 +2955,7 @@ function JobDetailModal({
       COMPANY.forEach((line) => { set1(`B${r1}`, line, styleFooter); r1++; });
       ws1["!ref"] = `A1:D${r1 + 1}`;
       ws1["!cols"] = [{ wch: 3 }, { wch: 5 }, { wch: 42 }, { wch: 4 }];
-      ws1["!merges"] = [{ s: { c: 1, r: 1 }, e: { c: 2, r: 1 } }];
+      ws1["!merges"] = [{ s: { c: 1, r: titleRow1 - 1 }, e: { c: 2, r: titleRow1 - 1 } }];
 
       // ════ Aba 2: FECHAMENTO ════
       const isCostado = kindFilter === "COSTADO";
@@ -2997,16 +3000,18 @@ function JobDetailModal({
 
       const ws2: Record<string, unknown> = {};
       const set2 = mkSet(ws2);
-      set2("B2", shipLabel, styleTitle);
-      set2("B3", `CLIENTE: ${job!.client || "—"}${job!.supervisor ? ` - SUPERVISOR: ${job!.supervisor}` : ""}`, styleInfo);
-      set2("B4", "VALOR COBRADO R$", styleInfo);
-      set2("D4", Number(job!.contract_value || 0), styleMoney, "n");
+      const titleRow2 = LOGO_ROWS + 1; // 7
+      set2(`B${titleRow2}`, shipLabel, styleTitle);
+      set2(`B${titleRow2 + 1}`, `CLIENTE: ${job!.client || "—"}${job!.supervisor ? ` - SUPERVISOR: ${job!.supervisor}` : ""}`, styleInfo);
+      set2(`B${titleRow2 + 2}`, "VALOR COBRADO R$", styleInfo);
+      set2(`D${titleRow2 + 2}`, Number(job!.contract_value || 0), styleMoney, "n");
 
-      // Tabela de funcionários do navio
-      set2("B6", "#", styleHeader);
-      set2("C6", "FUNCIONÁRIOS", styleHeader);
-      set2("D6", "VALOR", styleHeader);
-      let r2 = 7;
+      // Tabela de funcionários do navio (deixa uma linha em branco antes do cabeçalho)
+      const headerRow2 = titleRow2 + 4;
+      set2(`B${headerRow2}`, "#", styleHeader);
+      set2(`C${headerRow2}`, "FUNCIONÁRIOS", styleHeader);
+      set2(`D${headerRow2}`, "VALOR", styleHeader);
+      let r2 = headerRow2 + 1;
       workerRows.forEach((w, i) => {
         set2(`B${r2}`, i + 1, styleCellCenter, "n");
         set2(`C${r2}`, w.name, styleCell);
@@ -3041,8 +3046,8 @@ function JobDetailModal({
       ws2["!ref"] = `A1:E${r2 + 1}`;
       ws2["!cols"] = [{ wch: 3 }, { wch: 5 }, { wch: 42 }, { wch: 16 }, { wch: 4 }];
       ws2["!merges"] = [
-        { s: { c: 1, r: 1 }, e: { c: 3, r: 1 } }, // título B2:D2
-        { s: { c: 1, r: 2 }, e: { c: 3, r: 2 } }, // cliente B3:D3
+        { s: { c: 1, r: titleRow2 - 1 }, e: { c: 3, r: titleRow2 - 1 } }, // título
+        { s: { c: 1, r: titleRow2 }, e: { c: 3, r: titleRow2 } }, // cliente
       ];
 
       const wb = XLSX.utils.book_new();
@@ -3050,7 +3055,9 @@ function JobDetailModal({
       XLSX.utils.book_append_sheet(wb, ws2, "FECHAMENTO");
       const safeName = (job!.name || "fechamento").replace(/[^a-zA-Z0-9_-]+/g, "_");
       const dateForFile = (job!.end_date || job!.start_date || "").slice(0, 10);
-      XLSX.writeFile(wb, `Fechamento_${dateForFile}_${safeName}.xlsx`);
+      // Gera os bytes e injeta a logo da Cargo no topo das duas abas (1 e 2).
+      const out = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+      await downloadXlsxWithLogo(out, `Fechamento_${dateForFile}_${safeName}.xlsx`, [1, 2]);
     } catch (err) {
       alert("Falha ao gerar Fechamento: " + (err as Error).message);
     } finally {
@@ -3213,9 +3220,9 @@ function JobDetailModal({
                   onClick={handleExportPagamento}
                   disabled={exporting}
                   className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60"
-                  title="Gera a planilha de Pagamento (formato da contabilidade)"
+                  title="Gera a Folha de Pagamento (formato da contabilidade)"
                 >
-                  {exporting ? "Gerando…" : "📥 Pagamento"}
+                  {exporting ? "Gerando…" : "📥 Folha de Pagamento"}
                 </button>
               )}
               {allocations.length > 0 && (
@@ -3223,9 +3230,9 @@ function JobDetailModal({
                   onClick={handleExportFechamento}
                   disabled={exporting}
                   className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-60"
-                  title="Gera o Excel de Fechamento do navio (lista de funcionários + valores + despesas)"
+                  title="Gera a Folha de Fechamento do navio (lista de funcionários + valores + despesas)"
                 >
-                  {exporting ? "Gerando…" : "📥 Gerar Fechamento"}
+                  {exporting ? "Gerando…" : "📥 Folha de Fechamento"}
                 </button>
               )}
               {canEdit && !isReadOnly && !peopleReadOnly && !showAddAlloc && (
@@ -4657,6 +4664,91 @@ function findBestPdfMatch(
     }
   }
   return null;
+}
+
+// Dispara o download de um Blob no navegador.
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Recebe os bytes de um .xlsx gerado pelo xlsx-js-style e injeta a logo da Cargo
+// no topo das abas indicadas (1-based). O xlsx-js-style não suporta imagens, então
+// abrimos o pacote (jszip), adicionamos mídia + drawing + rels e re-zipamos.
+// Se a logo não puder ser carregada, baixa o arquivo mesmo assim (sem imagem).
+async function downloadXlsxWithLogo(out: ArrayBuffer, filename: string, logoSheets: number[]) {
+  let logoBytes: Uint8Array | null = null;
+  try {
+    const resp = await fetch("/cargo-logo.png");
+    if (resp.ok) logoBytes = new Uint8Array(await resp.arrayBuffer());
+  } catch {
+    logoBytes = null;
+  }
+
+  const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (!logoBytes) {
+    triggerBlobDownload(new Blob([out], { type: XLSX_MIME }), filename);
+    return;
+  }
+
+  const JSZip = (await import("jszip")).default;
+  const zip = await JSZip.loadAsync(out);
+  zip.file("xl/media/cargo-logo.png", logoBytes);
+
+  // Logo original 541x141 px → mantém proporção em EMU (1 px ≈ 9525 EMU).
+  const cx = 3200000;
+  const cy = Math.round((cx * 141) / 541);
+
+  let ctExtra = "";
+  for (const idx of logoSheets) {
+    const drawingName = `drawing${idx}.xml`;
+    zip.file(
+      `xl/drawings/${drawingName}`,
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">` +
+        `<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>45720</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>45720</xdr:rowOff></xdr:from>` +
+        `<xdr:ext cx="${cx}" cy="${cy}"/>` +
+        `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="1" name="cargo-logo"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>` +
+        `<xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>` +
+        `<xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>`,
+    );
+    zip.file(
+      `xl/drawings/_rels/${drawingName}.rels`,
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+        `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/cargo-logo.png"/></Relationships>`,
+    );
+    zip.file(
+      `xl/worksheets/_rels/sheet${idx}.xml.rels`,
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+        `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/${drawingName}"/></Relationships>`,
+    );
+    const sheetPath = `xl/worksheets/sheet${idx}.xml`;
+    const sheetFile = zip.file(sheetPath);
+    if (sheetFile) {
+      const sheetXml = await sheetFile.async("string");
+      zip.file(sheetPath, sheetXml.replace("</worksheet>", `<drawing r:id="rId1"/></worksheet>`));
+    }
+    ctExtra += `<Override PartName="/xl/drawings/${drawingName}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`;
+  }
+
+  // png já vem como Default no Content_Types do xlsx-js-style; só faltam os drawings.
+  const ctPath = "[Content_Types].xml";
+  const ctFile = zip.file(ctPath);
+  if (ctFile) {
+    const ct = await ctFile.async("string");
+    zip.file(ctPath, ct.replace("</Types>", `${ctExtra}</Types>`));
+  }
+
+  const blob = await zip.generateAsync({ type: "blob", mimeType: XLSX_MIME });
+  triggerBlobDownload(blob, filename);
 }
 
 function formatBankLabel(name: string | null, type: string | null): string {
