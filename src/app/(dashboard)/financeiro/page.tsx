@@ -361,7 +361,12 @@ function CloseShipModal({
 export default function FinanceiroPage() {
   const { profile } = useAuth();
   const searchParams = useSearchParams();
-  const initialTab = searchParams.get("tab") || "funcoes";
+  const rawTab = searchParams.get("tab") || "funcoes";
+  // "Pagamento de Embarque" e "Pagamento de Costado" viraram uma aba só
+  // ("Pagamento de Navios"). Mantém links antigos funcionando: embarque/costado
+  // caem na aba unificada, e o tipo define qual visão abre primeiro.
+  const initialTab = rawTab === "embarque" || rawTab === "costado" ? "navios" : rawTab;
+  const initialTipo: "EMBARQUE" | "COSTADO" = rawTab === "costado" ? "COSTADO" : "EMBARQUE";
   const role = profile?.role || "FINANCEIRO";
   const canEdit = hasPermission(role, "FINANCEIRO_MOD", "edit") || hasPermission(role, "FINANCEIRO_MOD", "create");
   // Trocar a função de um colaborador só neste navio (override travado) é só
@@ -529,10 +534,11 @@ export default function FinanceiroPage() {
       ),
     },
     {
-      key: "embarque",
-      label: "🚢 Pagamento de Embarque",
+      key: "navios",
+      label: "🚢 Pagamento de Navios",
       content: (
-        <TrabalhosTab
+        <PagamentoNaviosTab
+          initialTipo={initialTipo}
           jobs={jobs}
           allocations={allocations}
           adjustments={adjustments}
@@ -542,26 +548,6 @@ export default function FinanceiroPage() {
           specialRates={specialRates}
           canEdit={canEdit}
           canEditFunction={canEditFunction}
-          profileName={profile?.full_name || "Sistema"}
-          filter={pgFilter}
-          onChange={loadAll}
-          loading={loading}
-        />
-      ),
-    },
-    {
-      key: "costado",
-      label: "⚓ Pagamento de Costado",
-      content: (
-        <CostadoTab
-          jobs={jobs}
-          allocations={allocations}
-          adjustments={adjustments}
-          functions={functions}
-          ships={ships}
-          employees={employees}
-          specialRates={specialRates}
-          canEdit={canEdit}
           profileName={profile?.full_name || "Sistema"}
           filter={pgFilter}
           onChange={loadAll}
@@ -1899,6 +1885,83 @@ function EmployeeRatesModal({
         </div>
       )}
     </Modal>
+  );
+}
+
+// ─── PAGAMENTO DE NAVIOS (Embarque + Costado numa aba só) ────────────────────
+
+function PagamentoNaviosTab({
+  initialTipo, jobs, allocations, adjustments, functions, ships, employees, specialRates, canEdit, canEditFunction, profileName, filter, onChange, loading,
+}: {
+  initialTipo: "EMBARQUE" | "COSTADO";
+  jobs: Job[];
+  allocations: JobAllocation[];
+  adjustments: JobAdjustment[];
+  functions: JobFunction[];
+  ships: Ship[];
+  employees: Employee[];
+  specialRates: Map<string, number>;
+  canEdit: boolean;
+  canEditFunction: boolean;
+  profileName: string;
+  filter: PagamentoFilter;
+  onChange: () => void;
+  loading: boolean;
+}) {
+  const [tipo, setTipo] = useState<"EMBARQUE" | "COSTADO">(initialTipo);
+  return (
+    <div className="space-y-3">
+      {/* Alternador Embarque × Costado — mesma tela, duas visões */}
+      <div className="inline-flex rounded-lg border border-border bg-gray-50 p-0.5">
+        {([
+          { key: "EMBARQUE", label: "🚢 Embarque" },
+          { key: "COSTADO", label: "⚓ Costado" },
+        ] as const).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTipo(t.key)}
+            className={`px-4 py-1.5 text-sm font-medium rounded-md transition ${
+              tipo === t.key ? "bg-primary text-white shadow-sm" : "text-text-light hover:text-text"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tipo === "EMBARQUE" ? (
+        <TrabalhosTab
+          jobs={jobs}
+          allocations={allocations}
+          adjustments={adjustments}
+          functions={functions}
+          ships={ships}
+          employees={employees}
+          specialRates={specialRates}
+          canEdit={canEdit}
+          canEditFunction={canEditFunction}
+          profileName={profileName}
+          filter={filter}
+          onChange={onChange}
+          loading={loading}
+        />
+      ) : (
+        <CostadoTab
+          jobs={jobs}
+          allocations={allocations}
+          adjustments={adjustments}
+          functions={functions}
+          ships={ships}
+          employees={employees}
+          specialRates={specialRates}
+          canEdit={canEdit}
+          profileName={profileName}
+          filter={filter}
+          onChange={onChange}
+          loading={loading}
+        />
+      )}
+    </div>
   );
 }
 
