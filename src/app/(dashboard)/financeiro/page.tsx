@@ -2736,6 +2736,167 @@ function JobDetailModal({
     }
   }
 
+  // Exporta a planilha de "Pagamento" no formato da "PLANILHA BASE" usada pela
+  // contabilidade (o antigo "Gerar Excel", sem a coluna Pluxee — hoje tudo cai na
+  // folha). Usa xlsx-js-style pra aplicar bordas, alinhamento e formato BRL.
+  async function handleExportPagamento() {
+    setExporting(true);
+    try {
+      const XLSX = (await import("xlsx-js-style")).default;
+      const dateLabel = formatDateBR(job!.end_date) || formatDateBR(job!.start_date);
+      const shipLabel = `${job!.name}${job!.holds_count ? ` - ${job!.holds_count} PORÕES` : ""}${job!.cargo_type ? `-${job!.cargo_type}` : ""}${job!.port ? `-${job!.port}` : ""}${job!.start_date ? ` ${formatDateBR(job!.start_date)}` : ""}${job!.end_date ? ` a ${formatDateBR(job!.end_date)}` : ""}${dateLabel ? ` - VENCTO: ${dateLabel}` : ""}`;
+
+      // Estilos reutilizáveis (xlsx-js-style aceita objeto `s` em cada célula).
+      const thin = { style: "thin", color: { rgb: "000000" } };
+      const allBorders = { top: thin, bottom: thin, left: thin, right: thin };
+      const BRL = 'R$ #,##0.00;R$ -#,##0.00;"R$ -"';
+      const styleTitle = {
+        font: { bold: true, sz: 14, color: { rgb: "1F4E78" } },
+        alignment: { horizontal: "center", vertical: "center" },
+      };
+      const styleClient = {
+        font: { bold: true, sz: 12, color: { rgb: "1F4E78" } },
+        alignment: { horizontal: "center", vertical: "center" },
+      };
+      const styleHeader = {
+        font: { bold: true, sz: 10, color: { rgb: "FFFFFF" } },
+        fill: { patternType: "solid", fgColor: { rgb: "2E75B6" } },
+        alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        border: allBorders,
+      };
+      const styleSubHeader = {
+        font: { bold: true, sz: 10 },
+        fill: { patternType: "solid", fgColor: { rgb: "DDEBF7" } },
+        alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        border: allBorders,
+      };
+      const styleCellCenter = {
+        font: { sz: 10 },
+        alignment: { horizontal: "center", vertical: "center" },
+        border: allBorders,
+      };
+      const styleCellMoney = {
+        font: { sz: 10 },
+        alignment: { horizontal: "right", vertical: "center" },
+        border: allBorders,
+        numFmt: BRL,
+      };
+      const styleTotalLabel = {
+        font: { bold: true, sz: 10 },
+        fill: { patternType: "solid", fgColor: { rgb: "FFE699" } },
+        alignment: { horizontal: "center", vertical: "center" },
+        border: allBorders,
+      };
+      const styleTotalMoney = {
+        font: { bold: true, sz: 10 },
+        fill: { patternType: "solid", fgColor: { rgb: "FFE699" } },
+        alignment: { horizontal: "right", vertical: "center" },
+        border: allBorders,
+        numFmt: BRL,
+      };
+      const styleSummaryLabel = {
+        font: { bold: true, sz: 10 },
+        alignment: { horizontal: "right", vertical: "center" },
+      };
+      const styleSummaryMoney = {
+        font: { bold: true, sz: 10, color: { rgb: "1F4E78" } },
+        alignment: { horizontal: "right", vertical: "center" },
+        numFmt: BRL,
+      };
+      const styleSummaryTitle = {
+        font: { bold: true, sz: 11 },
+        alignment: { horizontal: "left", vertical: "center" },
+      };
+
+      // Monta o sheet célula a célula com estilo aplicado.
+      const ws: Record<string, unknown> = {};
+      const set = (
+        addr: string,
+        v: string | number | null,
+        s: Record<string, unknown>,
+        t: "s" | "n" = typeof v === "number" ? "n" : "s",
+      ) => {
+        if (v === null || v === undefined || v === "") { ws[addr] = { t: "s", v: "", s }; return; }
+        ws[addr] = { t, v, s };
+      };
+
+      // Linha 3: título "PAGAMENTO EM ..." (mesclado D3:G3 pra caber o texto inteiro)
+      set("D3", `PAGAMENTO EM ${dateLabel || ""}`, styleTitle);
+      // Linha 6: rótulos C=FUNCIONÁRIOS, J=cliente
+      set("C6", "FUNCIONÁRIOS", styleSummaryTitle);
+      set("J6", job!.client || "", styleClient);
+      // Linha 7: cabeçalho da tabela (sem coluna Pluxee)
+      set("C7", "Limpeza de porão", styleSubHeader);
+      set("D7", "AGÊNCIA", styleHeader);
+      set("E7", "CONTA", styleHeader);
+      set("F7", "ITAÚ/SANTANDER", styleHeader);
+      set("G7", "PAGTO NA FOLHA", styleHeader);
+      set("H7", "DESCONTO GERAL", styleHeader);
+      set("I7", "Perda de Material", styleHeader);
+      set("J7", `MV 1: ${shipLabel}`, styleHeader);
+
+      // Funcionários começam na linha 9 (linha 8 fica em branco como no template)
+      let row = 9;
+      let totalFolha = 0, totalNavio = 0;
+      allocations.forEach((a, idx) => {
+        const e = a.employees;
+        const total = allocTotalPerson(a);
+        totalFolha += total;
+        totalNavio += total;
+        set(`B${row}`, idx + 1, styleCellCenter, "n");
+        set(`C${row}`, e?.name || a.job_functions?.name || `#${a.function_id}`, styleCellCenter);
+        set(`D${row}`, e?.bank_agency || "", styleCellCenter);
+        set(`E${row}`, e?.bank_account || "", styleCellCenter);
+        set(`F${row}`, formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null), styleCellCenter);
+        set(`G${row}`, total, styleCellMoney, "n");
+        set(`H${row}`, 0, styleCellMoney, "n");
+        set(`I${row}`, 0, styleCellMoney, "n");
+        set(`J${row}`, total, styleCellMoney, "n");
+        row++;
+      });
+
+      row++; // linha em branco
+      const totalRow = row;
+      set(`F${totalRow}`, "TOTAL", styleTotalLabel);
+      set(`G${totalRow}`, totalFolha, styleTotalMoney, "n");
+      set(`H${totalRow}`, 0, styleTotalMoney, "n");
+      set(`I${totalRow}`, 0, styleTotalMoney, "n");
+      set(`J${totalRow}`, totalNavio, styleTotalMoney, "n");
+      row += 2;
+
+      set(`C${row}`, "TOTAL PAGAMENTO DOS MVs s/ desconto:", styleSummaryTitle); row++;
+      set(`C${row}`, "MV 1:", styleSummaryLabel);
+      set(`F${row}`, "TOTAIS:", styleSummaryLabel); row++;
+      set(`C${row}`, totalNavio, styleSummaryMoney, "n");
+      set(`F${row}`, "ADTO:", styleSummaryLabel);
+      set(`G${row}`, 0, styleSummaryMoney, "n"); row++;
+      set(`F${row}`, "PAGTO FOLHA:", styleSummaryLabel);
+      set(`G${row}`, totalFolha, styleSummaryMoney, "n"); row++;
+      set(`F${row}`, "PAGTO NAVIO:", styleSummaryLabel);
+      set(`G${row}`, totalNavio, styleSummaryMoney, "n");
+
+      ws["!ref"] = `A1:L${row + 2}`;
+      ws["!cols"] = [
+        { wch: 3 }, { wch: 5 }, { wch: 38 }, { wch: 10 }, { wch: 16 },
+        { wch: 18 }, { wch: 15 }, { wch: 14 }, { wch: 16 }, { wch: 70 },
+      ];
+      ws["!rows"] = Array.from({ length: row + 2 }, (_, i) => (i === 6 ? { hpt: 38 } : { hpt: 18 }));
+      ws["!merges"] = [
+        { s: { c: 3, r: 2 }, e: { c: 6, r: 2 } }, // D3:G3 título mesclado
+      ];
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "PLANILHA BASE");
+      const safeName = (job!.name || "planilha").replace(/[^a-zA-Z0-9_-]+/g, "_");
+      const dateForFile = (job!.end_date || job!.start_date || "").slice(0, 10);
+      XLSX.writeFile(wb, `${dateForFile}_${safeName}.xlsx`);
+    } catch (err) {
+      alert("Falha ao gerar XLSX: " + (err as Error).message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   // Gera o Excel de "Fechamento" do navio — modelo operacional da Cargo. Duas abas:
   //   1) LISTA FUNCIONARIOS — quadro completo de colaboradores (cadastro);
   //   2) FECHAMENTO — cabeçalho do navio, lista de funcionários do navio + valor,
@@ -3045,6 +3206,16 @@ function JobDetailModal({
               {canEdit && !isReadOnly && !showRateio && allocations.length > 0 && kindFilter !== "COSTADO" && (
                 <button onClick={() => setShowRateio(true)} className="text-xs px-2 py-1 bg-amber-600 text-white rounded hover:bg-amber-700" title="Distribuir o pagamento de quem faltou entre os que foram">
                   ⚖️ Aplicar Rateio
+                </button>
+              )}
+              {allocations.length > 0 && (
+                <button
+                  onClick={handleExportPagamento}
+                  disabled={exporting}
+                  className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-60"
+                  title="Gera a planilha de Pagamento (formato da contabilidade)"
+                >
+                  {exporting ? "Gerando…" : "📥 Pagamento"}
                 </button>
               )}
               {allocations.length > 0 && (
