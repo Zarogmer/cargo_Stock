@@ -1942,7 +1942,7 @@ export default function NaviosPage() {
 
               {editingShip && form.status === "CONCLUIDO" && (
                 <div>
-                  <label className="block text-sm font-medium text-text mb-1">Data de Saída</label>
+                  <label className="block text-sm font-medium text-text mb-1">Data de Término</label>
                   <input
                     type="date"
                     value={form.departure_date}
@@ -1950,7 +1950,7 @@ export default function NaviosPage() {
                     className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
                   />
                   <p className="text-[10px] text-text-light mt-1">
-                    🏁 Navio já concluído — corrija a saída aqui. A data também é atualizada no Financeiro.
+                    🏁 Navio já concluído — corrija o término aqui. A data também é atualizada no Financeiro.
                   </p>
                 </div>
               )}

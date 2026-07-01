@@ -131,6 +131,21 @@ function ShipStatusBadge({ status }: { status?: string | null }) {
   );
 }
 
+// Badge do status de PAGAMENTO (independente da situação operacional do navio).
+// Pago = job FECHADO; senão, Em Andamento. Cancelado não mostra badge de pagamento.
+function PaymentBadge({ job }: { job: Job }) {
+  if (job.status === "CANCELADO") return null;
+  const paid = job.status === "FECHADO";
+  return (
+    <span
+      className={`text-xs px-2 py-0.5 rounded-full font-medium ${paid ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}
+      title="Status do pagamento"
+    >
+      {paid ? `💰 Pago${job.closed_at ? ` · ${formatJobDate(job.closed_at)}` : ""}` : "💰 A pagar"}
+    </span>
+  );
+}
+
 function formatDateTime(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -350,6 +365,86 @@ function CloseShipModal({
           <Button type="button" onClick={handleConfirm} disabled={saving || !closeDate}>
             {saving ? "Fechando..." : "🏁 Fechar Navio"}
           </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Modal de PAGAMENTO do navio — o pessoal do Financeiro marca como Pago e
+// registra a data. Reusa closed_at/closed_by como data/autor do pagamento
+// (FECHADO = "Pago"). Permite reabrir (voltar a Em Andamento).
+function PayShipModal({
+  job, profileName, onClose, onSaved,
+}: {
+  job: Job | null;
+  profileName: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [payDate, setPayDate] = useState(isoDate(new Date()));
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const paid = job?.status === "FECHADO";
+
+  useEffect(() => {
+    if (job) {
+      setPayDate((job.closed_at || "").slice(0, 10) || job.end_date?.slice(0, 10) || isoDate(new Date()));
+      setErr(null);
+    }
+  }, [job]);
+
+  if (!job) return null;
+
+  async function setPaid(markPaid: boolean) {
+    setSaving(true);
+    setErr(null);
+    try {
+      const res = await db.from("jobs").update(
+        markPaid
+          ? { status: "FECHADO", closed_at: payDate, closed_by: profileName }
+          : { status: "EM_ANDAMENTO", closed_at: null, closed_by: null },
+      ).eq("id", job!.id);
+      if (res.error) throw new Error(res.error.message);
+      onSaved();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+  return (
+    <Modal open={!!job} onClose={onClose} title={`Pagamento · ${job.ships?.name || job.name}`} maxWidth="max-w-md">
+      <div className="space-y-4">
+        {paid && (
+          <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-800">
+            💰 <strong>Pago</strong>{job.closed_at ? ` em ${formatJobDate(job.closed_at)}` : ""}{job.closed_by ? ` por ${job.closed_by}` : ""}.
+          </div>
+        )}
+        {!paid && (
+          <p className="text-xs text-text-light">
+            Marca este pagamento como <strong>Pago</strong> e registra a data. O navio passa a aparecer no filtro <strong>Pago</strong>.
+          </p>
+        )}
+        <div>
+          <label className="block text-sm font-medium mb-1">Data do pagamento *</label>
+          <input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} className={inputCls} />
+        </div>
+        {err && <p className="text-xs text-danger bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</p>}
+        <div className="flex gap-3 justify-between pt-2">
+          {paid ? (
+            <Button variant="secondary" type="button" onClick={() => setPaid(false)} disabled={saving}>
+              ↩ Reabrir
+            </Button>
+          ) : <span />}
+          <div className="flex gap-2">
+            <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+            <Button type="button" onClick={() => setPaid(true)} disabled={saving || !payDate}>
+              {saving ? "Salvando..." : paid ? "Salvar data" : "💰 Confirmar Pagamento"}
+            </Button>
+          </div>
         </div>
       </div>
     </Modal>
@@ -1989,6 +2084,7 @@ function TrabalhosTab({
   const [detailJob, setDetailJob] = useState<Job | null>(null);
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
   const [closeShipJob, setCloseShipJob] = useState<Job | null>(null);
+  const [payJob, setPayJob] = useState<Job | null>(null);
   const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("TODOS");
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -2096,13 +2192,13 @@ function TrabalhosTab({
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-semibold">{j.name}</h3>
                       <ShipStatusBadge status={shipStatusOf(j)} />
-                      {/* Navios mostram só a situação operacional (Em Operação/Concluído),
-                          igual à aba Navios. O status de pagamento (Em Andamento/Pago) fica
-                          só para pagamentos avulsos sem navio. */}
-                      {!shipStatusOf(j) && (
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[j.status]}`}>
-                          {STATUS_LABELS[j.status]}
-                        </span>
+                      {/* Situação operacional (Concluído) + status de PAGAMENTO
+                          (A pagar / Pago) lado a lado — o Financeiro precisa ver
+                          claramente se já foi pago, mesmo com o navio concluído. */}
+                      {j.status === "CANCELADO" ? (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS.CANCELADO}`}>Cancelado</span>
+                      ) : (
+                        <PaymentBadge job={j} />
                       )}
                       {j.ships?.name && <span className="text-xs text-text-light">⚓ {j.ships.name}</span>}
                     </div>
@@ -2134,6 +2230,15 @@ function TrabalhosTab({
                             title="Fecha o navio (Concluído) e grava o valor do contrato"
                           >
                             🏁 Fechar Navio
+                          </button>
+                        )}
+                        {j.status !== "CANCELADO" && (
+                          <button
+                            onClick={() => setPayJob(j)}
+                            className={`text-xs px-2 py-1 rounded ${j.status === "FECHADO" ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-emerald-600 text-white hover:bg-emerald-700"}`}
+                            title="Registrar/editar o pagamento do navio"
+                          >
+                            {j.status === "FECHADO" ? "💰 Pago" : "💰 Pagar"}
                           </button>
                         )}
                         <button onClick={() => { setEditJob(j); setShowJobForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded">
@@ -2193,6 +2298,13 @@ function TrabalhosTab({
         job={closeShipJob}
         onClose={() => setCloseShipJob(null)}
         onClosed={() => { setCloseShipJob(null); onChange(); }}
+      />
+
+      <PayShipModal
+        job={payJob}
+        profileName={profileName}
+        onClose={() => setPayJob(null)}
+        onSaved={() => { setPayJob(null); onChange(); }}
       />
     </div>
   );
@@ -3379,7 +3491,11 @@ function JobDetailModal({
               <p>✓ <strong>Verificado</strong> por <span className="font-semibold">{job.verified_by}</span> em {formatDateTime(job.verified_at)}</p>
             )}
             {job.closed_at && (
-              <p>🔒 <strong>Último OK</strong> por <span className="font-semibold">{job.closed_by}</span> em {formatDateTime(job.closed_at)}</p>
+              job.status === "FECHADO" ? (
+                <p>💰 <strong>Pago</strong> por <span className="font-semibold">{job.closed_by}</span> em {formatJobDate(job.closed_at)}</p>
+              ) : (
+                <p>🔒 <strong>Último OK</strong> por <span className="font-semibold">{job.closed_by}</span> em {formatDateTime(job.closed_at)}</p>
+              )
             )}
           </div>
         )}
@@ -5479,6 +5595,7 @@ function CostadoTab({
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
   const [closeShipJob, setCloseShipJob] = useState<Job | null>(null);
+  const [payJob, setPayJob] = useState<Job | null>(null);
 
   // Costado jobs = jobs whose ship is marked as Costado OR that have any COSTADO allocation.
   const costadoShipIds = new Set(
@@ -5564,13 +5681,11 @@ function CostadoTab({
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-semibold">{j.name}</h3>
                       <ShipStatusBadge status={shipStatusOf(j)} />
-                      {/* Navios mostram só a situação operacional (Em Operação/Concluído),
-                          igual à aba Navios. O status de pagamento (Em Andamento/Pago) fica
-                          só para pagamentos avulsos sem navio. */}
-                      {!shipStatusOf(j) && (
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[j.status]}`}>
-                          {STATUS_LABELS[j.status]}
-                        </span>
+                      {/* Situação operacional + status de PAGAMENTO (A pagar / Pago). */}
+                      {j.status === "CANCELADO" ? (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS.CANCELADO}`}>Cancelado</span>
+                      ) : (
+                        <PaymentBadge job={j} />
                       )}
                       {j.ships?.name && <span className="text-xs text-text-light">⚓ {j.ships.name}</span>}
                     </div>
@@ -5592,6 +5707,15 @@ function CostadoTab({
                             title="Fecha o navio (Concluído) e grava o valor do contrato"
                           >
                             🏁 Fechar Navio
+                          </button>
+                        )}
+                        {j.status !== "CANCELADO" && (
+                          <button
+                            onClick={() => setPayJob(j)}
+                            className={`text-xs px-2 py-1 rounded ${j.status === "FECHADO" ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-emerald-600 text-white hover:bg-emerald-700"}`}
+                            title="Registrar/editar o pagamento do navio"
+                          >
+                            {j.status === "FECHADO" ? "💰 Pago" : "💰 Pagar"}
                           </button>
                         )}
                         <button
@@ -5669,6 +5793,13 @@ function CostadoTab({
         job={closeShipJob}
         onClose={() => setCloseShipJob(null)}
         onClosed={() => { setCloseShipJob(null); onChange(); }}
+      />
+
+      <PayShipModal
+        job={payJob}
+        profileName={profileName}
+        onClose={() => setPayJob(null)}
+        onSaved={() => { setPayJob(null); onChange(); }}
       />
     </div>
   );
