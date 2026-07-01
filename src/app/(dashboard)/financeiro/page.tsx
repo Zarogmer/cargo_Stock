@@ -2564,6 +2564,9 @@ function JobDetailModal({
   // Filtro por função na Equipe Alocada ("ALL" = todas). Também vale como
   // realce da fatia no gráfico de custo por função.
   const [fnFilter, setFnFilter] = useState<string>("ALL");
+  // Modo do gráfico de custo: "FUNCAO" (por função) ou "GERAL" (visão do navio:
+  // base, extra, administrativo, despesas + faturamento/lucro).
+  const [chartMode, setChartMode] = useState<"FUNCAO" | "GERAL">("FUNCAO");
   const [allocEmp, setAllocEmp] = useState("");
   const [allocFn, setAllocFn] = useState("");
   const [allocDays, setAllocDays] = useState("1");
@@ -2786,6 +2789,35 @@ function JobDetailModal({
     slices.sort((a, b) => b.value - a.value);
     const total = slices.reduce((s, x) => s + x.value, 0);
     return { slices: slices.map((s, i) => ({ ...s, color: PIE_COLORS[i % PIE_COLORS.length] })), total };
+  })();
+
+  // Visão geral do navio: decompõe o custo em Base, Extra, Administrativo e
+  // Despesas (somam o Custo da Operação), e traz Faturamento e Lucro do contrato.
+  const geral = (() => {
+    let baseSum = 0;
+    let extraSum = 0;
+    for (const a of allocations) {
+      const fn = functions.find((f) => f.id === a.function_id);
+      const defaultRate = Number(fn?.default_rate ?? a.rate);
+      const isEmb = kindFilter === "EMBARQUE";
+      const base = isEmb ? defaultRate * holdsMultiplier : Number(a.rate) * a.quantity * holdsMultiplier;
+      baseSum += base;
+      extraSum += allocTotalPerson(a) - base;
+    }
+    baseSum = +baseSum.toFixed(2);
+    extraSum = +extraSum.toFixed(2);
+    const despesas = cost.adj;
+    const slices = [
+      { label: "Base (mão de obra)", value: baseSum, color: "#2563eb" },
+      { label: "Extra (especial + rateio)", value: extraSum, color: "#f59e0b" },
+      { label: "Administrativo", value: +adminTotal.toFixed(2), color: "#8b5cf6" },
+      { label: "Despesas", value: +despesas.toFixed(2), color: "#ef4444" },
+    ].filter((s) => s.value > 0);
+    const total = +(baseSum + extraSum + adminTotal + Math.max(0, despesas)).toFixed(2);
+    const faturamento = Number(job.contract_value || 0);
+    const lucro = +(faturamento - custoTotal).toFixed(2);
+    const margem = faturamento > 0 ? (lucro / faturamento) * 100 : null;
+    return { slices, total, maoDeObra: +(baseSum + extraSum + adminTotal).toFixed(2), despesas: +despesas.toFixed(2), faturamento, lucro, margem };
   })();
 
   async function handleAddAlloc(e: React.FormEvent) {
@@ -3558,61 +3590,138 @@ function JobDetailModal({
         </div>
         </div>
 
-        {/* Custo por função — gráfico de pizza + legenda detalhada */}
+        {/* Custo do navio — gráfico de pizza com dois modos: por função ou visão geral */}
         {costBreakdown.slices.length > 0 && (
           <div className="bg-card border border-border rounded-xl p-4">
             <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-              <h3 className="text-sm font-semibold">📊 Custo por Função</h3>
-              <span className="text-[11px] text-text-light">% sobre o custo total da operação</span>
-            </div>
-            <div className="flex flex-col sm:flex-row gap-5 items-center sm:items-start">
-              <CostDonut slices={costBreakdown.slices} />
-              <div className="flex-1 min-w-0 w-full">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-[10px] uppercase tracking-wider text-text-light">
-                      <th className="text-left font-semibold py-1">Função</th>
-                      <th className="text-center font-semibold py-1">Qtd</th>
-                      <th className="text-right font-semibold py-1">Total</th>
-                      <th className="text-right font-semibold py-1">%</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {costBreakdown.slices.map((s) => {
-                      const pct = costBreakdown.total > 0 ? (s.value / costBreakdown.total) * 100 : 0;
-                      const isFn = s.label !== "ADMINISTRATIVO" && s.label !== "DESPESAS";
-                      const active = fnFilter === s.label;
-                      return (
-                        <tr
-                          key={s.label}
-                          onClick={() => isFn && setFnFilter(active ? "ALL" : s.label)}
-                          className={`border-t border-border ${isFn ? "cursor-pointer hover:bg-gray-50" : ""} ${active ? "bg-blue-50" : ""}`}
-                          title={isFn ? "Clique para filtrar a equipe por esta função" : ""}
-                        >
-                          <td className="py-1.5">
-                            <span className="inline-flex items-center gap-2 min-w-0">
-                              <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: s.color }} />
-                              <span className="font-medium truncate">{s.label}</span>
-                            </span>
-                          </td>
-                          <td className="text-center text-text-light tabular-nums">{s.count}</td>
-                          <td className="text-right font-semibold text-red-700 tabular-nums whitespace-nowrap">{brl(s.value)}</td>
-                          <td className="text-right text-text-light tabular-nums">{pct.toFixed(1)}%</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot>
-                    <tr className="border-t-2 border-border font-semibold">
-                      <td className="py-1.5">Total</td>
-                      <td></td>
-                      <td className="text-right text-red-700 tabular-nums whitespace-nowrap">{brl(costBreakdown.total)}</td>
-                      <td className="text-right text-text-light tabular-nums">100%</td>
-                    </tr>
-                  </tfoot>
-                </table>
+              <h3 className="text-sm font-semibold">📊 {chartMode === "FUNCAO" ? "Custo por Função" : "Visão Geral do Navio"}</h3>
+              <div className="inline-flex rounded-lg border border-border bg-gray-50 p-0.5 text-xs">
+                {([{ k: "FUNCAO", l: "Por Função" }, { k: "GERAL", l: "Visão Geral" }] as const).map((t) => (
+                  <button
+                    key={t.k}
+                    onClick={() => setChartMode(t.k)}
+                    className={`px-3 py-1 rounded-md font-medium transition ${chartMode === t.k ? "bg-primary text-white shadow-sm" : "text-text-light hover:text-text"}`}
+                  >
+                    {t.l}
+                  </button>
+                ))}
               </div>
             </div>
+
+            {chartMode === "FUNCAO" ? (
+              <div className="flex flex-col sm:flex-row gap-5 items-center sm:items-start">
+                <CostDonut slices={costBreakdown.slices} />
+                <div className="flex-1 min-w-0 w-full">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-[10px] uppercase tracking-wider text-text-light">
+                        <th className="text-left font-semibold py-1">Função</th>
+                        <th className="text-center font-semibold py-1">Qtd</th>
+                        <th className="text-right font-semibold py-1">Total</th>
+                        <th className="text-right font-semibold py-1">%</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {costBreakdown.slices.map((s) => {
+                        const pct = costBreakdown.total > 0 ? (s.value / costBreakdown.total) * 100 : 0;
+                        const isFn = s.label !== "ADMINISTRATIVO" && s.label !== "DESPESAS";
+                        const active = fnFilter === s.label;
+                        return (
+                          <tr
+                            key={s.label}
+                            onClick={() => isFn && setFnFilter(active ? "ALL" : s.label)}
+                            className={`border-t border-border ${isFn ? "cursor-pointer hover:bg-gray-50" : ""} ${active ? "bg-blue-50" : ""}`}
+                            title={isFn ? "Clique para filtrar a equipe por esta função" : ""}
+                          >
+                            <td className="py-1.5">
+                              <span className="inline-flex items-center gap-2 min-w-0">
+                                <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: s.color }} />
+                                <span className="font-medium truncate">{s.label}</span>
+                              </span>
+                            </td>
+                            <td className="text-center text-text-light tabular-nums">{s.count}</td>
+                            <td className="text-right font-semibold text-red-700 tabular-nums whitespace-nowrap">{brl(s.value)}</td>
+                            <td className="text-right text-text-light tabular-nums">{pct.toFixed(1)}%</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-border font-semibold">
+                        <td className="py-1.5">Total</td>
+                        <td></td>
+                        <td className="text-right text-red-700 tabular-nums whitespace-nowrap">{brl(costBreakdown.total)}</td>
+                        <td className="text-right text-text-light tabular-nums">100%</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col sm:flex-row gap-5 items-center sm:items-start">
+                <CostDonut slices={geral.slices} />
+                <div className="flex-1 min-w-0 w-full space-y-3">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-[10px] uppercase tracking-wider text-text-light">
+                        <th className="text-left font-semibold py-1">Componente do custo</th>
+                        <th className="text-right font-semibold py-1">Total</th>
+                        <th className="text-right font-semibold py-1">%</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {geral.slices.map((s) => {
+                        const pct = geral.total > 0 ? (s.value / geral.total) * 100 : 0;
+                        return (
+                          <tr key={s.label} className="border-t border-border">
+                            <td className="py-1.5">
+                              <span className="inline-flex items-center gap-2 min-w-0">
+                                <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: s.color }} />
+                                <span className="font-medium truncate">{s.label}</span>
+                              </span>
+                            </td>
+                            <td className="text-right font-semibold text-red-700 tabular-nums whitespace-nowrap">{brl(s.value)}</td>
+                            <td className="text-right text-text-light tabular-nums">{pct.toFixed(1)}%</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-border font-semibold">
+                        <td className="py-1.5">Custo da Operação</td>
+                        <td className="text-right text-red-700 tabular-nums whitespace-nowrap">{brl(geral.total)}</td>
+                        <td className="text-right text-text-light tabular-nums">100%</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+
+                  {/* Resultado do navio — mão de obra, despesas, faturamento e lucro */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg bg-gray-50 border border-border p-2">
+                      <p className="text-text-light">Mão de obra</p>
+                      <p className="font-bold text-text tabular-nums">{brl(geral.maoDeObra)}</p>
+                    </div>
+                    <div className="rounded-lg bg-gray-50 border border-border p-2">
+                      <p className="text-text-light">Despesas</p>
+                      <p className="font-bold text-text tabular-nums">{brl(geral.despesas)}</p>
+                    </div>
+                    <div className="rounded-lg bg-blue-50 border border-blue-200 p-2">
+                      <p className="text-blue-700">Faturamento</p>
+                      <p className="font-bold text-blue-700 tabular-nums">{brl(geral.faturamento)}</p>
+                    </div>
+                    <div className={`rounded-lg border p-2 ${geral.lucro >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-red-50 border-red-200"}`}>
+                      <p className={geral.lucro >= 0 ? "text-emerald-700" : "text-red-700"}>
+                        {geral.lucro >= 0 ? "Lucro" : "Prejuízo"}{geral.margem != null ? ` · ${geral.margem.toFixed(1)}%` : ""}
+                      </p>
+                      <p className={`font-bold tabular-nums ${geral.lucro >= 0 ? "text-emerald-700" : "text-red-700"}`}>{brl(geral.lucro)}</p>
+                    </div>
+                  </div>
+                  {geral.faturamento === 0 && (
+                    <p className="text-[11px] text-text-light">💡 Faturamento (valor do contrato) ainda não informado — edite o pagamento para ver o lucro.</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
