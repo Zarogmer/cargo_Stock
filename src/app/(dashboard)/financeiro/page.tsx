@@ -159,6 +159,37 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+// ─── Filtro das telas de Pagamento (Embarque e Costado) ──────────────────────
+// Permite ver os navios por Ano / Mês / Porto / Cliente, e dirige os KPIs do topo.
+const MONTHS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+type PagamentoFilter = {
+  year: number | "ALL";
+  month: number | "ALL"; // 0-11
+  port: string | "ALL";
+  client: string | "ALL";
+};
+// Ano/mês do job pela start_date, lendo a string direto (sem Date) pra não
+// sofrer shift de timezone.
+function jobStartYM(j: Job): { year: number; month: number } {
+  const parts = (j.start_date || "").slice(0, 10).split("-");
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10) - 1;
+  return { year: Number.isFinite(year) ? year : 0, month: Number.isFinite(month) ? month : 0 };
+}
+function jobMatchesPagamentoFilter(j: Job, f: PagamentoFilter): boolean {
+  const { year, month } = jobStartYM(j);
+  if (f.year !== "ALL" && year !== f.year) return false;
+  if (f.month !== "ALL" && month !== f.month) return false;
+  if (f.port !== "ALL" && (j.port || "") !== f.port) return false;
+  if (f.client !== "ALL" && (j.client || "") !== f.client) return false;
+  return true;
+}
+function pagamentoPeriodLabel(f: PagamentoFilter): string {
+  const y = f.year === "ALL" ? "" : String(f.year);
+  if (f.month === "ALL") return y || "Tudo";
+  return `${MONTHS_PT[f.month]}${y ? `/${y}` : ""}`;
+}
+
 // Categorias estruturadas de despesa, usadas no fechamento. A ordem aqui é
 // também a ordem em que aparecem na exportação Excel.
 const EXPENSE_CATEGORIES = [
@@ -350,6 +381,33 @@ export default function FinanceiroPage() {
   const [specialRates, setSpecialRates] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
 
+  // Filtro das telas de Pagamento — dirige os KPIs do topo e as listas das
+  // abas Embarque/Costado. Começa no ano atual, todos os meses (mostra o ano
+  // inteiro sem esconder navio nenhum).
+  const [pgFilter, setPgFilter] = useState<PagamentoFilter>(() => ({
+    year: new Date().getFullYear(),
+    month: "ALL",
+    port: "ALL",
+    client: "ALL",
+  }));
+
+  const filterOptions = useMemo(() => {
+    const years = new Set<number>();
+    const ports = new Set<string>();
+    const clients = new Set<string>();
+    for (const j of jobs) {
+      const { year } = jobStartYM(j);
+      if (year) years.add(year);
+      if (j.port) ports.add(j.port.trim());
+      if (j.client) clients.add(j.client.trim());
+    }
+    return {
+      years: [...years].sort((a, b) => b - a),
+      ports: [...ports].filter(Boolean).sort((a, b) => a.localeCompare(b, "pt-BR")),
+      clients: [...clients].filter(Boolean).sort((a, b) => a.localeCompare(b, "pt-BR")),
+    };
+  }, [jobs]);
+
   const loadAll = useCallback(async () => {
     setLoading(true);
     const [fnRes, rtRes, jbRes, alRes, adRes, shRes, emRes, srRes] = await Promise.all([
@@ -439,20 +497,20 @@ export default function FinanceiroPage() {
   // ── KPIs ──────────────────────────────────────────────────────────────────
 
   const kpis = useMemo(() => {
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthJobs = jobs.filter((j) => new Date(j.start_date) >= monthStart);
-    const totalCostMonth = monthJobs.reduce((s, j) => s + calcJobCost(j, allocations, adjustments).total, 0);
-    const totalRevenueMonth = monthJobs.reduce((s, j) => s + Number(j.contract_value || 0), 0);
+    // KPIs acompanham o filtro (Ano/Mês/Porto/Cliente) — assim dá pra ver o
+    // faturamento de qualquer período, não só do mês atual.
+    const periodJobs = jobs.filter((j) => jobMatchesPagamentoFilter(j, pgFilter));
+    const totalCost = periodJobs.reduce((s, j) => s + calcJobCost(j, allocations, adjustments).total, 0);
+    const totalRevenue = periodJobs.reduce((s, j) => s + Number(j.contract_value || 0), 0);
     return {
       activeFunctions: functions.filter((f) => f.active).length,
       // "Em Andamento" cobre todos os status que não são Pago (FECHADO) nem Cancelado.
-      openJobs: jobs.filter((j) => j.status !== "FECHADO" && j.status !== "CANCELADO").length,
-      monthCost: totalCostMonth,
-      monthRevenue: totalRevenueMonth,
-      monthProfit: totalRevenueMonth - totalCostMonth,
+      openJobs: periodJobs.filter((j) => j.status !== "FECHADO" && j.status !== "CANCELADO").length,
+      monthCost: totalCost,
+      monthRevenue: totalRevenue,
+      monthProfit: totalRevenue - totalCost,
     };
-  }, [functions, jobs, allocations, adjustments]);
+  }, [functions, jobs, allocations, adjustments, pgFilter]);
 
   const financeiroTabs = [
     {
@@ -485,6 +543,7 @@ export default function FinanceiroPage() {
           canEdit={canEdit}
           canEditFunction={canEditFunction}
           profileName={profile?.full_name || "Sistema"}
+          filter={pgFilter}
           onChange={loadAll}
           loading={loading}
         />
@@ -504,6 +563,7 @@ export default function FinanceiroPage() {
           specialRates={specialRates}
           canEdit={canEdit}
           profileName={profile?.full_name || "Sistema"}
+          filter={pgFilter}
           onChange={loadAll}
           loading={loading}
         />
@@ -552,6 +612,9 @@ export default function FinanceiroPage() {
   ];
 
   const activeTabLabel = financeiroTabs.find((t) => t.key === initialTab)?.label;
+  const plabel = pagamentoPeriodLabel(pgFilter);
+  const filterActive = pgFilter.month !== "ALL" || pgFilter.port !== "ALL" || pgFilter.client !== "ALL" || pgFilter.year !== "ALL";
+  const selectCls = "text-xs border border-border rounded-lg px-2 py-1.5 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40";
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -570,13 +633,71 @@ export default function FinanceiroPage() {
         </p>
       </div>
 
-      {/* KPIs */}
+      {/* Filtro de período/porto/cliente — dirige os KPIs e as listas de pagamento */}
+      <div className="flex flex-wrap items-center gap-2 bg-card border border-border rounded-xl p-2">
+        <span className="text-xs font-semibold text-text-light px-1">🔎 Filtrar:</span>
+        <select
+          className={selectCls}
+          value={pgFilter.year === "ALL" ? "ALL" : String(pgFilter.year)}
+          onChange={(e) => setPgFilter((f) => ({ ...f, year: e.target.value === "ALL" ? "ALL" : parseInt(e.target.value, 10) }))}
+          title="Ano"
+        >
+          <option value="ALL">Todos os anos</option>
+          {filterOptions.years.map((y) => (
+            <option key={y} value={y}>{y}</option>
+          ))}
+        </select>
+        <select
+          className={selectCls}
+          value={pgFilter.month === "ALL" ? "ALL" : String(pgFilter.month)}
+          onChange={(e) => setPgFilter((f) => ({ ...f, month: e.target.value === "ALL" ? "ALL" : parseInt(e.target.value, 10) }))}
+          title="Mês"
+        >
+          <option value="ALL">Todos os meses</option>
+          {MONTHS_PT.map((m, i) => (
+            <option key={m} value={i}>{m}</option>
+          ))}
+        </select>
+        <select
+          className={selectCls}
+          value={pgFilter.port}
+          onChange={(e) => setPgFilter((f) => ({ ...f, port: e.target.value }))}
+          title="Porto"
+        >
+          <option value="ALL">Todos os portos</option>
+          {filterOptions.ports.map((p) => (
+            <option key={p} value={p}>{p}</option>
+          ))}
+        </select>
+        <select
+          className={selectCls}
+          value={pgFilter.client}
+          onChange={(e) => setPgFilter((f) => ({ ...f, client: e.target.value }))}
+          title="Cliente / equipe"
+        >
+          <option value="ALL">Todos os clientes</option>
+          {filterOptions.clients.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
+        {filterActive && (
+          <button
+            onClick={() => setPgFilter({ year: "ALL", month: "ALL", port: "ALL", client: "ALL" })}
+            className="text-xs px-2 py-1.5 rounded-lg bg-gray-100 text-text-light hover:bg-gray-200"
+            title="Limpar filtros"
+          >
+            ✕ Limpar
+          </button>
+        )}
+      </div>
+
+      {/* KPIs — refletem o período/porto/cliente selecionado acima */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <KpiCard label="Faturamento do Mês" value={brl(kpis.monthRevenue)} accent="blue" />
-        <KpiCard label="Custo do Mês" value={brl(kpis.monthCost)} accent="red" />
-        <KpiCard label="Receita do Mês" value={brl(kpis.monthRevenue)} accent="emerald" />
+        <KpiCard label={`Faturamento · ${plabel}`} value={brl(kpis.monthRevenue)} accent="blue" />
+        <KpiCard label={`Custo · ${plabel}`} value={brl(kpis.monthCost)} accent="red" />
+        <KpiCard label={`Receita · ${plabel}`} value={brl(kpis.monthRevenue)} accent="emerald" />
         <KpiCard
-          label={kpis.monthProfit >= 0 ? "Lucro do Mês" : "Prejuízo do Mês"}
+          label={`${kpis.monthProfit >= 0 ? "Lucro" : "Prejuízo"} · ${plabel}`}
           value={brl(kpis.monthProfit)}
           accent={kpis.monthProfit >= 0 ? "emerald" : "red"}
         />
@@ -1784,7 +1905,7 @@ function EmployeeRatesModal({
 // ─── TRABALHOS TAB ──────────────────────────────────────────────────────────
 
 function TrabalhosTab({
-  jobs, allocations, adjustments, functions, ships, employees, specialRates, canEdit, canEditFunction, profileName, onChange, loading,
+  jobs, allocations, adjustments, functions, ships, employees, specialRates, canEdit, canEditFunction, profileName, filter, onChange, loading,
 }: {
   jobs: Job[];
   allocations: JobAllocation[];
@@ -1796,6 +1917,7 @@ function TrabalhosTab({
   canEdit: boolean;
   canEditFunction: boolean;
   profileName: string;
+  filter: PagamentoFilter;
   onChange: () => void;
   loading: boolean;
 }) {
@@ -1817,7 +1939,8 @@ function TrabalhosTab({
   // (lançamentos manuais) sempre aparecem.
   const embarqueJobs = jobs.filter((j) =>
     (!j.ship_id || !costadoShipIds.has(j.ship_id)) &&
-    (!j.ship_id || shipStatusOf(j) !== "CANCELADO"),
+    (!j.ship_id || shipStatusOf(j) !== "CANCELADO") &&
+    jobMatchesPagamentoFilter(j, filter),
   );
   // O filtro "EM_ANDAMENTO" pega qualquer status que NÃO é Pago nem Cancelado
   // (cobre os legados ABERTO/VERIFICADO).
@@ -5273,7 +5396,7 @@ function FaturamentoModal({
 // ─── COSTADO TAB ────────────────────────────────────────────────────────────
 
 function CostadoTab({
-  jobs, allocations, adjustments, functions, ships, employees, specialRates, canEdit, profileName, onChange, loading,
+  jobs, allocations, adjustments, functions, ships, employees, specialRates, canEdit, profileName, filter, onChange, loading,
 }: {
   jobs: Job[];
   allocations: JobAllocation[];
@@ -5284,6 +5407,7 @@ function CostadoTab({
   specialRates: Map<string, number>;
   canEdit: boolean;
   profileName: string;
+  filter: PagamentoFilter;
   onChange: () => void;
   loading: boolean;
 }) {
@@ -5304,7 +5428,8 @@ function CostadoTab({
   // fechar antes. Só esconde navio Cancelado; jobs sem navio sempre aparecem.
   const costadoJobs = jobs.filter(
     (j) => ((j.ship_id && costadoShipIds.has(j.ship_id)) || jobsWithCostadoAlloc.has(j.id))
-      && (!j.ship_id || shipStatusOf(j) !== "CANCELADO"),
+      && (!j.ship_id || shipStatusOf(j) !== "CANCELADO")
+      && jobMatchesPagamentoFilter(j, filter),
   );
   const filtered = costadoJobs.filter((j) => {
     if (statusFilter === "TODOS") return true;
