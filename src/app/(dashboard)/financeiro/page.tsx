@@ -2841,14 +2841,17 @@ function JobDetailModal({
       allocations.forEach((a, idx) => {
         const e = a.employees;
         const total = allocTotalPerson(a);
-        totalFolha += total;
+        // PAGTO NA FOLHA = líquido do Relatório de Líquidos (guardado como
+        // total - pluxee_value). Sem import, pluxee_value = 0 → folha = total.
+        const folha = +(total - Number(a.pluxee_value || 0)).toFixed(2);
+        totalFolha += folha;
         totalNavio += total;
         set(`B${row}`, idx + 1, styleCellCenter, "n");
         set(`C${row}`, e?.name || a.job_functions?.name || `#${a.function_id}`, styleCellCenter);
         set(`D${row}`, e?.bank_agency || "", styleCellCenter);
         set(`E${row}`, e?.bank_account || "", styleCellCenter);
         set(`F${row}`, formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null), styleCellCenter);
-        set(`G${row}`, total, styleCellMoney, "n");
+        set(`G${row}`, folha, styleCellMoney, "n");
         set(`H${row}`, 0, styleCellMoney, "n");
         set(`I${row}`, 0, styleCellMoney, "n");
         set(`J${row}`, total, styleCellMoney, "n");
@@ -3215,6 +3218,21 @@ function JobDetailModal({
                   ⚖️ Aplicar Rateio
                 </button>
               )}
+              {canEdit && !isReadOnly && allocations.length > 0 && (
+                <label
+                  className={`text-xs px-2 py-1 rounded cursor-pointer ${pdfStatus.kind === "parsing" ? "bg-indigo-300 text-white" : "bg-indigo-600 text-white hover:bg-indigo-700"}`}
+                  title="Importa o Relatório de Líquidos (PDF da contabilidade) e preenche o valor da folha de cada funcionário"
+                >
+                  {pdfStatus.kind === "parsing" ? "Lendo…" : "📄 Relatório Líquidos"}
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    onChange={handlePdfUpload}
+                    disabled={pdfStatus.kind === "parsing"}
+                    className="hidden"
+                  />
+                </label>
+              )}
               {allocations.length > 0 && (
                 <button
                   onClick={handleExportPagamento}
@@ -3242,6 +3260,29 @@ function JobDetailModal({
               )}
             </div>
           </div>
+
+          {pdfStatus.kind === "done" && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 mb-2 text-[11px] space-y-1">
+              <p className="text-emerald-800">
+                ✓ Relatório de Líquidos importado: <strong>{pdfStatus.matched}</strong> de <strong>{pdfStatus.total}</strong> registros casados com colaboradores. O valor da folha entra na coluna PAGTO NA FOLHA da Folha de Pagamento.
+              </p>
+              {pdfStatus.unmatched && pdfStatus.unmatched.length > 0 && (
+                <details className="text-amber-800">
+                  <summary className="cursor-pointer">
+                    ⚠ {pdfStatus.unmatched.length} do PDF sem match com a equipe alocada
+                  </summary>
+                  <ul className="mt-1 ml-4 list-disc">
+                    {pdfStatus.unmatched.map((u, i) => (
+                      <li key={i}>{u.name} — <strong>{brl(u.value)}</strong></li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
+          {pdfStatus.kind === "error" && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-2 mb-2 text-[11px] text-red-800">{pdfStatus.msg}</div>
+          )}
 
           {showRateio && (() => {
             // Agrupa alocações ativas por função pra montar o seletor + lista de
