@@ -807,6 +807,53 @@ function KpiCard({ label, value, accent }: { label: string; value: string; accen
   );
 }
 
+// Paleta do gráfico de custo por função (cores fixas, boa distinção visual).
+const PIE_COLORS = [
+  "#2563eb", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444",
+  "#14b8a6", "#ec4899", "#6366f1", "#84cc16", "#f97316",
+  "#06b6d4", "#a855f7", "#eab308", "#22c55e", "#f43f5e",
+];
+
+// Donut de custo (várias fatias em SVG, sem dependência). Cada fatia é um arco
+// desenhado com stroke-dasharray/-offset. Mostra o total no centro.
+function CostDonut({ slices, size = 168 }: { slices: { label: string; value: number; color: string }[]; size?: number }) {
+  const total = slices.reduce((s, x) => s + x.value, 0);
+  const strokeW = 22;
+  const r = size / 2 - strokeW / 2 - 2;
+  const cx = size / 2;
+  const cy = size / 2;
+  const C = 2 * Math.PI * r;
+  let acc = 0;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
+      <g transform={`rotate(-90 ${cx} ${cy})`}>
+        {total <= 0 ? (
+          <circle cx={cx} cy={cy} r={r} fill="none" stroke="#e2e8f0" strokeWidth={strokeW} />
+        ) : (
+          slices.map((s, i) => {
+            const len = (s.value / total) * C;
+            const seg = (
+              <circle
+                key={i}
+                cx={cx} cy={cy} r={r} fill="none"
+                stroke={s.color} strokeWidth={strokeW}
+                strokeDasharray={`${len} ${C - len}`}
+                strokeDashoffset={-acc}
+              >
+                <title>{`${s.label}: ${brl(s.value)} (${Math.round((s.value / total) * 100)}%)`}</title>
+              </circle>
+            );
+            acc += len;
+            return seg;
+          })
+        )}
+      </g>
+      <text x={cx} y={cy - 2} textAnchor="middle" fontSize="15" fontWeight="700" fill="#0f172a" className="tabular-nums">{brl(total)}</text>
+      <text x={cx} y={cy + 14} textAnchor="middle" fontSize="8.5" fill="#64748b" letterSpacing="1">CUSTO TOTAL</text>
+    </svg>
+  );
+}
+
 // ─── FUNÇÕES TAB ────────────────────────────────────────────────────────────
 
 // Inline editor: clicar no valor → vira input → salva ao perder foco/Enter.
@@ -2514,6 +2561,9 @@ function JobDetailModal({
   // Costado mostra colunas Data e Período por linha (cada linha = 1 turno).
   const showCostadoShiftColumns = kindFilter === "COSTADO";
   const [showAddAlloc, setShowAddAlloc] = useState(false);
+  // Filtro por função na Equipe Alocada ("ALL" = todas). Também vale como
+  // realce da fatia no gráfico de custo por função.
+  const [fnFilter, setFnFilter] = useState<string>("ALL");
   const [allocEmp, setAllocEmp] = useState("");
   const [allocFn, setAllocFn] = useState("");
   const [allocDays, setAllocDays] = useState("1");
@@ -2713,6 +2763,30 @@ function JobDetailModal({
   const custoBase = cost.base + adminTotal;
   // Valor que precisamos = TOTAL - VALOR DA FOLHA (Pluxee + ajustes/despesas)
   const liquidValue = custoTotal - folhaValue;
+
+  // Nome da função de uma alocação (sempre em maiúsculas p/ agrupar).
+  const allocFnName = (a: JobAllocation) =>
+    (a.job_functions?.name || functions.find((f) => f.id === a.function_id)?.name || `#${a.function_id}`).toUpperCase();
+  // Funções presentes na equipe (para o filtro).
+  const allocFnOptions = Array.from(new Set(allocations.map(allocFnName))).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  // Quebra do custo da operação por função (+ Administrativo + Despesas) para o
+  // gráfico de pizza e a tabela detalhada. A soma das funções = mão de obra base.
+  const costBreakdown = (() => {
+    const byFn = new Map<string, { total: number; count: number }>();
+    for (const a of allocations) {
+      const name = allocFnName(a);
+      const cur = byFn.get(name) || { total: 0, count: 0 };
+      cur.total += allocTotalPerson(a);
+      cur.count += 1;
+      byFn.set(name, cur);
+    }
+    const slices = Array.from(byFn.entries()).map(([label, v]) => ({ label, value: +v.total.toFixed(2), count: v.count }));
+    if (adminTotal > 0) slices.push({ label: "ADMINISTRATIVO", value: +adminTotal.toFixed(2), count: adminActive.length });
+    if (cost.adj > 0) slices.push({ label: "DESPESAS", value: +cost.adj.toFixed(2), count: adjustments.length });
+    slices.sort((a, b) => b.value - a.value);
+    const total = slices.reduce((s, x) => s + x.value, 0);
+    return { slices: slices.map((s, i) => ({ ...s, color: PIE_COLORS[i % PIE_COLORS.length] })), total };
+  })();
 
   async function handleAddAlloc(e: React.FormEvent) {
     e.preventDefault();
@@ -3483,6 +3557,64 @@ function JobDetailModal({
         </div>
         </div>
 
+        {/* Custo por função — gráfico de pizza + legenda detalhada */}
+        {costBreakdown.slices.length > 0 && (
+          <div className="bg-card border border-border rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+              <h3 className="text-sm font-semibold">📊 Custo por Função</h3>
+              <span className="text-[11px] text-text-light">% sobre o custo total da operação</span>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-5 items-center sm:items-start">
+              <CostDonut slices={costBreakdown.slices} />
+              <div className="flex-1 min-w-0 w-full">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-[10px] uppercase tracking-wider text-text-light">
+                      <th className="text-left font-semibold py-1">Função</th>
+                      <th className="text-center font-semibold py-1">Qtd</th>
+                      <th className="text-right font-semibold py-1">Total</th>
+                      <th className="text-right font-semibold py-1">%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {costBreakdown.slices.map((s) => {
+                      const pct = costBreakdown.total > 0 ? (s.value / costBreakdown.total) * 100 : 0;
+                      const isFn = s.label !== "ADMINISTRATIVO" && s.label !== "DESPESAS";
+                      const active = fnFilter === s.label;
+                      return (
+                        <tr
+                          key={s.label}
+                          onClick={() => isFn && setFnFilter(active ? "ALL" : s.label)}
+                          className={`border-t border-border ${isFn ? "cursor-pointer hover:bg-gray-50" : ""} ${active ? "bg-blue-50" : ""}`}
+                          title={isFn ? "Clique para filtrar a equipe por esta função" : ""}
+                        >
+                          <td className="py-1.5">
+                            <span className="inline-flex items-center gap-2 min-w-0">
+                              <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: s.color }} />
+                              <span className="font-medium truncate">{s.label}</span>
+                            </span>
+                          </td>
+                          <td className="text-center text-text-light tabular-nums">{s.count}</td>
+                          <td className="text-right font-semibold text-red-700 tabular-nums whitespace-nowrap">{brl(s.value)}</td>
+                          <td className="text-right text-text-light tabular-nums">{pct.toFixed(1)}%</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-border font-semibold">
+                      <td className="py-1.5">Total</td>
+                      <td></td>
+                      <td className="text-right text-red-700 tabular-nums whitespace-nowrap">{brl(costBreakdown.total)}</td>
+                      <td className="text-right text-text-light tabular-nums">100%</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Audit trail */}
         {(job.verified_at || job.closed_at) && (
           <div className="bg-gray-50 border border-border rounded-lg p-3 space-y-1 text-xs">
@@ -3509,6 +3641,19 @@ function JobDetailModal({
                 <p className="text-[10px] text-text-light mt-0.5">
                   Lista gerenciada na Escalação de Costado — aqui edita-se só o financeiro.
                 </p>
+              )}
+              {allocFnOptions.length > 1 && (
+                <select
+                  value={fnFilter}
+                  onChange={(e) => setFnFilter(e.target.value)}
+                  className="mt-1 text-xs border border-border rounded-lg px-2 py-1 bg-card"
+                  title="Filtrar a equipe por função"
+                >
+                  <option value="ALL">Todas as funções</option>
+                  {allocFnOptions.map((fn) => (
+                    <option key={fn} value={fn}>{fn}</option>
+                  ))}
+                </select>
               )}
             </div>
             <div className="flex gap-2 flex-wrap">
@@ -4013,7 +4158,7 @@ function JobDetailModal({
                         return (x.employees?.name || "").localeCompare(y.employees?.name || "");
                       })
                     : allocations
-                  ).map((a, idx) => {
+                  ).filter((a) => fnFilter === "ALL" || allocFnName(a) === fnFilter).map((a, idx) => {
                     // No EMBARQUE: Base usa o valor FIXO da função (default_rate);
                     // diferenças (overrides) entram como Extra.
                     // No COSTADO: rate vem sempre da função COSTADO (Valores) —
@@ -4290,7 +4435,8 @@ function JobDetailModal({
                     const isCostado = kindFilter === "COSTADO";
                     // O total acompanha o filtro de data (quando ativo) -- o
                     // resumo do navio inteiro fica nos cards acima.
-                    const totalAllocs = isCostado ? dateFilteredAllocations : allocations;
+                    const totalAllocs = (isCostado ? dateFilteredAllocations : allocations)
+                      .filter((a) => fnFilter === "ALL" || allocFnName(a) === fnFilter);
                     const baseTotal = totalAllocs.reduce((s, a) => {
                       if (isEmbarque) {
                         const fn = functions.find((f) => f.id === a.function_id);
