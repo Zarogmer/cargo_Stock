@@ -3035,24 +3035,22 @@ function JobDetailModal({
     }
   }
 
-  // Strip the extra_value from each allocation of a given function (undo rateio).
-  async function handleClearRateio(fnId: number) {
-    if (!confirm("Remover o rateio aplicado a essa função?")) return;
-    const fnAllocs = allocations.filter((a) => a.function_id === fnId && Number(a.extra_value || 0) > 0);
-    for (const a of fnAllocs) {
-      await db.from("job_allocations").update({
-        extra_value: 0,
-        extra_reason: null,
-      }).eq("id", a.id);
-    }
-    onChange();
-  }
-
   // Remove o rateio de UMA alocação (o "✕ remover" ao lado da nota na linha).
   async function handleClearAllocRateio(a: JobAllocation) {
     if (!confirm(`Remover o rateio de ${a.employees?.name || "este colaborador"}?`)) return;
     const res: any = await db.from("job_allocations").update({ extra_value: 0, extra_reason: null }).eq("id", a.id);
     if (res?.error) { alert(`Não consegui remover o rateio: ${res.error.message}`); return; }
+    onChange();
+  }
+
+  // Cancela TODOS os rateios aplicados no navio de uma vez.
+  async function handleClearAllRateios() {
+    const withRateio = allocations.filter((a) => Number(a.extra_value || 0) > 0 && a.extra_reason);
+    if (withRateio.length === 0) return;
+    if (!confirm(`Cancelar todos os ${withRateio.length} rateios aplicados neste navio?`)) return;
+    for (const a of withRateio) {
+      await db.from("job_allocations").update({ extra_value: 0, extra_reason: null }).eq("id", a.id);
+    }
     onChange();
   }
 
@@ -3884,11 +3882,44 @@ function JobDetailModal({
             const missingPay = fixedRate * holds * missing;
             const selectedCount = groupAllocs.filter((a) => rateioSelectedIds.has(a.id)).length;
             const perPerson = selectedCount > 0 ? missingPay / selectedCount : 0;
+            // Rateios já aplicados neste navio (extra_value + motivo de rateio) —
+            // ficam visíveis no painel pra ver/cancelar sem precisar achar a função.
+            const appliedRateios = allocations.filter((a) => Number(a.extra_value || 0) > 0 && a.extra_reason);
             return (
               <form onSubmit={(e) => { e.preventDefault(); handleApplyRateio(); }} className="bg-amber-50 rounded-lg p-3 mb-2 border border-amber-200 space-y-2">
                 <p className="text-xs text-amber-900 font-medium">
                   ⚖️ Rateio — divide o pagamento de quem faltou entre os colaboradores selecionados (valor fixo da função × porões).
                 </p>
+
+                {appliedRateios.length > 0 && (
+                  <div className="bg-white border border-amber-300 rounded-lg p-2 space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold text-amber-900">Rateios aplicados ({appliedRateios.length})</p>
+                      <button type="button" onClick={handleClearAllRateios} className="text-[11px] text-red-700 hover:underline shrink-0">
+                        Cancelar todos
+                      </button>
+                    </div>
+                    <div className="max-h-32 overflow-y-auto space-y-0.5">
+                      {appliedRateios.map((a) => (
+                        <div key={a.id} className="flex items-center justify-between gap-2 text-xs px-1 py-0.5 hover:bg-amber-50 rounded">
+                          <span className="min-w-0 truncate" title={a.extra_reason || ""}>
+                            {a.employees?.name || a.job_functions?.name || `#${a.function_id}`}
+                            <span className="text-text-light"> · {a.job_functions?.name}</span>
+                            <span className="text-emerald-700 font-semibold"> +{brl(Number(a.extra_value || 0))}</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleClearAllocRateio(a)}
+                            className="text-red-600 hover:text-red-800 font-semibold shrink-0"
+                            title="Cancelar o rateio deste colaborador"
+                          >
+                            ✕ cancelar
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-xs font-medium mb-1">Função *</label>
@@ -3984,13 +4015,8 @@ function JobDetailModal({
                     <p>Dividido entre {selectedCount} {selectedCount === 1 ? "colaborador selecionado" : "colaboradores selecionados"}: <strong className="text-emerald-700">+ {brl(perPerson)} por pessoa</strong></p>
                   </div>
                 )}
-                <div className="flex gap-2 justify-between flex-wrap">
-                  {fnId > 0 && allocations.some((a) => a.function_id === fnId && Number(a.extra_value || 0) > 0) && (
-                    <Button variant="secondary" size="sm" type="button" onClick={() => handleClearRateio(fnId)}>
-                      Limpar rateio anterior dessa função
-                    </Button>
-                  )}
-                  <div className="flex gap-2 ml-auto">
+                <div className="flex gap-2 justify-end flex-wrap">
+                  <div className="flex gap-2">
                     <Button variant="secondary" size="sm" type="button" onClick={() => setShowRateio(false)} disabled={rateioSaving}>Cancelar</Button>
                     <Button size="sm" type="submit" disabled={rateioSaving || !fnId || !missing || selectedCount === 0}>
                       {rateioSaving ? "Aplicando..." : "Aplicar Rateio"}
