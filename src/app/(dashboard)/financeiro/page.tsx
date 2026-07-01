@@ -3048,6 +3048,14 @@ function JobDetailModal({
     onChange();
   }
 
+  // Remove o rateio de UMA alocação (o "✕ remover" ao lado da nota na linha).
+  async function handleClearAllocRateio(a: JobAllocation) {
+    if (!confirm(`Remover o rateio de ${a.employees?.name || "este colaborador"}?`)) return;
+    const res: any = await db.from("job_allocations").update({ extra_value: 0, extra_reason: null }).eq("id", a.id);
+    if (res?.error) { alert(`Não consegui remover o rateio: ${res.error.message}`); return; }
+    onChange();
+  }
+
   async function handleDeleteAlloc(id: number) {
     await db.from("job_allocations").delete().eq("id", id);
     onChange();
@@ -4349,8 +4357,18 @@ function JobDetailModal({
                             </p>
                           )}
                           {rateioExtra > 0 && a.extra_reason && (
-                            <p className="text-[10px] text-amber-700 italic mt-0.5" title={a.extra_reason}>
-                              ⚖️ {a.extra_reason}
+                            <p className="text-[10px] text-amber-700 italic mt-0.5 flex items-start gap-1" title={a.extra_reason}>
+                              <span className="min-w-0 truncate">⚖️ {a.extra_reason}</span>
+                              {canEdit && !isReadOnly && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleClearAllocRateio(a)}
+                                  className="text-red-600 hover:text-red-800 not-italic font-semibold shrink-0"
+                                  title="Remover o rateio deste colaborador"
+                                >
+                                  ✕ remover
+                                </button>
+                              )}
                             </p>
                           )}
                         </td>
