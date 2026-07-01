@@ -159,6 +159,12 @@ function brl(n: number | string | null | undefined): string {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+// Formata um número em "50.000,00" (sem símbolo) para campos de valor — sempre
+// com 2 casas decimais (o ",00" que o Financeiro pediu no Valor do Contrato).
+function formatAmountBR(n: number): string {
+  return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 // Formata datas dos Jobs (start_date/end_date) que vêm do Postgres como
 // ISO ("2026-05-26T00:00:00.000Z") ou string plana ("2026-05-26"). Usamos
 // só os 10 primeiros caracteres pra evitar shift de timezone na exibição.
@@ -316,7 +322,7 @@ function CloseShipModal({
   useEffect(() => {
     if (job) {
       setCloseDate(job.end_date?.slice(0, 10) || isoDate(new Date()));
-      setContractValue(job.contract_value != null ? String(job.contract_value) : "");
+      setContractValue(job.contract_value != null ? formatAmountBR(Number(job.contract_value)) : "");
       setErr(null);
     }
   }, [job]);
@@ -328,7 +334,7 @@ function CloseShipModal({
     setSaving(true);
     setErr(null);
     try {
-      const cv = contractValue.trim() === "" ? null : parseFloat(contractValue.replace(",", "."));
+      const cv = contractValue.trim() === "" ? null : parseBrlNumber(contractValue);
       const shipRes = await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate }).eq("id", job!.ship_id);
       if (shipRes.error) throw new Error(shipRes.error.message);
       // Fecha a ponta dos pagamentos do navio e grava o contrato neste pagamento.
@@ -356,7 +362,15 @@ function CloseShipModal({
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Valor do Contrato (R$)</label>
-          <input type="number" step="0.01" value={contractValue} onChange={(e) => setContractValue(e.target.value)} placeholder="0,00" className={inputCls} />
+          <input
+            type="text"
+            inputMode="decimal"
+            value={contractValue}
+            onChange={(e) => setContractValue(e.target.value)}
+            onBlur={(e) => setContractValue(e.target.value.trim() ? formatAmountBR(parseBrlNumber(e.target.value)) : "")}
+            placeholder="0,00"
+            className={inputCls}
+          />
           <p className="text-[11px] text-text-light mt-1">Quanto o cliente paga pela operação. Pode deixar em branco e preencher depois.</p>
         </div>
         {err && <p className="text-xs text-danger bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</p>}
@@ -2391,7 +2405,7 @@ function JobFormModal({
       setEndDate(item.end_date?.slice(0, 10) || "");
       // Status legados (ABERTO, VERIFICADO) viram "Em Andamento" no UI.
       setStatus(item.status === "FECHADO" ? "FECHADO" : "EM_ANDAMENTO");
-      setContractValue(item.contract_value?.toString() || "");
+      setContractValue(item.contract_value != null ? formatAmountBR(Number(item.contract_value)) : "");
       setNotes(item.notes || "");
       setClient(item.client || "");
       setCargoType(item.cargo_type || "");
@@ -2417,7 +2431,7 @@ function JobFormModal({
       start_date: startDate,
       end_date: endDate || null,
       status,
-      contract_value: contractValue ? parseFloat(contractValue) : null,
+      contract_value: contractValue.trim() ? parseBrlNumber(contractValue) : null,
       notes: notes.trim() || null,
       client: client.trim() || null,
       supervisor: profileName || null,
@@ -2490,7 +2504,7 @@ function JobFormModal({
                 <option value="FECHADO">Pago</option>
               </select>
             </div>
-            <div><label className="block text-sm font-medium mb-1">Valor do Contrato (R$)</label><input type="number" step="0.01" value={contractValue} onChange={(e) => setContractValue(e.target.value)} className={inputCls} placeholder="0,00" /></div>
+            <div><label className="block text-sm font-medium mb-1">Valor do Contrato (R$)</label><input type="text" inputMode="decimal" value={contractValue} onChange={(e) => setContractValue(e.target.value)} onBlur={(e) => setContractValue(e.target.value.trim() ? formatAmountBR(parseBrlNumber(e.target.value)) : "")} className={inputCls} placeholder="0,00" /></div>
           </div>
         </div>
 
