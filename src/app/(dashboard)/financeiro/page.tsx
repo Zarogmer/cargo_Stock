@@ -3694,6 +3694,7 @@ function JobDetailModal({
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Base</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light" title="Valor especial + rateio">Extra</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Total</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-purple-700 whitespace-nowrap" title="PAGTO NA FOLHA — líquido do Relatório de Líquidos. Sem import, igual ao Total.">Folha</th>
                     {canEdit && !isReadOnly && !peopleReadOnly && <th className="w-14"></th>}
                   </tr>
                 </thead>
@@ -3733,6 +3734,10 @@ function JobDetailModal({
                     const specialDelta = isEmbarque ? (actualRate - defaultRate) * holdsMultiplier : 0;
                     const rateioExtra = Number(a.extra_value || 0);
                     const extra = specialDelta + rateioExtra;
+                    // PAGTO NA FOLHA = líquido do Relatório de Líquidos (guardado
+                    // como pluxee_value = total - folha). Sem import, folha = total.
+                    const pluxee = Number(a.pluxee_value || 0);
+                    const folha = base + extra - pluxee;
                     return (
                       <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
                         <td className="px-2 py-2 text-text-light">{idx + 1}</td>
@@ -3925,6 +3930,42 @@ function JobDetailModal({
                           )}
                         </td>
                         <td className="px-2 py-2 text-right font-semibold text-emerald-700 whitespace-nowrap">{brl(base + extra)}</td>
+                        <td className="px-2 py-2 text-right whitespace-nowrap">
+                          {editingFolhaId === a.id && canEdit && !isReadOnly ? (
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={folhaDraft}
+                              onChange={(e) => setFolhaDraft(e.target.value)}
+                              onBlur={async () => {
+                                const n = parseFloat(folhaDraft.replace(",", "."));
+                                if (Number.isFinite(n) && n !== folha) {
+                                  await handleSetFolha(a.id, base + extra, n);
+                                }
+                                setEditingFolhaId(null);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                if (e.key === "Escape") { setEditingFolhaId(null); setFolhaDraft(""); }
+                              }}
+                              autoFocus
+                              className="w-24 text-right px-1 py-0.5 border-2 border-primary rounded text-purple-700 font-semibold outline-none"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={!canEdit || isReadOnly}
+                              onClick={() => {
+                                setFolhaDraft(folha ? folha.toString() : "");
+                                setEditingFolhaId(a.id);
+                              }}
+                              className={`text-purple-700 ${canEdit && !isReadOnly ? "hover:bg-purple-50 rounded px-1 -mx-1 cursor-text" : ""}`}
+                              title={canEdit && !isReadOnly ? "Clique para editar (ajusta a diferença p/ o Total)" : ""}
+                            >
+                              {brl(folha)}
+                            </button>
+                          )}
+                        </td>
                         {canEdit && !isReadOnly && !peopleReadOnly && (
                           <td className="px-2 py-2">
                             <div className="flex gap-1 justify-end">
@@ -3967,6 +4008,7 @@ function JobDetailModal({
                       }
                       return s + rateio;
                     }, 0);
+                    const pluxeeTotal = totalAllocs.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
                     // colSpan = "#" + nome + (data+periodo?) + (qty?) + rate = 3 base, +1 cada coluna opcional
                     const labelColSpan = 3
                       + (showCostadoShiftColumns ? 2 : 0)  // Data + Período
@@ -3980,6 +4022,7 @@ function JobDetailModal({
                           {extraTotal === 0 ? "—" : `${extraTotal > 0 ? "+ " : "− "}${brl(Math.abs(extraTotal))}`}
                         </td>
                         <td className="px-2 py-2 text-right text-emerald-700 whitespace-nowrap">{brl(baseTotal + extraTotal)}</td>
+                        <td className="px-2 py-2 text-right text-purple-700 whitespace-nowrap">{brl(baseTotal + extraTotal - pluxeeTotal)}</td>
                         {canEdit && !isReadOnly && !peopleReadOnly && <td></td>}
                       </tr>
                     );
