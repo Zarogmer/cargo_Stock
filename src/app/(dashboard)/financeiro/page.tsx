@@ -2956,9 +2956,10 @@ function JobDetailModal({
     const fnId = parseInt(rateioFnId, 10);
     const missing = parseInt(rateioMissing, 10);
     if (!fnId || !missing || missing < 1) return;
-    const selected = allocations.filter(
-      (a) => a.status === "ATIVO" && rateioSelectedIds.has(a.id),
-    );
+    // Opera sobre o time exibido no modal (qualquer status) — navio concluído
+    // tem as alocações como REMOVIDO ("navio finalizado"), mas continuam sendo
+    // o time a pagar/ratear. Filtrar por ATIVO deixava o rateio vazio.
+    const selected = allocations.filter((a) => rateioSelectedIds.has(a.id));
     if (selected.length === 0) return;
 
     const fn = functions.find((f) => f.id === fnId);
@@ -2989,7 +2990,7 @@ function JobDetailModal({
   // Strip the extra_value from each allocation of a given function (undo rateio).
   async function handleClearRateio(fnId: number) {
     if (!confirm("Remover o rateio aplicado a essa função?")) return;
-    const fnAllocs = allocations.filter((a) => a.function_id === fnId && a.status === "ATIVO" && Number(a.extra_value || 0) > 0);
+    const fnAllocs = allocations.filter((a) => a.function_id === fnId && Number(a.extra_value || 0) > 0);
     for (const a of fnAllocs) {
       await db.from("job_allocations").update({
         extra_value: 0,
@@ -3732,11 +3733,12 @@ function JobDetailModal({
           )}
 
           {showRateio && (() => {
-            // Agrupa alocações ativas por função pra montar o seletor + lista de
-            // colaboradores que podem receber a divisão.
+            // Agrupa o time exibido por função pra montar o seletor + lista de
+            // colaboradores que podem receber a divisão. Usa o mesmo conjunto da
+            // tabela (qualquer status) — navio concluído tem tudo como REMOVIDO.
             const fnGroups = new Map<number, JobAllocation[]>();
             for (const a of allocations) {
-              if (a.status !== "ATIVO") continue;
+              if (a.status === "SUBSTITUIDO") continue;
               if (!fnGroups.has(a.function_id)) fnGroups.set(a.function_id, []);
               fnGroups.get(a.function_id)!.push(a);
             }
@@ -3766,7 +3768,7 @@ function JobDetailModal({
                         const next = new Set<number>();
                         if (newId) {
                           for (const a of allocations) {
-                            if (a.function_id === newId && a.status === "ATIVO") next.add(a.id);
+                            if (a.function_id === newId && a.status !== "SUBSTITUIDO") next.add(a.id);
                           }
                         }
                         setRateioSelectedIds(next);
