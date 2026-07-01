@@ -84,12 +84,12 @@ const UNIT_LABELS: Record<JobUnit, string> = {
   TURNO: "Turno (Costado)",
 };
 
-// Fluxo simplificado: tudo que não foi pago aparece como "Em Andamento" (cobre
+// Fluxo simplificado: tudo que não foi pago aparece como "Em Aberto" (cobre
 // também os legados ABERTO e VERIFICADO). FECHADO = "Pago".
 const STATUS_LABELS: Record<JobStatus, string> = {
-  ABERTO: "Em Andamento",
-  EM_ANDAMENTO: "Em Andamento",
-  VERIFICADO: "Em Andamento",
+  ABERTO: "Em Aberto",
+  EM_ANDAMENTO: "Em Aberto",
+  VERIFICADO: "Em Aberto",
   FECHADO: "Pago",
   CANCELADO: "Cancelado",
 };
@@ -2146,7 +2146,9 @@ function TrabalhosTab({
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
   const [closeShipJob, setCloseShipJob] = useState<Job | null>(null);
   const [payJob, setPayJob] = useState<Job | null>(null);
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("TODOS");
+  // Começa em "Em Aberto": navio Pago (FECHADO) sai da visão padrão — some da
+  // lista assim que é pago (fica acessível no filtro "Pago").
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("EM_ANDAMENTO");
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
@@ -2500,7 +2502,7 @@ function JobFormModal({
             <div>
               <label className="block text-sm font-medium mb-1">Status</label>
               <select value={status} onChange={(e) => setStatus(e.target.value as "EM_ANDAMENTO" | "FECHADO")} className={inputCls}>
-                <option value="EM_ANDAMENTO">Em Andamento</option>
+                <option value="EM_ANDAMENTO">Em Aberto</option>
                 <option value="FECHADO">Pago</option>
               </select>
             </div>
@@ -5862,7 +5864,9 @@ function CostadoTab({
   loading: boolean;
 }) {
   const [detailJob, setDetailJob] = useState<Job | null>(null);
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("TODOS");
+  // Começa em "Em Aberto": navio Pago (FECHADO) sai da visão padrão — some da
+  // lista assim que é pago (fica acessível no filtro "Pago").
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("EM_ANDAMENTO");
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
   const [closeShipJob, setCloseShipJob] = useState<Job | null>(null);
