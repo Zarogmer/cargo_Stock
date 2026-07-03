@@ -667,11 +667,20 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
         </div>
         <div>
           <label className="block text-sm font-medium text-text mb-1">Unidade de medida</label>
-          <select value={unit} onChange={(e) => setUnit(e.target.value)} className={inputCls}>
-            {STOCK_UNITS.map((u) => (
-              <option key={u.value} value={u.value}>{u.label}</option>
-            ))}
-          </select>
+          {selectedSource ? (
+            // Item já cadastrado: unidade é fixa do produto, não se escolhe de novo
+            // (evita trocar por acidente e ficar "arroz em un" quando é fardo).
+            <div className={`${inputCls} bg-gray-100 text-text-light flex items-center justify-between`}>
+              <span>{STOCK_UNITS.find((u) => u.value === unit)?.label ?? unit}</span>
+              <span className="text-[11px]">definida no cadastro do item</span>
+            </div>
+          ) : (
+            <select value={unit} onChange={(e) => setUnit(e.target.value)} className={inputCls}>
+              {STOCK_UNITS.map((u) => (
+                <option key={u.value} value={u.value}>{u.label}</option>
+              ))}
+            </select>
+          )}
         </div>
         <div className={`grid ${isMaster ? "grid-cols-2" : "grid-cols-3"} gap-4`}>
           <div>
