@@ -714,9 +714,15 @@ model Supplier {
   category   String?
   website    String?
   notes      String?
+  // CNPJ (só dígitos) — chave de casamento do Contas a Pagar: boleto extraído
+  // por e-mail e favorecido do extrato bancário casam com o fornecedor por aqui.
+  cnpj       String?  @unique
+  email      String?
   created_by String
   updated_at DateTime @default(now()) @db.Timestamptz()
   updated_by String
+
+  payable_invoices PayableInvoice[]
 
   @@map("suppliers")
 }
@@ -840,4 +846,247 @@ model ScheduledMessage {
 
   @@index([enabled, next_run_at])
   @@map("scheduled_messages")
+}
+
+// ── Contas a Pagar + Conciliação Bancária ────────────────────────────────────
+// Módulo de fornecedores/bancos (docs/financeiro/). Não confundir com o
+// Financeiro de folha (Job/JobAllocation), que é pagamento a colaboradores.
+
+// Máquina de estados (transições válidas em src/lib/services/payable-status.ts):
+// RECEBIDO → AGUARDANDO_APROVACAO → APROVADO → PAGO; CANCELADO a partir de
+// qualquer estado não-pago.
+enum PayableStatus {
+  RECEBIDO
+  AGUARDANDO_APROVACAO
+  APROVADO
+  PAGO
+  CANCELADO
+}
+
+enum PayableOrigin {
+  EMAIL // capturado da caixa integrada (Microsoft Graph)
+  MANUAL // lançado à mão na UI
+}
+
+enum BankKind {
+  ITAU
+  SANTANDER
+  OUTRO
+}
+
+// De onde veio a movimentação bancária — arquivo importado ou API direta.
+enum TransactionSource {
+  OFX_FILE
+  CNAB_FILE
+  API_ITAU
+  API_SANTANDER
+}
+
+enum ReconciliationStatus {
+  SUGERIDA // motor achou candidato com score intermediário; espera revisão
+  CONFIRMADA // conciliada (automática por score alto ou aceita na revisão)
+  REJEITADA // revisor descartou a sugestão
+}
+
+enum FinanceJobStatus {
+  PENDENTE
+  PROCESSANDO
+  CONCLUIDO
+  ERRO
+}
+
+// Título a pagar. Nasce RECEBIDO quando capturado por e-mail; lançamentos
+// manuais podem nascer direto em AGUARDANDO_APROVACAO.
+model PayableInvoice {
+  id          String         @id @default(uuid()) @db.Uuid
+  supplier_id Int?
+  suppliers   Supplier?      @relation(fields: [supplier_id], references: [id], onDelete: SetNull)
+  description String
+  amount      Decimal        @db.Decimal(12, 2)
+  due_date    DateTime?      @db.Date
+  status      PayableStatus  @default(RECEBIDO)
+  origin      PayableOrigin  @default(MANUAL)
+
+  // Dados extraídos do boleto (padrão FEBRABAN). A linha digitável identifica o
+  // título unicamente — é a dedupe primária: o mesmo boleto reenviado por
+  // e-mail não gera segundo lançamento.
+  digitable_line String? @unique
+  barcode        String?
+  payee_name     String? // beneficiário como está no boleto
+  payee_document String? // CNPJ/CPF do beneficiário (só dígitos)
+
+  notes String?
+
+  // ── Trilha de auditoria da máquina de estados ────────────────────────────
+  approved_by   String?
+  approved_at   DateTime? @db.Timestamptz()
+  paid_by       String?
+  paid_at       DateTime? @db.Timestamptz()
+  cancelled_by  String?
+  cancelled_at  DateTime? @db.Timestamptz()
+  cancel_reason String?
+
+  created_by String
+  created_at DateTime @default(now()) @db.Timestamptz()
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz()
+
+  attachments     InvoiceAttachment[]
+  reconciliations Reconciliation[]
+
+  @@index([status])
+  @@index([due_date])
+  @@index([supplier_id])
+  @@map("payable_invoices")
+}
+
+// PDF original do boleto, inline no Postgres (infra só Railway, sem storage
+// externo — mesmo racional de StockItem.image_url, mas em Bytes, não base64).
+model InvoiceAttachment {
+  id         String   @id @default(uuid()) @db.Uuid
+  invoice_id String   @db.Uuid
+  invoices   PayableInvoice @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  filename   String
+  mime_type  String   @default("application/pdf")
+  content    Bytes
+  // SHA-256 do conteúdo — dedupe global: o mesmo arquivo nunca entra duas vezes.
+  sha256     String   @unique
+  // id da mensagem no Graph quando veio por e-mail (rastreabilidade).
+  source_message_id String?
+  created_by String
+  created_at DateTime @default(now()) @db.Timestamptz()
+
+  @@index([invoice_id])
+  @@map("invoice_attachments")
+}
+
+model BankAccount {
+  id             Int      @id @default(autoincrement())
+  bank           BankKind
+  nickname       String // ex.: "Itaú principal"
+  agency         String?
+  account_number String?
+  active         Boolean  @default(true)
+  // true quando o provider de API (Fase 6) está habilitado pra esta conta;
+  // enquanto false a conta só recebe movimentações por arquivo (OFX/CNAB).
+  api_enabled    Boolean  @default(false)
+  created_by     String
+  created_at     DateTime @default(now()) @db.Timestamptz()
+  updated_at     DateTime @default(now()) @updatedAt @db.Timestamptz()
+
+  transactions BankTransaction[]
+
+  @@map("bank_accounts")
+}
+
+// Movimentação bancária normalizada — TODA fonte (OFX, CNAB, API Itaú/Santander)
+// converge pra este formato via BancoProvider; o motor de conciliação só conhece
+// este model, nunca o formato nativo do banco.
+model BankTransaction {
+  id              String            @id @default(uuid()) @db.Uuid
+  bank_account_id Int
+  bank_accounts   BankAccount       @relation(fields: [bank_account_id], references: [id], onDelete: Cascade)
+  posted_at       DateTime          @db.Date
+  // Valor com sinal: negativo = débito (pagamento), positivo = crédito.
+  amount          Decimal           @db.Decimal(12, 2)
+  description     String?
+  payee_name      String? // favorecido, quando a fonte informa
+  payee_document  String? // CNPJ/CPF do favorecido (só dígitos)
+  // Id externo da transação (FITID do OFX / id da API). Único por conta.
+  external_id     String?
+  // Fallback de idempotência pra fontes sem id externo confiável:
+  // sha256(conta + data + valor + descrição). Único por conta.
+  dedupe_hash     String
+  source          TransactionSource
+  // Registro cru da fonte (linha do OFX/CNAB ou JSON da API) pra auditoria.
+  raw             Json?
+  imported_by     String?
+  imported_at     DateTime          @default(now()) @db.Timestamptz()
+
+  reconciliation Reconciliation?
+
+  @@unique([bank_account_id, external_id])
+  @@unique([bank_account_id, dedupe_hash])
+  @@index([posted_at])
+  @@map("bank_transactions")
+}
+
+// Resultado do matching: liga UMA movimentação a UM título. A transação só pode
+// ter uma conciliação (1:1 via @unique) — idempotência garantida pelo banco.
+model Reconciliation {
+  id             Int                  @id @default(autoincrement())
+  transaction_id String               @unique @db.Uuid
+  transactions   BankTransaction      @relation(fields: [transaction_id], references: [id], onDelete: Cascade)
+  invoice_id     String               @db.Uuid
+  invoices       PayableInvoice       @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  status         ReconciliationStatus @default(SUGERIDA)
+  // Score 0-100 e motivo legível do match (ex.: "valor exato + CNPJ + data ±1d")
+  // — auditoria de POR QUE o motor casou os dois.
+  score          Int
+  reason         String
+  // "AUTO" quando o motor conciliou sozinho; senão o nome do revisor.
+  matched_by     String
+  decided_by     String?
+  decided_at     DateTime?            @db.Timestamptz()
+  created_at     DateTime             @default(now()) @db.Timestamptz()
+
+  @@index([invoice_id])
+  @@index([status])
+  @@map("reconciliations")
+}
+
+// Trilha de auditoria das integrações (Graph, bancos, parsers, motor).
+model IntegrationLog {
+  id         Int      @id @default(autoincrement())
+  provider   String // GRAPH, ITAU, SANTANDER, OFX, CNAB, ENGINE
+  operation  String // ex.: "delta_sync", "parse_boleto", "listar_movimentacoes"
+  ok         Boolean
+  message    String?
+  details    Json?
+  created_at DateTime @default(now()) @db.Timestamptz()
+
+  @@index([created_at(sort: Desc)])
+  @@index([provider])
+  @@map("integration_logs")
+}
+
+// Caixa de e-mail monitorada via Microsoft Graph. Tokens SEMPRE criptografados
+// (AES-256-GCM, src/lib/crypto.ts) — nunca em texto puro.
+model EmailIntegrationAccount {
+  id                Int       @id @default(autoincrement())
+  mailbox           String    @unique // endereço da caixa
+  tenant_id         String?
+  access_token_enc  String? // access token criptografado
+  refresh_token_enc String? // refresh token criptografado
+  token_expires_at  DateTime? @db.Timestamptz()
+  // deltaLink da última sincronização — próximo poll só traz o que mudou.
+  delta_token       String?
+  enabled           Boolean   @default(true)
+  last_sync_at      DateTime? @db.Timestamptz()
+  last_status       String? // "ok" | "error: ..."
+  created_by        String
+  created_at        DateTime  @default(now()) @db.Timestamptz()
+  updated_at        DateTime  @default(now()) @updatedAt @db.Timestamptz()
+
+  @@map("email_integration_accounts")
+}
+
+// Fila de jobs em Postgres, consumida pelo tick do scheduler (instrumentation)
+// com SELECT ... FOR UPDATE SKIP LOCKED. Sem Redis: instância única no Railway
+// e volume de milhares/mês — ver docs/financeiro/00-arquitetura.md §5.
+model FinanceJob {
+  id         Int              @id @default(autoincrement())
+  kind       String // EMAIL_MESSAGE, PARSE_BOLETO, BANK_SYNC, RECONCILE...
+  payload    Json
+  // Chave de idempotência (ex.: message id do Graph, sha256 do anexo) — o mesmo
+  // trabalho nunca é enfileirado duas vezes.
+  dedupe_key String?          @unique
+  status     FinanceJobStatus @default(PENDENTE)
+  attempts   Int              @default(0)
+  last_error String?
+  run_after  DateTime?        @db.Timestamptz()
+  created_at DateTime         @default(now()) @db.Timestamptz()
+  updated_at DateTime         @default(now()) @updatedAt @db.Timestamptz()
+
+  @@index([status, run_after])
+  @@map("finance_jobs")
 }

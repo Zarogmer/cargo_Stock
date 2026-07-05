@@ -315,6 +315,10 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Pagamento de Navios", href: "/financeiro?tab=navios" },
       { label: "Controle", href: "/financeiro?tab=controle" },
       { label: "Resumo", href: "/financeiro?tab=resumo" },
+      // Contas a Pagar + Conciliação (fornecedores/bancos) são sub-rotas reais,
+      // não abas do page.tsx — módulo novo, ver docs/financeiro/.
+      { label: "Contas a Pagar", href: "/financeiro/contas" },
+      { label: "Conciliação Bancária", href: "/financeiro/conciliacao" },
     ],
   },
   { label: "Conversas", href: "/conversas", icon: "conversas", module: "CONVERSAS" },
