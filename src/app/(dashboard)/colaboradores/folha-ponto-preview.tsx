@@ -98,16 +98,10 @@ export function FolhaPontoPreview({
                 <tr key={r.iso}>
                   <td className={`${cell} ${hl}`}>{ddmm(r.iso)}</td>
                   <td className={`${cell} ${hl}`}>{r.dayName}</td>
-                  {r.worked && r.times ? (
-                    <>
-                      <td className={`${cell} ${yellow}`}>{fmtHHMM(r.times.entrada1)}</td>
-                      <td className={`${cell} ${yellow}`}>{fmtHHMM(r.times.saida1)}</td>
-                      <td className={`${cell} ${yellow}`}>{r.times.entrada2 != null ? fmtHHMM(r.times.entrada2) : ""}</td>
-                      <td className={`${cell} ${yellow}`}>{r.times.saida2 != null ? fmtHHMM(r.times.saida2) : ""}</td>
-                    </>
-                  ) : (
-                    <td colSpan={4} className={`${cell} ${yellow} font-semibold text-gray-500`}>FOLGA</td>
-                  )}
+                  <td className={`${cell} ${yellow}`}>{r.worked && r.times ? fmtHHMM(r.times.entrada1) : ""}</td>
+                  <td className={`${cell} ${yellow}`}>{r.worked && r.times ? fmtHHMM(r.times.saida1) : ""}</td>
+                  <td className={`${cell} ${yellow}`}>{r.worked && r.times?.entrada2 != null ? fmtHHMM(r.times.entrada2) : ""}</td>
+                  <td className={`${cell} ${yellow}`}>{r.worked && r.times?.saida2 != null ? fmtHHMM(r.times.saida2) : ""}</td>
                   <td className={cell}>{r.worked && r.totals ? <span className="text-[#1F7A4D] font-semibold">{fmtHHMM(r.totals.hDiaria)}</span> : dash}</td>
                   <td className={cell}>{r.worked && r.totals ? dur(r.totals.atraso, "text-[#C00000]") : dash}</td>
                   <td className={cell}>{dash}</td>
