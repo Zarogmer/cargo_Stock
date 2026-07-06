@@ -728,7 +728,9 @@ export default function FinanceiroPage() {
         </p>
       </div>
 
-      {/* Filtro de período/porto/cliente — dirige os KPIs e as listas de pagamento */}
+      {/* Filtro de período/porto/cliente — dirige os KPIs e as listas de pagamento.
+          A aba Controle não usa (tem filtros próprios), então some lá. */}
+      {initialTab !== "controle" && (<>
       <div className="flex flex-wrap items-center gap-2 bg-card border border-border rounded-xl p-2">
         <span className="text-xs font-semibold text-text-light px-1">🔎 Filtrar:</span>
         <select
@@ -798,6 +800,7 @@ export default function FinanceiroPage() {
         />
         <KpiCard label="Navios em Aberto" value={kpis.openJobs.toString()} accent="amber" />
       </div>
+      </>)}
 
       <Tabs tabs={financeiroTabs} defaultTab={initialTab} hideHeader />
     </div>
