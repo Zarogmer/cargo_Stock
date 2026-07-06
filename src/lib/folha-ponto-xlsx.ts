@@ -5,13 +5,12 @@
 // <pageSetup>, garantindo um PDF limpo na conversão via LibreOffice.
 import * as XLSX from "xlsx-js-style";
 import PizZip from "pizzip";
-import { ADMIN_DIARIA_MIN, CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, JornadaFilter, MESES_PT, WorkedMap, computeFolha, fmtHHMM } from "./folha-ponto";
+import { CARGA_DIARIA_MIN, COSTADO_DIARIA_MIN, JornadaFilter, WorkedMap, computeFolha, fmtHHMM, periodoLabel } from "./folha-ponto";
 
 export interface FolhaEmployee {
   id: number;
   name: string;
-  worked: WorkedMap; // dias trabalhados no mês (origem dos navios)
-  admin?: boolean; // setor Administrativo → jornada fixa 09:00–18:00 (ignora navios)
+  worked: WorkedMap; // dias trabalhados no período (origem dos navios)
 }
 
 // ── Estilo ─────────────────────────────────────────────────────────────────────
@@ -30,8 +29,8 @@ const F = "Calibri";
 const HHMM = "hh:mm";
 const HHMM_LONG = "[hh]:mm";
 
-function excelSerial(year: number, month1: number, day: number): number {
-  const utc = Date.UTC(year, month1 - 1, day);
+function excelSerialFromIso(iso: string): number {
+  const utc = Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)));
   const epoch = Date.UTC(1899, 11, 30);
   return Math.round((utc - epoch) / 86400000);
 }
@@ -49,12 +48,7 @@ function sanitizeSheetName(name: string, used: Set<string>): string {
 //   - EMBARQUE/COSTADO: um valor por dia da semana (layout oficial: 7h20 / 6h).
 //   - AMBAS: legenda com os dois tipos, deixando claro qual carga é de cada um.
 const CARGA_WEEKDAYS = ["SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO", "DOMINGO", "FERIADOS"];
-const CARGA_FIM_DE_SEMANA = new Set(["SÁBADO", "DOMINGO", "FERIADOS"]);
-function cargaEntries(jornada?: JornadaFilter, admin?: boolean): [string, string][] {
-  // Administrativo: 8h de seg a sex; sábado/domingo/feriado = 0.
-  if (admin) {
-    return CARGA_WEEKDAYS.map((w) => [w, fmtHHMM(CARGA_FIM_DE_SEMANA.has(w) ? 0 : ADMIN_DIARIA_MIN)]);
-  }
+function cargaEntries(jornada?: JornadaFilter): [string, string][] {
   if (jornada === "AMBAS") {
     return [["EMBARQUE", fmtHHMM(CARGA_DIARIA_MIN)], ["COSTADO", fmtHHMM(COSTADO_DIARIA_MIN)]];
   }
@@ -63,15 +57,18 @@ function cargaEntries(jornada?: JornadaFilter, admin?: boolean): [string, string
 }
 
 // Constrói a worksheet de um colaborador.
-function buildSheet(emp: FolhaEmployee, year: number, month1: number, jornada?: JornadaFilter): XLSX.WorkSheet {
-  const { rows: dayRows, totals: monthTotals } = computeFolha(emp.id, emp.worked, year, month1, jornada, emp.admin);
+function buildSheet(emp: FolhaEmployee, startIso: string, endIso: string, jornada?: JornadaFilter, shipName?: string): XLSX.WorkSheet {
+  const { rows: dayRows, totals: monthTotals } = computeFolha(emp.id, emp.worked, startIso, endIso, jornada);
   const COLS = 16; // A..P
   const blankRow = () => Array(COLS).fill(null) as (string | number | null)[];
   const aoa: (string | number | null)[][] = [];
 
   // 0: título · 1: subtítulo · 2: branco · 3: cabeçalho de grupo · 4: branco · 5: cabeçalho de coluna
   aoa.push(["CARGO SHIPS CLEANING", ...Array(COLS - 1).fill(null)]);
-  aoa.push([`FOLHA DE PONTO · ${MESES_PT[month1 - 1]} / ${year}`, ...Array(COLS - 1).fill(null)]);
+  aoa.push([
+    `FOLHA DE PONTO · ${periodoLabel(startIso, endIso)}${shipName ? ` · NAVIO ${shipName.toUpperCase()}` : ""}`,
+    ...Array(COLS - 1).fill(null),
+  ]);
   aoa.push(blankRow());
 
   const groupRow = blankRow();
@@ -89,12 +86,12 @@ function buildSheet(emp: FolhaEmployee, year: number, month1: number, jornada?: 
   aoa.push(headRow);
   const HEAD_ROW = 5;
 
-  const carga = cargaEntries(jornada, emp.admin);
+  const carga = cargaEntries(jornada);
 
   const dayMeta: { row: number; highlight: boolean }[] = [];
   for (const dr of dayRows) {
     const row = blankRow();
-    row[0] = excelSerial(year, month1, dr.day);
+    row[0] = excelSerialFromIso(dr.iso);
     row[1] = dr.dayName;
     if (dr.worked && dr.times && dr.totals) {
       const t = dr.times, tot = dr.totals;
@@ -241,17 +238,20 @@ function injectPageSetup(buf: Buffer): Buffer {
 }
 
 // Gera o workbook (uma aba por colaborador) já com page setup para PDF limpo.
-// `jornada` filtra a folha por tipo (Costado/Embarque); sem ela, todos os dias.
+// A folha cobre o período startIso..endIso (pode cruzar meses). `jornada` filtra
+// por tipo (Costado/Embarque); sem ela, todos os dias. `shipName` (filtro por
+// navio) entra no subtítulo de cada aba.
 export function buildFolhaPontoXlsx(
   employees: FolhaEmployee[],
-  year: number,
-  month1: number,
+  startIso: string,
+  endIso: string,
   jornada?: JornadaFilter,
+  shipName?: string,
 ): Buffer {
   const wb = XLSX.utils.book_new();
   const used = new Set<string>();
   for (const emp of employees) {
-    const ws = buildSheet(emp, year, month1, jornada);
+    const ws = buildSheet(emp, startIso, endIso, jornada, shipName);
     XLSX.utils.book_append_sheet(wb, ws, sanitizeSheetName(emp.name, used));
   }
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { xlsxToPdf } from "@/lib/docx-to-pdf";
-import { AllocInput, JornadaFilter, MESES_PT, expandWorkedDates, isAdminSector } from "@/lib/folha-ponto";
+import { AllocInput, JornadaFilter, expandWorkedDates, periodoFileLabel, rangeDayCount } from "@/lib/folha-ponto";
 import { buildFolhaPontoXlsx, FolhaEmployee } from "@/lib/folha-ponto-xlsx";
 
 export const dynamic = "force-dynamic";
@@ -11,14 +11,22 @@ export const runtime = "nodejs";
 // Gera a Folha de Ponto (Apontamento de Cartões) no layout "CARGO SHIPS CLEANING".
 // Os dias trabalhados saem dos navios cadastrados (job_allocations): COSTADO usa
 // o shift_date do turno; EMBARQUE usa toda a janela do navio (chegada→saída).
+// A folha cobre um período livre de datas (startDate..endDate, pode cruzar meses);
+// `shipId` (opcional) restringe aos dias trabalhados naquele navio.
 // Saída: .xlsx (uma aba por colaborador) ou .pdf (uma página por colaborador).
 
 interface FolhaRequestBody {
   employeeIds?: number[];
-  month?: number; // 1-12
-  year?: number;
-  jornada?: string; // "EMBARQUE" | "COSTADO" | "AMBAS" | "ADMINISTRATIVO" — filtra a folha por tipo
+  startDate?: string; // YYYY-MM-DD (início do período, inclusivo)
+  endDate?: string; // YYYY-MM-DD (fim do período, inclusivo)
+  jornada?: string; // "EMBARQUE" | "COSTADO" | "AMBAS" — filtra a folha por tipo
+  shipId?: string; // filtro por navio: só as alocações desse navio entram
 }
+
+// Período máximo da folha (~4 meses) — evita planilhas absurdas por engano.
+const MAX_RANGE_DAYS = 124;
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Converte os DateTime (@db.Date, meia-noite UTC) do Prisma em "YYYY-MM-DD".
 function isoDate(d: Date | null | undefined): string | null {
@@ -40,27 +48,44 @@ export async function POST(request: NextRequest) {
   }
 
   const ids = Array.isArray(body.employeeIds) ? body.employeeIds.filter((n) => Number.isInteger(n)) : [];
-  const month = Number(body.month);
-  const year = Number(body.year);
+  const startDate = typeof body.startDate === "string" ? body.startDate : "";
+  const endDate = typeof body.endDate === "string" ? body.endDate : "";
+  const shipId = typeof body.shipId === "string" && body.shipId ? body.shipId : null;
   const jornada: JornadaFilter =
     body.jornada === "COSTADO" ? "COSTADO"
-    : body.jornada === "AMBAS" ? "AMBAS"
-    : body.jornada === "ADMINISTRATIVO" ? "ADMINISTRATIVO"
-    : "EMBARQUE";
+    : body.jornada === "EMBARQUE" ? "EMBARQUE"
+    : "AMBAS";
   if (ids.length === 0) {
     return NextResponse.json({ error: "Selecione ao menos um colaborador." }, { status: 400 });
   }
-  if (!(month >= 1 && month <= 12)) {
-    return NextResponse.json({ error: "Mês inválido." }, { status: 400 });
+  if (!ISO_DATE.test(startDate) || !ISO_DATE.test(endDate)) {
+    return NextResponse.json({ error: "Período inválido: informe as datas de início e fim." }, { status: 400 });
   }
-  if (!(year >= 2000 && year <= 2100)) {
-    return NextResponse.json({ error: "Ano inválido." }, { status: 400 });
+  if (endDate < startDate) {
+    return NextResponse.json({ error: "Período inválido: a data final é anterior à inicial." }, { status: 400 });
+  }
+  if (rangeDayCount(startDate, endDate) > MAX_RANGE_DAYS) {
+    return NextResponse.json({ error: `Período muito longo: o máximo é ${MAX_RANGE_DAYS} dias.` }, { status: 400 });
+  }
+
+  // Filtro por navio: valida o navio e restringe as alocações aos jobs dele.
+  let shipName: string | undefined;
+  if (shipId) {
+    const ship = await prisma.ship.findUnique({ where: { id: shipId }, select: { name: true } });
+    if (!ship) {
+      return NextResponse.json({ error: "Navio não encontrado." }, { status: 404 });
+    }
+    shipName = ship.name;
   }
 
   const [employees, allocations] = await Promise.all([
-    prisma.employee.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, sector: true } }),
+    prisma.employee.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }),
     prisma.jobAllocation.findMany({
-      where: { employee_id: { in: ids }, status: "ATIVO" },
+      where: {
+        employee_id: { in: ids },
+        status: "ATIVO",
+        ...(shipId ? { jobs: { ship_id: shipId } } : {}),
+      },
       select: {
         employee_id: true,
         kind: true,
@@ -97,18 +122,18 @@ export async function POST(request: NextRequest) {
     .map((emp) => ({
       id: emp.id,
       name: emp.name,
-      // Administrativo tem folha fixa (seg–sex 09:00–18:00) — ignora os navios.
-      admin: isAdminSector(emp.sector),
-      worked: expandWorkedDates(allocByEmp.get(emp.id) || [], year, month),
+      worked: expandWorkedDates(allocByEmp.get(emp.id) || [], startDate, endDate),
     }));
 
-  const xlsxBuf = buildFolhaPontoXlsx(ordered, year, month, jornada);
+  const xlsxBuf = buildFolhaPontoXlsx(ordered, startDate, endDate, jornada, shipName);
 
   const format = request.nextUrl.searchParams.get("format") === "pdf" ? "pdf" : "xlsx";
-  const periodo = `${MESES_PT[month - 1]} ${year}`;
-  const tipoLabel = jornada === "COSTADO" ? "Costado" : jornada === "AMBAS" ? "Ambas" : jornada === "ADMINISTRATIVO" ? "Administrativo" : "Embarque";
-  const oneName = ordered.length === 1 ? ` ${ordered[0].name.replace(/[\\/:*?"<>|]+/g, "").trim()}` : "";
-  const baseName = `Folha de Ponto ${tipoLabel}${oneName} - ${periodo}`;
+  const periodo = periodoFileLabel(startDate, endDate);
+  const tipoLabel = jornada === "COSTADO" ? "Costado" : jornada === "EMBARQUE" ? "Embarque" : "Ambas";
+  const safe = (s: string) => s.replace(/[\\/:*?"<>|]+/g, "").trim();
+  const shipPart = shipName ? ` ${safe(shipName)}` : "";
+  const oneName = ordered.length === 1 ? ` ${safe(ordered[0].name)}` : "";
+  const baseName = `Folha de Ponto ${tipoLabel}${shipPart}${oneName} - ${periodo}`;
 
   if (format === "pdf") {
     let pdfBuf: Buffer;

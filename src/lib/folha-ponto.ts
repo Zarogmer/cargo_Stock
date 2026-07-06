@@ -14,10 +14,6 @@
 export const CARGA_DIARIA_MIN = 7 * 60 + 20; // 440
 // Jornada do turno de Costado: 6h corridas (sem intervalo de almoço).
 export const COSTADO_DIARIA_MIN = 6 * 60; // 360
-// Jornada administrativa: 09:00–18:00 com 1h de almoço = 8h. Independe de navio:
-// quem é do setor Administrativo bate ponto fixo de segunda a sexta (sem
-// fim de semana e sem feriado nacional), nunca a janela do navio escalado.
-export const ADMIN_DIARIA_MIN = 8 * 60; // 480
 // 1ª faixa de hora extra vai até 4h; o que passar cai na 2ª faixa (PREMISSAS).
 export const FAIXA1_LIMITE_MIN = 4 * 60; // 240
 // Tolerância de atraso/extra (PREMISSAS!C13 = 0:00 → sem tolerância).
@@ -115,29 +111,43 @@ export function daysInMonth(year: number, month1to12: number): number {
   return new Date(Date.UTC(year, month1to12, 0)).getUTCDate();
 }
 
-// ── Folha administrativa (setor Administrativo) ────────────────────────────────
-// Quem é do Administrativo tem jornada fixa de escritório, não a janela do navio.
+// ── Período da folha (intervalo livre de datas) ────────────────────────────────
+// A folha cobre um intervalo de datas qualquer (pode cruzar meses), escolhido na
+// tela por data (De/Até) ou derivado do navio selecionado.
 
-export function isAdminSector(sector?: string | null): boolean {
-  return (sector || "").trim().toUpperCase() === "ADMINISTRATIVO";
+// Quantos dias o intervalo cobre (inclusivo nas duas pontas).
+export function rangeDayCount(startIso: string, endIso: string): number {
+  return isoToSerial(endIso) - isoToSerial(startIso) + 1;
 }
 
-// Dia útil administrativo: segunda a sexta que não seja feriado nacional. Sábado,
-// domingo e feriado ficam de fora (não trabalhados).
-export function isAdminWorkday(iso: string): boolean {
-  const wd = weekdayOf(iso);
-  return wd >= 1 && wd <= 5 && !isHoliday(iso);
+function fmtBR(iso: string): string {
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
 }
 
-// Quantos dias úteis administrativos há no mês — alimenta o contador da tela.
-export function countAdminWorkdays(year: number, month1to12: number): number {
-  const n = daysInMonth(year, month1to12);
-  let count = 0;
-  for (let d = 1; d <= n; d++) {
-    const iso = `${year}-${String(month1to12).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    if (isAdminWorkday(iso)) count++;
+// O intervalo é exatamente um mês-calendário fechado (01..último dia)?
+export function isFullMonth(startIso: string, endIso: string): boolean {
+  if (startIso.slice(0, 7) !== endIso.slice(0, 7)) return false;
+  if (startIso.slice(8, 10) !== "01") return false;
+  const y = Number(startIso.slice(0, 4));
+  const m = Number(startIso.slice(5, 7));
+  return Number(endIso.slice(8, 10)) === daysInMonth(y, m);
+}
+
+// Rótulo do período pro cabeçalho da folha: mês fechado sai como "OUTUBRO / 2026";
+// intervalo livre sai como "24/10/2026 A 08/11/2026".
+export function periodoLabel(startIso: string, endIso: string): string {
+  if (isFullMonth(startIso, endIso)) {
+    return `${MESES_PT[Number(startIso.slice(5, 7)) - 1]} / ${startIso.slice(0, 4)}`;
   }
-  return count;
+  return `${fmtBR(startIso)} A ${fmtBR(endIso)}`;
+}
+
+// Rótulo do período pro nome do arquivo (sem "/" — inválido em filename).
+export function periodoFileLabel(startIso: string, endIso: string): string {
+  if (isFullMonth(startIso, endIso)) {
+    return `${MESES_PT[Number(startIso.slice(5, 7)) - 1]} ${startIso.slice(0, 4)}`;
+  }
+  return `${fmtBR(startIso).replace(/\//g, "-")} a ${fmtBR(endIso).replace(/\//g, "-")}`;
 }
 
 // ── Quais dias o colaborador trabalhou ─────────────────────────────────────────
@@ -174,21 +184,17 @@ export type WorkedMap = Map<string, WorkedDay>;
 
 // Filtro de jornada da folha (o que o RH escolhe na tela). "AMBAS" não filtra:
 // mostra Embarque e Costado juntos na mesma folha (é o que vai pra contabilidade).
-// "ADMINISTRATIVO" é um modo da tela que mostra só o pessoal do setor
-// Administrativo (que já tem jornada fixa seg–sex 09:00–18:00, via isAdminSector).
-export type JornadaFilter = WorkedKind | "AMBAS" | "ADMINISTRATIVO";
+export type JornadaFilter = WorkedKind | "AMBAS";
 
-// Mapa dia (YYYY-MM-DD) → tipo de jornada, a partir das alocações do mês.
+// Mapa dia (YYYY-MM-DD) → tipo de jornada, a partir das alocações recortadas ao
+// período startIso..endIso (inclusivo; pode cruzar meses).
 // Costado (turno específico) tem prioridade sobre Embarque (janela ampla); entre
 // dois turnos de Costado no mesmo dia, fica o que começa mais cedo (determinístico).
 export function expandWorkedDates(
   allocs: AllocInput[],
-  year: number,
-  month1to12: number,
+  startIso: string,
+  endIso: string,
 ): WorkedMap {
-  const mm = String(month1to12).padStart(2, "0");
-  const monthStart = `${year}-${mm}-01`;
-  const monthEnd = `${year}-${mm}-${String(daysInMonth(year, month1to12)).padStart(2, "0")}`;
   const out: WorkedMap = new Map();
 
   // Costado (turno específico) tem prioridade sobre Embarque (janela ampla); e
@@ -210,16 +216,16 @@ export function expandWorkedDates(
     // qualquer outro navio → Embarque (janela do navio).
     if ((a.ship_services || []).includes("COSTADO")) {
       const d = (a.shift_date || "").slice(0, 10);
-      if (d && d >= monthStart && d <= monthEnd) addCostado(d, a.shift_period ?? null);
+      if (d && d >= startIso && d <= endIso) addCostado(d, a.shift_period ?? null);
       continue;
     }
-    // EMBARQUE: toda a janela do navio (chegada → saída), recortada ao mês.
+    // EMBARQUE: toda a janela do navio (chegada → saída), recortada ao período.
     const start = (a.ship_arrival || a.job_start || "").slice(0, 10);
     if (!start) continue;
     const end = (a.ship_departure || start).slice(0, 10);
     // YYYY-MM-DD compara lexicograficamente = cronologicamente.
-    const from = start > monthStart ? start : monthStart;
-    const to = end < monthEnd ? end : monthEnd;
+    const from = start > startIso ? start : startIso;
+    const to = end < endIso ? end : endIso;
     if (from > to) continue;
     for (let s = isoToSerial(from); s <= isoToSerial(to); s++) {
       addEmbarque(serialToIso(s));
@@ -286,15 +292,6 @@ export function timesForDay(seedKey: string, day: WorkedDay): DayTimes {
   return { entrada1, saida1, entrada2, saida2 };
 }
 
-// Horário fixo da jornada administrativa: 09:00–12:00 / 13:00–18:00 (8h, 1h de
-// almoço). Sem variação — é contrato de escritório, não ponto estimado por navio.
-export const ADMIN_TIMES: DayTimes = {
-  entrada1: 9 * 60,
-  saida1: 12 * 60,
-  entrada2: 13 * 60,
-  saida2: 18 * 60,
-};
-
 export interface DayTotals {
   hDiaria: number; // minutos trabalhados no dia
   atraso: number; // minutos abaixo da carga (após tolerância)
@@ -350,19 +347,20 @@ export interface FolhaDayRow {
   dayName: string;
   highlight: boolean; // domingo/feriado → linha realçada
   worked: boolean;
-  kind: WorkedKind | "ADMIN" | null; // tipo de jornada do dia (null = não trabalhou)
+  kind: WorkedKind | null; // tipo de jornada do dia (null = não trabalhou)
   times: DayTimes | null;
   totals: DayTotals | null;
 }
 
 export interface FolhaComputed {
   rows: FolhaDayRow[];
-  totals: DayTotals; // somatório do mês
+  totals: DayTotals; // somatório do período
 }
 
-// Monta as linhas da folha de um colaborador (todos os dias do mês; só os dias
-// trabalhados recebem horário/cálculo). Usada pelo gerador de Excel e pela prévia
-// da tela — assim a visualização bate exatamente com o arquivo gerado.
+// Monta as linhas da folha de um colaborador (todos os dias do período
+// startIso..endIso; só os dias trabalhados recebem horário/cálculo). Usada pelo
+// gerador de Excel e pela prévia da tela — assim a visualização bate exatamente
+// com o arquivo gerado.
 // O tipo de cada dia vem do navio onde a pessoa esteve (definido em
 // expandWorkedDates pelo services): COSTADO = 6h no turno; EMBARQUE = 7h20.
 // `jornada` filtra a folha por tipo: "EMBARQUE"/"COSTADO" passa só os dias
@@ -371,39 +369,29 @@ export interface FolhaComputed {
 export function computeFolha(
   empId: number,
   worked: WorkedMap,
-  year: number,
-  month1to12: number,
+  startIso: string,
+  endIso: string,
   jornada?: JornadaFilter,
-  admin?: boolean,
 ): FolhaComputed {
-  const nDays = daysInMonth(year, month1to12);
   const rows: FolhaDayRow[] = [];
   let totH = 0, totA = 0, totHE = 0, totF1 = 0, totF2 = 0;
-  for (let d = 1; d <= nDays; d++) {
-    const iso = `${year}-${String(month1to12).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  const first = isoToSerial(startIso);
+  const last = isoToSerial(endIso);
+  for (let s = first; s <= last; s++) {
+    const iso = serialToIso(s);
     let times: DayTimes | null = null;
     let totals: DayTotals | null = null;
-    let kind: WorkedKind | "ADMIN" | null = null;
+    let kind: WorkedKind | null = null;
     let isWorked = false;
 
-    if (admin) {
-      // Administrativo: jornada fixa seg–sex (sem navio, sem fim de semana/feriado).
-      if (isAdminWorkday(iso)) {
-        isWorked = true;
-        kind = "ADMIN";
-        times = ADMIN_TIMES;
-        totals = totalsForDay(times, ADMIN_DIARIA_MIN);
-      }
-    } else {
-      const wd = worked.get(iso) ?? null;
-      // Filtra pelo tipo selecionado; "AMBAS" (ou sem filtro) mantém todos os dias.
-      const day = wd && (jornada == null || jornada === "AMBAS" || wd.kind === jornada) ? wd : null;
-      if (day) {
-        isWorked = true;
-        kind = day.kind;
-        times = timesForDay(seedKey(empId, iso), day);
-        totals = totalsForDay(times, cargaForDay(day));
-      }
+    const wd = worked.get(iso) ?? null;
+    // Filtra pelo tipo selecionado; "AMBAS" (ou sem filtro) mantém todos os dias.
+    const day = wd && (jornada == null || jornada === "AMBAS" || wd.kind === jornada) ? wd : null;
+    if (day) {
+      isWorked = true;
+      kind = day.kind;
+      times = timesForDay(seedKey(empId, iso), day);
+      totals = totalsForDay(times, cargaForDay(day));
     }
 
     if (totals) {
@@ -412,7 +400,7 @@ export function computeFolha(
     }
     rows.push({
       iso,
-      day: d,
+      day: Number(iso.slice(8, 10)),
       dayName: DIAS_SEMANA_PT[weekdayOf(iso)],
       highlight: isHighlightedDay(iso),
       worked: isWorked,

@@ -4,19 +4,29 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob } from "@/lib/print";
 import { db } from "@/lib/db";
-import { AllocInput, JornadaFilter, WorkedMap, countAdminWorkdays, countWorkedKind, expandWorkedDates, isAdminSector } from "@/lib/folha-ponto";
+import { AllocInput, JornadaFilter, WorkedMap, countWorkedKind, daysInMonth, expandWorkedDates, periodoFileLabel, rangeDayCount } from "@/lib/folha-ponto";
 import { FolhaPontoPreview } from "./folha-ponto-preview";
 import type { Employee } from "@/types/database";
 
-const MESES = [
-  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
-];
+// Período máximo da folha — igual ao limite da API (~4 meses).
+const MAX_RANGE_DAYS = 124;
 
-// Competência atual (a folha abre sempre no mês de hoje).
-function defaultCompetencia(): { month: number; year: number } {
+// Como o período é escolhido: por intervalo de datas livre ou por navio (o
+// período e as alocações vêm do navio selecionado).
+type FiltroPeriodo = "DATA" | "NAVIO";
+
+// Período default: o mês atual fechado (01..último dia).
+function defaultRange(): { start: string; end: string } {
   const d = new Date();
-  return { month: d.getMonth() + 1, year: d.getFullYear() };
+  const y = d.getFullYear();
+  const m = d.getMonth() + 1;
+  const mm = String(m).padStart(2, "0");
+  return { start: `${y}-${mm}-01`, end: `${y}-${mm}-${String(daysInMonth(y, m)).padStart(2, "0")}` };
+}
+
+function ddmmyy(iso: string | null): string {
+  if (!iso) return "?";
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(2, 4)}`;
 }
 
 // Linhas cruas do Supabase. Buscamos alocações e jobs (com o navio embutido)
@@ -33,19 +43,36 @@ interface JobRow {
   start_date: string | null;
   ships: { arrival_date: string | null; departure_date: string | null; services: string[] | null } | null;
 }
+interface ShipOption {
+  id: string;
+  name: string;
+  arrival_date: string | null;
+  departure_date: string | null;
+}
 
 export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [empSearch, setEmpSearch] = useState("");
-  const init = defaultCompetencia();
-  const [month, setMonth] = useState(init.month);
-  const [year, setYear] = useState(init.year);
+  const init = defaultRange();
+  const [startIso, setStartIso] = useState(init.start);
+  const [endIso, setEndIso] = useState(init.end);
   // Tipo de jornada que filtra a folha. "AMBAS" mostra Embarque e Costado juntos
   // na mesma folha (é o que vai pra contabilidade) — default.
   const [jornada, setJornada] = useState<JornadaFilter>("AMBAS");
+  // Filtro do período: por data (De/Até livres) ou por navio (datas derivadas).
+  const [filtro, setFiltro] = useState<FiltroPeriodo>("DATA");
 
-  // Dias trabalhados por colaborador no mês (best-effort) — alimenta a contagem
-  // e a visualização. Guardamos as datas (não só a contagem) pra renderizar a prévia.
+  // Navios pro filtro "Por navio" (carregados quando o modo é aberto).
+  const [ships, setShips] = useState<ShipOption[] | null>(null);
+  const [shipId, setShipId] = useState("");
+  // Jobs do navio selecionado — restringem as alocações da prévia.
+  const [shipJobIds, setShipJobIds] = useState<string[] | null>(null);
+  // Quem está escalado no navio (pro atalho "selecionar escalados").
+  const [shipEmpIds, setShipEmpIds] = useState<number[]>([]);
+  const [shipLoading, setShipLoading] = useState(false);
+
+  // Dias trabalhados por colaborador no período (best-effort) — alimenta a
+  // contagem e a visualização. Guardamos as datas pra renderizar a prévia.
   const [workedByEmp, setWorkedByEmp] = useState<Record<number, WorkedMap>>({});
   const [previewLoading, setPreviewLoading] = useState(false);
   // Qual colaborador está sendo visualizado.
@@ -61,54 +88,128 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
   }, [employees]);
 
   const filteredEmployees = useMemo(() => {
-    // No modo "Administrativo" a lista mostra só o pessoal do setor Administrativo.
-    const base = jornada === "ADMINISTRATIVO"
-      ? sortedEmployees.filter((e) => isAdminSector(e.sector))
-      : sortedEmployees;
     const q = empSearch.trim().toLowerCase();
-    if (!q) return base;
+    if (!q) return sortedEmployees;
     const qDigits = q.replace(/\D/g, "");
-    return base.filter(
+    return sortedEmployees.filter(
       (e) =>
         e.name.toLowerCase().includes(q) ||
         (qDigits ? (e.cpf || "").replace(/\D/g, "").includes(qDigits) : false)
     );
-  }, [sortedEmployees, empSearch, jornada]);
-
-  // Trocar para "Administrativo" descarta da seleção quem não é do Administrativo
-  // (some da lista, então não geraria folha em branco sem querer).
-  useEffect(() => {
-    if (jornada !== "ADMINISTRATIVO") return;
-    setSelectedIds((prev) => {
-      const next = new Set(
-        [...prev].filter((id) => isAdminSector(employees.find((e) => e.id === id)?.sector))
-      );
-      return next.size === prev.size ? prev : next;
-    });
-  }, [jornada, employees]);
+  }, [sortedEmployees, empSearch]);
 
   const selectedCount = selectedIds.size;
-  const yearOptions = useMemo(() => {
-    const cur = new Date().getFullYear();
-    return [cur + 1, cur, cur - 1, cur - 2];
-  }, []);
 
-  // Carrega a prévia de dias trabalhados quando muda a seleção ou a competência.
+  // Validação do período (compartilhada entre a prévia e o botão de gerar).
+  const rangeError = useMemo(() => {
+    if (filtro === "NAVIO" && !shipId) return "Selecione um navio.";
+    if (!startIso || !endIso) return "Informe as datas de início e fim do período.";
+    if (endIso < startIso) return "A data final é anterior à inicial.";
+    if (rangeDayCount(startIso, endIso) > MAX_RANGE_DAYS) {
+      return `Período muito longo: o máximo é ${MAX_RANGE_DAYS} dias.`;
+    }
+    return null;
+  }, [filtro, shipId, startIso, endIso]);
+  const rangeOk = rangeError === null;
+
+  // Carrega a lista de navios quando o filtro "Por navio" é aberto.
+  useEffect(() => {
+    if (filtro !== "NAVIO" || ships !== null) return;
+    let active = true;
+    (async () => {
+      const { data } = await db
+        .from("ships")
+        .select("id, name, arrival_date, departure_date")
+        .order("arrival_date", { ascending: false })
+        .limit(300);
+      if (active) setShips(((data as unknown as ShipOption[]) || []));
+    })();
+    return () => {
+      active = false;
+    };
+  }, [filtro, ships]);
+
+  // Navio selecionado → deriva o período (chegada/saída + turnos de Costado),
+  // guarda os jobs (pra filtrar as alocações) e quem está escalado nele.
+  useEffect(() => {
+    if (filtro !== "NAVIO" || !shipId) {
+      setShipJobIds(null);
+      setShipEmpIds([]);
+      return;
+    }
+    let active = true;
+    setShipLoading(true);
+    (async () => {
+      try {
+        const [{ data: shipRows }, { data: jobs }] = await Promise.all([
+          db.from("ships").select("arrival_date, departure_date").eq("id", shipId).limit(1),
+          db.from("jobs").select("id, start_date").eq("ship_id", shipId),
+        ]);
+        if (!active) return;
+        const jobIds = ((jobs as { id: string; start_date: string | null }[]) || []).map((j) => j.id);
+        let allocRows: { employee_id: number | null; shift_date: string | null }[] = [];
+        if (jobIds.length > 0) {
+          const { data: allocs } = await db
+            .from("job_allocations")
+            .select("employee_id, shift_date")
+            .in("job_id", jobIds)
+            .eq("status", "ATIVO");
+          if (!active) return;
+          allocRows = (allocs as { employee_id: number | null; shift_date: string | null }[]) || [];
+        }
+        setShipJobIds(jobIds);
+        setShipEmpIds([...new Set(allocRows.map((a) => a.employee_id).filter((n): n is number => n != null))]);
+
+        // Período do navio: da menor à maior data conhecida (chegada, saída,
+        // início dos jobs e turnos de Costado). O usuário pode ajustar depois.
+        const s = ((shipRows as { arrival_date: string | null; departure_date: string | null }[] | null) || [])[0] ?? null;
+        const dates = [
+          s?.arrival_date,
+          s?.departure_date,
+          ...((jobs as { start_date: string | null }[]) || []).map((j) => j.start_date),
+          ...allocRows.map((a) => a.shift_date),
+        ]
+          .filter((d): d is string => !!d)
+          .map((d) => d.slice(0, 10));
+        if (dates.length > 0) {
+          dates.sort();
+          setStartIso(dates[0]);
+          setEndIso(dates[dates.length - 1]);
+        }
+      } finally {
+        if (active) setShipLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [filtro, shipId]);
+
+  // Carrega a prévia de dias trabalhados quando muda a seleção ou o período.
   useEffect(() => {
     const ids = [...selectedIds];
-    if (ids.length === 0) {
+    if (ids.length === 0 || !rangeOk) {
       setWorkedByEmp({});
       return;
     }
+    // No filtro por navio, espera os jobs do navio chegarem antes de buscar.
+    const shipFilter = filtro === "NAVIO" ? shipJobIds : null;
+    if (filtro === "NAVIO" && shipFilter === null) return;
     let active = true;
     setPreviewLoading(true);
     (async () => {
       try {
-        const { data: allocs, error: aErr } = await db
+        if (shipFilter !== null && shipFilter.length === 0) {
+          setWorkedByEmp({});
+          return;
+        }
+        let query = db
           .from("job_allocations")
           .select("employee_id, kind, shift_date, shift_period, job_id")
           .in("employee_id", ids)
           .eq("status", "ATIVO");
+        if (shipFilter !== null) query = query.in("job_id", shipFilter);
+        const { data: allocs, error: aErr } = await query;
         if (!active) return;
         if (aErr || !allocs) {
           setWorkedByEmp({});
@@ -149,7 +250,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
         }
         const next: Record<number, WorkedMap> = {};
         for (const id of ids) {
-          next[id] = expandWorkedDates(byEmp.get(id) || [], year, month);
+          next[id] = expandWorkedDates(byEmp.get(id) || [], startIso, endIso);
         }
         setWorkedByEmp(next);
       } catch {
@@ -161,7 +262,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
     return () => {
       active = false;
     };
-  }, [selectedIds, month, year]);
+  }, [selectedIds, startIso, endIso, rangeOk, filtro, shipJobIds]);
 
   function toggleEmployee(id: number) {
     setSelectedIds((prev) => {
@@ -174,6 +275,12 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
 
   function clearSelection() {
     setSelectedIds(new Set());
+  }
+
+  // Atalho do filtro por navio: seleciona todo mundo escalado no navio.
+  function selectShipCrew() {
+    const active = new Set(sortedEmployees.map((e) => e.id));
+    setSelectedIds(new Set(shipEmpIds.filter((id) => active.has(id))));
   }
 
   // Mantém o colaborador visualizado dentro da seleção (default = primeiro).
@@ -191,13 +298,15 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
 
   const totalWorked = useMemo(
     () => [...selectedIds].reduce((acc, id) => {
-      // Administrativo conta dias úteis fixos (seg–sex), não as alocações.
-      const emp = employees.find((e) => e.id === id);
-      if (emp && isAdminSector(emp.sector)) return acc + countAdminWorkdays(year, month);
       const w = workedByEmp[id];
       return acc + (w ? countWorkedKind(w, jornada) : 0);
     }, 0),
-    [selectedIds, workedByEmp, jornada, employees, year, month]
+    [selectedIds, workedByEmp, jornada]
+  );
+
+  const selectedShip = useMemo(
+    () => (ships || []).find((s) => s.id === shipId) ?? null,
+    [ships, shipId]
   );
 
   const previewEmp = previewId != null ? employees.find((e) => e.id === previewId) ?? null : null;
@@ -221,13 +330,23 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
       setError("Selecione ao menos um colaborador.");
       return;
     }
+    if (!rangeOk) {
+      setError(rangeError);
+      return;
+    }
     const format = action === "xlsx" ? "xlsx" : "pdf";
     setGenerating(action);
     try {
       const res = await fetch(`/api/documents/folha-ponto?format=${format}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employeeIds: ids, month, year, jornada }),
+        body: JSON.stringify({
+          employeeIds: ids,
+          startDate: startIso,
+          endDate: endIso,
+          jornada,
+          shipId: filtro === "NAVIO" ? shipId : undefined,
+        }),
       });
       if (!res.ok) {
         const b = await res.json().catch(() => ({}));
@@ -241,11 +360,12 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        const periodo = `${MESES[month - 1]} ${year}`;
-        const tipoLabel = jornada === "COSTADO" ? "Costado" : jornada === "AMBAS" ? "Ambas" : jornada === "ADMINISTRATIVO" ? "Administrativo" : "Embarque";
+        const periodo = periodoFileLabel(startIso, endIso);
+        const tipoLabel = jornada === "COSTADO" ? "Costado" : jornada === "EMBARQUE" ? "Embarque" : "Ambas";
+        const shipPart = filtro === "NAVIO" && selectedShip ? ` ${selectedShip.name}` : "";
         a.download = ids.length === 1
-          ? `Folha de Ponto ${tipoLabel} - ${periodo}.${format}`
-          : `Folhas de Ponto ${tipoLabel} (${ids.length}) - ${periodo}.${format}`;
+          ? `Folha de Ponto ${tipoLabel}${shipPart} - ${periodo}.${format}`
+          : `Folhas de Ponto ${tipoLabel}${shipPart} (${ids.length}) - ${periodo}.${format}`;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -261,7 +381,8 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
 
   const fieldCls =
     "mt-1 w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30";
-  const canGenerate = !generating && selectedCount > 0;
+  const canGenerate = !generating && selectedCount > 0 && rangeOk;
+  const periodoTexto = rangeOk ? periodoFileLabel(startIso, endIso).toLowerCase() : "—";
 
   return (
     <div className="space-y-5">
@@ -271,15 +392,11 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           <p className="text-xs text-text-light mt-0.5">
             Os dias trabalhados saem dos <strong>navios cadastrados</strong> (o tipo de cada dia vem do
             navio). Escolha a <strong>jornada</strong>: <strong>Embarque</strong> 7h20 (09:00–17:20),{" "}
-            <strong>Costado</strong> 6h (só o 1º turno do dia), <strong>Ambas</strong> (Embarque e Costado na
-            mesma folha — a carga horária ao lado diz qual é qual) ou <strong>Administrativo</strong> (mostra só
-            o pessoal do escritório, jornada fixa 8h). Vários colaboradores geram um único arquivo
-            com uma aba (ou página) para cada.
-          </p>
-          <p className="text-xs text-text-light mt-1.5">
-            <strong>Administrativo:</strong> quem é do setor Administrativo tem folha fixa de escritório
-            (segunda a sexta, <strong>09:00–18:00</strong>, 8h), respeitando feriados nacionais — independe de
-            navio/escala. O tipo de jornada acima é ignorado para esses colaboradores.
+            <strong>Costado</strong> 6h (só o 1º turno do dia) ou <strong>Ambas</strong> (Embarque e Costado
+            na mesma folha — a carga horária ao lado diz qual é qual). O <strong>período</strong> pode ser
+            um intervalo de datas livre (inclusive cruzando meses, ex.: 24/10 a 08/11) ou derivado de um{" "}
+            <strong>navio</strong> (só os dias daquele navio entram na folha). Vários colaboradores geram um
+            único arquivo com uma aba (ou página) para cada.
           </p>
         </div>
 
@@ -287,7 +404,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
         <div>
           <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Tipo de jornada</label>
           <div className="mt-1 inline-flex rounded-lg border border-border overflow-hidden">
-            {([["AMBAS", "Ambas"], ["EMBARQUE", "Embarque · 7h20"], ["COSTADO", "Costado · 6h"], ["ADMINISTRATIVO", "Administrativo · 8h"]] as const).map(([val, label]) => (
+            {([["AMBAS", "Ambas"], ["EMBARQUE", "Embarque · 7h20"], ["COSTADO", "Costado · 6h"]] as const).map(([val, label]) => (
               <button
                 key={val}
                 type="button"
@@ -303,24 +420,78 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           </div>
         </div>
 
-        {/* Competência */}
-        <div className="grid grid-cols-2 gap-3 sm:max-w-xs">
-          <div>
-            <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Mês</label>
-            <select value={month} onChange={(e) => setMonth(Number(e.target.value))} className={fieldCls}>
-              {MESES.map((m, i) => (
-                <option key={m} value={i + 1}>{m}</option>
-              ))}
-            </select>
+        {/* Período — por data livre ou por navio */}
+        <div>
+          <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Período</label>
+          <div className="mt-1 inline-flex rounded-lg border border-border overflow-hidden">
+            {([["DATA", "Por data"], ["NAVIO", "Por navio"]] as const).map(([val, label]) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => setFiltro(val)}
+                aria-pressed={filtro === val}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  filtro === val ? "bg-primary text-white" : "bg-card text-text hover:bg-gray-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-          <div>
-            <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Ano</label>
-            <select value={year} onChange={(e) => setYear(Number(e.target.value))} className={fieldCls}>
-              {yearOptions.map((y) => (
-                <option key={y} value={y}>{y}</option>
-              ))}
-            </select>
+
+          {filtro === "NAVIO" && (
+            <div className="mt-2 sm:max-w-md">
+              <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Navio</label>
+              <select
+                value={shipId}
+                onChange={(e) => setShipId(e.target.value)}
+                className={fieldCls}
+                disabled={ships === null}
+              >
+                <option value="">{ships === null ? "Carregando navios…" : "Selecione o navio…"}</option>
+                {(ships || []).map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                    {s.arrival_date ? ` — ${ddmmyy(s.arrival_date)} a ${ddmmyy(s.departure_date || s.arrival_date)}` : ""}
+                  </option>
+                ))}
+              </select>
+              {shipId && (
+                <p className="mt-1 text-[11px] text-text-light">
+                  {shipLoading
+                    ? "Carregando o período do navio…"
+                    : "Período preenchido pelo navio (chegada → saída e turnos de Costado). Ajuste as datas abaixo se precisar."}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="mt-2 grid grid-cols-2 gap-3 sm:max-w-xs">
+            <div>
+              <label className="text-xs font-semibold text-text-light uppercase tracking-wider">De</label>
+              <input
+                type="date"
+                value={startIso}
+                onChange={(e) => setStartIso(e.target.value)}
+                className={fieldCls}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Até</label>
+              <input
+                type="date"
+                value={endIso}
+                onChange={(e) => setEndIso(e.target.value)}
+                className={fieldCls}
+              />
+            </div>
           </div>
+          {rangeError && filtro === "DATA" && (
+            <p className="mt-1 text-[11px] text-amber-700">{rangeError}</p>
+          )}
+          {rangeError && filtro === "NAVIO" && shipId && (
+            <p className="mt-1 text-[11px] text-amber-700">{rangeError}</p>
+          )}
         </div>
 
         {/* Seleção de colaboradores */}
@@ -329,21 +500,27 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
             <label className="text-xs font-semibold text-text-light uppercase tracking-wider">
               Colaboradores
             </label>
-            {selectedCount > 0 && (
-              <button
-                type="button"
-                onClick={clearSelection}
-                className="text-[11px] font-medium text-primary hover:underline"
-              >
-                Limpar seleção ({selectedCount})
-              </button>
-            )}
+            <div className="flex items-center gap-3">
+              {filtro === "NAVIO" && shipId && shipEmpIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={selectShipCrew}
+                  className="text-[11px] font-medium text-primary hover:underline"
+                >
+                  Selecionar escalados do navio ({shipEmpIds.length})
+                </button>
+              )}
+              {selectedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  className="text-[11px] font-medium text-primary hover:underline"
+                >
+                  Limpar seleção ({selectedCount})
+                </button>
+              )}
+            </div>
           </div>
-          {jornada === "ADMINISTRATIVO" && (
-            <p className="mt-1 text-[11px] text-primary">
-              Mostrando só colaboradores do setor <strong>Administrativo</strong>.
-            </p>
-          )}
           <input
             type="text"
             value={empSearch}
@@ -358,9 +535,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
               filteredEmployees.map((e) => {
                 const checked = selectedIds.has(e.id);
                 const w = workedByEmp[e.id];
-                const dias = isAdminSector(e.sector)
-                  ? countAdminWorkdays(year, month)
-                  : w ? countWorkedKind(w, jornada) : undefined;
+                const dias = w ? countWorkedKind(w, jornada) : undefined;
                 return (
                   <label
                     key={e.id}
@@ -391,9 +566,9 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           <p className="text-[11px] text-text-light mt-1">
             {selectedCount === 0
               ? "Marque um ou mais colaboradores."
-              : `${selectedCount} selecionado${selectedCount === 1 ? "" : "s"} · ${totalWorked} dia${totalWorked === 1 ? "" : "s"} trabalhado${totalWorked === 1 ? "" : "s"} em ${MESES[month - 1]}/${year}.`}
-            {selectedCount > 0 && totalWorked === 0 && !previewLoading && (
-              <span className="text-amber-700"> Nenhum dia encontrado nessa competência — a folha sai em branco.</span>
+              : `${selectedCount} selecionado${selectedCount === 1 ? "" : "s"} · ${totalWorked} dia${totalWorked === 1 ? "" : "s"} trabalhado${totalWorked === 1 ? "" : "s"} no período (${periodoTexto}).`}
+            {selectedCount > 0 && rangeOk && totalWorked === 0 && !previewLoading && (
+              <span className="text-amber-700"> Nenhum dia encontrado nesse período — a folha sai em branco.</span>
             )}
           </p>
         </div>
@@ -418,7 +593,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
       </div>
 
       {/* Visualização */}
-      {selectedCount > 0 && previewEmp && (
+      {selectedCount > 0 && rangeOk && previewEmp && (
         <div className="space-y-2">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <h4 className="text-sm font-semibold text-text">
@@ -444,10 +619,10 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
             name={previewEmp.name}
             empId={previewEmp.id}
             worked={previewWorked}
-            year={year}
-            month={month}
+            startIso={startIso}
+            endIso={endIso}
             jornada={jornada}
-            admin={isAdminSector(previewEmp.sector)}
+            shipName={filtro === "NAVIO" ? selectedShip?.name ?? null : null}
           />
         </div>
       )}
