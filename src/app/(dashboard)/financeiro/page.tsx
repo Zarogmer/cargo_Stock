@@ -6186,6 +6186,8 @@ function ControleTab({
   const [statusFilter, setStatusFilter] = useState<"ATIVOS" | "TODOS">("ATIVOS");
   // Filtro por um colaborador específico ("TODOS" = sem filtro).
   const [employeeFilter, setEmployeeFilter] = useState<number | "TODOS">("TODOS");
+  // Filtro por navio ("TODOS" = sem filtro) — só alocações daquele navio contam.
+  const [shipFilter, setShipFilter] = useState<string | "TODOS">("TODOS");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"name" | "earnings" | "poroes" | "turnos" | "ships">("earnings");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -6256,6 +6258,7 @@ function ControleTab({
       const s = map.get(a.employee_id);
       if (!s) continue;
       const job = jobs.find((j) => j.id === a.job_id);
+      if (shipFilter !== "TODOS" && job?.ship_id !== shipFilter) continue;
       const ship = job?.ship_id ? ships.find((sh) => sh.id === job.ship_id) : null;
       const shipName = ship?.name || job?.name || null;
       const fn = functions.find((f) => f.id === a.function_id);
@@ -6326,7 +6329,57 @@ function ControleTab({
     return Array.from(map.values());
   // passesPeriodFilter / allocMonthKey usam só year/month/jobs — já cobertos.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employees, allocations, jobs, ships, functions, statusFilter, employeeFilter, activity, year, month]);
+  }, [employees, allocations, jobs, ships, functions, statusFilter, employeeFilter, shipFilter, activity, year, month]);
+
+  // ── Navios disponíveis pro filtro (só os que têm job) ───────────────────
+  const shipOptions = useMemo(() => {
+    const used = new Set(jobs.map((j) => j.ship_id).filter(Boolean));
+    return ships
+      .filter((s) => used.has(s.id))
+      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, [jobs, ships]);
+
+  // ── Resumo anual do funcionário selecionado ─────────────────────────────
+  // "Quanto ele já ganhou no ano", por Embarque/Costado — considera o ANO
+  // inteiro selecionado (independe do mês/atividade/navio filtrados).
+  const yearSummary = useMemo(() => {
+    if (employeeFilter === "TODOS") return null;
+    const costadoFn = functions.find((f) => f.name.trim().toUpperCase() === "COSTADO");
+    const costadoRate = costadoFn ? Number(costadoFn.default_rate) : 0;
+    let embarque = 0, costado = 0, poroes = 0, turnos = 0;
+    const shipsEmb = new Set<string>();
+    const shipsCost = new Set<string>();
+    const embarqueJobSeen = new Set<string>();
+    for (const a of allocations) {
+      if (a.status !== "ATIVO") continue;
+      if (a.employee_id !== employeeFilter) continue;
+      if ((a.kind || "EMBARQUE") === "ADMINISTRATIVO") continue;
+      const job = jobs.find((j) => j.id === a.job_id);
+      const dateStr = a.shift_date || job?.start_date || null;
+      if (!dateStr || new Date(dateStr).getFullYear() !== year) continue;
+      const ship = job?.ship_id ? ships.find((sh) => sh.id === job.ship_id) : null;
+      const shipName = ship?.name || job?.name || null;
+      const extra = Number(a.extra_value || 0);
+      if (a.kind === "COSTADO") {
+        const qty = Math.max(1, a.quantity);
+        costado += costadoRate * qty + extra;
+        turnos += qty;
+        if (shipName) shipsCost.add(shipName);
+      } else {
+        const holds = Math.max(1, Number(job?.holds_count || 1));
+        embarque += Number(a.rate) * holds + extra;
+        if (!embarqueJobSeen.has(a.job_id)) {
+          poroes += holds;
+          embarqueJobSeen.add(a.job_id);
+          if (shipName) shipsEmb.add(shipName);
+        }
+      }
+    }
+    return {
+      embarque, costado, total: embarque + costado, poroes, turnos,
+      shipsEmb: shipsEmb.size, shipsCost: shipsCost.size,
+    };
+  }, [employeeFilter, allocations, jobs, ships, functions, year]);
 
   // ── Ordenação & busca ────────────────────────────────────────────────────
   const visibleStats = useMemo(() => {
@@ -6538,6 +6591,21 @@ function ControleTab({
             </select>
           </div>
 
+          {/* Navio específico */}
+          <div>
+            <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Navio</label>
+            <select
+              value={shipFilter}
+              onChange={(e) => setShipFilter(e.target.value)}
+              className="px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none max-w-[200px]"
+            >
+              <option value="TODOS">Todos</option>
+              {shipOptions.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Busca */}
           <div className="flex-1 min-w-[180px]">
             <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Buscar</label>
@@ -6562,6 +6630,29 @@ function ControleTab({
             </button>
           </div>
         </div>
+
+        {/* Resumo anual do funcionário selecionado */}
+        {yearSummary && employeeFilter !== "TODOS" && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-1.5 text-sm">
+            <span className="font-bold text-emerald-900">
+              📅 Ganho no ano {year} · {employees.find((e) => e.id === employeeFilter)?.name || "?"}
+            </span>
+            <span className="text-text">
+              🚢 Embarque: <strong>{brl(yearSummary.embarque)}</strong>
+              <span className="text-xs text-text-light"> ({yearSummary.poroes} {yearSummary.poroes === 1 ? "porão" : "porões"} · {yearSummary.shipsEmb} {yearSummary.shipsEmb === 1 ? "navio" : "navios"})</span>
+            </span>
+            <span className="text-text">
+              ⚓ Costado: <strong>{brl(yearSummary.costado)}</strong>
+              <span className="text-xs text-text-light"> ({yearSummary.turnos} {yearSummary.turnos === 1 ? "turno" : "turnos"} · {yearSummary.shipsCost} {yearSummary.shipsCost === 1 ? "navio" : "navios"})</span>
+            </span>
+            <span className="ml-auto text-emerald-800">
+              Total no ano: <strong className="text-base">{brl(yearSummary.total)}</strong>
+            </span>
+            <span className="w-full text-[10px] text-text-light italic">
+              Considera o ano {year} inteiro (independe do mês, atividade ou navio filtrados).
+            </span>
+          </div>
+        )}
       </div>
 
       {/* KPIs do período ─────────────────────────────────────────────────── */}
@@ -6771,6 +6862,7 @@ function ControleTab({
       <p className="text-[10px] text-text-light italic text-center">
         Período: <strong>{periodLabel}</strong> · Filtro: <strong>{activity === "TODAS" ? "Todas atividades" : activity === "EMBARQUE" ? "Só Embarque" : "Só Costado"}</strong>
         {employeeFilter !== "TODOS" && <> · Funcionário: <strong>{employees.find((e) => e.id === employeeFilter)?.name || "?"}</strong></>}
+        {shipFilter !== "TODOS" && <> · Navio: <strong>{ships.find((s) => s.id === shipFilter)?.name || "?"}</strong></>}
         · Clique numa linha pra ver o detalhamento completo.
       </p>
 
