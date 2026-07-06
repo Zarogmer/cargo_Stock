@@ -88,7 +88,7 @@ function buildSheet(emp: FolhaEmployee, startIso: string, endIso: string, jornad
 
   const carga = cargaEntries(jornada);
 
-  const dayMeta: { row: number; highlight: boolean }[] = [];
+  const dayMeta: { row: number; highlight: boolean; folga: boolean }[] = [];
   for (const dr of dayRows) {
     const row = blankRow();
     row[0] = excelSerialFromIso(dr.iso);
@@ -108,10 +108,15 @@ function buildSheet(emp: FolhaEmployee, startIso: string, endIso: string, jornad
       row[11] = tot.faixa1 ? tot.faixa1 / 1440 : "-";
       row[12] = tot.faixa2 ? tot.faixa2 / 1440 : "-";
     } else {
-      for (let c = 2; c <= 12; c++) row[c] = "-";
+      // Dia não trabalhado = FOLGA nas colunas de horário (igual ao cartão
+      // oficial da contabilidade), traço nas colunas calculadas. As células
+      // 3..5 recebem "" pra existirem no arquivo (borda/fundo sob o merge).
+      row[2] = "FOLGA";
+      row[3] = row[4] = row[5] = "";
+      for (let c = 6; c <= 12; c++) row[c] = "-";
     }
     aoa.push(row);
-    dayMeta.push({ row: aoa.length - 1, highlight: dr.highlight });
+    dayMeta.push({ row: aoa.length - 1, highlight: dr.highlight, folga: !(dr.worked && dr.times && dr.totals) });
   }
 
   // Tabela lateral CARGA HORÁRIA (coluna O/P) a partir da linha de cabeçalho.
@@ -124,6 +129,10 @@ function buildSheet(emp: FolhaEmployee, startIso: string, endIso: string, jornad
 
   const totalRow = blankRow();
   totalRow[0] = "TOTAIS";
+  totalRow[1] = totalRow[2] = "";
+  totalRow[3] = "Faltas / Suspensão";
+  totalRow[4] = "";
+  totalRow[5] = "-";
   totalRow[6] = monthTotals.hDiaria ? monthTotals.hDiaria / 1440 : "-";
   totalRow[7] = monthTotals.atraso ? monthTotals.atraso / 1440 : "-";
   totalRow[9] = monthTotals.he ? monthTotals.he / 1440 : "-";
@@ -170,7 +179,9 @@ function buildSheet(emp: FolhaEmployee, startIso: string, endIso: string, jornad
     set(r, 0, { font: { name: F, sz: 10, bold: dm.highlight }, fill: { patternType: "solid", fgColor: { rgb: dayFill } }, alignment: { horizontal: "center", vertical: "center" }, border: borderAll, numFmt: "dd/mm/yyyy" });
     set(r, 1, { font: { name: F, sz: 10, bold: dm.highlight }, fill: { patternType: "solid", fgColor: { rgb: dayFill } }, alignment: { horizontal: "center", vertical: "center" }, border: borderAll });
     for (let c = 2; c <= 5; c++) {
-      set(r, c, { font: { name: F, sz: 10 }, fill: { patternType: "solid", fgColor: { rgb: YELLOW } }, alignment: { horizontal: "center", vertical: "center" }, border: borderAll, numFmt: HHMM });
+      // Na FOLGA o texto fica em cinza (célula 2..5 mesclada abaixo).
+      const folgaFont = dm.folga ? { name: F, sz: 10, bold: true, color: { rgb: "595959" } } : { name: F, sz: 10 };
+      set(r, c, { font: folgaFont, fill: { patternType: "solid", fgColor: { rgb: YELLOW } }, alignment: { horizontal: "center", vertical: "center" }, border: borderAll, numFmt: HHMM });
     }
     const computed: [number, string][] = [[6, TEAL], [7, RED], [8, GREY_TXT], [9, BLUE_TXT], [10, GREY_TXT], [11, BLUE_TXT], [12, BLUE_TXT]];
     for (const [c, color] of computed) {
@@ -186,6 +197,8 @@ function buildSheet(emp: FolhaEmployee, startIso: string, endIso: string, jornad
     const isText = typeof v === "string" || v == null;
     set(TOTAL_ROW, c, { font: { name: F, sz: 11, bold: true, color: { rgb: isText ? GREY_TXT : (totColor[c] || "000000") } }, fill: { patternType: "solid", fgColor: { rgb: GREY_HEAD } }, alignment: { horizontal: "center", vertical: "center" }, border: borderAll, numFmt: HHMM_LONG });
   }
+  // "Faltas / Suspensão" (célula 3..4 mesclada) em preto legível, não cinza-claro.
+  set(TOTAL_ROW, 3, { font: { name: F, sz: 10, bold: true }, fill: { patternType: "solid", fgColor: { rgb: GREY_HEAD } }, alignment: { horizontal: "center", vertical: "center" }, border: borderAll });
 
   set(OBS_ROW, 0, { font: { name: F, sz: 10, bold: true, color: { rgb: "595959" } }, alignment: { horizontal: "left", vertical: "top" }, border: borderAll });
   for (let c = 1; c <= 12; c++) set(OBS_ROW, c, { border: borderAll });
@@ -197,7 +210,10 @@ function buildSheet(emp: FolhaEmployee, startIso: string, endIso: string, jornad
     { s: { r: 3, c: 6 }, e: { r: 3, c: 10 } },
     { s: { r: 3, c: 11 }, e: { r: 3, c: 12 } },
     { s: { r: 3, c: 14 }, e: { r: 3, c: 15 } },
-    { s: { r: TOTAL_ROW, c: 0 }, e: { r: TOTAL_ROW, c: 5 } },
+    // FOLGA ocupa o bloco Entrada..Saída inteiro (igual ao cartão oficial).
+    ...dayMeta.filter((dm) => dm.folga).map((dm) => ({ s: { r: dm.row, c: 2 }, e: { r: dm.row, c: 5 } })),
+    { s: { r: TOTAL_ROW, c: 0 }, e: { r: TOTAL_ROW, c: 2 } },
+    { s: { r: TOTAL_ROW, c: 3 }, e: { r: TOTAL_ROW, c: 4 } },
     { s: { r: OBS_ROW, c: 0 }, e: { r: OBS_ROW, c: 12 } },
   ];
   ws["!cols"] = [

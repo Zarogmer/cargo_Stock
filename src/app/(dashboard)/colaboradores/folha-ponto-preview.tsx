@@ -98,10 +98,16 @@ export function FolhaPontoPreview({
                 <tr key={r.iso}>
                   <td className={`${cell} ${hl}`}>{ddmm(r.iso)}</td>
                   <td className={`${cell} ${hl}`}>{r.dayName}</td>
-                  <td className={`${cell} ${yellow}`}>{r.worked && r.times ? fmtHHMM(r.times.entrada1) : ""}</td>
-                  <td className={`${cell} ${yellow}`}>{r.worked && r.times ? fmtHHMM(r.times.saida1) : ""}</td>
-                  <td className={`${cell} ${yellow}`}>{r.worked && r.times?.entrada2 != null ? fmtHHMM(r.times.entrada2) : ""}</td>
-                  <td className={`${cell} ${yellow}`}>{r.worked && r.times?.saida2 != null ? fmtHHMM(r.times.saida2) : ""}</td>
+                  {r.worked && r.times ? (
+                    <>
+                      <td className={`${cell} ${yellow}`}>{fmtHHMM(r.times.entrada1)}</td>
+                      <td className={`${cell} ${yellow}`}>{fmtHHMM(r.times.saida1)}</td>
+                      <td className={`${cell} ${yellow}`}>{r.times.entrada2 != null ? fmtHHMM(r.times.entrada2) : ""}</td>
+                      <td className={`${cell} ${yellow}`}>{r.times.saida2 != null ? fmtHHMM(r.times.saida2) : ""}</td>
+                    </>
+                  ) : (
+                    <td colSpan={4} className={`${cell} ${yellow} font-semibold text-gray-500`}>FOLGA</td>
+                  )}
                   <td className={cell}>{r.worked && r.totals ? <span className="text-[#1F7A4D] font-semibold">{fmtHHMM(r.totals.hDiaria)}</span> : dash}</td>
                   <td className={cell}>{r.worked && r.totals ? dur(r.totals.atraso, "text-[#C00000]") : dash}</td>
                   <td className={cell}>{dash}</td>
@@ -114,7 +120,9 @@ export function FolhaPontoPreview({
             })}
             {/* TOTAIS */}
             <tr className="bg-gray-200 font-bold">
-              <td colSpan={6} className="border border-gray-300 px-1.5 py-1 text-center">TOTAIS</td>
+              <td colSpan={3} className="border border-gray-300 px-1.5 py-1 text-center">TOTAIS</td>
+              <td colSpan={2} className="border border-gray-300 px-1.5 py-1 text-center text-[11px]">Faltas / Suspensão</td>
+              <td className="border border-gray-300 px-1.5 py-1 text-center">{dash}</td>
               <td className="border border-gray-300 px-1.5 py-1 text-center text-[#1F7A4D]">{folha.totals.hDiaria ? fmtHHMM(folha.totals.hDiaria) : dash}</td>
               <td className="border border-gray-300 px-1.5 py-1 text-center text-[#C00000]">{folha.totals.atraso ? fmtHHMM(folha.totals.atraso) : dash}</td>
               <td className="border border-gray-300 px-1.5 py-1 text-center">{dash}</td>

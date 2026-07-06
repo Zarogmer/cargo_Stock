@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob } from "@/lib/print";
 import { db } from "@/lib/db";
-import { AllocInput, JornadaFilter, WorkedMap, countWorkedKind, daysInMonth, expandWorkedDates, periodoFileLabel, rangeDayCount } from "@/lib/folha-ponto";
+import { AllocInput, JornadaFilter, WorkedMap, countWorkedKind, expandWorkedDates, periodoFileLabel, rangeDayCount } from "@/lib/folha-ponto";
 import { FolhaPontoPreview } from "./folha-ponto-preview";
 import type { Employee } from "@/types/database";
 
@@ -15,13 +15,18 @@ const MAX_RANGE_DAYS = 124;
 // período e as alocações vêm do navio selecionado).
 type FiltroPeriodo = "DATA" | "NAVIO";
 
-// Período default: o mês atual fechado (01..último dia).
+// Período default: o do cartão de ponto oficial da contabilidade — dia 26 do
+// mês anterior a dia 25 do mês atual (ex.: 26/10 a 25/11).
 function defaultRange(): { start: string; end: string } {
   const d = new Date();
   const y = d.getFullYear();
   const m = d.getMonth() + 1;
-  const mm = String(m).padStart(2, "0");
-  return { start: `${y}-${mm}-01`, end: `${y}-${mm}-${String(daysInMonth(y, m)).padStart(2, "0")}` };
+  const py = m === 1 ? y - 1 : y;
+  const pm = m === 1 ? 12 : m - 1;
+  return {
+    start: `${py}-${String(pm).padStart(2, "0")}-26`,
+    end: `${y}-${String(m).padStart(2, "0")}-25`,
+  };
 }
 
 function ddmmyy(iso: string | null): string {
@@ -395,8 +400,9 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
             <strong>Costado</strong> 6h (só o 1º turno do dia) ou <strong>Ambas</strong> (Embarque e Costado
             na mesma folha — a carga horária ao lado diz qual é qual). O <strong>período</strong> pode ser
             um intervalo de datas livre (inclusive cruzando meses, ex.: 24/10 a 08/11) ou derivado de um{" "}
-            <strong>navio</strong> (só os dias daquele navio entram na folha). Vários colaboradores geram um
-            único arquivo com uma aba (ou página) para cada.
+            <strong>navio</strong> (só os dias daquele navio entram na folha). O padrão é o período do
+            cartão oficial: <strong>26 do mês anterior a 25 do mês atual</strong>. Vários colaboradores
+            geram um único arquivo com uma aba (ou página) para cada.
           </p>
         </div>
 
