@@ -54,6 +54,7 @@ import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { hasPermission } from "@/lib/rbac";
 import { db } from "@/lib/db";
+import { allocCountsAsWorked } from "@/lib/alloc-worked";
 import { Tabs } from "@/components/ui/tabs";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
@@ -5151,9 +5152,11 @@ function FaturarTab({
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [search, setSearch] = useState("");
 
-  // Apenas fechamentos com alocações fazem sentido para faturar
+  // Apenas fechamentos com alocações fazem sentido para faturar. Alocações
+  // liberadas pela finalização do navio continuam faturáveis (a pessoa
+  // trabalhou; a remoção foi só pra soltar a escala do RH).
   const billable = useMemo(
-    () => jobs.filter((j) => allocations.some((a) => a.job_id === j.id && a.status === "ATIVO")),
+    () => jobs.filter((j) => allocations.some((a) => a.job_id === j.id && allocCountsAsWorked(a))),
     [jobs, allocations]
   );
 
@@ -5197,7 +5200,7 @@ function FaturarTab({
       ) : (
         <div className="grid gap-2">
           {filtered.map((j) => {
-            const jobAllocs = allocations.filter((a) => a.job_id === j.id && a.status === "ATIVO");
+            const jobAllocs = allocations.filter((a) => a.job_id === j.id && allocCountsAsWorked(a));
             const total = jobAllocs.reduce((s, a) => s + Number(a.rate) * a.quantity, 0);
             return (
               <button
@@ -5235,7 +5238,7 @@ function FaturarTab({
       <FaturamentoModal
         open={!!selectedJob}
         job={selectedJob}
-        allocations={allocations.filter((a) => a.job_id === selectedJob?.id && a.status === "ATIVO" && (a.kind || "EMBARQUE") !== "ADMINISTRATIVO")}
+        allocations={allocations.filter((a) => a.job_id === selectedJob?.id && allocCountsAsWorked(a) && (a.kind || "EMBARQUE") !== "ADMINISTRATIVO")}
         onClose={() => setSelectedJob(null)}
       />
     </div>
@@ -6252,10 +6255,11 @@ function ControleTab({
     const ctrlCostadoFn = functions.find((f) => f.name.trim().toUpperCase() === "COSTADO");
     const ctrlCostadoRate = ctrlCostadoFn ? Number(ctrlCostadoFn.default_rate) : 0;
 
-    // Toda escalação ATIVA conta — não filtramos por pagamento/status do job:
-    // o painel mostra quem trabalhou com base na escalação, pago ou não.
+    // Toda escalação trabalhada conta — não filtramos por pagamento/status do
+    // job: o painel mostra quem trabalhou com base na escalação, pago ou não.
+    // Inclui alocações liberadas pela finalização do navio (allocCountsAsWorked).
     for (const a of allocations) {
-      if (a.status !== "ATIVO") continue;
+      if (!allocCountsAsWorked(a)) continue;
       if (!passesPeriodFilter(a)) continue;
       if (!a.employee_id) continue;
       const s = map.get(a.employee_id);
@@ -6354,7 +6358,7 @@ function ControleTab({
     const shipsCost = new Set<string>();
     const embarqueJobSeen = new Set<string>();
     for (const a of allocations) {
-      if (a.status !== "ATIVO") continue;
+      if (!allocCountsAsWorked(a)) continue;
       if (a.employee_id !== employeeFilter) continue;
       if ((a.kind || "EMBARQUE") === "ADMINISTRATIVO") continue;
       const job = jobs.find((j) => j.id === a.job_id);
