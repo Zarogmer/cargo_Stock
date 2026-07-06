@@ -54,7 +54,7 @@ import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { hasPermission } from "@/lib/rbac";
 import { db } from "@/lib/db";
-import { allocCountsAsWorked } from "@/lib/alloc-worked";
+import { allocCountsAsWorked, dedupeWorkedAllocations } from "@/lib/alloc-worked";
 import { Tabs } from "@/components/ui/tabs";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
@@ -264,7 +264,13 @@ function calcJobCost(job: Job, allocations: JobAllocation[], adjustments: JobAdj
   adj: number;      // ajustes (adicionais menos reduções)
   total: number;
 } {
-  const jobAllocs = allocations.filter((a) => a.job_id === job.id);
+  // Só o que conta como trabalhado entra no custo (ATIVO ou REMOVIDO pela
+  // liberação de navio finalizado — ver alloc-worked.ts), e cada funcionário
+  // conta uma vez por job/kind: o vaivém entre o auto-add de ADMINISTRATIVO e a
+  // liberação acumulou linhas REMOVIDO duplicadas que inflavam o KPI de Custo.
+  const jobAllocs = dedupeWorkedAllocations(
+    allocations.filter((a) => a.job_id === job.id && allocCountsAsWorked(a))
+  );
   const jobAdjs = adjustments.filter((a) => a.job_id === job.id);
   const base = jobAllocs.reduce((sum, a) => sum + calcAllocBase(a, job.holds_count), 0);
   const adj = jobAdjs.reduce(
@@ -2176,6 +2182,12 @@ function TrabalhosTab({
     return j.status === statusFilter;
   });
 
+  // Navio do modal de detalhe já finalizado? Mesma régua da liberação automática
+  // (release-finished-ships): data de saída estritamente antes de hoje (UTC).
+  const detailShip = detailJob?.ship_id ? ships.find((s) => s.id === detailJob.ship_id) : null;
+  const detailShipFinished = !!detailShip?.departure_date &&
+    detailShip.departure_date.slice(0, 10) < new Date().toISOString().slice(0, 10);
+
   async function handleSyncShips() {
     setSyncing(true);
     setSyncMessage(null);
@@ -2337,7 +2349,10 @@ function TrabalhosTab({
         open={!!detailJob}
         job={detailJob}
         allocations={allocations.filter((a) => a.job_id === detailJob?.id && (a.kind || "EMBARQUE") === "EMBARQUE")}
-        adminAllocations={allocations.filter((a) => a.job_id === detailJob?.id && (a.kind || "EMBARQUE") === "ADMINISTRATIVO" && a.status === "ATIVO")}
+        // Inclui as linhas REMOVIDO pela liberação de navio finalizado: elas contam
+        // como trabalhadas e valem como presença — sem isso o auto-add re-inseria o
+        // administrativo a cada load em navio já finalizado.
+        adminAllocations={allocations.filter((a) => a.job_id === detailJob?.id && (a.kind || "EMBARQUE") === "ADMINISTRATIVO" && allocCountsAsWorked(a))}
         adjustments={adjustments.filter((a) => a.job_id === detailJob?.id)}
         functions={functions}
         employees={employees}
@@ -2346,6 +2361,7 @@ function TrabalhosTab({
         canEditFunction={canEditFunction}
         profileName={profileName}
         kindFilter="EMBARQUE"
+        shipFinished={detailShipFinished}
         onClose={() => setDetailJob(null)}
         onChange={() => { onChange(); }}
       />
@@ -2541,13 +2557,14 @@ interface PurchaseOrderLite {
 }
 
 function JobDetailModal({
-  open, job, allocations, adminAllocations = [], adjustments, functions, employees, specialRates, canEdit, canEditFunction = false, profileName, kindFilter, onClose, onChange,
+  open, job, allocations, adminAllocations = [], adjustments, functions, employees, specialRates, canEdit, canEditFunction = false, profileName, kindFilter, shipFinished = false, onClose, onChange,
 }: {
   open: boolean;
   job: Job | null;
   allocations: JobAllocation[];
   // Administrativo (kind=ADMINISTRATIVO) deste navio — só usado no modal de Embarque,
-  // renderizado numa seção própria. Vazio em Costado.
+  // renderizado numa seção própria. Vazio em Costado. Inclui as linhas REMOVIDO
+  // pela liberação de navio finalizado (contam como trabalhadas).
   adminAllocations?: JobAllocation[];
   adjustments: JobAdjustment[];
   functions: JobFunction[];
@@ -2559,6 +2576,10 @@ function JobDetailModal({
   profileName: string;
   // When set, people come from Escalação (read-only); modal only edits financial layer.
   kindFilter?: "EMBARQUE" | "COSTADO";
+  // Navio com data de saída no passado: bloqueia o auto-add de administrativo —
+  // a liberação (release-finished-ships) removeria de novo no próximo load e o
+  // vaivém acumularia linhas REMOVIDO duplicadas no banco.
+  shipFinished?: boolean;
   onClose: () => void;
   onChange: () => void;
 }) {
@@ -2735,9 +2756,13 @@ function JobDetailModal({
   // navio de Embarque em aberto é aberto e ainda não tem ninguém do administrativo.
   // O valor inicial de cada pessoa vem do valor especial por colaborador
   // (Valores › 👤); sem valor configurado entra como 0 e o usuário ajusta na hora.
+  // Navio finalizado não recebe auto-add (shipFinished) e as linhas REMOVIDO da
+  // liberação contam como presença (vêm em adminAllocations) — sem as duas
+  // guardas, o auto-add e a liberação ficavam se revezando a cada load, criando
+  // linhas duplicadas em produção.
   const adminAutoRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!open || !job || kindFilter !== "EMBARQUE" || !canEdit || job.status === "FECHADO") return;
+    if (!open || !job || kindFilter !== "EMBARQUE" || !canEdit || job.status === "FECHADO" || shipFinished) return;
     if (adminAllocations.length > 0) { adminAutoRef.current = job.id; return; }
     if (adminAutoRef.current === job.id) return;
     adminAutoRef.current = job.id; // marca antes do insert pra não duplicar entre renders
@@ -2766,20 +2791,25 @@ function JobDetailModal({
       if (!res.error) onChange();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, job?.id, adminAllocations.length, kindFilter, canEdit]);
+  }, [open, job?.id, adminAllocations.length, kindFilter, canEdit, shipFinished]);
 
   if (!job) return null;
 
   const cost = calcJobCost(job, allocations.map((a) => ({ ...a, job_id: job.id })), adjustments.map((a) => ({ ...a, job_id: job.id })));
+  // Agregados financeiros usam só o que conta como trabalhado (mesma régua do
+  // calcJobCost) — a tabela de equipe continua mostrando qualquer status.
+  const workedAllocs = dedupeWorkedAllocations(allocations.filter(allocCountsAsWorked));
   // Administrativo: pessoal de escritório com valor fixo por operação. Entra no
   // custo do navio (mão de obra), mas fora da folha/Pluxee (pagos à parte).
+  // Navio finalizado mantém o administrativo (linhas REMOVIDO da liberação),
+  // deduplicado — produção acumulou cópias do vaivém auto-add × liberação.
   const adminFn = functions.find((f) => f.name.trim().toUpperCase() === "ADMINISTRATIVO") || null;
-  const adminActive = adminAllocations.filter((a) => a.status === "ATIVO");
-  const adminTotal = adminActive.reduce((s, a) => s + Number(a.rate) + Number(a.extra_value || 0), 0);
+  const adminWorked = dedupeWorkedAllocations(adminAllocations.filter(allocCountsAsWorked));
+  const adminTotal = adminWorked.reduce((s, a) => s + Number(a.rate) + Number(a.extra_value || 0), 0);
   // Folha = soma de (base + extra - pluxee) por funcionário = cost.base - pluxeeTotal.
   // payroll_value no banco nunca é gravado, então o valor vem das próprias
   // alocações pra refletir 1:1 a coluna Folha da tabela.
-  const pluxeeTotal = allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
+  const pluxeeTotal = workedAllocs.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
   const folhaValue = cost.base - pluxeeTotal;
   // Custo da operação inclui o administrativo (que não passa por folha/Pluxee).
   const custoTotal = cost.total + adminTotal;
@@ -2796,7 +2826,7 @@ function JobDetailModal({
   // gráfico de pizza e a tabela detalhada. A soma das funções = mão de obra base.
   const costBreakdown = (() => {
     const byFn = new Map<string, { total: number; count: number }>();
-    for (const a of allocations) {
+    for (const a of workedAllocs) {
       const name = allocFnName(a);
       const cur = byFn.get(name) || { total: 0, count: 0 };
       cur.total += allocTotalPerson(a);
@@ -2804,7 +2834,7 @@ function JobDetailModal({
       byFn.set(name, cur);
     }
     const slices = Array.from(byFn.entries()).map(([label, v]) => ({ label, value: +v.total.toFixed(2), count: v.count }));
-    if (adminTotal > 0) slices.push({ label: "ADMINISTRATIVO", value: +adminTotal.toFixed(2), count: adminActive.length });
+    if (adminTotal > 0) slices.push({ label: "ADMINISTRATIVO", value: +adminTotal.toFixed(2), count: adminWorked.length });
     if (cost.adj > 0) slices.push({ label: "DESPESAS", value: +cost.adj.toFixed(2), count: adjustments.length });
     slices.sort((a, b) => b.value - a.value);
     const total = slices.reduce((s, x) => s + x.value, 0);
@@ -2816,7 +2846,7 @@ function JobDetailModal({
   const geral = (() => {
     let baseSum = 0;
     let extraSum = 0;
-    for (const a of allocations) {
+    for (const a of workedAllocs) {
       const fn = functions.find((f) => f.id === a.function_id);
       const defaultRate = Number(fn?.default_rate ?? a.rate);
       const isEmb = kindFilter === "EMBARQUE";
@@ -3407,13 +3437,13 @@ function JobDetailModal({
       if (isCostado) {
         for (const row of costadoSummary) workerRows.push({ name: row.name, value: row.total });
       } else {
-        for (const a of allocations) {
+        for (const a of workedAllocs) {
           workerRows.push({
             name: a.employees?.name || a.job_functions?.name || `#${a.function_id}`,
             value: allocTotalPerson(a),
           });
         }
-        for (const a of adminActive) {
+        for (const a of adminWorked) {
           workerRows.push({
             name: a.employees?.name || "Administrativo",
             value: Number(a.rate) + Number(a.extra_value || 0),
@@ -4661,13 +4691,13 @@ function JobDetailModal({
         {kindFilter === "EMBARQUE" && (
           <div>
             <div className="mb-2">
-              <h3 className="text-sm font-semibold">🧑‍💼 Administrativo ({adminActive.length})</h3>
+              <h3 className="text-sm font-semibold">🧑‍💼 Administrativo ({adminWorked.length})</h3>
               <p className="text-[10px] text-text-light mt-0.5">
                 Valor fixo por operação — entra no custo do navio, fora da folha/Pluxee. O valor padrão de
                 cada um vem de <a href="/financeiro?tab=funcoes" className="underline">Valores › 👤</a> e pode ser ajustado aqui só para este navio.
               </p>
             </div>
-            {adminActive.length === 0 ? (
+            {adminWorked.length === 0 ? (
               <p className="text-xs text-text-light italic text-center py-3 bg-gray-50 border border-border rounded-lg">
                 Ninguém do administrativo neste navio.
               </p>
@@ -4682,7 +4712,7 @@ function JobDetailModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {adminActive.map((a) => {
+                    {adminWorked.map((a) => {
                       const emp = employees.find((e) => e.id === a.employee_id);
                       return (
                         <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
@@ -4715,7 +4745,7 @@ function JobDetailModal({
               </div>
             )}
             {canEdit && !isReadOnly && (() => {
-              const allocatedIds = new Set(adminActive.map((a) => a.employee_id));
+              const allocatedIds = new Set(adminWorked.map((a) => a.employee_id));
               const candidates = employees.filter(
                 (e) => e.sector === "ADMINISTRATIVO" && (e.status ?? "ATIVO") !== "INATIVO" && !allocatedIds.has(e.id),
               );
@@ -5200,7 +5230,7 @@ function FaturarTab({
       ) : (
         <div className="grid gap-2">
           {filtered.map((j) => {
-            const jobAllocs = allocations.filter((a) => a.job_id === j.id && allocCountsAsWorked(a));
+            const jobAllocs = dedupeWorkedAllocations(allocations.filter((a) => a.job_id === j.id && allocCountsAsWorked(a)));
             const total = jobAllocs.reduce((s, a) => s + Number(a.rate) * a.quantity, 0);
             return (
               <button
@@ -5238,7 +5268,7 @@ function FaturarTab({
       <FaturamentoModal
         open={!!selectedJob}
         job={selectedJob}
-        allocations={allocations.filter((a) => a.job_id === selectedJob?.id && allocCountsAsWorked(a) && (a.kind || "EMBARQUE") !== "ADMINISTRATIVO")}
+        allocations={dedupeWorkedAllocations(allocations.filter((a) => a.job_id === selectedJob?.id && allocCountsAsWorked(a) && (a.kind || "EMBARQUE") !== "ADMINISTRATIVO"))}
         onClose={() => setSelectedJob(null)}
       />
     </div>
