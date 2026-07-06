@@ -6417,7 +6417,16 @@ function ControleTab({
   const periodKpis = useMemo(() => {
     const workers = stats.filter((s) => s.totalEarnings > 0 || s.embarque.allocations > 0 || s.costado.allocations > 0);
     const totalPaid = stats.reduce((sum, s) => sum + s.totalEarnings, 0);
-    const totalPoroes = stats.reduce((sum, s) => sum + s.embarque.poroes, 0);
+    // Porões do período por JOB distinto: o porão é da operação/navio, não de
+    // cada colaborador — somar s.embarque.poroes de todo mundo multiplicava os
+    // porões do navio pelo tamanho da equipe (ex.: 7 porões × 25 pessoas = 172).
+    const poroesPorJob = new Map<string, number>();
+    for (const s of stats) {
+      for (const h of s.history) {
+        if (h.kind === "EMBARQUE" && (h.poroes ?? 0) > 0) poroesPorJob.set(h.jobId, h.poroes!);
+      }
+    }
+    const totalPoroes = Array.from(poroesPorJob.values()).reduce((sum, n) => sum + n, 0);
     const totalTurnos = stats.reduce((sum, s) => sum + s.costado.turnos, 0);
     const totalHoras = totalTurnos * 6;
     const totalShipsEmbarque = new Set<string>();
