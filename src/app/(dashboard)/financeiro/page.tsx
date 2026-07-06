@@ -6184,7 +6184,8 @@ function ControleTab({
   const [month, setMonth] = useState<number | "TODOS">(now.getMonth());
   const [activity, setActivity] = useState<"TODAS" | "EMBARQUE" | "COSTADO">("TODAS");
   const [statusFilter, setStatusFilter] = useState<"ATIVOS" | "TODOS">("ATIVOS");
-  const [paymentFilter, setPaymentFilter] = useState<"TODOS" | "PAGO">("TODOS");
+  // Filtro por um colaborador específico ("TODOS" = sem filtro).
+  const [employeeFilter, setEmployeeFilter] = useState<number | "TODOS">("TODOS");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"name" | "earnings" | "poroes" | "turnos" | "ships">("earnings");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -6226,6 +6227,7 @@ function ControleTab({
     for (const e of employees) {
       const isActive = (e.status ?? "ATIVO") === "ATIVO";
       if (statusFilter === "ATIVOS" && !isActive) continue;
+      if (employeeFilter !== "TODOS" && e.id !== employeeFilter) continue;
       map.set(e.id, {
         employee: e,
         embarque: { ships: new Set(), poroes: 0, earnings: 0, allocations: 0 },
@@ -6245,12 +6247,10 @@ function ControleTab({
     const ctrlCostadoFn = functions.find((f) => f.name.trim().toUpperCase() === "COSTADO");
     const ctrlCostadoRate = ctrlCostadoFn ? Number(ctrlCostadoFn.default_rate) : 0;
 
+    // Toda escalação ATIVA conta — não filtramos por pagamento/status do job:
+    // o painel mostra quem trabalhou com base na escalação, pago ou não.
     for (const a of allocations) {
       if (a.status !== "ATIVO") continue;
-      if (paymentFilter === "PAGO") {
-        const job = jobs.find((j) => j.id === a.job_id);
-        if (job?.status !== "FECHADO") continue;
-      }
       if (!passesPeriodFilter(a)) continue;
       if (!a.employee_id) continue;
       const s = map.get(a.employee_id);
@@ -6326,7 +6326,7 @@ function ControleTab({
     return Array.from(map.values());
   // passesPeriodFilter / allocMonthKey usam só year/month/jobs — já cobertos.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employees, allocations, jobs, ships, functions, statusFilter, paymentFilter, activity, year, month]);
+  }, [employees, allocations, jobs, ships, functions, statusFilter, employeeFilter, activity, year, month]);
 
   // ── Ordenação & busca ────────────────────────────────────────────────────
   const visibleStats = useMemo(() => {
@@ -6520,25 +6520,22 @@ function ControleTab({
             </div>
           </div>
 
-          {/* Pago vs Tudo */}
+          {/* Funcionário específico */}
           <div>
-            <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Pagamentos</label>
-            <div className="flex gap-1">
-              {(["TODOS", "PAGO"] as const).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setPaymentFilter(s)}
-                  className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition ${
-                    paymentFilter === s
-                      ? "bg-primary text-white border-primary"
-                      : "border-border text-text-light hover:bg-gray-50"
-                  }`}
-                >
-                  {s === "TODOS" ? "Em aberto + pago" : "🔒 Só pago"}
-                </button>
-              ))}
-            </div>
+            <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Funcionário</label>
+            <select
+              value={employeeFilter === "TODOS" ? "TODOS" : String(employeeFilter)}
+              onChange={(e) => setEmployeeFilter(e.target.value === "TODOS" ? "TODOS" : Number(e.target.value))}
+              className="px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none max-w-[220px]"
+            >
+              <option value="TODOS">Todos</option>
+              {[...employees]
+                .filter((e) => statusFilter === "TODOS" || (e.status ?? "ATIVO") === "ATIVO")
+                .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"))
+                .map((e) => (
+                  <option key={e.id} value={e.id}>{e.name}</option>
+                ))}
+            </select>
           </div>
 
           {/* Busca */}
@@ -6773,7 +6770,7 @@ function ControleTab({
 
       <p className="text-[10px] text-text-light italic text-center">
         Período: <strong>{periodLabel}</strong> · Filtro: <strong>{activity === "TODAS" ? "Todas atividades" : activity === "EMBARQUE" ? "Só Embarque" : "Só Costado"}</strong>
-        {paymentFilter === "PAGO" && <> · Só pagamentos <strong>FECHADO</strong></>}
+        {employeeFilter !== "TODOS" && <> · Funcionário: <strong>{employees.find((e) => e.id === employeeFilter)?.name || "?"}</strong></>}
         · Clique numa linha pra ver o detalhamento completo.
       </p>
 
