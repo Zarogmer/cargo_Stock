@@ -596,7 +596,7 @@ export function ConciliacaoPage() {
                 </div>
               </div>
 
-              {/* Tabela de movimentações */}
+              {/* Preview no formato da planilha de conciliação */}
               <div className="bg-card border border-border rounded-xl overflow-x-auto">
                 {loadingTx ? (
                   <p className="p-8 text-center text-text-light text-sm">Carregando...</p>
@@ -605,7 +605,29 @@ export function ConciliacaoPage() {
                     Nenhuma movimentação. Importe um extrato .ofx para começar.
                   </p>
                 ) : (
-                  <table className="w-full text-sm">
+                  <>
+                    {/* Cabeçalho estilo planilha */}
+                    {(() => {
+                      const acc = accounts.find((a) => a.id === selectedAccount);
+                      if (!acc) return null;
+                      return (
+                        <div className="px-4 pt-4 pb-2 text-xs text-text-light space-y-0.5">
+                          <p><span className="font-medium text-text">Nome:</span> {acc.nickname}</p>
+                          <p>
+                            <span className="font-medium text-text">Banco:</span> {BANK_LABELS[acc.bank]}
+                            {acc.agency ? ` · Ag ${acc.agency}` : ""}
+                            {acc.account_number ? ` · CC ${acc.account_number}` : ""}
+                          </p>
+                          <p>
+                            <span className="font-medium text-text">Período:</span>{" "}
+                            {exportMonth
+                              ? `${exportMonth.split("-")[1]}/${exportMonth.split("-")[0]}`
+                              : "todos os lançamentos"}
+                          </p>
+                        </div>
+                      );
+                    })()}
+                    <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-border text-left text-xs text-text-light">
                         <th className="px-3 py-3 font-medium text-center">ok</th>
@@ -617,6 +639,20 @@ export function ConciliacaoPage() {
                       </tr>
                     </thead>
                     <tbody>
+                      {(() => {
+                        const acc = accounts.find((a) => a.id === selectedAccount);
+                        const open = acc ? Number(acc.opening_balance) : 0;
+                        return (
+                          <tr className="border-b border-border bg-gray-50/60 text-xs">
+                            <td className="px-3 py-2" />
+                            <td className="px-3 py-2 text-text-light" />
+                            <td className="px-3 py-2 font-medium text-text-light">SALDO ANTERIOR</td>
+                            <td className="px-3 py-2" />
+                            <td className="px-3 py-2" />
+                            <td className="px-3 py-2 text-right text-text-light">{formatCurrency(open)}</td>
+                          </tr>
+                        );
+                      })()}
                       {visibleTx.map((t) => {
                         const v = Number(t.amount);
                         const ok = isConciliada(t);
@@ -675,12 +711,13 @@ export function ConciliacaoPage() {
                       })}
                     </tbody>
                   </table>
+                  </>
                 )}
               </div>
               <p className="text-xs text-text-light">
-                Marque <b>ok</b> nas linhas conferidas e edite o <b>lançamento</b> — as conciliadas
-                automaticamente já vêm marcadas. Depois clique <b>Exportar Excel</b> pra gerar a planilha
-                no formato da contabilidade.
+                Este é o <b>preview</b> da planilha de conciliação. Marque <b>ok</b> nas linhas conferidas
+                e edite o <b>lançamento</b> — as conciliadas automaticamente já vêm marcadas. Depois clique
+                <b> Exportar Excel</b> pra gerar o arquivo no formato da contabilidade.
               </p>
             </>
           )}
