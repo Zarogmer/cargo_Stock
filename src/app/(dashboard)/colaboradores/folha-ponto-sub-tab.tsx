@@ -173,12 +173,15 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           // viradas para REMOVIDO ("Navio finalizado…") mas a tripulação
           // trabalhou. allocCountsAsWorked é o critério oficial (igual ao
           // Financeiro): ATIVO ou REMOVIDO por navio finalizado.
+          // Exclui kind ADMINISTRATIVO: o admin (Camila, Lucas…) entra automático
+          // no custo do Embarque, mas não trabalha a bordo — não tem folha do navio.
           const { data: allocs } = await db
             .from("job_allocations")
-            .select("employee_id, shift_date, status, removal_reason")
+            .select("employee_id, shift_date, status, removal_reason, kind")
             .in("job_id", jobIds);
           if (!active) return;
-          allocRows = ((allocs as { employee_id: number | null; shift_date: string | null; status: string | null; removal_reason: string | null }[]) || [])
+          allocRows = ((allocs as { employee_id: number | null; shift_date: string | null; status: string | null; removal_reason: string | null; kind: string | null }[]) || [])
+            .filter((a) => a.kind !== "ADMINISTRATIVO")
             .filter(allocCountsAsWorked);
         }
         setShipJobIds(jobIds);
@@ -242,6 +245,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           return;
         }
         const allocRows = (allocs as unknown as (AllocRow & { status: string | null; removal_reason: string | null })[])
+          .filter((a) => a.kind !== "ADMINISTRATIVO")
           .filter(allocCountsAsWorked);
 
         // Navio de cada job (services define o tipo; janela usada no Embarque).

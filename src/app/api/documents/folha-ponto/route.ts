@@ -83,6 +83,9 @@ export async function POST(request: NextRequest) {
     prisma.jobAllocation.findMany({
       where: {
         employee_id: { in: ids },
+        // Só operacional: o admin (kind=ADMINISTRATIVO) entra no custo do
+        // Embarque mas não trabalha a bordo — não tem folha de ponto do navio.
+        kind: { not: "ADMINISTRATIVO" },
         // Conta como trabalhada (igual ao Financeiro / allocCountsAsWorked):
         // ATIVO ou REMOVIDO por navio finalizado — este último é o caso de
         // navio já saído, que é o comum da folha.
