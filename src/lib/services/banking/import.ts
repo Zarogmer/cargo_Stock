@@ -70,6 +70,19 @@ export async function importStatement(
     };
   });
 
+  // Saldo inicial da conta: na PRIMEIRA importação (conta ainda sem
+  // movimentação), semeia com o "SALDO ANTERIOR" do OFX, se veio. Depois disso
+  // não mexe mais (o usuário pode ajustar à mão).
+  if (statement.openingBalance != null) {
+    const already = await prisma.bankTransaction.count({ where: { bank_account_id: bankAccountId } });
+    if (already === 0) {
+      await prisma.bankAccount.update({
+        where: { id: bankAccountId },
+        data: { opening_balance: new Prisma.Decimal(statement.openingBalance.toFixed(2)) },
+      });
+    }
+  }
+
   // ON CONFLICT DO NOTHING em qualquer uma das @@unique — idempotente.
   const { count } = await prisma.bankTransaction.createMany({
     data: rows,

@@ -20,6 +20,7 @@ interface BankAccount {
   agency: string | null;
   account_number: string | null;
   active: boolean;
+  opening_balance: string;
   _count: { transactions: number };
 }
 
@@ -32,6 +33,8 @@ interface Transaction {
   payee_document: string | null;
   reconcilable: boolean;
   source: string;
+  review_status: "PENDENTE" | "CONCILIADO" | "IGNORADO";
+  review_note: string | null;
   reconciliation: {
     id: number;
     status: ReconciliationStatus;
@@ -108,7 +111,11 @@ export function ConciliacaoPage() {
   const [selectedAccount, setSelectedAccount] = useState<number | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loadingTx, setLoadingTx] = useState(false);
-  const [showNonRecon, setShowNonRecon] = useState(false);
+  const [showNonRecon, setShowNonRecon] = useState(true);
+  // Mês selecionado pro export ("" = todos). Formato "YYYY-MM".
+  const [exportMonth, setExportMonth] = useState("");
+  // Nota (lançamento reescrito) em edição, por linha.
+  const [noteEdits, setNoteEdits] = useState<Record<string, string>>({});
 
   // Modal de nova conta
   const [accountModal, setAccountModal] = useState(false);
@@ -280,6 +287,67 @@ export function ConciliacaoPage() {
     } finally {
       setImporting(false);
     }
+  }
+
+  // Saldo corrente por linha: parte do saldo inicial da conta e acumula na
+  // ordem cronológica (inclui transferências internas, que movem caixa).
+  const runningById = useMemo(() => {
+    const acc = accounts.find((a) => a.id === selectedAccount);
+    let running = acc ? Number(acc.opening_balance) : 0;
+    const map: Record<string, number> = {};
+    for (const t of transactions) {
+      running += Number(t.amount);
+      map[t.id] = running;
+    }
+    return map;
+  }, [transactions, accounts, selectedAccount]);
+
+  // Meses presentes no extrato (pro seletor de export).
+  const months = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of transactions) set.add(t.posted_at.slice(0, 7));
+    return [...set].sort().reverse();
+  }, [transactions]);
+
+  function isConciliada(t: Transaction): boolean {
+    return t.review_status === "CONCILIADO" || t.reconciliation?.status === "CONFIRMADA";
+  }
+
+  async function toggleOk(t: Transaction) {
+    // Auto-conciliada (via conta a pagar) não é desmarcada aqui — se preciso,
+    // rejeita na aba Conciliação.
+    if (t.reconciliation?.status === "CONFIRMADA") return;
+    const next = t.review_status === "CONCILIADO" ? "PENDENTE" : "CONCILIADO";
+    setTransactions((prev) => prev.map((x) => (x.id === t.id ? { ...x, review_status: next } : x)));
+    await fetch(`/api/financeiro/extrato/${t.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ review_status: next }),
+    });
+  }
+
+  async function saveNote(t: Transaction) {
+    const note = noteEdits[t.id];
+    if (note === undefined || note === (t.review_note ?? "")) return;
+    setTransactions((prev) => prev.map((x) => (x.id === t.id ? { ...x, review_note: note || null } : x)));
+    await fetch(`/api/financeiro/extrato/${t.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ review_note: note }),
+    });
+  }
+
+  function exportExcel() {
+    if (selectedAccount == null) return;
+    const params = new URLSearchParams({ account: String(selectedAccount) });
+    if (exportMonth) {
+      const [y, m] = exportMonth.split("-").map(Number);
+      const from = `${exportMonth}-01`;
+      const to = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); // último dia do mês
+      params.set("from", from);
+      params.set("to", to);
+    }
+    window.open(`/api/financeiro/extrato/export?${params.toString()}`, "_blank");
   }
 
   if (!canView) {
@@ -469,15 +537,36 @@ export function ConciliacaoPage() {
                     />
                   </label>
                 )}
-                <label className="ml-auto text-xs text-text-light inline-flex items-center gap-1.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={showNonRecon}
-                    onChange={(e) => setShowNonRecon(e.target.checked)}
-                  />
-                  mostrar transferências internas
-                </label>
+                <div className="ml-auto flex items-center gap-2">
+                  <select
+                    value={exportMonth}
+                    onChange={(e) => setExportMonth(e.target.value)}
+                    className="text-sm border border-border rounded-lg px-2 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    title="Mês do Excel"
+                  >
+                    <option value="">Excel: tudo</option>
+                    {months.map((m) => {
+                      const [y, mo] = m.split("-");
+                      return (
+                        <option key={m} value={m}>
+                          {mo}/{y}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <Button variant="secondary" onClick={exportExcel} disabled={transactions.length === 0}>
+                    Exportar Excel
+                  </Button>
+                </div>
               </div>
+              <label className="text-xs text-text-light inline-flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showNonRecon}
+                  onChange={(e) => setShowNonRecon(e.target.checked)}
+                />
+                mostrar transferências internas (aplicação/resgate automático)
+              </label>
 
               {/* Resumo da última importação */}
               {importSummary && (
@@ -519,49 +608,67 @@ export function ConciliacaoPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-border text-left text-xs text-text-light">
-                        <th className="px-4 py-3 font-medium">Data</th>
-                        <th className="px-4 py-3 font-medium">Descrição</th>
-                        <th className="px-4 py-3 font-medium">Favorecido</th>
-                        <th className="px-4 py-3 font-medium text-right">Valor</th>
-                        <th className="px-4 py-3 font-medium">Conciliação</th>
+                        <th className="px-3 py-3 font-medium text-center">ok</th>
+                        <th className="px-3 py-3 font-medium">Data</th>
+                        <th className="px-3 py-3 font-medium">Lançamento</th>
+                        <th className="px-3 py-3 font-medium text-right">Débito</th>
+                        <th className="px-3 py-3 font-medium text-right">Crédito</th>
+                        <th className="px-3 py-3 font-medium text-right">Saldo</th>
                       </tr>
                     </thead>
                     <tbody>
                       {visibleTx.map((t) => {
                         const v = Number(t.amount);
+                        const ok = isConciliada(t);
+                        const auto = t.reconciliation?.status === "CONFIRMADA";
+                        const noteVal = noteEdits[t.id] ?? t.review_note ?? "";
                         return (
                           <tr
                             key={t.id}
-                            className={`border-b border-border last:border-0 ${
-                              t.reconcilable ? "" : "opacity-50"
+                            className={`border-b border-border last:border-0 ${t.reconcilable ? "" : "opacity-60"} ${
+                              ok ? "bg-emerald-50/40" : ""
                             }`}
                           >
-                            <td className="px-4 py-3 whitespace-nowrap text-text">{fmtDateOnly(t.posted_at)}</td>
-                            <td className="px-4 py-3 text-text max-w-[360px] truncate" title={t.description || ""}>
-                              {t.description || "—"}
-                            </td>
-                            <td className="px-4 py-3 text-text-light max-w-[200px] truncate">
-                              {t.payee_name || t.payee_document || "—"}
-                            </td>
-                            <td
-                              className={`px-4 py-3 text-right font-medium whitespace-nowrap ${
-                                v < 0 ? "text-red-600" : "text-emerald-600"
-                              }`}
-                            >
-                              {formatCurrency(v)}
-                            </td>
-                            <td className="px-4 py-3">
-                              {!t.reconcilable ? (
-                                <span className="text-xs text-text-light">transf. interna</span>
-                              ) : t.reconciliation ? (
-                                <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
-                                  {t.reconciliation.status === "CONFIRMADA" ? "conciliado" : "sugerido"}
-                                </span>
+                            <td className="px-3 py-2 text-center">
+                              {t.reconcilable ? (
+                                <input
+                                  type="checkbox"
+                                  checked={ok}
+                                  disabled={!canEdit || auto}
+                                  title={auto ? "Conciliado automaticamente (via conta a pagar)" : "Marcar como conciliado"}
+                                  onChange={() => toggleOk(t)}
+                                />
                               ) : (
-                                <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
-                                  pendente
+                                <span className="text-[10px] text-text-light" title="Transferência interna — não concilia">
+                                  —
                                 </span>
                               )}
+                            </td>
+                            <td className="px-3 py-2 whitespace-nowrap text-text">{fmtDateOnly(t.posted_at)}</td>
+                            <td className="px-3 py-2">
+                              {canEdit ? (
+                                <input
+                                  value={noteVal}
+                                  placeholder={t.payee_name || t.description || ""}
+                                  onChange={(e) => setNoteEdits((prev) => ({ ...prev, [t.id]: e.target.value }))}
+                                  onBlur={() => saveNote(t)}
+                                  className="w-full min-w-[240px] bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-1.5 py-1 text-text focus:outline-none"
+                                  title={t.description || ""}
+                                />
+                              ) : (
+                                <span className="text-text" title={t.description || ""}>
+                                  {t.review_note || t.payee_name || t.description || "—"}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-right font-medium whitespace-nowrap text-red-600">
+                              {v < 0 ? formatCurrency(v) : ""}
+                            </td>
+                            <td className="px-3 py-2 text-right font-medium whitespace-nowrap text-emerald-600">
+                              {v > 0 ? formatCurrency(v) : ""}
+                            </td>
+                            <td className="px-3 py-2 text-right whitespace-nowrap text-text-light">
+                              {formatCurrency(runningById[t.id] ?? 0)}
                             </td>
                           </tr>
                         );
@@ -571,8 +678,9 @@ export function ConciliacaoPage() {
                 )}
               </div>
               <p className="text-xs text-text-light">
-                A conciliação automática (casar cada movimentação com uma conta a pagar) entra na próxima
-                etapa. Por ora, o extrato já fica registrado e sem duplicatas.
+                Marque <b>ok</b> nas linhas conferidas e edite o <b>lançamento</b> — as conciliadas
+                automaticamente já vêm marcadas. Depois clique <b>Exportar Excel</b> pra gerar a planilha
+                no formato da contabilidade.
               </p>
             </>
           )}

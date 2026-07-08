@@ -966,6 +966,10 @@ model BankAccount {
   agency         String?
   account_number String?
   active         Boolean  @default(true)
+  // Saldo antes da primeira movimentação (semente do saldo corrente no extrato
+  // e no Excel de conciliação). Preenchido do "SALDO ANTERIOR" do 1º OFX
+  // importado; ajustável pelo usuário.
+  opening_balance Decimal @default(0) @db.Decimal(14, 2)
   // true quando o provider de API (Fase 6) está habilitado pra esta conta;
   // enquanto false a conta só recebe movimentações por arquivo (OFX/CNAB).
   api_enabled    Boolean  @default(false)
@@ -1009,6 +1013,15 @@ model BankTransaction {
   raw             Json?
   imported_by     String?
   imported_at     DateTime          @default(now()) @db.Timestamptz()
+
+  // ── Revisão manual (a "marca ok" da planilha da contabilidade) ───────────
+  // Independe do casamento com conta a pagar: a linha pode ser conferida e
+  // marcada mesmo sem título (tarifa, salário, etc.). Linha conciliada =
+  // review_status CONCILIADO OU tem Reconciliation CONFIRMADA.
+  review_status   String            @default("PENDENTE") // PENDENTE | CONCILIADO | IGNORADO
+  review_note     String?           // "lançamento" reescrito pra exibição/Excel
+  reviewed_by     String?
+  reviewed_at     DateTime?         @db.Timestamptz()
 
   reconciliation Reconciliation?
 
