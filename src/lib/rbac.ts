@@ -319,6 +319,7 @@ export const NAV_ITEMS: NavItem[] = [
       // não abas do page.tsx — módulo novo, ver docs/financeiro/.
       { label: "Contas a Pagar", href: "/financeiro/contas" },
       { label: "Conciliação Bancária", href: "/financeiro/conciliacao" },
+      { label: "Boletos por e-mail", href: "/financeiro/email" },
     ],
   },
   { label: "Conversas", href: "/conversas", icon: "conversas", module: "CONVERSAS" },

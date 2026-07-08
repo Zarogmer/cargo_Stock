@@ -11,7 +11,7 @@
 // Sem a env configurada, encryptSecret/decryptSecret lançam erro — nunca
 // gravamos segredo em texto puro como fallback.
 
-import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
 const VERSION = "v1";
 const ALGO = "aes-256-gcm";

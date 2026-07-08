@@ -21,6 +21,12 @@ export async function register() {
 
   const { runDueScheduledMessages } = await import("./lib/services/scheduler");
   const { runDueBirthdayMessages } = await import("./lib/services/birthday-message");
+  // Import só-Node (usa node:crypto/pdfjs). O guard NEXT_RUNTIME faz o webpack
+  // tree-shakear isso fora do bundle edge do instrumentation.
+  let runFinanceTick: (() => Promise<unknown>) | null = null;
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    ({ runFinanceTick } = await import("./lib/services/email/tick"));
+  }
   const tick = async () => {
     try {
       await runDueScheduledMessages();
@@ -33,6 +39,13 @@ export async function register() {
       await runDueBirthdayMessages();
     } catch (err) {
       console.error("[birthday] tick error:", (err as Error).message);
+    }
+    // Financeiro: captura de boletos por e-mail (Graph) + fila. Inerte enquanto
+    // o Graph não estiver configurado; isolado dos demais.
+    try {
+      if (runFinanceTick) await runFinanceTick();
+    } catch (err) {
+      console.error("[financeiro] tick error:", (err as Error).message);
     }
   };
 

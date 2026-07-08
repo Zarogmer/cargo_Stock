@@ -8,7 +8,7 @@
 //   2. linha digitável (título já existe com a mesma linha);
 //   3. se não há linha digitável, cai só no SHA-256.
 
-import { createHash } from "crypto";
+import { createHash } from "node:crypto";
 import { Prisma, type PayableOrigin } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { extractBoletoFromPdf } from "./pdf";
