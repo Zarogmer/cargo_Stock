@@ -214,6 +214,18 @@ export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "ESTA
 // também (acesso completo ao Controle).
 export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "ESTAGIO", "EXECUTIVO", "FINANCEIRO", "RH"];
 
+// Papéis que acessam o módulo bancário do Financeiro (Contas a Pagar,
+// Conciliação Bancária, Boletos por e-mail e o Painel financeiro). Dados de
+// banco/saldo/extrato são sensíveis — só Executivo, Financeiro e Tecnologia.
+// Estágio, apesar de ver o resto do Financeiro (Valores/Pagamento de Navios),
+// NÃO entra aqui. Fonte única: sidebar (roles nos sub-itens), páginas e as
+// rotas de API (requireFinance) checam por esta lista.
+export const FINANCEIRO_BANCO_ROLES: Role[] = ["EXECUTIVO", "FINANCEIRO", "TECNOLOGIA"];
+
+export function canAccessFinanceiroBanco(role: Role): boolean {
+  return FINANCEIRO_BANCO_ROLES.includes(role);
+}
+
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/", icon: "dashboard", module: "DASHBOARD" },
   { label: "Navios", href: "/navios", icon: "navios", module: "NAVIOS" },
@@ -315,11 +327,12 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Pagamento de Navios", href: "/financeiro?tab=navios" },
       { label: "Controle", href: "/financeiro?tab=controle" },
       { label: "Resumo", href: "/financeiro?tab=resumo" },
-      // Contas a Pagar + Conciliação (fornecedores/bancos) são sub-rotas reais,
-      // não abas do page.tsx — módulo novo, ver docs/financeiro/.
-      { label: "Contas a Pagar", href: "/financeiro/contas" },
-      { label: "Conciliação Bancária", href: "/financeiro/conciliacao" },
-      { label: "Boletos por e-mail", href: "/financeiro/email" },
+      // Módulo bancário (fornecedores/bancos) — sub-rotas reais, restritas a
+      // FINANCEIRO_BANCO_ROLES (Estágio fica de fora). Ver docs/financeiro/.
+      { label: "Painel", href: "/financeiro/painel", roles: FINANCEIRO_BANCO_ROLES },
+      { label: "Contas a Pagar", href: "/financeiro/contas", roles: FINANCEIRO_BANCO_ROLES },
+      { label: "Conciliação Bancária", href: "/financeiro/conciliacao", roles: FINANCEIRO_BANCO_ROLES },
+      { label: "Boletos por e-mail", href: "/financeiro/email", roles: FINANCEIRO_BANCO_ROLES },
     ],
   },
   { label: "Conversas", href: "/conversas", icon: "conversas", module: "CONVERSAS" },

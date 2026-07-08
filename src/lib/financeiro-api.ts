@@ -1,11 +1,12 @@
-// Guarda de autorização das rotas de API do módulo Contas a Pagar/Conciliação.
-// Usa a mesma matriz do rbac (FINANCEIRO_MOD) em vez de repetir allowlist de
-// roles em cada rota — assim ESTAGIO (view) lê mas não escreve, e mudança de
-// permissão acontece num lugar só.
+// Guarda de autorização das rotas de API do módulo bancário do Financeiro
+// (Contas a Pagar, Conciliação, Boletos, Painel). Além da permissão
+// FINANCEIRO_MOD, exige que o papel esteja em FINANCEIRO_BANCO_ROLES — dados de
+// banco/saldo/extrato são sensíveis, então Estágio (que vê o resto do
+// Financeiro) NÃO acessa. Todas as rotas do módulo novo usam este guard.
 
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { hasPermission, type Permission } from "@/lib/rbac";
+import { hasPermission, canAccessFinanceiroBanco, type Permission } from "@/lib/rbac";
 import type { Role } from "@/types/database";
 import type { Session } from "next-auth";
 
@@ -19,7 +20,7 @@ export async function requireFinance(permission: Permission = "view"): Promise<F
     return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
   }
   const role = session.user.role as Role;
-  if (!hasPermission(role, "FINANCEIRO_MOD", permission)) {
+  if (!canAccessFinanceiroBanco(role) || !hasPermission(role, "FINANCEIRO_MOD", permission)) {
     return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   }
   return { session, userName: session.user.name || session.user.email || "?" };

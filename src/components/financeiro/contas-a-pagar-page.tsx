@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { hasPermission, hasModuleAccess } from "@/lib/rbac";
+import { hasPermission, canAccessFinanceiroBanco } from "@/lib/rbac";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
@@ -154,9 +154,9 @@ const EMPTY_FORM: FormState = {
 export function ContasAPagarPage() {
   const { profile } = useAuth();
   const role = profile?.role || "FINANCEIRO";
-  const canView = hasModuleAccess(role, "FINANCEIRO_MOD");
+  const canView = canAccessFinanceiroBanco(role);
   const canEdit =
-    hasPermission(role, "FINANCEIRO_MOD", "edit") || hasPermission(role, "FINANCEIRO_MOD", "create");
+    canView && (hasPermission(role, "FINANCEIRO_MOD", "edit") || hasPermission(role, "FINANCEIRO_MOD", "create"));
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);

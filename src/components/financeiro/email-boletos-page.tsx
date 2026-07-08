@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { hasPermission, hasModuleAccess } from "@/lib/rbac";
+import { hasPermission, canAccessFinanceiroBanco } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 
 interface EmailAccount {
@@ -31,9 +31,9 @@ function fmtDateTime(iso: string | null): string {
 export function EmailBoletosPage() {
   const { profile } = useAuth();
   const role = profile?.role || "FINANCEIRO";
-  const canView = hasModuleAccess(role, "FINANCEIRO_MOD");
+  const canView = canAccessFinanceiroBanco(role);
   const canEdit =
-    hasPermission(role, "FINANCEIRO_MOD", "edit") || hasPermission(role, "FINANCEIRO_MOD", "create");
+    canView && (hasPermission(role, "FINANCEIRO_MOD", "edit") || hasPermission(role, "FINANCEIRO_MOD", "create"));
 
   const [accounts, setAccounts] = useState<EmailAccount[]>([]);
   const [graphConfigured, setGraphConfigured] = useState(true);
