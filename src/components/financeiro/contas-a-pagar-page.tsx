@@ -135,6 +135,8 @@ interface FormState {
   digitable_line: string;
   bank: string;
   expense_type: string;
+  paid_amount: string;
+  payment_date: string;
   notes: string;
 }
 
@@ -148,6 +150,8 @@ const EMPTY_FORM: FormState = {
   digitable_line: "",
   bank: "",
   expense_type: "",
+  paid_amount: "",
+  payment_date: "",
   notes: "",
 };
 
@@ -300,6 +304,8 @@ export function ContasAPagarPage() {
       digitable_line: inv.digitable_line || "",
       bank: inv.bank || "",
       expense_type: inv.expense_type || "",
+      paid_amount: inv.paid_amount != null ? String(Number(inv.paid_amount)).replace(".", ",") : "",
+      payment_date: inv.payment_date?.slice(0, 10) || "",
       notes: inv.notes || "",
     });
     setFormFile(null);
@@ -385,6 +391,8 @@ export function ContasAPagarPage() {
         digitable_line: form.digitable_line || null,
         bank: form.bank || null,
         expense_type: form.expense_type || null,
+        paid_amount: form.paid_amount ? parseDecimalBR(form.paid_amount) : null,
+        payment_date: form.payment_date || null,
         notes: form.notes || null,
       };
       const res = await fetch(editingId ? `/api/financeiro/contas/${editingId}` : "/api/financeiro/contas", {
@@ -459,7 +467,9 @@ export function ContasAPagarPage() {
   }
 
   const detailTransitions = detail && detail.status in PAYABLE_TRANSITIONS ? PAYABLE_TRANSITIONS[detail.status] : [];
-  const isEditableStatus = detail ? detail.status === "RECEBIDO" || detail.status === "AGUARDANDO_APROVACAO" : false;
+  // Editar liberado em qualquer status menos cancelado — títulos vindos do OFX
+  // trazem dados crus e precisam ser corrigíveis mesmo depois de pagos.
+  const isEditableStatus = detail ? detail.status !== "CANCELADO" : false;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -727,6 +737,27 @@ export function ContasAPagarPage() {
                 onChange={(e) => setForm({ ...form, expense_type: e.target.value })}
                 className={inputCls}
                 placeholder="ex.: Rancho, Combustível..."
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-text-light">Valor pago (R$)</label>
+              <input
+                value={form.paid_amount}
+                onChange={(e) => setForm({ ...form, paid_amount: e.target.value })}
+                className={inputCls}
+                placeholder="se diferente do valor"
+                inputMode="decimal"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-text-light">Data de pagamento</label>
+              <input
+                type="date"
+                value={form.payment_date}
+                onChange={(e) => setForm({ ...form, payment_date: e.target.value })}
+                className={inputCls}
               />
             </div>
           </div>

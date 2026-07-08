@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireFinance } from "@/lib/financeiro-api";
-import { isEditable } from "@/lib/services/payable-status";
 
 // GET /api/financeiro/contas/[id] — detalhe do título (anexos como metadados;
 // o PDF em si é servido por /api/financeiro/anexos/[id]).
@@ -63,12 +62,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     body.barcode !== undefined;
 
   if (wantsCoreEdit) {
-    if (!isEditable(invoice.status)) {
-      return NextResponse.json(
-        { error: `Título ${invoice.status} — só observações podem ser editadas` },
-        { status: 422 }
-      );
-    }
+    // Edição liberada em qualquer status (menos CANCELADO, já barrado acima):
+    // títulos vindos do OFX/boleto trazem dados crus (fornecedor do memo, sem
+    // vencimento) e o usuário precisa poder corrigir mesmo depois de pagos.
     if (body.description !== undefined) {
       const d = String(body.description).trim();
       if (!d) return NextResponse.json({ error: "Descrição é obrigatória" }, { status: 400 });
