@@ -83,7 +83,13 @@ export async function POST(request: NextRequest) {
     prisma.jobAllocation.findMany({
       where: {
         employee_id: { in: ids },
-        status: "ATIVO",
+        // Conta como trabalhada (igual ao Financeiro / allocCountsAsWorked):
+        // ATIVO ou REMOVIDO por navio finalizado — este último é o caso de
+        // navio já saído, que é o comum da folha.
+        OR: [
+          { status: "ATIVO" },
+          { status: "REMOVIDO", removal_reason: { startsWith: "Navio finalizado" } },
+        ],
         ...(shipId ? { jobs: { ship_id: shipId } } : {}),
       },
       select: {

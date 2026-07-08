@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { printPdfBlob } from "@/lib/print";
 import { db } from "@/lib/db";
 import { AllocInput, JornadaFilter, WorkedMap, countWorkedKind, expandWorkedDates, periodoFileLabel, rangeDayCount } from "@/lib/folha-ponto";
+import { allocCountsAsWorked } from "@/lib/alloc-worked";
 import { FolhaPontoPreview } from "./folha-ponto-preview";
 import type { Employee } from "@/types/database";
 
@@ -168,13 +169,17 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
         const jobIds = ((jobs as { id: string; start_date: string | null }[]) || []).map((j) => j.id);
         let allocRows: { employee_id: number | null; shift_date: string | null }[] = [];
         if (jobIds.length > 0) {
+          // Não filtra por status ATIVO: navio finalizado tem as alocações
+          // viradas para REMOVIDO ("Navio finalizado…") mas a tripulação
+          // trabalhou. allocCountsAsWorked é o critério oficial (igual ao
+          // Financeiro): ATIVO ou REMOVIDO por navio finalizado.
           const { data: allocs } = await db
             .from("job_allocations")
-            .select("employee_id, shift_date")
-            .in("job_id", jobIds)
-            .eq("status", "ATIVO");
+            .select("employee_id, shift_date, status, removal_reason")
+            .in("job_id", jobIds);
           if (!active) return;
-          allocRows = (allocs as { employee_id: number | null; shift_date: string | null }[]) || [];
+          allocRows = ((allocs as { employee_id: number | null; shift_date: string | null; status: string | null; removal_reason: string | null }[]) || [])
+            .filter(allocCountsAsWorked);
         }
         setShipJobIds(jobIds);
         setShipEmpIds([...new Set(allocRows.map((a) => a.employee_id).filter((n): n is number => n != null))]);
@@ -222,11 +227,13 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           setWorkedByEmp({});
           return;
         }
+        // Sem filtro de status: inclui as alocações de navio finalizado
+        // (REMOVIDO por liberação) via allocCountsAsWorked, senão a folha de um
+        // navio já saído sairia em branco.
         let query = db
           .from("job_allocations")
-          .select("employee_id, kind, shift_date, shift_period, job_id")
-          .in("employee_id", ids)
-          .eq("status", "ATIVO");
+          .select("employee_id, kind, shift_date, shift_period, job_id, status, removal_reason")
+          .in("employee_id", ids);
         if (shipFilter !== null) query = query.in("job_id", shipFilter);
         const { data: allocs, error: aErr } = await query;
         if (!active) return;
@@ -234,7 +241,8 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           setWorkedByEmp({});
           return;
         }
-        const allocRows = allocs as unknown as AllocRow[];
+        const allocRows = (allocs as unknown as (AllocRow & { status: string | null; removal_reason: string | null })[])
+          .filter(allocCountsAsWorked);
 
         // Navio de cada job (services define o tipo; janela usada no Embarque).
         // Buscamos para TODAS as alocações com job — inclusive Costado.
