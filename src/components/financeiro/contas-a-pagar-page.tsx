@@ -163,6 +163,7 @@ export function ContasAPagarPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [formFile, setFormFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  const [uploadingBoleto, setUploadingBoleto] = useState(false);
 
   // Modal de detalhe
   const [detail, setDetail] = useState<Invoice | null>(null);
@@ -277,6 +278,34 @@ export function ContasAPagarPage() {
     });
     setFormFile(null);
     setFormOpen(true);
+  }
+
+  async function handleBoletoUpload(file: File) {
+    setUploadingBoleto(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/financeiro/boletos/upload", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao ler o boleto");
+        return;
+      }
+      const p = data.parsed || {};
+      const valor = p.amount != null ? `R$ ${Number(p.amount).toFixed(2)}` : "não detectado";
+      const venc = p.dueDate ? p.dueDate.split("-").reverse().join("/") : "não detectado";
+      if (data.status === "duplicate") {
+        alert(`Boleto já estava cadastrado (${data.reason}).`);
+      } else {
+        alert(
+          `Boleto lido!\nValor: ${valor}\nVencimento: ${venc}\nCNPJ: ${p.cnpj || "—"}\n` +
+            (p.digitableLine ? "" : "\n⚠ Linha digitável não detectada no PDF — confira o valor manualmente.")
+        );
+      }
+      await loadAll();
+    } finally {
+      setUploadingBoleto(false);
+    }
   }
 
   async function uploadAttachment(invoiceId: string, file: File): Promise<boolean> {
@@ -395,7 +424,27 @@ export function ContasAPagarPage() {
             Boletos recebidos, aprovação e pagamento de fornecedores
           </p>
         </div>
-        {canEdit && <Button onClick={openCreate}>+ Nova conta</Button>}
+        {canEdit && (
+          <div className="flex gap-2">
+            <label className={`inline-flex items-center ${uploadingBoleto ? "opacity-50" : "cursor-pointer"}`}>
+              <span className="bg-gray-100 hover:bg-gray-200 text-text text-sm font-medium px-4 py-2.5 rounded-lg transition">
+                {uploadingBoleto ? "Lendo boleto..." : "Importar boleto (PDF)"}
+              </span>
+              <input
+                type="file"
+                accept="application/pdf"
+                className="hidden"
+                disabled={uploadingBoleto}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleBoletoUpload(f);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            <Button onClick={openCreate}>+ Nova conta</Button>
+          </div>
+        )}
       </div>
 
       {/* KPIs */}
