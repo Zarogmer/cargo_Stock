@@ -92,16 +92,23 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [employees]);
 
+  // No modo "Por navio", a lista já vem restrita a quem esteve escalado no
+  // navio — é assim que o pessoal pensa a folha ("quem foi no navio tal").
   const filteredEmployees = useMemo(() => {
+    let base = sortedEmployees;
+    if (filtro === "NAVIO" && shipId) {
+      const crew = new Set(shipEmpIds);
+      base = base.filter((e) => crew.has(e.id));
+    }
     const q = empSearch.trim().toLowerCase();
-    if (!q) return sortedEmployees;
+    if (!q) return base;
     const qDigits = q.replace(/\D/g, "");
-    return sortedEmployees.filter(
+    return base.filter(
       (e) =>
         e.name.toLowerCase().includes(q) ||
         (qDigits ? (e.cpf || "").replace(/\D/g, "").includes(qDigits) : false)
     );
-  }, [sortedEmployees, empSearch]);
+  }, [sortedEmployees, empSearch, filtro, shipId, shipEmpIds]);
 
   const selectedCount = selectedIds.size;
 
@@ -466,7 +473,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
                 <p className="mt-1 text-[11px] text-text-light">
                   {shipLoading
                     ? "Carregando o período do navio…"
-                    : "Período preenchido pelo navio (chegada → saída e turnos de Costado). Ajuste as datas abaixo se precisar."}
+                    : "Período preenchido pelo navio (chegada → saída e turnos de Costado). A lista abaixo mostra só quem foi escalado neste navio. Ajuste as datas se precisar."}
                 </p>
               )}
             </div>
@@ -513,7 +520,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
                   onClick={selectShipCrew}
                   className="text-[11px] font-medium text-primary hover:underline"
                 >
-                  Selecionar escalados do navio ({shipEmpIds.length})
+                  Selecionar todos ({shipEmpIds.length})
                 </button>
               )}
               {selectedCount > 0 && (
@@ -536,7 +543,15 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
           />
           <div className="mt-1 max-h-56 overflow-y-auto border border-border rounded-lg divide-y divide-border">
             {filteredEmployees.length === 0 ? (
-              <p className="px-3 py-2 text-xs text-text-light">Nenhum colaborador encontrado.</p>
+              <p className="px-3 py-2 text-xs text-text-light">
+                {filtro === "NAVIO" && shipId
+                  ? shipLoading
+                    ? "Carregando os escalados do navio…"
+                    : empSearch.trim()
+                      ? "Nenhum escalado do navio bate com a busca."
+                      : "Nenhum colaborador escalado nesse navio."
+                  : "Nenhum colaborador encontrado."}
+              </p>
             ) : (
               filteredEmployees.map((e) => {
                 const checked = selectedIds.has(e.id);
