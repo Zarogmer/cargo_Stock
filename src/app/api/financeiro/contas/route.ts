@@ -81,6 +81,8 @@ export async function POST(request: NextRequest) {
       digitable_line: digitableLine,
       barcode: body.barcode ? String(body.barcode).replace(/\D/g, "") : null,
       notes: body.notes ? String(body.notes) : null,
+      bank: body.bank ? String(body.bank).trim() : null,
+      expense_type: body.expense_type ? String(body.expense_type).trim() : null,
       origin: "MANUAL",
       status: autoReason ? "APROVADO" : "AGUARDANDO_APROVACAO",
       approved_by: autoReason,

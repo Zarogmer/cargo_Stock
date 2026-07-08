@@ -44,6 +44,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   const data: Record<string, unknown> = {};
   if (body.notes !== undefined) data.notes = body.notes ? String(body.notes) : null;
+  // Campos do controle de vencimentos, editáveis em qualquer status (menos cancelado).
+  if (body.bank !== undefined) data.bank = body.bank ? String(body.bank).trim() : null;
+  if (body.expense_type !== undefined) data.expense_type = body.expense_type ? String(body.expense_type).trim() : null;
+  if (body.paid_amount !== undefined) {
+    data.paid_amount = body.paid_amount === null || body.paid_amount === "" ? null : new Prisma.Decimal(Number(body.paid_amount).toFixed(2));
+  }
+  if (body.payment_date !== undefined) data.payment_date = body.payment_date ? new Date(body.payment_date) : null;
 
   const wantsCoreEdit =
     body.description !== undefined ||

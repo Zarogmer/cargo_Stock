@@ -41,11 +41,15 @@ interface Invoice {
   amount: string; // Prisma Decimal serializa como string
   due_date: string | null;
   status: PayableStatus;
-  origin: "EMAIL" | "MANUAL";
+  origin: string;
   digitable_line: string | null;
   barcode: string | null;
   payee_name: string | null;
   payee_document: string | null;
+  bank: string | null;
+  expense_type: string | null;
+  paid_amount: string | null;
+  payment_date: string | null;
   notes: string | null;
   approved_by: string | null;
   approved_at: string | null;
@@ -129,6 +133,8 @@ interface FormState {
   payee_name: string;
   payee_document: string;
   digitable_line: string;
+  bank: string;
+  expense_type: string;
   notes: string;
 }
 
@@ -140,6 +146,8 @@ const EMPTY_FORM: FormState = {
   payee_name: "",
   payee_document: "",
   digitable_line: "",
+  bank: "",
+  expense_type: "",
   notes: "",
 };
 
@@ -164,6 +172,9 @@ export function ContasAPagarPage() {
   const [formFile, setFormFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploadingBoleto, setUploadingBoleto] = useState(false);
+  const [importingOfx, setImportingOfx] = useState(false);
+  // Mês de referência do controle ("ALL" = todos). Formato "YYYY-MM".
+  const [monthFilter, setMonthFilter] = useState<string>("ALL");
 
   // Modal de detalhe
   const [detail, setDetail] = useState<Invoice | null>(null);
@@ -207,8 +218,26 @@ export function ContasAPagarPage() {
 
   // ── Derivados: filtros e KPIs ─────────────────────────────────────────────
 
+  // Mês de referência de um título: data de pagto (se pago) senão vencimento
+  // senão criação. É por ele que o controle mensal agrupa (como a planilha).
+  function refMonthOf(inv: Invoice): string {
+    const d = inv.payment_date || inv.due_date || inv.created_at;
+    return d ? d.slice(0, 7) : "";
+  }
+
+  // Meses presentes (pro seletor).
+  const months = useMemo(() => {
+    const set = new Set<string>();
+    for (const inv of invoices) {
+      const m = refMonthOf(inv);
+      if (m) set.add(m);
+    }
+    return [...set].sort().reverse();
+  }, [invoices]);
+
   const filtered = useMemo(() => {
     return invoices.filter((inv) => {
+      if (monthFilter !== "ALL" && refMonthOf(inv) !== monthFilter) return false;
       if (statusFilter === "ABERTAS" && !OPEN_STATUSES.includes(inv.status)) return false;
       if (statusFilter !== "ABERTAS" && statusFilter !== "ALL" && inv.status !== statusFilter) return false;
       if (search) {
@@ -218,6 +247,8 @@ export function ContasAPagarPage() {
           inv.payee_document,
           inv.suppliers?.name,
           inv.suppliers?.cnpj,
+          inv.bank,
+          inv.expense_type,
           inv.digitable_line,
         ]
           .filter(Boolean)
@@ -226,34 +257,27 @@ export function ContasAPagarPage() {
       }
       return true;
     });
-  }, [invoices, statusFilter, search]);
+  }, [invoices, statusFilter, search, monthFilter]);
 
-  const kpis = useMemo(() => {
+  // RESUMO do mês selecionado (ou de tudo), no espírito da aba RESUMO da
+  // planilha: Falta pagar / Pago / Despesas (total) + contagem de vencidas.
+  const resumo = useMemo(() => {
     const today = todayStr();
-    const in7 = addDaysStr(7);
-    const month = today.slice(0, 7);
-    let openCount = 0;
-    let openSum = 0;
-    let dueSoonCount = 0;
-    let dueSoonSum = 0;
+    const scope = invoices.filter((inv) => monthFilter === "ALL" || refMonthOf(inv) === monthFilter);
+    let faltaPagar = 0;
+    let pago = 0;
     let overdueCount = 0;
-    let paidMonthSum = 0;
-    for (const inv of invoices) {
+    for (const inv of scope) {
       const amount = Number(inv.amount) || 0;
-      const due = inv.due_date?.slice(0, 10) || null;
-      if (OPEN_STATUSES.includes(inv.status)) {
-        openCount++;
-        openSum += amount;
-        if (due && due < today) overdueCount++;
-        else if (due && due <= in7) {
-          dueSoonCount++;
-          dueSoonSum += amount;
-        }
+      if (inv.status === "PAGO") {
+        pago += inv.paid_amount != null ? Number(inv.paid_amount) : amount;
+      } else if (inv.status !== "CANCELADO") {
+        faltaPagar += amount;
+        if (inv.due_date && inv.due_date.slice(0, 10) < today) overdueCount++;
       }
-      if (inv.status === "PAGO" && inv.paid_at?.slice(0, 7) === month) paidMonthSum += amount;
     }
-    return { openCount, openSum, dueSoonCount, dueSoonSum, overdueCount, paidMonthSum };
-  }, [invoices]);
+    return { faltaPagar, pago, total: faltaPagar + pago, overdueCount };
+  }, [invoices, monthFilter]);
 
   // ── Ações ─────────────────────────────────────────────────────────────────
 
@@ -274,6 +298,8 @@ export function ContasAPagarPage() {
       payee_name: inv.payee_name || "",
       payee_document: inv.payee_document || "",
       digitable_line: inv.digitable_line || "",
+      bank: inv.bank || "",
+      expense_type: inv.expense_type || "",
       notes: inv.notes || "",
     });
     setFormFile(null);
@@ -308,6 +334,28 @@ export function ContasAPagarPage() {
     }
   }
 
+  async function handleOfxImport(file: File) {
+    setImportingOfx(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/financeiro/contas/import-ofx", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao importar o extrato");
+        return;
+      }
+      alert(
+        `Extrato ${data.bank} importado: ${data.created} pagamento(s) novo(s), ${data.duplicates} já existiam.\n` +
+          `(${data.skippedCredits} crédito(s) ignorado(s) — não são contas a pagar.)\n\n` +
+          "Os títulos entraram como PAGOS. Complete vencimento/NF/tipo onde precisar."
+      );
+      await loadAll();
+    } finally {
+      setImportingOfx(false);
+    }
+  }
+
   async function uploadAttachment(invoiceId: string, file: File): Promise<boolean> {
     const fd = new FormData();
     fd.append("file", file);
@@ -335,6 +383,8 @@ export function ContasAPagarPage() {
         payee_name: form.payee_name || null,
         payee_document: form.payee_document || null,
         digitable_line: form.digitable_line || null,
+        bank: form.bank || null,
+        expense_type: form.expense_type || null,
         notes: form.notes || null,
       };
       const res = await fetch(editingId ? `/api/financeiro/contas/${editingId}` : "/api/financeiro/contas", {
@@ -421,11 +471,27 @@ export function ContasAPagarPage() {
             <span className="text-lg font-semibold text-text-light">Contas a Pagar</span>
           </div>
           <p className="text-text-light text-sm mt-0.5">
-            Boletos recebidos, aprovação e pagamento de fornecedores
+            Controle de vencimentos — importe o extrato ou o boleto, ou lance à mão
           </p>
         </div>
         {canEdit && (
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <label className={`inline-flex items-center ${importingOfx ? "opacity-50" : "cursor-pointer"}`}>
+              <span className="bg-primary hover:bg-primary-dark text-white text-sm font-medium px-4 py-2.5 rounded-lg transition">
+                {importingOfx ? "Importando..." : "Importar extrato (OFX)"}
+              </span>
+              <input
+                type="file"
+                accept=".ofx,application/x-ofx,application/octet-stream"
+                className="hidden"
+                disabled={importingOfx}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleOfxImport(f);
+                  e.target.value = "";
+                }}
+              />
+            </label>
             <label className={`inline-flex items-center ${uploadingBoleto ? "opacity-50" : "cursor-pointer"}`}>
               <span className="bg-gray-100 hover:bg-gray-200 text-text text-sm font-medium px-4 py-2.5 rounded-lg transition">
                 {uploadingBoleto ? "Lendo boleto..." : "Importar boleto (PDF)"}
@@ -447,33 +513,46 @@ export function ContasAPagarPage() {
         )}
       </div>
 
-      {/* KPIs */}
+      {/* RESUMO (do mês selecionado, no espírito da aba RESUMO da planilha) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-card border border-border rounded-xl p-4">
-          <p className="text-xs text-text-light">Em aberto</p>
-          <p className="text-xl font-bold text-text">{formatCurrency(kpis.openSum)}</p>
-          <p className="text-xs text-text-light">{kpis.openCount} título(s)</p>
+          <p className="text-xs text-text-light">Falta pagar {monthFilter !== "ALL" ? "(mês)" : ""}</p>
+          <p className="text-xl font-bold text-amber-600">{formatCurrency(resumo.faltaPagar)}</p>
         </div>
         <div className="bg-card border border-border rounded-xl p-4">
-          <p className="text-xs text-text-light">Vencendo em 7 dias</p>
-          <p className="text-xl font-bold text-amber-600">{formatCurrency(kpis.dueSoonSum)}</p>
-          <p className="text-xs text-text-light">{kpis.dueSoonCount} título(s)</p>
+          <p className="text-xs text-text-light">Pago {monthFilter !== "ALL" ? "(mês)" : ""}</p>
+          <p className="text-xl font-bold text-emerald-600">{formatCurrency(resumo.pago)}</p>
+        </div>
+        <div className="bg-card border border-border rounded-xl p-4">
+          <p className="text-xs text-text-light">Despesas {monthFilter !== "ALL" ? "do mês" : "(total)"}</p>
+          <p className="text-xl font-bold text-text">{formatCurrency(resumo.total)}</p>
         </div>
         <div className="bg-card border border-border rounded-xl p-4">
           <p className="text-xs text-text-light">Vencidas</p>
-          <p className={`text-xl font-bold ${kpis.overdueCount > 0 ? "text-red-600" : "text-text"}`}>
-            {kpis.overdueCount}
+          <p className={`text-xl font-bold ${resumo.overdueCount > 0 ? "text-red-600" : "text-text"}`}>
+            {resumo.overdueCount}
           </p>
           <p className="text-xs text-text-light">título(s) em atraso</p>
-        </div>
-        <div className="bg-card border border-border rounded-xl p-4">
-          <p className="text-xs text-text-light">Pago no mês</p>
-          <p className="text-xl font-bold text-emerald-600">{formatCurrency(kpis.paidMonthSum)}</p>
         </div>
       </div>
 
       {/* Filtros */}
       <div className="flex gap-3 flex-wrap items-center">
+        <select
+          value={monthFilter}
+          onChange={(e) => setMonthFilter(e.target.value)}
+          className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
+        >
+          <option value="ALL">Todos os meses</option>
+          {months.map((m) => {
+            const [y, mo] = m.split("-");
+            return (
+              <option key={m} value={m}>
+                {mo}/{y}
+              </option>
+            );
+          })}
+        </select>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
@@ -490,7 +569,7 @@ export function ContasAPagarPage() {
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Buscar por descrição, fornecedor, CNPJ..."
+          placeholder="Buscar por descrição, fornecedor, CNPJ, banco..."
           className="flex-1 min-w-[220px] text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
         />
       </div>
@@ -505,12 +584,15 @@ export function ContasAPagarPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs text-text-light">
-                <th className="px-4 py-3 font-medium">Vencimento</th>
-                <th className="px-4 py-3 font-medium">Descrição</th>
-                <th className="px-4 py-3 font-medium">Fornecedor / Favorecido</th>
-                <th className="px-4 py-3 font-medium text-right">Valor</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium text-center">PDF</th>
+                <th className="px-3 py-3 font-medium">Vencimento</th>
+                <th className="px-3 py-3 font-medium">Pagto</th>
+                <th className="px-3 py-3 font-medium">Fornecedor / Descrição</th>
+                <th className="px-3 py-3 font-medium text-right">Valor</th>
+                <th className="px-3 py-3 font-medium text-right">Pago</th>
+                <th className="px-3 py-3 font-medium">Banco</th>
+                <th className="px-3 py-3 font-medium">Tipo</th>
+                <th className="px-3 py-3 font-medium">Status</th>
+                <th className="px-3 py-3 font-medium text-center">PDF</th>
               </tr>
             </thead>
             <tbody>
@@ -525,21 +607,26 @@ export function ContasAPagarPage() {
                     onClick={() => setDetail(inv)}
                     className="border-b border-border last:border-0 hover:bg-gray-50 cursor-pointer"
                   >
-                    <td className={`px-4 py-3 whitespace-nowrap ${overdue ? "text-red-600 font-semibold" : "text-text"}`}>
+                    <td className={`px-3 py-3 whitespace-nowrap ${overdue ? "text-red-600 font-semibold" : "text-text"}`}>
                       {fmtDateOnly(inv.due_date)}
                       {overdue && " ⚠"}
                     </td>
-                    <td className="px-4 py-3 text-text max-w-[320px] truncate">{inv.description}</td>
-                    <td className="px-4 py-3 text-text-light max-w-[220px] truncate">
-                      {inv.suppliers?.name || inv.payee_name || "—"}
+                    <td className="px-3 py-3 whitespace-nowrap text-text-light">{fmtDateOnly(inv.payment_date)}</td>
+                    <td className="px-3 py-3 text-text max-w-[300px] truncate">
+                      {inv.suppliers?.name || inv.payee_name || inv.description}
                     </td>
-                    <td className="px-4 py-3 text-right font-medium text-text whitespace-nowrap">
+                    <td className="px-3 py-3 text-right font-medium text-text whitespace-nowrap">
                       {formatCurrency(Number(inv.amount))}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3 text-right text-emerald-700 whitespace-nowrap">
+                      {inv.paid_amount != null ? formatCurrency(Number(inv.paid_amount)) : ""}
+                    </td>
+                    <td className="px-3 py-3 text-text-light whitespace-nowrap">{inv.bank || "—"}</td>
+                    <td className="px-3 py-3 text-text-light max-w-[120px] truncate">{inv.expense_type || "—"}</td>
+                    <td className="px-3 py-3">
                       <StatusBadge status={inv.status} />
                     </td>
-                    <td className="px-4 py-3 text-center text-text-light">
+                    <td className="px-3 py-3 text-center text-text-light">
                       {inv.attachments.length > 0 ? `📎 ${inv.attachments.length}` : "—"}
                     </td>
                   </tr>
@@ -620,6 +707,26 @@ export function ContasAPagarPage() {
                 onChange={(e) => setForm({ ...form, payee_document: e.target.value })}
                 className={inputCls}
                 placeholder="só números"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-text-light">Banco</label>
+              <input
+                value={form.bank}
+                onChange={(e) => setForm({ ...form, bank: e.target.value })}
+                className={inputCls}
+                placeholder="Itaú / Santander"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-text-light">Tipo de despesa</label>
+              <input
+                value={form.expense_type}
+                onChange={(e) => setForm({ ...form, expense_type: e.target.value })}
+                className={inputCls}
+                placeholder="ex.: Rancho, Combustível..."
               />
             </div>
           </div>
