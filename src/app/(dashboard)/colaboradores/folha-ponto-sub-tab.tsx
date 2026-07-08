@@ -53,6 +53,13 @@ interface ShipOption {
   name: string;
   arrival_date: string | null;
   departure_date: string | null;
+  services: string[] | null;
+}
+
+// Um navio é de Costado quando os serviços incluem "COSTADO"; senão é Embarque.
+// É a mesma regra que decide o tipo de jornada de cada dia (ship_services).
+function isCostadoShip(s: ShipOption): boolean {
+  return (s.services || []).includes("COSTADO");
 }
 
 export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
@@ -131,7 +138,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
     (async () => {
       const { data } = await db
         .from("ships")
-        .select("id, name, arrival_date, departure_date")
+        .select("id, name, arrival_date, departure_date, services")
         .order("arrival_date", { ascending: false })
         .limit(300);
       if (active) setShips(((data as unknown as ShipOption[]) || []));
@@ -321,6 +328,31 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
     [ships, shipId]
   );
 
+  // Dropdown de navios filtrado pela jornada escolhida: Costado → só navios de
+  // Costado; Embarque → só de Embarque; Ambas → todos. Assim o RH escolhe pelo
+  // par jornada+navio sem misturar tipos.
+  const shipsForJornada = useMemo(() => {
+    const list = ships || [];
+    if (jornada === "COSTADO") return list.filter(isCostadoShip);
+    if (jornada === "EMBARQUE") return list.filter((s) => !isCostadoShip(s));
+    return list;
+  }, [ships, jornada]);
+
+  // Se o navio selecionado deixa de bater com a jornada (ex.: troquei p/ Costado
+  // com um navio de Embarque escolhido), limpa a seleção do navio.
+  useEffect(() => {
+    if (!shipId || ships === null) return;
+    if (!shipsForJornada.some((s) => s.id === shipId)) setShipId("");
+  }, [shipId, ships, shipsForJornada]);
+
+  // Ao carregar a tripulação do navio, já marca todo mundo escalado (é o caso
+  // comum da folha por navio). Trocar de navio reinicia a seleção.
+  useEffect(() => {
+    if (filtro !== "NAVIO" || !shipId) return;
+    const activeIds = new Set(sortedEmployees.map((e) => e.id));
+    setSelectedIds(new Set(shipEmpIds.filter((id) => activeIds.has(id))));
+  }, [shipEmpIds, filtro, shipId, sortedEmployees]);
+
   const previewEmp = previewId != null ? employees.find((e) => e.id === previewId) ?? null : null;
   const previewWorked = useMemo<WorkedMap>(
     () => (previewId != null ? workedByEmp[previewId] : undefined) ?? new Map(),
@@ -461,8 +493,18 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
                 className={fieldCls}
                 disabled={ships === null}
               >
-                <option value="">{ships === null ? "Carregando navios…" : "Selecione o navio…"}</option>
-                {(ships || []).map((s) => (
+                <option value="">
+                  {ships === null
+                    ? "Carregando navios…"
+                    : shipsForJornada.length === 0
+                      ? jornada === "COSTADO"
+                        ? "Nenhum navio de Costado"
+                        : jornada === "EMBARQUE"
+                          ? "Nenhum navio de Embarque"
+                          : "Selecione o navio…"
+                      : "Selecione o navio…"}
+                </option>
+                {shipsForJornada.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
                     {s.arrival_date ? ` — ${ddmmyy(s.arrival_date)} a ${ddmmyy(s.departure_date || s.arrival_date)}` : ""}
@@ -471,34 +513,47 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
               </select>
               {shipId && (
                 <p className="mt-1 text-[11px] text-text-light">
-                  {shipLoading
-                    ? "Carregando o período do navio…"
-                    : "Período preenchido pelo navio (chegada → saída e turnos de Costado). A lista abaixo mostra só quem foi escalado neste navio. Ajuste as datas se precisar."}
+                  {shipLoading ? (
+                    "Carregando o período do navio…"
+                  ) : (
+                    <>
+                      Período do navio:{" "}
+                      <strong>
+                        {ddmmyy(startIso)} a {ddmmyy(endIso)}
+                      </strong>{" "}
+                      (chegada → saída e turnos de Costado). A lista abaixo mostra só quem foi escalado neste
+                      navio, já marcados.
+                    </>
+                  )}
                 </p>
               )}
             </div>
           )}
 
-          <div className="mt-2 grid grid-cols-2 gap-3 sm:max-w-xs">
-            <div>
-              <label className="text-xs font-semibold text-text-light uppercase tracking-wider">De</label>
-              <input
-                type="date"
-                value={startIso}
-                onChange={(e) => setStartIso(e.target.value)}
-                className={fieldCls}
-              />
+          {/* Datas livres só no modo "Por data"; no modo "Por navio" o período
+              vem do navio (mostrado acima) e não precisa ser digitado. */}
+          {filtro === "DATA" && (
+            <div className="mt-2 grid grid-cols-2 gap-3 sm:max-w-xs">
+              <div>
+                <label className="text-xs font-semibold text-text-light uppercase tracking-wider">De</label>
+                <input
+                  type="date"
+                  value={startIso}
+                  onChange={(e) => setStartIso(e.target.value)}
+                  className={fieldCls}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Até</label>
+                <input
+                  type="date"
+                  value={endIso}
+                  onChange={(e) => setEndIso(e.target.value)}
+                  className={fieldCls}
+                />
+              </div>
             </div>
-            <div>
-              <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Até</label>
-              <input
-                type="date"
-                value={endIso}
-                onChange={(e) => setEndIso(e.target.value)}
-                className={fieldCls}
-              />
-            </div>
-          </div>
+          )}
           {rangeError && filtro === "DATA" && (
             <p className="mt-1 text-[11px] text-amber-700">{rangeError}</p>
           )}
