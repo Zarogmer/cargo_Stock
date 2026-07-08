@@ -16,3 +16,5 @@ export type BankKind = "ITAU" | "SANTANDER" | "OUTRO";
 export type TransactionSource = "OFX_FILE" | "CNAB_FILE" | "API_ITAU" | "API_SANTANDER";
 
 export type ReconciliationStatus = "SUGERIDA" | "CONFIRMADA" | "REJEITADA";
+
+export type FinanceJobStatus = "PENDENTE" | "PROCESSANDO" | "CONCLUIDO" | "ERRO";

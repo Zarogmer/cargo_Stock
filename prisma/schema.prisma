@@ -994,8 +994,16 @@ model BankTransaction {
   // Id externo da transação (FITID do OFX / id da API). Único por conta.
   external_id     String?
   // Fallback de idempotência pra fontes sem id externo confiável:
-  // sha256(conta + data + valor + descrição). Único por conta.
+  // sha256(conta + data + valor + descrição + ocorrência). Único por conta.
+  // (Ex.: no OFX do Santander o FITID se repete no mesmo arquivo, então não dá
+  // pra usar como external_id — o dedupe_hash é quem garante idempotência.)
   dedupe_hash     String
+  // false = movimentação que NÃO entra na conciliação: transferência interna /
+  // aplicação-resgate automático (CONTAMAX, APLIC AUT) e rendimento do sweep.
+  // O contador nunca marca "ok" nessas — o motor as ignora e a UI as mostra
+  // esmaecidas. Marcadores puros de saldo (SALDO ANTERIOR/DIA do Itaú) nem
+  // chegam aqui: são filtrados na importação.
+  reconcilable    Boolean           @default(true)
   source          TransactionSource
   // Registro cru da fonte (linha do OFX/CNAB ou JSON da API) pra auditoria.
   raw             Json?
