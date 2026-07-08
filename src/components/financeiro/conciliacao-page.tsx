@@ -49,6 +49,38 @@ interface ImportSummary {
   warnings: string[];
 }
 
+interface ReconciliationRow {
+  id: number;
+  status: ReconciliationStatus;
+  score: number;
+  reason: string;
+  matched_by: string;
+  transactions: {
+    id: string;
+    posted_at: string;
+    amount: string;
+    description: string | null;
+    payee_name: string | null;
+    payee_document: string | null;
+  };
+  invoices: {
+    id: string;
+    description: string;
+    amount: string;
+    due_date: string | null;
+    status: string;
+    payee_name: string | null;
+  } | null;
+}
+
+interface OpenInvoice {
+  id: string;
+  description: string;
+  amount: string;
+  due_date: string | null;
+  status: string;
+}
+
 const BANK_LABELS: Record<BankKind, string> = {
   ITAU: "Itaú",
   SANTANDER: "Santander",
@@ -71,7 +103,7 @@ export function ConciliacaoPage() {
   const canEdit =
     hasPermission(role, "FINANCEIRO_MOD", "edit") || hasPermission(role, "FINANCEIRO_MOD", "create");
 
-  const [tab, setTab] = useState<"extrato" | "contas">("extrato");
+  const [tab, setTab] = useState<"extrato" | "conciliacao" | "contas">("extrato");
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<number | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -86,6 +118,15 @@ export function ConciliacaoPage() {
   // Import
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
+
+  // Conciliação
+  const [queue, setQueue] = useState<ReconciliationRow[]>([]);
+  const [loadingQueue, setLoadingQueue] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [deciding, setDeciding] = useState<number | null>(null);
+  // Casamento manual: linha da fila sendo casada → lista de títulos em aberto
+  const [manualFor, setManualFor] = useState<ReconciliationRow | null>(null);
+  const [openInvoices, setOpenInvoices] = useState<OpenInvoice[]>([]);
 
   const loadAccounts = useCallback(async () => {
     const res = await fetch("/api/financeiro/contas-bancarias").then((r) => r.json());
@@ -104,6 +145,16 @@ export function ConciliacaoPage() {
     }
   }, []);
 
+  const loadQueue = useCallback(async () => {
+    setLoadingQueue(true);
+    try {
+      const res = await fetch("/api/financeiro/conciliacao?status=SUGERIDA").then((r) => r.json());
+      setQueue((res.reconciliations as ReconciliationRow[]) || []);
+    } finally {
+      setLoadingQueue(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (canView) loadAccounts();
   }, [canView, loadAccounts]);
@@ -111,6 +162,67 @@ export function ConciliacaoPage() {
   useEffect(() => {
     if (selectedAccount != null) loadTransactions(selectedAccount);
   }, [selectedAccount, loadTransactions]);
+
+  useEffect(() => {
+    if (canView && tab === "conciliacao") loadQueue();
+  }, [canView, tab, loadQueue]);
+
+  async function handleRun() {
+    setRunning(true);
+    try {
+      const res = await fetch("/api/financeiro/conciliacao/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data.error || "Erro ao rodar a conciliação");
+      const s = data.summary;
+      alert(
+        `Conciliação: ${s.confirmed} automáticas, ${s.suggested} sugestões, ${s.unmatched} sem par (de ${s.scanned} débitos).`
+      );
+      await loadQueue();
+      if (selectedAccount != null) loadTransactions(selectedAccount);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function decide(row: ReconciliationRow, decision: "ACEITAR" | "REJEITAR") {
+    setDeciding(row.id);
+    try {
+      const res = await fetch(`/api/financeiro/conciliacao/${row.id}/decide`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data.error || "Erro ao decidir");
+      setQueue((q) => q.filter((r) => r.id !== row.id));
+    } finally {
+      setDeciding(null);
+    }
+  }
+
+  async function openManual(row: ReconciliationRow) {
+    setManualFor(row);
+    // Carrega títulos em aberto (não pagos/cancelados) pra escolher.
+    const res = await fetch("/api/financeiro/contas?status=RECEBIDO,AGUARDANDO_APROVACAO,APROVADO").then((r) => r.json());
+    setOpenInvoices((res.invoices as OpenInvoice[]) || []);
+  }
+
+  async function confirmManual(invoiceId: string) {
+    if (!manualFor) return;
+    const res = await fetch("/api/financeiro/conciliacao/manual", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transaction_id: manualFor.transactions.id, invoice_id: invoiceId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return alert(data.error || "Erro ao casar manualmente");
+    setQueue((q) => q.filter((r) => r.id !== manualFor.id));
+    setManualFor(null);
+  }
 
   const visibleTx = useMemo(
     () => (showNonRecon ? transactions : transactions.filter((t) => t.reconcilable)),
@@ -193,7 +305,7 @@ export function ConciliacaoPage() {
 
       {/* Abas */}
       <div className="flex gap-1 border-b border-border">
-        {(["extrato", "contas"] as const).map((t) => (
+        {(["extrato", "conciliacao", "contas"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -203,10 +315,86 @@ export function ConciliacaoPage() {
                 : "border-transparent text-text-light hover:text-text"
             }`}
           >
-            {t === "extrato" ? "Extrato" : "Contas bancárias"}
+            {t === "extrato" ? "Extrato" : t === "conciliacao" ? "Conciliação" : "Contas bancárias"}
+            {t === "conciliacao" && queue.length > 0 && (
+              <span className="ml-1.5 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
+                {queue.length}
+              </span>
+            )}
           </button>
         ))}
       </div>
+
+      {tab === "conciliacao" && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center flex-wrap gap-3">
+            <p className="text-sm text-text-light">
+              Fila de revisão — sugestões que o motor não teve confiança pra conciliar sozinho.
+              As de alta confiança já viraram título pago automaticamente.
+            </p>
+            {canEdit && (
+              <Button onClick={handleRun} disabled={running}>
+                {running ? "Rodando..." : "Rodar conciliação"}
+              </Button>
+            )}
+          </div>
+
+          {loadingQueue ? (
+            <p className="p-8 text-center text-text-light text-sm">Carregando...</p>
+          ) : queue.length === 0 ? (
+            <div className="bg-card border border-border rounded-xl p-8 text-center text-text-light text-sm">
+              Nenhuma sugestão pendente. Rode a conciliação após importar o extrato e cadastrar as contas a pagar.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {queue.map((row) => (
+                <div key={row.id} className="bg-card border border-border rounded-xl p-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+                      score {row.score} · {row.reason}
+                    </span>
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-3 text-sm">
+                    {/* Movimentação */}
+                    <div className="border border-border rounded-lg p-3">
+                      <p className="text-xs text-text-light mb-1">Movimentação do extrato</p>
+                      <p className="font-medium text-text">{fmtDateOnly(row.transactions.posted_at)}</p>
+                      <p className="text-text-light truncate" title={row.transactions.description || ""}>
+                        {row.transactions.description || "—"}
+                      </p>
+                      <p className="font-bold text-red-600">{formatCurrency(Number(row.transactions.amount))}</p>
+                    </div>
+                    {/* Título */}
+                    <div className="border border-border rounded-lg p-3">
+                      <p className="text-xs text-text-light mb-1">Conta a pagar sugerida</p>
+                      <p className="font-medium text-text">{row.invoices?.description || "—"}</p>
+                      <p className="text-text-light">
+                        venc. {fmtDateOnly(row.invoices?.due_date || null)}
+                      </p>
+                      <p className="font-bold text-text">
+                        {row.invoices ? formatCurrency(Number(row.invoices.amount)) : "—"}
+                      </p>
+                    </div>
+                  </div>
+                  {canEdit && (
+                    <div className="flex gap-2 justify-end mt-3">
+                      <Button variant="secondary" size="sm" onClick={() => openManual(row)} disabled={deciding === row.id}>
+                        Casar com outro
+                      </Button>
+                      <Button variant="danger" size="sm" onClick={() => decide(row, "REJEITAR")} disabled={deciding === row.id}>
+                        Rejeitar
+                      </Button>
+                      <Button variant="success" size="sm" onClick={() => decide(row, "ACEITAR")} disabled={deciding === row.id}>
+                        Aceitar
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {tab === "contas" && (
         <div className="space-y-4">
@@ -390,6 +578,46 @@ export function ConciliacaoPage() {
           )}
         </div>
       )}
+
+      {/* Modal casamento manual */}
+      <Modal
+        open={!!manualFor}
+        onClose={() => setManualFor(null)}
+        title="Casar movimentação com outro título"
+        maxWidth="max-w-2xl"
+      >
+        {manualFor && (
+          <div className="space-y-3">
+            <div className="border border-border rounded-lg p-3 text-sm bg-gray-50">
+              <p className="text-xs text-text-light">Movimentação</p>
+              <p className="font-medium text-text">
+                {fmtDateOnly(manualFor.transactions.posted_at)} ·{" "}
+                {formatCurrency(Number(manualFor.transactions.amount))}
+              </p>
+              <p className="text-text-light truncate">{manualFor.transactions.description}</p>
+            </div>
+            <p className="text-xs font-medium text-text-light">Escolha o título a pagar:</p>
+            {openInvoices.length === 0 ? (
+              <p className="text-sm text-text-light">Nenhum título em aberto.</p>
+            ) : (
+              <div className="max-h-[360px] overflow-y-auto divide-y divide-border border border-border rounded-lg">
+                {openInvoices.map((inv) => (
+                  <button
+                    key={inv.id}
+                    onClick={() => confirmManual(inv.id)}
+                    className="w-full text-left px-3 py-2 hover:bg-gray-50 transition flex justify-between gap-3"
+                  >
+                    <span className="text-sm text-text truncate">{inv.description}</span>
+                    <span className="text-sm font-medium text-text whitespace-nowrap">
+                      {formatCurrency(Number(inv.amount))}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
 
       {/* Modal nova conta */}
       <Modal open={accountModal} onClose={() => setAccountModal(false)} title="Nova conta bancária">
