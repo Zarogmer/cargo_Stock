@@ -179,6 +179,8 @@ export function ContasAPagarPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [formFile, setFormFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  const [importingPdf, setImportingPdf] = useState(false); // botão do header (lote)
+  const [analyzing, setAnalyzing] = useState(false); // leitura no modal
   // Mês de referência do controle ("ALL" = todos). Formato "YYYY-MM".
   const [monthFilter, setMonthFilter] = useState<string>("ALL");
   const [supplierFilter, setSupplierFilter] = useState<string>("ALL");
@@ -336,6 +338,68 @@ export function ContasAPagarPage() {
     setModalOpen(true);
   }
 
+  // Import em LOTE pelo header: lê 1..N PDFs (boleto ou nota fiscal) e cria os
+  // títulos com o arquivo anexado e os campos extraídos.
+  async function handlePdfImport(files: FileList) {
+    setImportingPdf(true);
+    try {
+      const fd = new FormData();
+      Array.from(files).forEach((f) => fd.append("file", f));
+      const res = await fetch("/api/financeiro/contas/importar-pdf", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao importar os PDFs");
+        return;
+      }
+      alert(
+        `Importação concluída:\n` +
+          `• ${data.created} título(s) criado(s)\n` +
+          `• ${data.duplicates} já existiam\n` +
+          `• ${data.scanned} escaneado(s)/ilegível(is) — anexados, preencher à mão\n` +
+          `• ${data.errors} com erro\n\n` +
+          `${data.needsAmount} sem valor detectado — confira e complete o valor.`
+      );
+      await loadAll();
+    } finally {
+      setImportingPdf(false);
+    }
+  }
+
+  // Leitura no modal de "Nova conta": lê um PDF e pré-preenche os campos.
+  async function handleAnalyzePdf(file: File) {
+    setAnalyzing(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/financeiro/contas/analisar-pdf", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao ler o PDF");
+        return;
+      }
+      const p = data.parsed;
+      setForm((prev) => ({
+        ...prev,
+        description: p.description || prev.description,
+        amount: p.amount != null ? String(p.amount).replace(".", ",") : prev.amount,
+        due_date: p.due_date || prev.due_date,
+        payee_name: p.payee_name || prev.payee_name,
+        payee_document: p.payee_document || prev.payee_document,
+        digitable_line: p.digitable_line || prev.digitable_line,
+        supplier_id: p.supplier_id ? String(p.supplier_id) : prev.supplier_id,
+        notes: p.notes || prev.notes,
+      }));
+      setFormFile(file); // anexa junto ao criar
+      if (p.scanned) {
+        alert("Este PDF parece escaneado (sem texto legível). Preencha os campos à mão — o arquivo será anexado ao criar.");
+      } else if (p.amount == null) {
+        alert("Li o documento, mas não consegui o valor com segurança. Confira e preencha o valor.");
+      }
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
   async function uploadAttachment(invoiceId: string, file: File): Promise<boolean> {
     const fd = new FormData();
     fd.append("file", file);
@@ -479,6 +543,23 @@ export function ContasAPagarPage() {
         </div>
         {canEdit && (
           <div className="flex gap-2 flex-wrap">
+            <label className={`inline-flex items-center ${importingPdf ? "opacity-50" : "cursor-pointer"}`}>
+              <span className="bg-primary hover:bg-primary-dark text-white text-sm font-medium px-4 py-2.5 rounded-lg transition">
+                {importingPdf ? "Importando..." : "Import Boleto (PDF)"}
+              </span>
+              <input
+                type="file"
+                accept="application/pdf"
+                multiple
+                className="hidden"
+                disabled={importingPdf}
+                onChange={(e) => {
+                  const fs = e.target.files;
+                  if (fs && fs.length) handlePdfImport(fs);
+                  e.target.value = "";
+                }}
+              />
+            </label>
             <Button onClick={openCreate}>+ Nova conta</Button>
           </div>
         )}
@@ -804,13 +885,26 @@ export function ContasAPagarPage() {
             </div>
             {!editing && (
               <div>
-                <label className="text-xs font-medium text-text-light">PDF do boleto (opcional)</label>
-                <input
-                  type="file"
-                  accept="application/pdf"
-                  onChange={(e) => setFormFile(e.target.files?.[0] || null)}
-                  className="block w-full text-sm text-text-light file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-gray-100 file:text-text file:text-xs hover:file:bg-gray-200"
-                />
+                <label className="text-xs font-medium text-text-light">Import Boleto (PDF)</label>
+                <label className={`mt-1 block ${analyzing ? "opacity-50" : "cursor-pointer"}`}>
+                  <span className="inline-block bg-gray-100 hover:bg-gray-200 text-text text-xs font-medium px-3 py-1.5 rounded-lg">
+                    {analyzing ? "Lendo..." : formFile ? `📎 ${formFile.name}` : "Escolher PDF e ler os dados"}
+                  </span>
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    className="hidden"
+                    disabled={analyzing}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleAnalyzePdf(f);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                <p className="text-[11px] text-text-light mt-1">
+                  Lê boleto ou nota fiscal (fornecedor, número, valor) e preenche os campos. Revise antes de criar.
+                </p>
               </div>
             )}
           </fieldset>

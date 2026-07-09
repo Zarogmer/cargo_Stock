@@ -79,6 +79,41 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
   return parts.join(" ");
 }
 
+// Item de texto com posição (x,y) na página — necessário pra ler o valor da
+// nota fiscal, cujo número fica numa linha ABAIXO do rótulo (regex de texto
+// não resolve; precisamos casar por posição).
+export interface PdfItem {
+  s: string;
+  x: number;
+  y: number;
+  page: number;
+}
+
+// Lê texto + itens posicionados. Usado pela extração de NF-e (nf-extract.ts).
+export async function extractPdfItems(buffer: Buffer): Promise<{ text: string; items: PdfItem[] }> {
+  ensureUint8Polyfill();
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const data = new Uint8Array(buffer);
+  const doc = await pdfjs.getDocument({ data, useSystemFonts: true }).promise;
+  const parts: string[] = [];
+  const items: PdfItem[] = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
+    const content = await page.getTextContent();
+    for (const item of content.items) {
+      const s = (item as { str?: string }).str;
+      const tr = (item as { transform?: number[] }).transform;
+      if (s) {
+        parts.push(s);
+        if (s.trim() && tr) items.push({ s: s.trim(), x: tr[4], y: tr[5], page: p });
+      }
+    }
+    parts.push("\n");
+  }
+  await doc.cleanup();
+  return { text: parts.join(" "), items };
+}
+
 // Extrai boleto (linha digitável + CNPJ) de um PDF. Nunca lança: em erro
 // devolve o que conseguiu (text vazio, linha null) pra o chamador decidir.
 export async function extractBoletoFromPdf(buffer: Buffer): Promise<BoletoExtract> {
