@@ -169,15 +169,27 @@ export async function GET(request: NextRequest) {
   if (guard.error) return guard.error;
 
   const sp = request.nextUrl.searchParams;
-  const accountId = Number(sp.get("account"));
-  if (!Number.isInteger(accountId)) {
-    return NextResponse.json({ error: "Parâmetro 'account' obrigatório" }, { status: 400 });
+
+  // Aceita ?account=<id> OU ?bank=ITAU|SANTANDER (resolve a conta pelo banco).
+  const bankParam = (sp.get("bank") || "").toUpperCase();
+  let account = null as Awaited<ReturnType<typeof prisma.bankAccount.findUnique>> | null;
+  if (bankParam === "ITAU" || bankParam === "SANTANDER" || bankParam === "OUTRO") {
+    account = await prisma.bankAccount.findFirst({ where: { bank: bankParam }, orderBy: { id: "asc" } });
+    if (!account) {
+      return NextResponse.json({ error: `Conta do ${bankParam} não cadastrada` }, { status: 404 });
+    }
+  } else {
+    const accountId = Number(sp.get("account"));
+    if (!Number.isInteger(accountId)) {
+      return NextResponse.json({ error: "Informe 'account' ou 'bank'" }, { status: 400 });
+    }
+    account = await prisma.bankAccount.findUnique({ where: { id: accountId } });
   }
-
-  const account = await prisma.bankAccount.findUnique({ where: { id: accountId } });
   if (!account) return NextResponse.json({ error: "Conta não encontrada" }, { status: 404 });
+  const accountId = account.id;
 
-  const yearParam = sp.get("year");
+  // Ano padrão = ano corrente quando não vem ?year nem período.
+  const yearParam = sp.get("year") || (sp.get("from") || sp.get("to") ? null : String(new Date().getUTCFullYear()));
 
   // ── Modo ANO: uma aba por mês (reproduz a planilha "Jan a Dez") ───────────
   if (yearParam) {

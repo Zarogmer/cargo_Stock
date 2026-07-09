@@ -52,38 +52,6 @@ interface ImportSummary {
   warnings: string[];
 }
 
-interface ReconciliationRow {
-  id: number;
-  status: ReconciliationStatus;
-  score: number;
-  reason: string;
-  matched_by: string;
-  transactions: {
-    id: string;
-    posted_at: string;
-    amount: string;
-    description: string | null;
-    payee_name: string | null;
-    payee_document: string | null;
-  };
-  invoices: {
-    id: string;
-    description: string;
-    amount: string;
-    due_date: string | null;
-    status: string;
-    payee_name: string | null;
-  } | null;
-}
-
-interface OpenInvoice {
-  id: string;
-  description: string;
-  amount: string;
-  due_date: string | null;
-  status: string;
-}
-
 const BANK_LABELS: Record<BankKind, string> = {
   ITAU: "Itaú",
   SANTANDER: "Santander",
@@ -112,8 +80,6 @@ export function ConciliacaoPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loadingTx, setLoadingTx] = useState(false);
   const [showNonRecon, setShowNonRecon] = useState(true);
-  // Mês selecionado pro export ("" = todos). Formato "YYYY-MM".
-  const [exportMonth, setExportMonth] = useState("");
   // Nota (lançamento reescrito) em edição, por linha.
   const [noteEdits, setNoteEdits] = useState<Record<string, string>>({});
 
@@ -125,15 +91,6 @@ export function ConciliacaoPage() {
   // Import
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
-
-  // Conciliação
-  const [queue, setQueue] = useState<ReconciliationRow[]>([]);
-  const [loadingQueue, setLoadingQueue] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [deciding, setDeciding] = useState<number | null>(null);
-  // Casamento manual: linha da fila sendo casada → lista de títulos em aberto
-  const [manualFor, setManualFor] = useState<ReconciliationRow | null>(null);
-  const [openInvoices, setOpenInvoices] = useState<OpenInvoice[]>([]);
 
   const loadAccounts = useCallback(async () => {
     const res = await fetch("/api/financeiro/contas-bancarias").then((r) => r.json());
@@ -152,16 +109,6 @@ export function ConciliacaoPage() {
     }
   }, []);
 
-  const loadQueue = useCallback(async () => {
-    setLoadingQueue(true);
-    try {
-      const res = await fetch("/api/financeiro/conciliacao?status=SUGERIDA").then((r) => r.json());
-      setQueue((res.reconciliations as ReconciliationRow[]) || []);
-    } finally {
-      setLoadingQueue(false);
-    }
-  }, []);
-
   useEffect(() => {
     if (canView) loadAccounts();
   }, [canView, loadAccounts]);
@@ -169,67 +116,6 @@ export function ConciliacaoPage() {
   useEffect(() => {
     if (selectedAccount != null) loadTransactions(selectedAccount);
   }, [selectedAccount, loadTransactions]);
-
-  useEffect(() => {
-    if (canView && tab === "conciliacao") loadQueue();
-  }, [canView, tab, loadQueue]);
-
-  async function handleRun() {
-    setRunning(true);
-    try {
-      const res = await fetch("/api/financeiro/conciliacao/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) return alert(data.error || "Erro ao rodar a conciliação");
-      const s = data.summary;
-      alert(
-        `Conciliação: ${s.confirmed} automáticas, ${s.suggested} sugestões, ${s.unmatched} sem par (de ${s.scanned} débitos).`
-      );
-      await loadQueue();
-      if (selectedAccount != null) loadTransactions(selectedAccount);
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  async function decide(row: ReconciliationRow, decision: "ACEITAR" | "REJEITAR") {
-    setDeciding(row.id);
-    try {
-      const res = await fetch(`/api/financeiro/conciliacao/${row.id}/decide`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) return alert(data.error || "Erro ao decidir");
-      setQueue((q) => q.filter((r) => r.id !== row.id));
-    } finally {
-      setDeciding(null);
-    }
-  }
-
-  async function openManual(row: ReconciliationRow) {
-    setManualFor(row);
-    // Carrega títulos em aberto (não pagos/cancelados) pra escolher.
-    const res = await fetch("/api/financeiro/contas?status=RECEBIDO,AGUARDANDO_APROVACAO,APROVADO").then((r) => r.json());
-    setOpenInvoices((res.invoices as OpenInvoice[]) || []);
-  }
-
-  async function confirmManual(invoiceId: string) {
-    if (!manualFor) return;
-    const res = await fetch("/api/financeiro/conciliacao/manual", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ transaction_id: manualFor.transactions.id, invoice_id: invoiceId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return alert(data.error || "Erro ao casar manualmente");
-    setQueue((q) => q.filter((r) => r.id !== manualFor.id));
-    setManualFor(null);
-  }
 
   const visibleTx = useMemo(
     () => (showNonRecon ? transactions : transactions.filter((t) => t.reconcilable)),
@@ -268,14 +154,14 @@ export function ConciliacaoPage() {
     }
   }
 
+  // O banco é detectado no próprio OFX — não precisa escolher conta. A lista
+  // aponta sozinha pro banco que acabou de importar.
   async function handleImport(file: File) {
-    if (selectedAccount == null) return alert("Selecione uma conta antes de importar");
     setImporting(true);
     setImportSummary(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("bank_account_id", String(selectedAccount));
       const res = await fetch("/api/financeiro/extrato/import", { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -283,7 +169,12 @@ export function ConciliacaoPage() {
         return;
       }
       setImportSummary(data as ImportSummary);
-      await Promise.all([loadAccounts(), loadTransactions(selectedAccount)]);
+      const detectedId = accounts.find((a) => a.bank === data.bankDetected)?.id ?? selectedAccount;
+      await loadAccounts();
+      if (detectedId != null) {
+        setSelectedAccount(detectedId);
+        await loadTransactions(detectedId);
+      }
     } finally {
       setImporting(false);
     }
@@ -301,13 +192,6 @@ export function ConciliacaoPage() {
     }
     return map;
   }, [transactions, accounts, selectedAccount]);
-
-  // Meses presentes no extrato (pro seletor de export).
-  const months = useMemo(() => {
-    const set = new Set<string>();
-    for (const t of transactions) set.add(t.posted_at.slice(0, 7));
-    return [...set].sort().reverse();
-  }, [transactions]);
 
   function isConciliada(t: Transaction): boolean {
     return t.review_status === "CONCILIADO" || t.reconciliation?.status === "CONFIRMADA";
@@ -337,31 +221,11 @@ export function ConciliacaoPage() {
     });
   }
 
-  function exportExcel() {
-    if (selectedAccount == null) return;
-    const params = new URLSearchParams({ account: String(selectedAccount) });
-    if (exportMonth) {
-      const [y, m] = exportMonth.split("-").map(Number);
-      const from = `${exportMonth}-01`;
-      const to = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); // último dia do mês
-      params.set("from", from);
-      params.set("to", to);
-    }
-    window.open(`/api/financeiro/extrato/export?${params.toString()}`, "_blank");
-  }
-
-  // Planilha do ano inteiro: uma aba por mês (reproduz a "Jan a Dez" da
-  // contabilidade). Usa o ano do mês selecionado, senão o mais recente do
-  // extrato, senão o ano atual.
-  function exportYear() {
-    if (selectedAccount == null) return;
-    const year = exportMonth
-      ? exportMonth.slice(0, 4)
-      : months[0]?.slice(0, 4) ?? String(new Date().getFullYear());
-    window.open(
-      `/api/financeiro/extrato/export?account=${selectedAccount}&year=${year}`,
-      "_blank",
-    );
+  // Gera a planilha de conciliação do ano (uma aba por mês, formato da
+  // contabilidade) pro banco escolhido — resolve a conta pelo banco no backend.
+  function gerarConciliacao(bank: "ITAU" | "SANTANDER") {
+    const year = new Date().getFullYear();
+    window.open(`/api/financeiro/extrato/export?bank=${bank}&year=${year}`, "_blank");
   }
 
   if (!canView) {
@@ -398,11 +262,6 @@ export function ConciliacaoPage() {
             }`}
           >
             {t === "conciliacao" ? "Conciliação" : "Contas bancárias"}
-            {t === "conciliacao" && queue.length > 0 && (
-              <span className="ml-1.5 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
-                {queue.length}
-              </span>
-            )}
           </button>
         ))}
       </div>
@@ -451,17 +310,6 @@ export function ConciliacaoPage() {
           ) : (
             <>
               <div className="flex gap-3 flex-wrap items-center">
-                <select
-                  value={selectedAccount ?? ""}
-                  onChange={(e) => setSelectedAccount(Number(e.target.value))}
-                  className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
-                >
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.nickname} ({BANK_LABELS[a.bank]})
-                    </option>
-                  ))}
-                </select>
                 {canEdit && (
                   <label className={`inline-flex items-center gap-2 ${importing ? "opacity-50" : "cursor-pointer"}`}>
                     <span className="bg-primary hover:bg-primary-dark text-white text-sm font-medium px-4 py-2 rounded-lg transition">
@@ -480,44 +328,42 @@ export function ConciliacaoPage() {
                     />
                   </label>
                 )}
+                <span className="text-xs text-text-light">O banco é reconhecido no próprio arquivo.</span>
                 <div className="ml-auto flex items-center gap-2">
-                  <select
-                    value={exportMonth}
-                    onChange={(e) => setExportMonth(e.target.value)}
-                    className="text-sm border border-border rounded-lg px-2 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
-                    title="Mês do Excel"
-                  >
-                    <option value="">Excel: tudo</option>
-                    {months.map((m) => {
-                      const [y, mo] = m.split("-");
-                      return (
-                        <option key={m} value={m}>
-                          {mo}/{y}
-                        </option>
-                      );
-                    })}
-                  </select>
-                  <Button variant="secondary" onClick={exportExcel} disabled={transactions.length === 0}>
-                    Exportar Excel
+                  <Button variant="secondary" onClick={() => gerarConciliacao("ITAU")}>
+                    Gerar conciliação Itaú
                   </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={exportYear}
-                    disabled={transactions.length === 0}
-                    title="Planilha do ano inteiro, uma aba por mês (formato da contabilidade)"
-                  >
-                    Baixar ano
+                  <Button variant="secondary" onClick={() => gerarConciliacao("SANTANDER")}>
+                    Gerar conciliação Santander
                   </Button>
                 </div>
               </div>
-              <label className="text-xs text-text-light inline-flex items-center gap-1.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={showNonRecon}
-                  onChange={(e) => setShowNonRecon(e.target.checked)}
-                />
-                mostrar transferências internas (aplicação/resgate automático)
-              </label>
+
+              {/* Toggle de visualização: qual banco mostrar na lista abaixo */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-text-light">Ver extrato:</span>
+                {accounts.map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => setSelectedAccount(a.id)}
+                    className={`text-xs font-medium px-3 py-1.5 rounded-lg border transition ${
+                      selectedAccount === a.id
+                        ? "border-primary text-primary bg-primary/5"
+                        : "border-border text-text-light hover:text-text"
+                    }`}
+                  >
+                    {BANK_LABELS[a.bank]}
+                  </button>
+                ))}
+                <label className="ml-2 text-xs text-text-light inline-flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showNonRecon}
+                    onChange={(e) => setShowNonRecon(e.target.checked)}
+                  />
+                  mostrar transferências internas (aplicação/resgate automático)
+                </label>
+              </div>
 
               {/* Resumo da última importação */}
               {importSummary && (
@@ -570,10 +416,7 @@ export function ConciliacaoPage() {
                             {acc.account_number ? ` · CC ${acc.account_number}` : ""}
                           </p>
                           <p>
-                            <span className="font-medium text-text">Período:</span>{" "}
-                            {exportMonth
-                              ? `${exportMonth.split("-")[1]}/${exportMonth.split("-")[0]}`
-                              : "todos os lançamentos"}
+                            <span className="font-medium text-text">Período:</span> todos os lançamentos
                           </p>
                         </div>
                       );
@@ -667,125 +510,13 @@ export function ConciliacaoPage() {
               </div>
               <p className="text-xs text-text-light">
                 Este é o <b>preview</b> da planilha de conciliação. Marque <b>ok</b> nas linhas conferidas
-                e edite o <b>lançamento</b> — as conciliadas automaticamente já vêm marcadas. Depois clique
-                <b> Exportar Excel</b> pra gerar o arquivo no formato da contabilidade.
+                e edite o <b>lançamento</b>. Depois clique <b>Gerar conciliação {"{"}banco{"}"}</b> pra baixar
+                o arquivo no formato da contabilidade.
               </p>
             </>
           )}
         </div>
       )}
-
-      {/* Fila de conciliação (embaixo do extrato, mesma aba) */}
-      {tab === "conciliacao" && accounts.length > 0 && (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center flex-wrap gap-3 border-t border-border pt-4">
-            <p className="text-sm text-text-light">
-              Fila de revisão — sugestões que o motor não teve confiança pra conciliar sozinho.
-              As de alta confiança já viraram título pago automaticamente.
-            </p>
-            {canEdit && (
-              <Button onClick={handleRun} disabled={running}>
-                {running ? "Rodando..." : "Rodar conciliação"}
-              </Button>
-            )}
-          </div>
-
-          {loadingQueue ? (
-            <p className="p-8 text-center text-text-light text-sm">Carregando...</p>
-          ) : queue.length === 0 ? (
-            <div className="bg-card border border-border rounded-xl p-8 text-center text-text-light text-sm">
-              Nenhuma sugestão pendente. Rode a conciliação após importar o extrato e cadastrar as contas a pagar.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {queue.map((row) => (
-                <div key={row.id} className="bg-card border border-border rounded-xl p-4">
-                  <div className="flex items-center justify-between gap-3 mb-3">
-                    <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
-                      score {row.score} · {row.reason}
-                    </span>
-                  </div>
-                  <div className="grid sm:grid-cols-2 gap-3 text-sm">
-                    {/* Movimentação */}
-                    <div className="border border-border rounded-lg p-3">
-                      <p className="text-xs text-text-light mb-1">Movimentação do extrato</p>
-                      <p className="font-medium text-text">{fmtDateOnly(row.transactions.posted_at)}</p>
-                      <p className="text-text-light truncate" title={row.transactions.description || ""}>
-                        {row.transactions.description || "—"}
-                      </p>
-                      <p className="font-bold text-red-600">{formatCurrency(Number(row.transactions.amount))}</p>
-                    </div>
-                    {/* Título */}
-                    <div className="border border-border rounded-lg p-3">
-                      <p className="text-xs text-text-light mb-1">Conta a pagar sugerida</p>
-                      <p className="font-medium text-text">{row.invoices?.description || "—"}</p>
-                      <p className="text-text-light">
-                        venc. {fmtDateOnly(row.invoices?.due_date || null)}
-                      </p>
-                      <p className="font-bold text-text">
-                        {row.invoices ? formatCurrency(Number(row.invoices.amount)) : "—"}
-                      </p>
-                    </div>
-                  </div>
-                  {canEdit && (
-                    <div className="flex gap-2 justify-end mt-3">
-                      <Button variant="secondary" size="sm" onClick={() => openManual(row)} disabled={deciding === row.id}>
-                        Casar com outro
-                      </Button>
-                      <Button variant="danger" size="sm" onClick={() => decide(row, "REJEITAR")} disabled={deciding === row.id}>
-                        Rejeitar
-                      </Button>
-                      <Button variant="success" size="sm" onClick={() => decide(row, "ACEITAR")} disabled={deciding === row.id}>
-                        Aceitar
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Modal casamento manual */}
-      <Modal
-        open={!!manualFor}
-        onClose={() => setManualFor(null)}
-        title="Casar movimentação com outro título"
-        maxWidth="max-w-2xl"
-      >
-        {manualFor && (
-          <div className="space-y-3">
-            <div className="border border-border rounded-lg p-3 text-sm bg-gray-50">
-              <p className="text-xs text-text-light">Movimentação</p>
-              <p className="font-medium text-text">
-                {fmtDateOnly(manualFor.transactions.posted_at)} ·{" "}
-                {formatCurrency(Number(manualFor.transactions.amount))}
-              </p>
-              <p className="text-text-light truncate">{manualFor.transactions.description}</p>
-            </div>
-            <p className="text-xs font-medium text-text-light">Escolha o título a pagar:</p>
-            {openInvoices.length === 0 ? (
-              <p className="text-sm text-text-light">Nenhum título em aberto.</p>
-            ) : (
-              <div className="max-h-[360px] overflow-y-auto divide-y divide-border border border-border rounded-lg">
-                {openInvoices.map((inv) => (
-                  <button
-                    key={inv.id}
-                    onClick={() => confirmManual(inv.id)}
-                    className="w-full text-left px-3 py-2 hover:bg-gray-50 transition flex justify-between gap-3"
-                  >
-                    <span className="text-sm text-text truncate">{inv.description}</span>
-                    <span className="text-sm font-medium text-text whitespace-nowrap">
-                      {formatCurrency(Number(inv.amount))}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
 
       {/* Modal nova conta */}
       <Modal open={accountModal} onClose={() => setAccountModal(false)} title="Nova conta bancária">
