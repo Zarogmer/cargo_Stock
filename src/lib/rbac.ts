@@ -326,10 +326,8 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Valores", href: "/financeiro?tab=funcoes" },
       { label: "Pagamento de Navios", href: "/financeiro?tab=navios" },
       { label: "Controle", href: "/financeiro?tab=controle" },
-      { label: "Resumo", href: "/financeiro?tab=resumo" },
       // Módulo bancário (fornecedores/bancos) — sub-rotas reais, restritas a
       // FINANCEIRO_BANCO_ROLES (Estágio fica de fora). Ver docs/financeiro/.
-      { label: "Painel", href: "/financeiro/painel", roles: FINANCEIRO_BANCO_ROLES },
       { label: "Contas a Pagar", href: "/financeiro/contas", roles: FINANCEIRO_BANCO_ROLES },
       { label: "Conciliação Bancária", href: "/financeiro/conciliacao", roles: FINANCEIRO_BANCO_ROLES },
       { label: "Boletos por e-mail", href: "/financeiro/email", roles: FINANCEIRO_BANCO_ROLES },
