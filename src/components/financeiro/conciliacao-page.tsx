@@ -79,7 +79,6 @@ export function ConciliacaoPage() {
   const [selectedAccount, setSelectedAccount] = useState<number | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loadingTx, setLoadingTx] = useState(false);
-  const [showNonRecon, setShowNonRecon] = useState(true);
   // Nota (lançamento reescrito) em edição, por linha.
   const [noteEdits, setNoteEdits] = useState<Record<string, string>>({});
 
@@ -91,6 +90,12 @@ export function ConciliacaoPage() {
   // Import
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
+
+  // Adicionar título da Contas a Pagar como linha do extrato
+  const [addOpen, setAddOpen] = useState(false);
+  const [cpInvoices, setCpInvoices] = useState<{ id: string; description: string; amount: string; bank: string | null; payment_date: string | null }[]>([]);
+  const [cpSearch, setCpSearch] = useState("");
+  const [addingId, setAddingId] = useState<string | null>(null);
 
   const loadAccounts = useCallback(async () => {
     const res = await fetch("/api/financeiro/contas-bancarias").then((r) => r.json());
@@ -118,8 +123,8 @@ export function ConciliacaoPage() {
   }, [selectedAccount, loadTransactions]);
 
   const visibleTx = useMemo(
-    () => (showNonRecon ? transactions : transactions.filter((t) => t.reconcilable)),
-    [transactions, showNonRecon]
+    () => transactions,
+    [transactions]
   );
 
   const totals = useMemo(() => {
@@ -228,6 +233,38 @@ export function ConciliacaoPage() {
     window.open(`/api/financeiro/extrato/export?bank=${bank}&year=${year}`, "_blank");
   }
 
+  // Abre o seletor de títulos da Contas a Pagar pra adicionar como linha.
+  async function openAdd() {
+    setAddOpen(true);
+    const res = await fetch("/api/financeiro/contas").then((r) => r.json());
+    setCpInvoices((res.invoices as typeof cpInvoices) || []);
+  }
+
+  // Adiciona o título escolhido como linha no extrato do banco selecionado.
+  async function addInvoiceToExtrato(invoiceId: string) {
+    if (selectedAccount == null) return;
+    setAddingId(invoiceId);
+    try {
+      const res = await fetch("/api/financeiro/extrato/from-invoice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bank_account_id: selectedAccount, invoice_id: invoiceId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao adicionar o título");
+        return;
+      }
+      await Promise.all([loadTransactions(selectedAccount), loadAccounts()]);
+      setAddOpen(false);
+    } finally {
+      setAddingId(null);
+    }
+  }
+
+  const selectedBank = accounts.find((a) => a.id === selectedAccount)?.bank ?? null;
+  const txCountByBank = (bank: BankKind) => accounts.find((a) => a.bank === bank)?._count.transactions ?? 0;
+
   if (!canView) {
     return (
       <div className="max-w-7xl mx-auto">
@@ -330,10 +367,20 @@ export function ConciliacaoPage() {
                 )}
                 <span className="text-xs text-text-light">O banco é reconhecido no próprio arquivo.</span>
                 <div className="ml-auto flex items-center gap-2">
-                  <Button variant="secondary" onClick={() => gerarConciliacao("ITAU")}>
+                  <Button
+                    variant="secondary"
+                    onClick={() => gerarConciliacao("ITAU")}
+                    disabled={txCountByBank("ITAU") === 0}
+                    title={txCountByBank("ITAU") === 0 ? "Importe o extrato do Itaú primeiro" : ""}
+                  >
                     Gerar conciliação Itaú
                   </Button>
-                  <Button variant="secondary" onClick={() => gerarConciliacao("SANTANDER")}>
+                  <Button
+                    variant="secondary"
+                    onClick={() => gerarConciliacao("SANTANDER")}
+                    disabled={txCountByBank("SANTANDER") === 0}
+                    title={txCountByBank("SANTANDER") === 0 ? "Importe o extrato do Santander primeiro" : ""}
+                  >
                     Gerar conciliação Santander
                   </Button>
                 </div>
@@ -355,14 +402,11 @@ export function ConciliacaoPage() {
                     {BANK_LABELS[a.bank]}
                   </button>
                 ))}
-                <label className="ml-2 text-xs text-text-light inline-flex items-center gap-1.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={showNonRecon}
-                    onChange={(e) => setShowNonRecon(e.target.checked)}
-                  />
-                  mostrar transferências internas (aplicação/resgate automático)
-                </label>
+                {canEdit && selectedAccount != null && (
+                  <Button variant="secondary" size="sm" onClick={openAdd} className="ml-2">
+                    + Do Contas a Pagar
+                  </Button>
+                )}
               </div>
 
               {/* Resumo da última importação */}
@@ -517,6 +561,57 @@ export function ConciliacaoPage() {
           )}
         </div>
       )}
+
+      {/* Modal: adicionar título da Contas a Pagar como linha do extrato */}
+      <Modal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        title={`Adicionar do Contas a Pagar${selectedBank ? ` — ${BANK_LABELS[selectedBank]}` : ""}`}
+        maxWidth="max-w-2xl"
+      >
+        <div className="space-y-3">
+          <p className="text-xs text-text-light">
+            Escolha um título lançado na Contas a Pagar pra incluir na conciliação deste banco
+            (ex.: pagamento em dinheiro/pix que não veio no extrato). Entra já marcado como conciliado.
+          </p>
+          <input
+            value={cpSearch}
+            onChange={(e) => setCpSearch(e.target.value)}
+            placeholder="Buscar por descrição ou banco..."
+            className={inputCls}
+          />
+          {(() => {
+            const list = cpInvoices.filter((i) => {
+              if (!cpSearch) return true;
+              const blob = `${i.description} ${i.bank || ""}`.toLowerCase();
+              return blob.includes(cpSearch.toLowerCase());
+            });
+            if (list.length === 0) {
+              return <p className="text-sm text-text-light">Nenhum título encontrado.</p>;
+            }
+            return (
+              <div className="max-h-[380px] overflow-y-auto divide-y divide-border border border-border rounded-lg">
+                {list.map((inv) => (
+                  <button
+                    key={inv.id}
+                    onClick={() => addInvoiceToExtrato(inv.id)}
+                    disabled={addingId === inv.id}
+                    className="w-full text-left px-3 py-2 hover:bg-gray-50 transition flex justify-between gap-3 disabled:opacity-50"
+                  >
+                    <span className="text-sm text-text truncate">
+                      {inv.description}
+                      {inv.bank ? <span className="text-text-light"> · {inv.bank}</span> : ""}
+                    </span>
+                    <span className="text-sm font-medium text-text whitespace-nowrap">
+                      {formatCurrency(Number(inv.amount))}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      </Modal>
 
       {/* Modal nova conta */}
       <Modal open={accountModal} onClose={() => setAccountModal(false)} title="Nova conta bancária">
