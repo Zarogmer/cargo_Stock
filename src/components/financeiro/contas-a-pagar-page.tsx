@@ -179,6 +179,7 @@ export function ContasAPagarPage() {
   // Mês de referência do controle ("ALL" = todos). Formato "YYYY-MM".
   const [monthFilter, setMonthFilter] = useState<string>("ALL");
   const [supplierFilter, setSupplierFilter] = useState<string>("ALL");
+  const [bankFilter, setBankFilter] = useState<string>("ALL");
   const [confirmTo, setConfirmTo] = useState<PayableStatus | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
@@ -248,12 +249,20 @@ export function ContasAPagarPage() {
     return [...set].sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [invoices]);
 
+  // Bancos presentes (pro filtro Itaú/Santander).
+  const bankOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const inv of invoices) if (inv.bank) set.add(inv.bank);
+    return [...set].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [invoices]);
+
   const filtered = useMemo(() => {
     return invoices.filter((inv) => {
       if (monthFilter !== "ALL" && refMonthOf(inv) !== monthFilter) return false;
       if (statusFilter === "ABERTAS" && !OPEN_STATUSES.includes(inv.status)) return false;
       if (statusFilter === "PAGO" && inv.status !== "PAGO") return false;
       if (supplierFilter !== "ALL" && supplierNameOf(inv) !== supplierFilter) return false;
+      if (bankFilter !== "ALL" && inv.bank !== bankFilter) return false;
       if (search) {
         const blob = [
           inv.description,
@@ -271,7 +280,7 @@ export function ContasAPagarPage() {
       }
       return true;
     });
-  }, [invoices, statusFilter, search, monthFilter, supplierFilter]);
+  }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter]);
 
   // RESUMO do mês selecionado (ou de tudo), no espírito da aba RESUMO da
   // planilha: Falta pagar / Pago / Despesas (total) + contagem de vencidas.
@@ -549,6 +558,20 @@ export function ContasAPagarPage() {
             </option>
           ))}
         </select>
+        {bankOptions.length > 0 && (
+          <select
+            value={bankFilter}
+            onChange={(e) => setBankFilter(e.target.value)}
+            className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
+          >
+            <option value="ALL">Todos os bancos</option>
+            {bankOptions.map((b) => (
+              <option key={b} value={b}>
+                {b}
+              </option>
+            ))}
+          </select>
+        )}
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
