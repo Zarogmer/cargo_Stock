@@ -106,7 +106,7 @@ export function ConciliacaoPage() {
   const canEdit =
     canView && (hasPermission(role, "FINANCEIRO_MOD", "edit") || hasPermission(role, "FINANCEIRO_MOD", "create"));
 
-  const [tab, setTab] = useState<"extrato" | "conciliacao" | "contas">("extrato");
+  const [tab, setTab] = useState<"conciliacao" | "contas">("conciliacao");
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<number | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -387,7 +387,7 @@ export function ConciliacaoPage() {
 
       {/* Abas */}
       <div className="flex gap-1 border-b border-border">
-        {(["extrato", "conciliacao", "contas"] as const).map((t) => (
+        {(["conciliacao", "contas"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -397,7 +397,7 @@ export function ConciliacaoPage() {
                 : "border-transparent text-text-light hover:text-text"
             }`}
           >
-            {t === "extrato" ? "Extrato" : t === "conciliacao" ? "Conciliação" : "Contas bancárias"}
+            {t === "conciliacao" ? "Conciliação" : "Contas bancárias"}
             {t === "conciliacao" && queue.length > 0 && (
               <span className="ml-1.5 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
                 {queue.length}
@@ -406,77 +406,6 @@ export function ConciliacaoPage() {
           </button>
         ))}
       </div>
-
-      {tab === "conciliacao" && (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center flex-wrap gap-3">
-            <p className="text-sm text-text-light">
-              Fila de revisão — sugestões que o motor não teve confiança pra conciliar sozinho.
-              As de alta confiança já viraram título pago automaticamente.
-            </p>
-            {canEdit && (
-              <Button onClick={handleRun} disabled={running}>
-                {running ? "Rodando..." : "Rodar conciliação"}
-              </Button>
-            )}
-          </div>
-
-          {loadingQueue ? (
-            <p className="p-8 text-center text-text-light text-sm">Carregando...</p>
-          ) : queue.length === 0 ? (
-            <div className="bg-card border border-border rounded-xl p-8 text-center text-text-light text-sm">
-              Nenhuma sugestão pendente. Rode a conciliação após importar o extrato e cadastrar as contas a pagar.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {queue.map((row) => (
-                <div key={row.id} className="bg-card border border-border rounded-xl p-4">
-                  <div className="flex items-center justify-between gap-3 mb-3">
-                    <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
-                      score {row.score} · {row.reason}
-                    </span>
-                  </div>
-                  <div className="grid sm:grid-cols-2 gap-3 text-sm">
-                    {/* Movimentação */}
-                    <div className="border border-border rounded-lg p-3">
-                      <p className="text-xs text-text-light mb-1">Movimentação do extrato</p>
-                      <p className="font-medium text-text">{fmtDateOnly(row.transactions.posted_at)}</p>
-                      <p className="text-text-light truncate" title={row.transactions.description || ""}>
-                        {row.transactions.description || "—"}
-                      </p>
-                      <p className="font-bold text-red-600">{formatCurrency(Number(row.transactions.amount))}</p>
-                    </div>
-                    {/* Título */}
-                    <div className="border border-border rounded-lg p-3">
-                      <p className="text-xs text-text-light mb-1">Conta a pagar sugerida</p>
-                      <p className="font-medium text-text">{row.invoices?.description || "—"}</p>
-                      <p className="text-text-light">
-                        venc. {fmtDateOnly(row.invoices?.due_date || null)}
-                      </p>
-                      <p className="font-bold text-text">
-                        {row.invoices ? formatCurrency(Number(row.invoices.amount)) : "—"}
-                      </p>
-                    </div>
-                  </div>
-                  {canEdit && (
-                    <div className="flex gap-2 justify-end mt-3">
-                      <Button variant="secondary" size="sm" onClick={() => openManual(row)} disabled={deciding === row.id}>
-                        Casar com outro
-                      </Button>
-                      <Button variant="danger" size="sm" onClick={() => decide(row, "REJEITAR")} disabled={deciding === row.id}>
-                        Rejeitar
-                      </Button>
-                      <Button variant="success" size="sm" onClick={() => decide(row, "ACEITAR")} disabled={deciding === row.id}>
-                        Aceitar
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       {tab === "contas" && (
         <div className="space-y-4">
@@ -513,7 +442,7 @@ export function ConciliacaoPage() {
         </div>
       )}
 
-      {tab === "extrato" && (
+      {tab === "conciliacao" && (
         <div className="space-y-4">
           {accounts.length === 0 ? (
             <div className="bg-card border border-border rounded-xl p-8 text-center text-text-light text-sm">
@@ -742,6 +671,78 @@ export function ConciliacaoPage() {
                 <b> Exportar Excel</b> pra gerar o arquivo no formato da contabilidade.
               </p>
             </>
+          )}
+        </div>
+      )}
+
+      {/* Fila de conciliação (embaixo do extrato, mesma aba) */}
+      {tab === "conciliacao" && accounts.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center flex-wrap gap-3 border-t border-border pt-4">
+            <p className="text-sm text-text-light">
+              Fila de revisão — sugestões que o motor não teve confiança pra conciliar sozinho.
+              As de alta confiança já viraram título pago automaticamente.
+            </p>
+            {canEdit && (
+              <Button onClick={handleRun} disabled={running}>
+                {running ? "Rodando..." : "Rodar conciliação"}
+              </Button>
+            )}
+          </div>
+
+          {loadingQueue ? (
+            <p className="p-8 text-center text-text-light text-sm">Carregando...</p>
+          ) : queue.length === 0 ? (
+            <div className="bg-card border border-border rounded-xl p-8 text-center text-text-light text-sm">
+              Nenhuma sugestão pendente. Rode a conciliação após importar o extrato e cadastrar as contas a pagar.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {queue.map((row) => (
+                <div key={row.id} className="bg-card border border-border rounded-xl p-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+                      score {row.score} · {row.reason}
+                    </span>
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-3 text-sm">
+                    {/* Movimentação */}
+                    <div className="border border-border rounded-lg p-3">
+                      <p className="text-xs text-text-light mb-1">Movimentação do extrato</p>
+                      <p className="font-medium text-text">{fmtDateOnly(row.transactions.posted_at)}</p>
+                      <p className="text-text-light truncate" title={row.transactions.description || ""}>
+                        {row.transactions.description || "—"}
+                      </p>
+                      <p className="font-bold text-red-600">{formatCurrency(Number(row.transactions.amount))}</p>
+                    </div>
+                    {/* Título */}
+                    <div className="border border-border rounded-lg p-3">
+                      <p className="text-xs text-text-light mb-1">Conta a pagar sugerida</p>
+                      <p className="font-medium text-text">{row.invoices?.description || "—"}</p>
+                      <p className="text-text-light">
+                        venc. {fmtDateOnly(row.invoices?.due_date || null)}
+                      </p>
+                      <p className="font-bold text-text">
+                        {row.invoices ? formatCurrency(Number(row.invoices.amount)) : "—"}
+                      </p>
+                    </div>
+                  </div>
+                  {canEdit && (
+                    <div className="flex gap-2 justify-end mt-3">
+                      <Button variant="secondary" size="sm" onClick={() => openManual(row)} disabled={deciding === row.id}>
+                        Casar com outro
+                      </Button>
+                      <Button variant="danger" size="sm" onClick={() => decide(row, "REJEITAR")} disabled={deciding === row.id}>
+                        Rejeitar
+                      </Button>
+                      <Button variant="success" size="sm" onClick={() => decide(row, "ACEITAR")} disabled={deciding === row.id}>
+                        Aceitar
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}
