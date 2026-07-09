@@ -208,15 +208,26 @@ export default function DashboardPage() {
         return ghosts.has(a.toUpperCase()) || ghosts.has(a.toLowerCase());
       };
 
-      // Load recent movements from ALL sources
+      // Valores CRUS (nome e email) dos fantasmas, pra excluir já na consulta.
+      // Sem isso, as ações da Tecnologia (ex.: vários logins do dia) entopem as
+      // "30 mais recentes" e só depois são escondidas — empurrando as
+      // movimentações reais dos outros pra fora do feed.
+      const ghostAuthors: string[] = [];
+      ((ghostsRes.data as Array<{ full_name: string | null; email: string | null }> | null) || []).forEach((u) => {
+        if (u.full_name) ghostAuthors.push(u.full_name);
+        if (u.email) ghostAuthors.push(u.email);
+      });
+      const notGhost = (qb: any, col: string) => (ghostAuthors.length ? qb.notIn(col, ghostAuthors) : qb);
+
+      // Load recent movements from ALL sources (fantasmas já fora da consulta).
       const [stockMov, epiMov, toolMov, requestsMov, shipsMov, empMov, loginMov] = await Promise.all([
-        db.from("stock_movements").select("id, movement_type, quantity, created_at, created_by, stock_items(name)").order("created_at", { ascending: false }).limit(30),
-        db.from("epi_movements").select("id, movement_type, quantity, created_at, created_by, epis(name)").order("created_at", { ascending: false }).limit(30),
-        db.from("tool_movements").select("id, movement_type, created_at, created_by, tools(name)").order("created_at", { ascending: false }).limit(30),
-        db.from("tool_requests").select("id, tool_name, status, notes, created_at, requested_by").order("created_at", { ascending: false }).limit(30),
+        notGhost(db.from("stock_movements").select("id, movement_type, quantity, created_at, created_by, stock_items(name)"), "created_by").order("created_at", { ascending: false }).limit(30),
+        notGhost(db.from("epi_movements").select("id, movement_type, quantity, created_at, created_by, epis(name)"), "created_by").order("created_at", { ascending: false }).limit(30),
+        notGhost(db.from("tool_movements").select("id, movement_type, created_at, created_by, tools(name)"), "created_by").order("created_at", { ascending: false }).limit(30),
+        notGhost(db.from("tool_requests").select("id, tool_name, status, notes, created_at, requested_by"), "requested_by").order("created_at", { ascending: false }).limit(30),
         db.from("ships").select("id, name, status, created_at, assigned_team").order("created_at", { ascending: false }).limit(10),
         db.from("employees").select("id, name, team, created_at").order("created_at", { ascending: false }).limit(10),
-        db.from("login_logs").select("id, full_name, email, event_type, created_at").order("created_at", { ascending: false }).limit(30),
+        notGhost(db.from("login_logs").select("id, full_name, email, event_type, created_at"), "full_name").order("created_at", { ascending: false }).limit(30),
       ]);
 
       const combined: RecentMovement[] = [];

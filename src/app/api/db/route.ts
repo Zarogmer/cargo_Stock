@@ -150,6 +150,9 @@ function buildWhere(filters: QuerySpec["filters"]) {
       case "in":
         where[f.column] = { in: f.values };
         break;
+      case "notIn":
+        where[f.column] = { notIn: f.values };
+        break;
       case "like":
         where[f.column] = { contains: f.value, mode: "insensitive" };
         break;

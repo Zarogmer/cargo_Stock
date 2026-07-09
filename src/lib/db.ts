@@ -111,6 +111,11 @@ class QueryBuilder<T = any> {
     return this;
   }
 
+  notIn(column: string, values: unknown[]): this {
+    this.spec.filters.push({ column, op: "notIn", values });
+    return this;
+  }
+
   like(column: string, value: string): this {
     this.spec.filters.push({ column, op: "like", value });
     return this;
