@@ -166,21 +166,19 @@ export function ContasAPagarPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [statusFilter, setStatusFilter] = useState<"ABERTAS" | "ALL" | PayableStatus>("ABERTAS");
+  const [statusFilter, setStatusFilter] = useState<"ABERTAS" | "PAGO">("ABERTAS");
   const [search, setSearch] = useState("");
 
-  // Modal de criar/editar
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  // Modal único (detalhe + edição na mesma tela).
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<Invoice | null>(null); // null = novo título
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [formFile, setFormFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [importingOfx, setImportingOfx] = useState(false);
   // Mês de referência do controle ("ALL" = todos). Formato "YYYY-MM".
   const [monthFilter, setMonthFilter] = useState<string>("ALL");
-
-  // Modal de detalhe
-  const [detail, setDetail] = useState<Invoice | null>(null);
+  const [supplierFilter, setSupplierFilter] = useState<string>("ALL");
   const [confirmTo, setConfirmTo] = useState<PayableStatus | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
@@ -216,7 +214,7 @@ export function ContasAPagarPage() {
       next[idx] = inv;
       return next;
     });
-    setDetail((d) => (d && d.id === inv.id ? inv : d));
+    setEditing((d) => (d && d.id === inv.id ? inv : d));
   }
 
   // ── Derivados: filtros e KPIs ─────────────────────────────────────────────
@@ -226,6 +224,11 @@ export function ContasAPagarPage() {
   function refMonthOf(inv: Invoice): string {
     const d = inv.payment_date || inv.due_date || inv.created_at;
     return d ? d.slice(0, 7) : "";
+  }
+
+  // Nome de fornecedor exibido (cadastro > favorecido do boleto).
+  function supplierNameOf(inv: Invoice): string {
+    return inv.suppliers?.name || inv.payee_name || "(sem fornecedor)";
   }
 
   // Meses presentes (pro seletor).
@@ -238,11 +241,19 @@ export function ContasAPagarPage() {
     return [...set].sort().reverse();
   }, [invoices]);
 
+  // Fornecedores presentes (pro filtro).
+  const supplierOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const inv of invoices) set.add(supplierNameOf(inv));
+    return [...set].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [invoices]);
+
   const filtered = useMemo(() => {
     return invoices.filter((inv) => {
       if (monthFilter !== "ALL" && refMonthOf(inv) !== monthFilter) return false;
       if (statusFilter === "ABERTAS" && !OPEN_STATUSES.includes(inv.status)) return false;
-      if (statusFilter !== "ABERTAS" && statusFilter !== "ALL" && inv.status !== statusFilter) return false;
+      if (statusFilter === "PAGO" && inv.status !== "PAGO") return false;
+      if (supplierFilter !== "ALL" && supplierNameOf(inv) !== supplierFilter) return false;
       if (search) {
         const blob = [
           inv.description,
@@ -260,7 +271,7 @@ export function ContasAPagarPage() {
       }
       return true;
     });
-  }, [invoices, statusFilter, search, monthFilter]);
+  }, [invoices, statusFilter, search, monthFilter, supplierFilter]);
 
   // RESUMO do mês selecionado (ou de tudo), no espírito da aba RESUMO da
   // planilha: Falta pagar / Pago / Despesas (total) + contagem de vencidas.
@@ -285,14 +296,14 @@ export function ContasAPagarPage() {
   // ── Ações ─────────────────────────────────────────────────────────────────
 
   function openCreate() {
-    setEditingId(null);
+    setEditing(null);
     setForm(EMPTY_FORM);
     setFormFile(null);
-    setFormOpen(true);
+    setModalOpen(true);
   }
 
-  function openEdit(inv: Invoice) {
-    setEditingId(inv.id);
+  function openInvoice(inv: Invoice) {
+    setEditing(inv);
     setForm({
       description: inv.description,
       amount: String(Number(inv.amount)).replace(".", ","),
@@ -308,7 +319,7 @@ export function ContasAPagarPage() {
       notes: inv.notes || "",
     });
     setFormFile(null);
-    setFormOpen(true);
+    setModalOpen(true);
   }
 
   async function handleOfxImport(file: File) {
@@ -366,8 +377,8 @@ export function ContasAPagarPage() {
         payment_date: form.payment_date || null,
         notes: form.notes || null,
       };
-      const res = await fetch(editingId ? `/api/financeiro/contas/${editingId}` : "/api/financeiro/contas", {
-        method: editingId ? "PATCH" : "POST",
+      const res = await fetch(editing ? `/api/financeiro/contas/${editing.id}` : "/api/financeiro/contas", {
+        method: editing ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
@@ -385,7 +396,7 @@ export function ContasAPagarPage() {
         }
       }
       upsertInvoice(inv);
-      setFormOpen(false);
+      setModalOpen(false);
     } finally {
       setSaving(false);
     }
@@ -437,10 +448,10 @@ export function ContasAPagarPage() {
     );
   }
 
-  const detailTransitions = detail && detail.status in PAYABLE_TRANSITIONS ? PAYABLE_TRANSITIONS[detail.status] : [];
-  // Editar liberado em qualquer status menos cancelado — títulos vindos do OFX
-  // trazem dados crus e precisam ser corrigíveis mesmo depois de pagos.
-  const isEditableStatus = detail ? detail.status !== "CANCELADO" : false;
+  const detailTransitions =
+    editing && editing.status in PAYABLE_TRANSITIONS ? PAYABLE_TRANSITIONS[editing.status] : [];
+  // Somente leitura: título cancelado, ou usuário sem permissão de edição.
+  const readOnly = (!!editing && editing.status === "CANCELADO") || !canEdit;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -523,11 +534,18 @@ export function ContasAPagarPage() {
           onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
           className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
         >
-          <option value="ABERTAS">Em aberto (recebido/aguardando/aprovado)</option>
-          <option value="ALL">Todas</option>
-          {(Object.keys(PAYABLE_STATUS_LABELS) as PayableStatus[]).map((s) => (
+          <option value="ABERTAS">Em aberto</option>
+          <option value="PAGO">Pago</option>
+        </select>
+        <select
+          value={supplierFilter}
+          onChange={(e) => setSupplierFilter(e.target.value)}
+          className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40 max-w-[240px]"
+        >
+          <option value="ALL">Todos os fornecedores</option>
+          {supplierOptions.map((s) => (
             <option key={s} value={s}>
-              {PAYABLE_STATUS_LABELS[s]}
+              {s}
             </option>
           ))}
         </select>
@@ -569,7 +587,7 @@ export function ContasAPagarPage() {
                 return (
                   <tr
                     key={inv.id}
-                    onClick={() => setDetail(inv)}
+                    onClick={() => openInvoice(inv)}
                     className="border-b border-border last:border-0 hover:bg-gray-50 cursor-pointer"
                   >
                     <td className={`px-3 py-3 whitespace-nowrap ${overdue ? "text-red-600 font-semibold" : "text-text"}`}>
@@ -602,242 +620,189 @@ export function ContasAPagarPage() {
         )}
       </div>
 
-      {/* Modal criar/editar */}
+      {/* Modal único: detalhe + edição na mesma tela */}
       <Modal
-        open={formOpen}
-        onClose={() => setFormOpen(false)}
-        title={editingId ? "Editar título" : "Nova conta a pagar"}
-        maxWidth="max-w-xl"
-      >
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs font-medium text-text-light">Descrição *</label>
-            <input
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              className={inputCls}
-              placeholder="Ex.: Boleto químicos — pedido 123"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-text-light">Valor (R$) *</label>
-              <input
-                value={form.amount}
-                onChange={(e) => setForm({ ...form, amount: e.target.value })}
-                className={inputCls}
-                placeholder="0,00"
-                inputMode="decimal"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-text-light">Vencimento</label>
-              <input
-                type="date"
-                value={form.due_date}
-                onChange={(e) => setForm({ ...form, due_date: e.target.value })}
-                className={inputCls}
-              />
-            </div>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-text-light">Fornecedor (cadastro)</label>
-            <select
-              value={form.supplier_id}
-              onChange={(e) => setForm({ ...form, supplier_id: e.target.value })}
-              className={inputCls}
-            >
-              <option value="">— sem vínculo —</option>
-              {suppliers.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                  {s.cnpj ? ` (${s.cnpj})` : ""}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-text-light">Favorecido (como no boleto)</label>
-              <input
-                value={form.payee_name}
-                onChange={(e) => setForm({ ...form, payee_name: e.target.value })}
-                className={inputCls}
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-text-light">CNPJ/CPF do favorecido</label>
-              <input
-                value={form.payee_document}
-                onChange={(e) => setForm({ ...form, payee_document: e.target.value })}
-                className={inputCls}
-                placeholder="só números"
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-text-light">Banco</label>
-              <input
-                value={form.bank}
-                onChange={(e) => setForm({ ...form, bank: e.target.value })}
-                className={inputCls}
-                placeholder="Itaú / Santander"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-text-light">Tipo de despesa</label>
-              <input
-                value={form.expense_type}
-                onChange={(e) => setForm({ ...form, expense_type: e.target.value })}
-                className={inputCls}
-                placeholder="ex.: Rancho, Combustível..."
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-text-light">Valor pago (R$)</label>
-              <input
-                value={form.paid_amount}
-                onChange={(e) => setForm({ ...form, paid_amount: e.target.value })}
-                className={inputCls}
-                placeholder="se diferente do valor"
-                inputMode="decimal"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-text-light">Data de pagamento</label>
-              <input
-                type="date"
-                value={form.payment_date}
-                onChange={(e) => setForm({ ...form, payment_date: e.target.value })}
-                className={inputCls}
-              />
-            </div>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-text-light">Linha digitável (se boleto)</label>
-            <input
-              value={form.digitable_line}
-              onChange={(e) => setForm({ ...form, digitable_line: e.target.value })}
-              className={inputCls}
-              placeholder="47 ou 48 dígitos"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-text-light">Observações</label>
-            <textarea
-              value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              className={`${inputCls} min-h-[60px]`}
-            />
-          </div>
-          {!editingId && (
-            <div>
-              <label className="text-xs font-medium text-text-light">PDF do boleto (opcional)</label>
-              <input
-                type="file"
-                accept="application/pdf"
-                onChange={(e) => setFormFile(e.target.files?.[0] || null)}
-                className="block w-full text-sm text-text-light file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-gray-100 file:text-text file:text-xs hover:file:bg-gray-200"
-              />
-            </div>
-          )}
-          <div className="flex justify-end gap-3 pt-2">
-            <Button variant="secondary" onClick={() => setFormOpen(false)}>
-              Cancelar
-            </Button>
-            <Button onClick={handleSave} disabled={saving}>
-              {saving ? "Salvando..." : editingId ? "Salvar alterações" : "Criar título"}
-            </Button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Modal de detalhe */}
-      <Modal
-        open={!!detail}
+        open={modalOpen}
         onClose={() => {
-          setDetail(null);
+          setModalOpen(false);
           setCancelOpen(false);
           setCancelReason("");
         }}
-        title="Detalhe do título"
+        title={editing ? "Título — detalhe e edição" : "Nova conta a pagar"}
         maxWidth="max-w-3xl"
       >
-        {detail && (
-          <div className="space-y-4">
+        <div className="space-y-4">
+          {/* Status/origem (só título existente) */}
+          {editing && (
             <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div>
-                <p className="font-semibold text-text">{detail.description}</p>
-                <p className="text-sm text-text-light">
-                  {detail.suppliers?.name || detail.payee_name || "sem fornecedor"}
-                  {detail.payee_document ? ` · ${detail.payee_document}` : ""}
-                </p>
-              </div>
-              <StatusBadge status={detail.status} />
+              <p className="text-sm text-text-light">
+                <span className="font-medium text-text">Origem:</span>{" "}
+                {editing.origin === "EMAIL"
+                  ? "E-mail"
+                  : editing.origin === "EXTRATO"
+                    ? "Extrato (OFX)"
+                    : editing.origin === "BOLETO_PDF"
+                      ? "Boleto (PDF)"
+                      : "Manual"}
+                {"  ·  "}
+                {editing.created_by} · {fmtDateTime(editing.created_at)}
+              </p>
+              <StatusBadge status={editing.status} />
             </div>
+          )}
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+          {readOnly && editing && (
+            <div className="bg-gray-50 border border-border rounded-lg p-2 text-xs text-text-light">
+              {editing.status === "CANCELADO"
+                ? "Título cancelado — somente leitura."
+                : "Você não tem permissão para editar."}
+            </div>
+          )}
+
+          {/* Formulário editável */}
+          <fieldset disabled={readOnly} className="space-y-3 disabled:opacity-70">
+            <div>
+              <label className="text-xs font-medium text-text-light">Descrição *</label>
+              <input
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                className={inputCls}
+                placeholder="Ex.: Boleto químicos — pedido 123"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <p className="text-xs text-text-light">Valor</p>
-                <p className="font-bold text-text">{formatCurrency(Number(detail.amount))}</p>
+                <label className="text-xs font-medium text-text-light">Valor (R$) *</label>
+                <input
+                  value={form.amount}
+                  onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                  className={inputCls}
+                  placeholder="0,00"
+                  inputMode="decimal"
+                />
               </div>
               <div>
-                <p className="text-xs text-text-light">Vencimento</p>
-                <p className="font-medium text-text">{fmtDateOnly(detail.due_date)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-text-light">Origem</p>
-                <p className="font-medium text-text">{detail.origin === "EMAIL" ? "E-mail" : "Manual"}</p>
-              </div>
-              <div>
-                <p className="text-xs text-text-light">Criado por</p>
-                <p className="font-medium text-text">
-                  {detail.created_by} · {fmtDateTime(detail.created_at)}
-                </p>
+                <label className="text-xs font-medium text-text-light">Vencimento</label>
+                <input
+                  type="date"
+                  value={form.due_date}
+                  onChange={(e) => setForm({ ...form, due_date: e.target.value })}
+                  className={inputCls}
+                />
               </div>
             </div>
-
-            {detail.digitable_line && (
-              <div className="text-xs text-text-light break-all">
-                <span className="font-medium">Linha digitável:</span> {detail.digitable_line}
+            <div>
+              <label className="text-xs font-medium text-text-light">Fornecedor (cadastro)</label>
+              <select
+                value={form.supplier_id}
+                onChange={(e) => setForm({ ...form, supplier_id: e.target.value })}
+                className={inputCls}
+              >
+                <option value="">— sem vínculo —</option>
+                {suppliers.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                    {s.cnpj ? ` (${s.cnpj})` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-text-light">Favorecido (como no boleto)</label>
+                <input
+                  value={form.payee_name}
+                  onChange={(e) => setForm({ ...form, payee_name: e.target.value })}
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-text-light">CNPJ/CPF do favorecido</label>
+                <input
+                  value={form.payee_document}
+                  onChange={(e) => setForm({ ...form, payee_document: e.target.value })}
+                  className={inputCls}
+                  placeholder="só números"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-text-light">Banco</label>
+                <input
+                  value={form.bank}
+                  onChange={(e) => setForm({ ...form, bank: e.target.value })}
+                  className={inputCls}
+                  placeholder="Itaú / Santander"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-text-light">Tipo de despesa</label>
+                <input
+                  value={form.expense_type}
+                  onChange={(e) => setForm({ ...form, expense_type: e.target.value })}
+                  className={inputCls}
+                  placeholder="ex.: Rancho, Combustível..."
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-text-light">Valor pago (R$)</label>
+                <input
+                  value={form.paid_amount}
+                  onChange={(e) => setForm({ ...form, paid_amount: e.target.value })}
+                  className={inputCls}
+                  placeholder="se diferente do valor"
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-text-light">Data de pagamento</label>
+                <input
+                  type="date"
+                  value={form.payment_date}
+                  onChange={(e) => setForm({ ...form, payment_date: e.target.value })}
+                  className={inputCls}
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-text-light">Linha digitável (se boleto)</label>
+              <input
+                value={form.digitable_line}
+                onChange={(e) => setForm({ ...form, digitable_line: e.target.value })}
+                className={inputCls}
+                placeholder="47 ou 48 dígitos"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-text-light">Observações</label>
+              <textarea
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                className={`${inputCls} min-h-[60px]`}
+              />
+            </div>
+            {!editing && (
+              <div>
+                <label className="text-xs font-medium text-text-light">PDF do boleto (opcional)</label>
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  onChange={(e) => setFormFile(e.target.files?.[0] || null)}
+                  className="block w-full text-sm text-text-light file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-gray-100 file:text-text file:text-xs hover:file:bg-gray-200"
+                />
               </div>
             )}
-            {detail.notes && <p className="text-sm text-text-light whitespace-pre-wrap">{detail.notes}</p>}
+          </fieldset>
 
-            {/* Trilha de auditoria */}
-            <div className="bg-gray-50 border border-border rounded-lg p-3 text-xs text-text-light space-y-1">
-              {detail.approved_by && (
-                <p>
-                  ✔ Aprovado por <span className="font-medium text-text">{detail.approved_by}</span> em{" "}
-                  {fmtDateTime(detail.approved_at)}
-                </p>
-              )}
-              {detail.paid_by && (
-                <p>
-                  💸 Pago por <span className="font-medium text-text">{detail.paid_by}</span> em{" "}
-                  {fmtDateTime(detail.paid_at)}
-                </p>
-              )}
-              {detail.cancelled_by && (
-                <p>
-                  ✖ Cancelado por <span className="font-medium text-text">{detail.cancelled_by}</span> em{" "}
-                  {fmtDateTime(detail.cancelled_at)}
-                  {detail.cancel_reason ? ` — "${detail.cancel_reason}"` : ""}
-                </p>
-              )}
-              {!detail.approved_by && !detail.paid_by && !detail.cancelled_by && (
-                <p>Sem aprovações/pagamentos registrados ainda.</p>
-              )}
-            </div>
-
-            {/* Anexos */}
+          {/* Anexos + preview (só título existente) */}
+          {editing && (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-semibold text-text">Anexos ({detail.attachments.length})</p>
-                {canEdit && detail.status !== "CANCELADO" && (
+                <p className="text-sm font-semibold text-text">Anexos ({editing.attachments.length})</p>
+                {canEdit && editing.status !== "CANCELADO" && (
                   <label className="text-xs text-primary cursor-pointer hover:underline">
                     {uploadingExtra ? "Enviando..." : "+ anexar PDF"}
                     <input
@@ -847,19 +812,19 @@ export function ContasAPagarPage() {
                       disabled={uploadingExtra}
                       onChange={(e) => {
                         const f = e.target.files?.[0];
-                        if (f) handleExtraUpload(detail, f);
+                        if (f) handleExtraUpload(editing, f);
                         e.target.value = "";
                       }}
                     />
                   </label>
                 )}
               </div>
-              {detail.attachments.length === 0 ? (
+              {editing.attachments.length === 0 ? (
                 <p className="text-xs text-text-light">Nenhum PDF anexado.</p>
               ) : (
                 <div className="space-y-2">
                   <ul className="text-sm space-y-1">
-                    {detail.attachments.map((a) => (
+                    {editing.attachments.map((a) => (
                       <li key={a.id} className="flex items-center gap-2">
                         <a
                           href={`/api/financeiro/anexos/${a.id}`}
@@ -869,89 +834,116 @@ export function ContasAPagarPage() {
                         >
                           📎 {a.filename}
                         </a>
-                        <span className="text-xs text-text-light whitespace-nowrap">
-                          por {a.created_by}
-                        </span>
+                        <span className="text-xs text-text-light whitespace-nowrap">por {a.created_by}</span>
                       </li>
                     ))}
                   </ul>
                   <iframe
-                    src={`/api/financeiro/anexos/${detail.attachments[0].id}`}
+                    src={`/api/financeiro/anexos/${editing.attachments[0].id}`}
                     className="w-full h-[420px] border border-border rounded-lg"
                     title="PDF do boleto"
                   />
                 </div>
               )}
             </div>
+          )}
 
-            {/* Ações */}
-            {canEdit && (
-              <div className="flex gap-2 flex-wrap justify-end border-t border-border pt-4">
-                {isEditableStatus && (
-                  <Button variant="secondary" onClick={() => openEdit(detail)}>
-                    Editar
-                  </Button>
-                )}
-                {detailTransitions
-                  .filter((t) => t !== "CANCELADO")
-                  .map((t) => (
-                    <Button
-                      key={t}
-                      variant={t === "PAGO" ? "success" : "primary"}
-                      disabled={transitioning}
-                      onClick={() =>
-                        t === "AGUARDANDO_APROVACAO" ? doTransition(detail, t) : setConfirmTo(t)
-                      }
-                    >
-                      {PAYABLE_ACTION_LABELS[t]}
-                    </Button>
-                  ))}
-                {detailTransitions.includes("CANCELADO") && (
-                  <Button variant="danger" disabled={transitioning} onClick={() => setCancelOpen((v) => !v)}>
-                    Cancelar título
-                  </Button>
-                )}
-              </div>
+          {/* Trilha de auditoria (só existente) */}
+          {editing && (
+            <div className="bg-gray-50 border border-border rounded-lg p-3 text-xs text-text-light space-y-1">
+              {editing.approved_by && (
+                <p>
+                  ✔ Aprovado por <span className="font-medium text-text">{editing.approved_by}</span> em{" "}
+                  {fmtDateTime(editing.approved_at)}
+                </p>
+              )}
+              {editing.paid_by && (
+                <p>
+                  💸 Pago por <span className="font-medium text-text">{editing.paid_by}</span> em{" "}
+                  {fmtDateTime(editing.paid_at)}
+                </p>
+              )}
+              {editing.cancelled_by && (
+                <p>
+                  ✖ Cancelado por <span className="font-medium text-text">{editing.cancelled_by}</span> em{" "}
+                  {fmtDateTime(editing.cancelled_at)}
+                  {editing.cancel_reason ? ` — "${editing.cancel_reason}"` : ""}
+                </p>
+              )}
+              {!editing.approved_by && !editing.paid_by && !editing.cancelled_by && (
+                <p>Sem aprovações/pagamentos registrados ainda.</p>
+              )}
+            </div>
+          )}
+
+          {/* Ações */}
+          <div className="flex gap-2 flex-wrap justify-end border-t border-border pt-4">
+            <Button variant="secondary" onClick={() => setModalOpen(false)}>
+              Fechar
+            </Button>
+            {canEdit && !readOnly && (
+              <Button onClick={handleSave} disabled={saving}>
+                {saving ? "Salvando..." : editing ? "Salvar alterações" : "Criar título"}
+              </Button>
             )}
-
-            {/* Cancelamento com motivo */}
-            {cancelOpen && detail && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-3 space-y-2">
-                <label className="text-xs font-medium text-red-700">Motivo do cancelamento</label>
-                <textarea
-                  value={cancelReason}
-                  onChange={(e) => setCancelReason(e.target.value)}
-                  className={`${inputCls} min-h-[50px]`}
-                  placeholder="Ex.: boleto duplicado / compra desfeita"
-                />
-                <div className="flex justify-end gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => setCancelOpen(false)}>
-                    Voltar
-                  </Button>
+            {canEdit &&
+              editing &&
+              detailTransitions
+                .filter((t) => t !== "CANCELADO")
+                .map((t) => (
                   <Button
-                    variant="danger"
-                    size="sm"
+                    key={t}
+                    variant={t === "PAGO" ? "success" : "primary"}
                     disabled={transitioning}
-                    onClick={() => doTransition(detail, "CANCELADO", cancelReason)}
+                    onClick={() => (t === "AGUARDANDO_APROVACAO" ? doTransition(editing, t) : setConfirmTo(t))}
                   >
-                    Confirmar cancelamento
+                    {PAYABLE_ACTION_LABELS[t]}
                   </Button>
-                </div>
-              </div>
+                ))}
+            {canEdit && editing && detailTransitions.includes("CANCELADO") && (
+              <Button variant="danger" disabled={transitioning} onClick={() => setCancelOpen((v) => !v)}>
+                Cancelar título
+              </Button>
             )}
           </div>
-        )}
+
+          {/* Cancelamento com motivo */}
+          {cancelOpen && editing && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 space-y-2">
+              <label className="text-xs font-medium text-red-700">Motivo do cancelamento</label>
+              <textarea
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                className={`${inputCls} min-h-[50px]`}
+                placeholder="Ex.: boleto duplicado / compra desfeita"
+              />
+              <div className="flex justify-end gap-2">
+                <Button variant="secondary" size="sm" onClick={() => setCancelOpen(false)}>
+                  Voltar
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={transitioning}
+                  onClick={() => doTransition(editing, "CANCELADO", cancelReason)}
+                >
+                  Confirmar cancelamento
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
       </Modal>
 
       {/* Confirmação de aprovar/pagar */}
       <ConfirmDialog
-        open={!!confirmTo && !!detail}
+        open={!!confirmTo && !!editing}
         onClose={() => setConfirmTo(null)}
-        onConfirm={() => detail && confirmTo && doTransition(detail, confirmTo)}
+        onConfirm={() => editing && confirmTo && doTransition(editing, confirmTo)}
         title={confirmTo ? PAYABLE_ACTION_LABELS[confirmTo] : ""}
         message={
-          detail && confirmTo
-            ? `${PAYABLE_ACTION_LABELS[confirmTo]}: "${detail.description}" — ${formatCurrency(Number(detail.amount))}?`
+          editing && confirmTo
+            ? `${PAYABLE_ACTION_LABELS[confirmTo]}: "${editing.description}" — ${formatCurrency(Number(editing.amount))}?`
             : ""
         }
         confirmLabel={confirmTo ? PAYABLE_ACTION_LABELS[confirmTo] : "Confirmar"}
