@@ -13,11 +13,6 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatCurrency, parseDecimalBR, matchSearch } from "@/lib/utils";
-import {
-  PAYABLE_STATUS_LABELS,
-  PAYABLE_ACTION_LABELS,
-  PAYABLE_TRANSITIONS,
-} from "@/lib/services/payable-status";
 import type { PayableStatus } from "@/types/financeiro";
 
 // ── Tipos das respostas da API ───────────────────────────────────────────────
@@ -100,25 +95,27 @@ function fmtDateTime(iso: string | null): string {
   return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 }
 
-// ── Badges ───────────────────────────────────────────────────────────────────
+// ── Estado "pago" e badge ────────────────────────────────────────────────────
+// Não há mais aprovação/cancelamento: um título é PAGO quando tem data de
+// pagamento; senão está Em aberto (Vencido se passou do vencimento).
 
-const STATUS_BADGE: Record<PayableStatus, string> = {
-  RECEBIDO: "bg-blue-100 text-blue-700",
-  AGUARDANDO_APROVACAO: "bg-amber-100 text-amber-700",
-  APROVADO: "bg-emerald-100 text-emerald-700",
-  PAGO: "bg-emerald-600 text-white",
-  CANCELADO: "bg-gray-200 text-gray-600",
-};
-
-function StatusBadge({ status }: { status: PayableStatus }) {
-  return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${STATUS_BADGE[status]}`}>
-      {PAYABLE_STATUS_LABELS[status]}
-    </span>
-  );
+function isPaid(inv: { payment_date: string | null }): boolean {
+  return !!inv.payment_date;
 }
 
-const OPEN_STATUSES: PayableStatus[] = ["RECEBIDO", "AGUARDANDO_APROVACAO", "APROVADO"];
+function PaidBadge({ inv }: { inv: Invoice }) {
+  const paid = isPaid(inv);
+  const overdue = !paid && !!inv.due_date && inv.due_date.slice(0, 10) < todayStr();
+  const cls = paid
+    ? "bg-emerald-600 text-white"
+    : overdue
+      ? "bg-red-100 text-red-700"
+      : "bg-blue-100 text-blue-700";
+  const label = paid ? "Pago" : overdue ? "Vencido" : "Em aberto";
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${cls}`}>{label}</span>
+  );
+}
 
 // Bancos padronizados no lançamento manual. Seletor fixo evita "Itaú" vs
 // "itau" e mantém o filtro por banco consistente.
@@ -185,10 +182,7 @@ export function ContasAPagarPage() {
   const [monthFilter, setMonthFilter] = useState<string>("ALL");
   const [supplierFilter, setSupplierFilter] = useState<string>("ALL");
   const [bankFilter, setBankFilter] = useState<string>("ALL");
-  const [confirmTo, setConfirmTo] = useState<PayableStatus | null>(null);
-  const [cancelOpen, setCancelOpen] = useState(false);
-  const [cancelReason, setCancelReason] = useState("");
-  const [transitioning, setTransitioning] = useState(false);
+  const [togglingPaid, setTogglingPaid] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [uploadingExtra, setUploadingExtra] = useState(false);
@@ -266,8 +260,8 @@ export function ContasAPagarPage() {
   const filtered = useMemo(() => {
     return invoices.filter((inv) => {
       if (monthFilter !== "ALL" && refMonthOf(inv) !== monthFilter) return false;
-      if (statusFilter === "ABERTAS" && !OPEN_STATUSES.includes(inv.status)) return false;
-      if (statusFilter === "PAGO" && inv.status !== "PAGO") return false;
+      if (statusFilter === "ABERTAS" && isPaid(inv)) return false;
+      if (statusFilter === "PAGO" && !isPaid(inv)) return false;
       if (supplierFilter !== "ALL" && supplierNameOf(inv) !== supplierFilter) return false;
       if (bankFilter !== "ALL" && inv.bank !== bankFilter) return false;
       if (search) {
@@ -299,9 +293,9 @@ export function ContasAPagarPage() {
     let overdueCount = 0;
     for (const inv of scope) {
       const amount = Number(inv.amount) || 0;
-      if (inv.status === "PAGO") {
+      if (isPaid(inv)) {
         pago += inv.paid_amount != null ? Number(inv.paid_amount) : amount;
-      } else if (inv.status !== "CANCELADO") {
+      } else {
         faltaPagar += amount;
         if (inv.due_date && inv.due_date.slice(0, 10) < today) overdueCount++;
       }
@@ -458,26 +452,29 @@ export function ContasAPagarPage() {
     }
   }
 
-  async function doTransition(inv: Invoice, to: PayableStatus, reason?: string) {
-    setTransitioning(true);
+  // Marca/desmarca pago (dirigido pela data de pagamento — sem aprovação).
+  async function setPaid(inv: Invoice, paid: boolean) {
+    setTogglingPaid(true);
     try {
-      const res = await fetch(`/api/financeiro/contas/${inv.id}/transition`, {
-        method: "POST",
+      const body = paid
+        ? {
+            payment_date: todayStr(),
+            paid_amount: inv.paid_amount != null ? Number(inv.paid_amount) : Number(inv.amount),
+          }
+        : { payment_date: null };
+      const res = await fetch(`/api/financeiro/contas/${inv.id}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to, reason }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert(data.error || "Erro na transição de status");
-        if (res.status === 409) loadAll();
+        alert(data.error || "Erro ao atualizar o pagamento");
         return;
       }
       upsertInvoice(data.invoice as Invoice);
     } finally {
-      setTransitioning(false);
-      setConfirmTo(null);
-      setCancelOpen(false);
-      setCancelReason("");
+      setTogglingPaid(false);
     }
   }
 
@@ -523,10 +520,8 @@ export function ContasAPagarPage() {
     );
   }
 
-  const detailTransitions =
-    editing && editing.status in PAYABLE_TRANSITIONS ? PAYABLE_TRANSITIONS[editing.status] : [];
-  // Somente leitura: título cancelado, ou usuário sem permissão de edição.
-  const readOnly = (!!editing && editing.status === "CANCELADO") || !canEdit;
+  // Sem aprovação/cancelamento: edição liberada sempre que pode editar.
+  const readOnly = !canEdit;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -671,9 +666,7 @@ export function ContasAPagarPage() {
             <tbody>
               {filtered.map((inv) => {
                 const overdue =
-                  OPEN_STATUSES.includes(inv.status) &&
-                  !!inv.due_date &&
-                  inv.due_date.slice(0, 10) < todayStr();
+                  !isPaid(inv) && !!inv.due_date && inv.due_date.slice(0, 10) < todayStr();
                 return (
                   <tr
                     key={inv.id}
@@ -697,7 +690,7 @@ export function ContasAPagarPage() {
                     <td className="px-3 py-3 text-text-light whitespace-nowrap">{inv.bank || "—"}</td>
                     <td className="px-3 py-3 text-text-light max-w-[120px] truncate">{inv.expense_type || "—"}</td>
                     <td className="px-3 py-3">
-                      <StatusBadge status={inv.status} />
+                      <PaidBadge inv={inv} />
                     </td>
                     <td className="px-3 py-3 text-center text-text-light">
                       {inv.attachments.length > 0 ? `📎 ${inv.attachments.length}` : "—"}
@@ -713,11 +706,7 @@ export function ContasAPagarPage() {
       {/* Modal único: detalhe + edição na mesma tela */}
       <Modal
         open={modalOpen}
-        onClose={() => {
-          setModalOpen(false);
-          setCancelOpen(false);
-          setCancelReason("");
-        }}
+        onClose={() => setModalOpen(false)}
         title={editing ? "Título — detalhe e edição" : "Nova conta a pagar"}
         maxWidth="max-w-3xl"
       >
@@ -737,15 +726,13 @@ export function ContasAPagarPage() {
                 {"  ·  "}
                 {editing.created_by} · {fmtDateTime(editing.created_at)}
               </p>
-              <StatusBadge status={editing.status} />
+              <PaidBadge inv={editing} />
             </div>
           )}
 
           {readOnly && editing && (
             <div className="bg-gray-50 border border-border rounded-lg p-2 text-xs text-text-light">
-              {editing.status === "CANCELADO"
-                ? "Título cancelado — somente leitura."
-                : "Você não tem permissão para editar."}
+              Você não tem permissão para editar.
             </div>
           )}
 
@@ -914,7 +901,7 @@ export function ContasAPagarPage() {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <p className="text-sm font-semibold text-text">Anexos ({editing.attachments.length})</p>
-                {canEdit && editing.status !== "CANCELADO" && (
+                {canEdit && (
                   <label className="text-xs text-primary cursor-pointer hover:underline">
                     {uploadingExtra ? "Enviando..." : "+ anexar PDF"}
                     <input
@@ -960,31 +947,11 @@ export function ContasAPagarPage() {
             </div>
           )}
 
-          {/* Trilha de auditoria (só existente) */}
-          {editing && (
-            <div className="bg-gray-50 border border-border rounded-lg p-3 text-xs text-text-light space-y-1">
-              {editing.approved_by && (
-                <p>
-                  ✔ Aprovado por <span className="font-medium text-text">{editing.approved_by}</span> em{" "}
-                  {fmtDateTime(editing.approved_at)}
-                </p>
-              )}
-              {editing.paid_by && (
-                <p>
-                  💸 Pago por <span className="font-medium text-text">{editing.paid_by}</span> em{" "}
-                  {fmtDateTime(editing.paid_at)}
-                </p>
-              )}
-              {editing.cancelled_by && (
-                <p>
-                  ✖ Cancelado por <span className="font-medium text-text">{editing.cancelled_by}</span> em{" "}
-                  {fmtDateTime(editing.cancelled_at)}
-                  {editing.cancel_reason ? ` — "${editing.cancel_reason}"` : ""}
-                </p>
-              )}
-              {!editing.approved_by && !editing.paid_by && !editing.cancelled_by && (
-                <p>Sem aprovações/pagamentos registrados ainda.</p>
-              )}
+          {/* Pagamento (só existente e pago) */}
+          {editing && isPaid(editing) && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-800">
+              💸 Pago em {fmtDateOnly(editing.payment_date)}
+              {editing.paid_amount != null ? ` — ${formatCurrency(Number(editing.paid_amount))}` : ""}
             </div>
           )}
 
@@ -1003,72 +970,21 @@ export function ContasAPagarPage() {
                 {saving ? "Salvando..." : editing ? "Salvar alterações" : "Criar título"}
               </Button>
             )}
-            {canEdit &&
-              editing &&
-              detailTransitions
-                .filter((t) => t !== "CANCELADO")
-                .map((t) => (
-                  <Button
-                    key={t}
-                    variant={t === "PAGO" ? "success" : "primary"}
-                    disabled={transitioning}
-                    onClick={() => (t === "AGUARDANDO_APROVACAO" ? doTransition(editing, t) : setConfirmTo(t))}
-                  >
-                    {PAYABLE_ACTION_LABELS[t]}
-                  </Button>
-                ))}
-            {canEdit && editing && detailTransitions.includes("CANCELADO") && (
-              <Button variant="danger" disabled={transitioning} onClick={() => setCancelOpen((v) => !v)}>
-                Cancelar título
+            {canEdit && editing && !isPaid(editing) && (
+              <Button variant="success" disabled={togglingPaid} onClick={() => setPaid(editing, true)}>
+                {togglingPaid ? "..." : "Marcar como pago"}
+              </Button>
+            )}
+            {canEdit && editing && isPaid(editing) && (
+              <Button variant="secondary" disabled={togglingPaid} onClick={() => setPaid(editing, false)}>
+                {togglingPaid ? "..." : "Reabrir (não pago)"}
               </Button>
             )}
           </div>
-
-          {/* Cancelamento com motivo */}
-          {cancelOpen && editing && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-3 space-y-2">
-              <label className="text-xs font-medium text-red-700">Motivo do cancelamento</label>
-              <textarea
-                value={cancelReason}
-                onChange={(e) => setCancelReason(e.target.value)}
-                className={`${inputCls} min-h-[50px]`}
-                placeholder="Ex.: boleto duplicado / compra desfeita"
-              />
-              <div className="flex justify-end gap-2">
-                <Button variant="secondary" size="sm" onClick={() => setCancelOpen(false)}>
-                  Voltar
-                </Button>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  disabled={transitioning}
-                  onClick={() => doTransition(editing, "CANCELADO", cancelReason)}
-                >
-                  Confirmar cancelamento
-                </Button>
-              </div>
-            </div>
-          )}
         </div>
       </Modal>
 
-      {/* Confirmação de aprovar/pagar */}
-      <ConfirmDialog
-        open={!!confirmTo && !!editing}
-        onClose={() => setConfirmTo(null)}
-        onConfirm={() => editing && confirmTo && doTransition(editing, confirmTo)}
-        title={confirmTo ? PAYABLE_ACTION_LABELS[confirmTo] : ""}
-        message={
-          editing && confirmTo
-            ? `${PAYABLE_ACTION_LABELS[confirmTo]}: "${editing.description}" — ${formatCurrency(Number(editing.amount))}?`
-            : ""
-        }
-        confirmLabel={confirmTo ? PAYABLE_ACTION_LABELS[confirmTo] : "Confirmar"}
-        variant="primary"
-        loading={transitioning}
-      />
-
-      {/* Confirmação de EXCLUSÃO (remove de vez, diferente de cancelar) */}
+      {/* Confirmação de EXCLUSÃO */}
       <ConfirmDialog
         open={deleteOpen && !!editing}
         onClose={() => setDeleteOpen(false)}
