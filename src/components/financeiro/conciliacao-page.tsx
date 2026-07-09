@@ -350,6 +350,20 @@ export function ConciliacaoPage() {
     window.open(`/api/financeiro/extrato/export?${params.toString()}`, "_blank");
   }
 
+  // Planilha do ano inteiro: uma aba por mês (reproduz a "Jan a Dez" da
+  // contabilidade). Usa o ano do mês selecionado, senão o mais recente do
+  // extrato, senão o ano atual.
+  function exportYear() {
+    if (selectedAccount == null) return;
+    const year = exportMonth
+      ? exportMonth.slice(0, 4)
+      : months[0]?.slice(0, 4) ?? String(new Date().getFullYear());
+    window.open(
+      `/api/financeiro/extrato/export?account=${selectedAccount}&year=${year}`,
+      "_blank",
+    );
+  }
+
   if (!canView) {
     return (
       <div className="max-w-7xl mx-auto">
@@ -556,6 +570,14 @@ export function ConciliacaoPage() {
                   </select>
                   <Button variant="secondary" onClick={exportExcel} disabled={transactions.length === 0}>
                     Exportar Excel
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={exportYear}
+                    disabled={transactions.length === 0}
+                    title="Planilha do ano inteiro, uma aba por mês (formato da contabilidade)"
+                  >
+                    Baixar ano
                   </Button>
                 </div>
               </div>

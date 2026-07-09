@@ -5,15 +5,28 @@ import { prisma } from "@/lib/prisma";
 import { requireFinance } from "@/lib/financeiro-api";
 
 // GET /api/financeiro/extrato/export?account=<id>&from=YYYY-MM-DD&to=YYYY-MM-DD
-// Gera a planilha de conciliação NO FORMATO da contabilidade:
+//   → planilha de UM período, numa aba só.
+// GET /api/financeiro/extrato/export?account=<id>&year=YYYY
+//   → planilha do ANO INTEIRO, uma aba por mês (Jan..mês atual), no formato
+//     que a contabilidade mantinha à mão. É essa que reproduz a "Jan a Dez"
+//     do Itaú/Santander — roda uma vez por conta e sai um arquivo por banco.
+//
+// Layout da contabilidade em cada aba:
 //   [ok] | data | lançamento | Débito | Crédito | saldo (R$)
-// com "SALDO ANTERIOR", saldo corrente e a marca "ok" (conciliado manual ou
-// automático). Substitui a digitação manual do extrato.
+// com "SALDO ANTERIOR", saldo corrente acumulado e a marca "ok" (conciliado
+// manual ou automático). O cabeçalho segue o banco (Itaú x Santander).
 
-const MES_PT = [
+const MES_ABBR = [
+  "Jan", "Fev", "Mar", "Abr", "Maio", "Jun",
+  "Jul", "Ago", "Set", "Out", "Nov", "Dez",
+];
+const MES_FULL = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
 ];
+
+// Formato de moeda BRL nas colunas Débito/Crédito/saldo.
+const MONEY_FMT = '"R$"\\ #,##0.00;[Red]-"R$"\\ #,##0.00';
 
 function fmtBrDate(d: Date): string {
   const iso = d.toISOString().slice(0, 10);
@@ -25,6 +38,103 @@ function num(v: Prisma.Decimal | number): number {
   return Number(v);
 }
 
+interface TxRow {
+  posted_at: Date;
+  amount: Prisma.Decimal;
+  review_status: string;
+  review_note: string | null;
+  payee_name: string | null;
+  description: string | null;
+  reconciliation: { status: string } | null;
+}
+
+// Monta as linhas (aoa) de UMA aba a partir do saldo de abertura e das
+// transações já filtradas/ordenadas do período. Retorna a aoa e o saldo final.
+function buildSheet(
+  account: { nickname: string; bank: string; agency: string | null; account_number: string | null },
+  opening: number,
+  txs: TxRow[],
+  header: (string | number)[][],
+  anteriorDate: string,
+): { aoa: (string | number)[][]; closing: number } {
+  const aoa: (string | number)[][] = [...header];
+  aoa.push(["", anteriorDate, "SALDO ANTERIOR", "", "", Number(opening.toFixed(2))]);
+
+  let running = opening;
+  for (const t of txs) {
+    const v = num(t.amount);
+    running += v;
+    const conciliado = t.review_status === "CONCILIADO" || t.reconciliation?.status === "CONFIRMADA";
+    const lancamento = t.review_note || t.payee_name || t.description || "";
+    aoa.push([
+      conciliado ? "ok" : "",
+      fmtBrDate(t.posted_at),
+      lancamento,
+      v < 0 ? Number(v.toFixed(2)) : "",
+      v > 0 ? Number(v.toFixed(2)) : "",
+      Number(running.toFixed(2)),
+    ]);
+  }
+  return { aoa, closing: running };
+}
+
+// Cabeçalho de uma aba conforme o banco.
+function sheetHeader(
+  account: { nickname: string; bank: string; agency: string | null; account_number: string | null },
+  monthIdx: number | null,
+  year: number | null,
+  periodoLabel: string,
+): (string | number)[][] {
+  if (account.bank === "SANTANDER") {
+    // Santander rotula a coluna com o mês ("lançamento - Março/26").
+    const lancCol =
+      monthIdx != null && year != null
+        ? `lançamento - ${MES_FULL[monthIdx]}/${String(year).slice(2)}`
+        : "lançamento";
+    return [
+      ["", account.nickname],
+      ["", "BANCO", account.bank],
+      ["", "AGENCIA", account.agency || ""],
+      ["", "CONTA", account.account_number || ""],
+      [],
+      ["", "data", lancCol, "Débito", "Crédito", "saldo (R$)"],
+    ];
+  }
+  // Itaú / outros
+  return [
+    ["", "Nome:", account.nickname],
+    ["", "Agência:", account.agency || ""],
+    ["", "Conta:", account.account_number || ""],
+    ["", "Periodo:", periodoLabel],
+    [],
+    ["", "data", "lançamento", "Débito", "Crédito", "saldo (R$)"],
+  ];
+}
+
+// Aplica largura de colunas e o formato de moeda nas colunas D/E/F.
+function styleSheet(aoa: (string | number)[][]): XLSX.WorkSheet {
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 5 }, { wch: 12 }, { wch: 52 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    for (const c of [3, 4, 5]) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })];
+      if (cell && typeof cell.v === "number") cell.z = MONEY_FMT;
+    }
+  }
+  return ws;
+}
+
+function xlsxResponse(wb: XLSX.WorkBook, fname: string): NextResponse {
+  const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  return new NextResponse(new Uint8Array(buffer), {
+    headers: {
+      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Disposition": `attachment; filename="${fname}"`,
+    },
+  });
+}
+
 export async function GET(request: NextRequest) {
   const guard = await requireFinance("view");
   if (guard.error) return guard.error;
@@ -34,13 +144,73 @@ export async function GET(request: NextRequest) {
   if (!Number.isInteger(accountId)) {
     return NextResponse.json({ error: "Parâmetro 'account' obrigatório" }, { status: 400 });
   }
-  const from = sp.get("from");
-  const to = sp.get("to");
 
   const account = await prisma.bankAccount.findUnique({ where: { id: accountId } });
   if (!account) return NextResponse.json({ error: "Conta não encontrada" }, { status: 404 });
 
-  // Saldo no início do período = saldo inicial da conta + tudo antes de `from`.
+  const yearParam = sp.get("year");
+
+  // ── Modo ANO: uma aba por mês (reproduz a planilha "Jan a Dez") ───────────
+  if (yearParam) {
+    const year = Number(yearParam);
+    if (!Number.isInteger(year)) {
+      return NextResponse.json({ error: "Parâmetro 'year' inválido" }, { status: 400 });
+    }
+    const yearStart = new Date(Date.UTC(year, 0, 1));
+    const yearEnd = new Date(Date.UTC(year + 1, 0, 1));
+
+    // Saldo de abertura do ano = saldo inicial da conta + tudo antes de 01/jan.
+    let opening = num(account.opening_balance);
+    const before = await prisma.bankTransaction.aggregate({
+      where: { bank_account_id: accountId, posted_at: { lt: yearStart } },
+      _sum: { amount: true },
+    });
+    if (before._sum.amount) opening += num(before._sum.amount);
+
+    const txs = await prisma.bankTransaction.findMany({
+      where: { bank_account_id: accountId, posted_at: { gte: yearStart, lt: yearEnd } },
+      orderBy: [{ posted_at: "asc" }, { id: "asc" }],
+      include: { reconciliation: { select: { status: true } } },
+    });
+
+    // Agrupa por mês (0-11).
+    const byMonth: TxRow[][] = Array.from({ length: 12 }, () => []);
+    for (const t of txs) byMonth[t.posted_at.getUTCMonth()].push(t as TxRow);
+
+    const wb = XLSX.utils.book_new();
+    let carry = opening; // saldo que passa de um mês pro outro
+    let anySheet = false;
+    for (let m = 0; m < 12; m++) {
+      const monthTxs = byMonth[m];
+      if (monthTxs.length === 0) continue; // pula meses sem movimento
+      // SALDO ANTERIOR datado no último dia do mês anterior.
+      const anteriorDate = fmtBrDate(new Date(Date.UTC(year, m, 0)));
+      const periodoLabel = `01/${String(m + 1).padStart(2, "0")}/${year} até ${fmtBrDate(
+        new Date(Date.UTC(year, m + 1, 0)),
+      )}`;
+      const header = sheetHeader(account, m, year, periodoLabel);
+      const { aoa, closing } = buildSheet(account, carry, monthTxs, header, anteriorDate);
+      carry = closing;
+      const ws = styleSheet(aoa);
+      XLSX.utils.book_append_sheet(wb, ws, `${MES_ABBR[m]} ${year}`.slice(0, 31));
+      anySheet = true;
+    }
+
+    if (!anySheet) {
+      return NextResponse.json(
+        { error: `Sem movimentações em ${year} para esta conta.` },
+        { status: 404 },
+      );
+    }
+
+    const fname = `Conciliacao_${account.nickname.replace(/\s+/g, "_")}_${year}.xlsx`;
+    return xlsxResponse(wb, fname);
+  }
+
+  // ── Modo PERÍODO: uma aba só (comportamento original) ─────────────────────
+  const from = sp.get("from");
+  const to = sp.get("to");
+
   let startBalance = num(account.opening_balance);
   if (from) {
     const before = await prisma.bankTransaction.aggregate({
@@ -62,61 +232,23 @@ export async function GET(request: NextRequest) {
     include: { reconciliation: { select: { status: true } } },
   });
 
-  // Cabeçalho no layout da planilha atual.
+  const monthIdx = from ? new Date(from).getUTCMonth() : null;
+  const yearOf = from ? new Date(from).getUTCFullYear() : null;
   const periodo =
     from && to ? `${fmtBrDate(new Date(from))} até ${fmtBrDate(new Date(to))}` : "todos os lançamentos";
-  const aoa: (string | number)[][] = [
-    [],
-    ["", "Nome:", account.nickname],
-    ["", "Banco:", account.bank],
-    ["", "Agência:", account.agency || ""],
-    ["", "Conta:", account.account_number || ""],
-    ["", "Período:", periodo],
-    [],
-    ["", "data", "lançamento", "Débito", "Crédito", "saldo (R$)"],
-  ];
-
-  // Linha SALDO ANTERIOR (datada no dia anterior ao início, como a planilha).
+  const header = sheetHeader(account, monthIdx, yearOf, periodo);
   const anteriorDate = from ? fmtBrDate(new Date(new Date(from).getTime() - 86_400_000)) : "";
-  aoa.push(["", anteriorDate, "SALDO ANTERIOR", "", "", Number(startBalance.toFixed(2))]);
+  const { aoa } = buildSheet(account, startBalance, txs as TxRow[], header, anteriorDate);
+  const ws = styleSheet(aoa);
 
-  let running = startBalance;
-  for (const t of txs) {
-    const v = num(t.amount);
-    running += v;
-    const conciliado = t.review_status === "CONCILIADO" || t.reconciliation?.status === "CONFIRMADA";
-    const lancamento = t.review_note || t.payee_name || t.description || "";
-    aoa.push([
-      conciliado ? "ok" : "",
-      fmtBrDate(t.posted_at),
-      lancamento,
-      v < 0 ? Number(v.toFixed(2)) : "",
-      v > 0 ? Number(v.toFixed(2)) : "",
-      Number(running.toFixed(2)),
-    ]);
-  }
-
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = [
-    { wch: 5 }, { wch: 12 }, { wch: 52 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
-  ];
-
-  // Nome da aba: "Mês Ano" quando o período é um mês só; senão "Extrato".
   let sheetName = "Extrato";
   if (from) {
     const d = new Date(from);
-    sheetName = `${MES_PT[d.getUTCMonth()]} ${d.getUTCFullYear()}`.slice(0, 31);
+    sheetName = `${MES_ABBR[d.getUTCMonth()]} ${d.getUTCFullYear()}`.slice(0, 31);
   }
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
-  const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
-
   const fname = `Conciliacao_${account.nickname.replace(/\s+/g, "_")}_${from || "tudo"}.xlsx`;
-  return new NextResponse(new Uint8Array(buffer), {
-    headers: {
-      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename="${fname}"`,
-    },
-  });
+  return xlsxResponse(wb, fname);
 }
