@@ -6187,7 +6187,8 @@ function ControleTab({
   // `now` em useMemo pra não invalidar a lista de anos a cada render.
   const now = useMemo(() => new Date(), []);
   const [year, setYear] = useState<number>(now.getFullYear());
-  const [month, setMonth] = useState<number | "TODOS">(now.getMonth());
+  // Abre já no ano inteiro (não no mês atual) — é a visão que o pessoal usa.
+  const [month, setMonth] = useState<number | "TODOS">("TODOS");
   const [activity, setActivity] = useState<"TODAS" | "EMBARQUE" | "COSTADO">("TODAS");
   const [statusFilter, setStatusFilter] = useState<"ATIVOS" | "TODOS">("ATIVOS");
   // Filtro por um colaborador específico ("TODOS" = sem filtro).
