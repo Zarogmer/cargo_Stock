@@ -120,6 +120,10 @@ function StatusBadge({ status }: { status: PayableStatus }) {
 
 const OPEN_STATUSES: PayableStatus[] = ["RECEBIDO", "AGUARDANDO_APROVACAO", "APROVADO"];
 
+// Bancos padronizados — casam com o rótulo que o import de OFX grava
+// (BANK_LABEL em contas/import-ofx). Seletor fixo evita "Itaú" vs "itau".
+const BANK_OPTIONS = ["Itaú", "Santander", "Outro"];
+
 const inputCls =
   "w-full border border-border rounded-lg px-3 py-2 text-sm bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40";
 
@@ -752,12 +756,21 @@ export function ContasAPagarPage() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-medium text-text-light">Banco</label>
-                <input
+                <select
                   value={form.bank}
                   onChange={(e) => setForm({ ...form, bank: e.target.value })}
                   className={inputCls}
-                  placeholder="Itaú / Santander"
-                />
+                >
+                  <option value="">— banco —</option>
+                  {BANK_OPTIONS.map((b) => (
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
+                  {form.bank && !BANK_OPTIONS.includes(form.bank) && (
+                    <option value={form.bank}>{form.bank}</option>
+                  )}
+                </select>
               </div>
               <div>
                 <label className="text-xs font-medium text-text-light">Tipo de despesa</label>
