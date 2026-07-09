@@ -120,8 +120,8 @@ function StatusBadge({ status }: { status: PayableStatus }) {
 
 const OPEN_STATUSES: PayableStatus[] = ["RECEBIDO", "AGUARDANDO_APROVACAO", "APROVADO"];
 
-// Bancos padronizados — casam com o rótulo que o import de OFX grava
-// (BANK_LABEL em contas/import-ofx). Seletor fixo evita "Itaú" vs "itau".
+// Bancos padronizados no lançamento manual. Seletor fixo evita "Itaú" vs
+// "itau" e mantém o filtro por banco consistente.
 const BANK_OPTIONS = ["Itaú", "Santander", "Outro"];
 
 const inputCls =
@@ -179,7 +179,6 @@ export function ContasAPagarPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [formFile, setFormFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
-  const [importingOfx, setImportingOfx] = useState(false);
   // Mês de referência do controle ("ALL" = todos). Formato "YYYY-MM".
   const [monthFilter, setMonthFilter] = useState<string>("ALL");
   const [supplierFilter, setSupplierFilter] = useState<string>("ALL");
@@ -335,28 +334,6 @@ export function ContasAPagarPage() {
     setModalOpen(true);
   }
 
-  async function handleOfxImport(file: File) {
-    setImportingOfx(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/financeiro/contas/import-ofx", { method: "POST", body: fd });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        alert(data.error || "Erro ao importar o extrato");
-        return;
-      }
-      alert(
-        `Extrato ${data.bank} importado: ${data.created} pagamento(s) novo(s), ${data.duplicates} já existiam.\n` +
-          `(${data.skippedCredits} crédito(s) ignorado(s) — não são contas a pagar.)\n\n` +
-          "Os títulos entraram como PAGOS. Complete vencimento/NF/tipo onde precisar."
-      );
-      await loadAll();
-    } finally {
-      setImportingOfx(false);
-    }
-  }
-
   async function uploadAttachment(invoiceId: string, file: File): Promise<boolean> {
     const fd = new FormData();
     fd.append("file", file);
@@ -476,27 +453,11 @@ export function ContasAPagarPage() {
             <span className="text-lg font-semibold text-text-light">Contas a Pagar</span>
           </div>
           <p className="text-text-light text-sm mt-0.5">
-            Controle de vencimentos — importe o extrato ou o boleto, ou lance à mão
+            Controle de vencimentos — lançamento manual (dinheiro, pix, boletos, outros bancos)
           </p>
         </div>
         {canEdit && (
           <div className="flex gap-2 flex-wrap">
-            <label className={`inline-flex items-center ${importingOfx ? "opacity-50" : "cursor-pointer"}`}>
-              <span className="bg-primary hover:bg-primary-dark text-white text-sm font-medium px-4 py-2.5 rounded-lg transition">
-                {importingOfx ? "Importando..." : "Importar extrato (OFX)"}
-              </span>
-              <input
-                type="file"
-                accept=".ofx,application/x-ofx,application/octet-stream"
-                className="hidden"
-                disabled={importingOfx}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleOfxImport(f);
-                  e.target.value = "";
-                }}
-              />
-            </label>
             <Button onClick={openCreate}>+ Nova conta</Button>
           </div>
         )}
