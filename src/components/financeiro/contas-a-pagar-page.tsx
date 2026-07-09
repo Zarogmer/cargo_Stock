@@ -187,6 +187,8 @@ export function ContasAPagarPage() {
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [transitioning, setTransitioning] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [uploadingExtra, setUploadingExtra] = useState(false);
 
   const loadAll = useCallback(async () => {
@@ -412,6 +414,25 @@ export function ContasAPagarPage() {
       setConfirmTo(null);
       setCancelOpen(false);
       setCancelReason("");
+    }
+  }
+
+  // Exclui o título de vez (não é o mesmo que "Cancelar"). Some da lista.
+  async function handleDelete(inv: Invoice) {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/financeiro/contas/${inv.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao excluir o título");
+        return;
+      }
+      setInvoices((prev) => prev.filter((i) => i.id !== inv.id));
+      setDeleteOpen(false);
+      setModalOpen(false);
+      setEditing(null);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -875,6 +896,11 @@ export function ContasAPagarPage() {
 
           {/* Ações */}
           <div className="flex gap-2 flex-wrap justify-end border-t border-border pt-4">
+            {canEdit && editing && (
+              <Button variant="danger" className="mr-auto" disabled={deleting} onClick={() => setDeleteOpen(true)}>
+                Excluir
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => setModalOpen(false)}>
               Fechar
             </Button>
@@ -946,6 +972,22 @@ export function ContasAPagarPage() {
         confirmLabel={confirmTo ? PAYABLE_ACTION_LABELS[confirmTo] : "Confirmar"}
         variant="primary"
         loading={transitioning}
+      />
+
+      {/* Confirmação de EXCLUSÃO (remove de vez, diferente de cancelar) */}
+      <ConfirmDialog
+        open={deleteOpen && !!editing}
+        onClose={() => setDeleteOpen(false)}
+        onConfirm={() => editing && handleDelete(editing)}
+        title="Excluir título"
+        message={
+          editing
+            ? `Excluir de vez "${editing.description}"? Essa ação não pode ser desfeita e apaga também os anexos.`
+            : ""
+        }
+        confirmLabel="Excluir"
+        variant="danger"
+        loading={deleting}
       />
     </div>
   );

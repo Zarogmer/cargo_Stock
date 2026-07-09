@@ -113,3 +113,19 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   return NextResponse.json({ invoice: updated });
 }
+
+// DELETE /api/financeiro/contas/[id] — exclui o título de vez (diferente de
+// "Cancelar", que só marca CANCELADO e mantém o histórico). Anexos e
+// conciliações somem junto (onDelete: Cascade no schema). Uso: limpar
+// lançamentos errados/duplicados que não deveriam ficar no controle.
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const guard = await requireFinance("edit");
+  if (guard.error) return guard.error;
+  const { id } = await params;
+
+  const invoice = await prisma.payableInvoice.findUnique({ where: { id }, select: { id: true } });
+  if (!invoice) return NextResponse.json({ error: "Título não encontrado" }, { status: 404 });
+
+  await prisma.payableInvoice.delete({ where: { id } });
+  return NextResponse.json({ ok: true });
+}
