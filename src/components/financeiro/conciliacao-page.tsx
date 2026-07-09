@@ -10,7 +10,7 @@ import { useAuth } from "@/lib/auth-context";
 import { hasPermission, canAccessFinanceiroBanco } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, parseDecimalBR } from "@/lib/utils";
 import type { BankKind, ReconciliationStatus } from "@/types/financeiro";
 
 interface BankAccount {
@@ -33,6 +33,7 @@ interface Transaction {
   payee_document: string | null;
   reconcilable: boolean;
   source: string;
+  raw: { manual?: boolean; from?: string; invoice_id?: string } | null;
   review_status: "PENDENTE" | "CONCILIADO" | "IGNORADO";
   review_note: string | null;
   reconciliation: {
@@ -96,6 +97,11 @@ export function ConciliacaoPage() {
   const [cpInvoices, setCpInvoices] = useState<{ id: string; description: string; amount: string; bank: string | null; payment_date: string | null }[]>([]);
   const [cpSearch, setCpSearch] = useState("");
   const [addingId, setAddingId] = useState<string | null>(null);
+
+  // Editar/excluir linha MANUAL (adicionada do Contas a Pagar)
+  const [editTx, setEditTx] = useState<Transaction | null>(null);
+  const [editForm, setEditForm] = useState({ description: "", amount: "", posted_at: "" });
+  const [savingTx, setSavingTx] = useState(false);
 
   const loadAccounts = useCallback(async () => {
     const res = await fetch("/api/financeiro/contas-bancarias").then((r) => r.json());
@@ -265,6 +271,62 @@ export function ConciliacaoPage() {
   const selectedBank = accounts.find((a) => a.id === selectedAccount)?.bank ?? null;
   const txCountByBank = (bank: BankKind) => accounts.find((a) => a.bank === bank)?._count.transactions ?? 0;
 
+  // Linha manual (adicionada do Contas a Pagar) — pode editar/excluir.
+  function isManualTx(t: Transaction): boolean {
+    return t.raw?.manual === true;
+  }
+
+  function openEditTx(t: Transaction) {
+    setEditTx(t);
+    setEditForm({
+      description: t.review_note || t.description || "",
+      amount: String(Math.abs(Number(t.amount))).replace(".", ","),
+      posted_at: t.posted_at.slice(0, 10),
+    });
+  }
+
+  async function saveEditTx() {
+    if (!editTx) return;
+    const amount = parseDecimalBR(editForm.amount);
+    if (!editForm.description.trim()) return alert("Informe a descrição");
+    if (amount <= 0) return alert("Informe um valor válido");
+    setSavingTx(true);
+    try {
+      const res = await fetch(`/api/financeiro/extrato/${editTx.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: editForm.description, amount, posted_at: editForm.posted_at }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao salvar");
+        return;
+      }
+      if (selectedAccount != null) await loadTransactions(selectedAccount);
+      setEditTx(null);
+    } finally {
+      setSavingTx(false);
+    }
+  }
+
+  async function deleteTx() {
+    if (!editTx) return;
+    if (!window.confirm(`Excluir "${editForm.description}" da conciliação?`)) return;
+    setSavingTx(true);
+    try {
+      const res = await fetch(`/api/financeiro/extrato/${editTx.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao excluir");
+        return;
+      }
+      if (selectedAccount != null) await loadTransactions(selectedAccount);
+      setEditTx(null);
+    } finally {
+      setSavingTx(false);
+    }
+  }
+
   if (!canView) {
     return (
       <div className="max-w-7xl mx-auto">
@@ -403,8 +465,8 @@ export function ConciliacaoPage() {
                   </button>
                 ))}
                 {canEdit && selectedAccount != null && (
-                  <Button variant="secondary" size="sm" onClick={openAdd} className="ml-2">
-                    + Do Contas a Pagar
+                  <Button size="sm" onClick={openAdd} className="ml-2">
+                    Adicionar
                   </Button>
                 )}
               </div>
@@ -520,7 +582,22 @@ export function ConciliacaoPage() {
                             </td>
                             <td className="px-3 py-2 whitespace-nowrap text-text">{fmtDateOnly(t.posted_at)}</td>
                             <td className="px-3 py-2">
-                              {canEdit ? (
+                              {isManualTx(t) ? (
+                                <div className="flex items-center gap-2 min-w-[240px]">
+                                  <span className="text-text">{t.review_note || t.description || "—"}</span>
+                                  <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full whitespace-nowrap">
+                                    adicionado
+                                  </span>
+                                  {canEdit && (
+                                    <button
+                                      onClick={() => openEditTx(t)}
+                                      className="text-xs text-primary hover:underline whitespace-nowrap"
+                                    >
+                                      editar
+                                    </button>
+                                  )}
+                                </div>
+                              ) : canEdit ? (
                                 <input
                                   value={noteVal}
                                   placeholder={t.payee_name || t.description || ""}
@@ -561,6 +638,54 @@ export function ConciliacaoPage() {
           )}
         </div>
       )}
+
+      {/* Modal: editar/excluir linha manual (adicionada do Contas a Pagar) */}
+      <Modal open={!!editTx} onClose={() => setEditTx(null)} title="Editar lançamento adicionado">
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-text-light">Descrição *</label>
+            <input
+              value={editForm.description}
+              onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+              className={inputCls}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-text-light">Valor (R$) *</label>
+              <input
+                value={editForm.amount}
+                onChange={(e) => setEditForm({ ...editForm, amount: e.target.value })}
+                className={inputCls}
+                placeholder="0,00"
+                inputMode="decimal"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-text-light">Data</label>
+              <input
+                type="date"
+                value={editForm.posted_at}
+                onChange={(e) => setEditForm({ ...editForm, posted_at: e.target.value })}
+                className={inputCls}
+              />
+            </div>
+          </div>
+          <div className="flex justify-between gap-3 pt-2">
+            <Button variant="danger" onClick={deleteTx} disabled={savingTx}>
+              Excluir
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setEditTx(null)}>
+                Fechar
+              </Button>
+              <Button onClick={saveEditTx} disabled={savingTx}>
+                {savingTx ? "Salvando..." : "Salvar"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
 
       {/* Modal: adicionar título da Contas a Pagar como linha do extrato */}
       <Modal
