@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 import { prisma } from "@/lib/prisma";
 import { requireFinance } from "@/lib/financeiro-api";
 
@@ -25,8 +25,13 @@ const MES_FULL = [
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
 ];
 
-// Formato de moeda BRL nas colunas Débito/Crédito/saldo.
-const MONEY_FMT = '"R$"\\ #,##0.00;[Red]-"R$"\\ #,##0.00';
+// Formatos de número copiados das planilhas-modelo da contabilidade:
+//   - Santander: Débito/Crédito com "R$ " e negativo em vermelho.
+//   - Itaú: Débito/Crédito como número simples (sem R$).
+//   - saldo (col F): sempre 2 casas, sem R$ (igual aos dois modelos).
+const FMT_RS = '"R$ "#,##0.00;[Red]\\-"R$ "#,##0.00';
+const FMT_NUM = "#,##0.00";
+const FMT_SALDO = "0.00";
 
 function fmtBrDate(d: Date): string {
   const iso = d.toISOString().slice(0, 10);
@@ -111,15 +116,39 @@ function sheetHeader(
   ];
 }
 
-// Aplica largura de colunas e o formato de moeda nas colunas D/E/F.
-function styleSheet(aoa: (string | number)[][]): XLSX.WorkSheet {
+// Larguras aproximadas das planilhas-modelo (col A = "ok", B = data,
+// C = lançamento larga, D/E/F = valores).
+const COL_WIDTHS = [{ wch: 6 }, { wch: 13 }, { wch: 62 }, { wch: 15 }, { wch: 15 }, { wch: 15 }];
+
+// Monta a worksheet: larguras, formato de número por banco (Débito/Crédito
+// em R$ no Santander, número puro no Itaú; saldo sempre 0.00) e cabeçalho
+// em negrito. `headerLen` = nº de linhas do cabeçalho (a linha de títulos
+// "data|lançamento|..." é a última delas).
+function styleSheet(aoa: (string | number)[][], bank: string, headerLen: number): XLSX.WorkSheet {
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = [{ wch: 5 }, { wch: 12 }, { wch: 52 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+  ws["!cols"] = COL_WIDTHS;
+
+  const debitCreditFmt = bank === "SANTANDER" ? FMT_RS : FMT_NUM;
+  const colHeaderRow = headerLen - 1; // linha "data|lançamento|Débito|..."
   const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+
   for (let r = range.s.r; r <= range.e.r; r++) {
+    // Formato de número nas colunas Débito(3)/Crédito(4)/saldo(5).
     for (const c of [3, 4, 5]) {
       const cell = ws[XLSX.utils.encode_cell({ r, c })];
-      if (cell && typeof cell.v === "number") cell.z = MONEY_FMT;
+      if (cell && typeof cell.v === "number") cell.z = c === 5 ? FMT_SALDO : debitCreditFmt;
+    }
+    // Negrito: linha de títulos das colunas e a coluna de rótulos do
+    // cabeçalho (Nome:/BANCO/AGENCIA/CONTA/Periodo: e o nome da empresa).
+    if (r === colHeaderRow) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        if (cell) cell.s = { font: { bold: true } };
+      }
+    } else if (r < colHeaderRow - 1) {
+      // Coluna B: rótulos (Nome:/BANCO/...) e o nome da empresa no Santander.
+      const cell = ws[XLSX.utils.encode_cell({ r, c: 1 })];
+      if (cell && cell.v !== "") cell.s = { font: { bold: true } };
     }
   }
   return ws;
@@ -191,7 +220,7 @@ export async function GET(request: NextRequest) {
       const header = sheetHeader(account, m, year, periodoLabel);
       const { aoa, closing } = buildSheet(account, carry, monthTxs, header, anteriorDate);
       carry = closing;
-      const ws = styleSheet(aoa);
+      const ws = styleSheet(aoa, account.bank, header.length);
       XLSX.utils.book_append_sheet(wb, ws, `${MES_ABBR[m]} ${year}`.slice(0, 31));
       anySheet = true;
     }
@@ -239,7 +268,7 @@ export async function GET(request: NextRequest) {
   const header = sheetHeader(account, monthIdx, yearOf, periodo);
   const anteriorDate = from ? fmtBrDate(new Date(new Date(from).getTime() - 86_400_000)) : "";
   const { aoa } = buildSheet(account, startBalance, txs as TxRow[], header, anteriorDate);
-  const ws = styleSheet(aoa);
+  const ws = styleSheet(aoa, account.bank, header.length);
 
   let sheetName = "Extrato";
   if (from) {
