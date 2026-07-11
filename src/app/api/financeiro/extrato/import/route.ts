@@ -44,9 +44,10 @@ export async function POST(request: NextRequest) {
 
   // O banco é detectado NO ARQUIVO (não precisa selecionar). Roteia pra conta
   // daquele banco; se veio um id explícito, respeita.
-  const explicitId = Number(form?.get("bank_account_id"));
+  const rawAccountId = form?.get("bank_account_id");
+  const explicitId = rawAccountId == null ? NaN : Number(rawAccountId);
   let account = null as Awaited<ReturnType<typeof prisma.bankAccount.findUnique>> | null;
-  if (Number.isInteger(explicitId)) {
+  if (Number.isInteger(explicitId) && explicitId > 0) {
     account = await prisma.bankAccount.findUnique({ where: { id: explicitId } });
   } else if (statement.bank === "ITAU" || statement.bank === "SANTANDER") {
     account = await prisma.bankAccount.findFirst({ where: { bank: statement.bank }, orderBy: { id: "asc" } });
