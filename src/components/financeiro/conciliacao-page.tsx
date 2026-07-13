@@ -283,9 +283,18 @@ export function ConciliacaoPage() {
 
   // Gera a planilha de conciliação do ano (uma aba por mês, formato da
   // contabilidade) pro banco escolhido — resolve a conta pelo banco no backend.
+  // Baixa via âncora (NÃO window.open): no app Electron, window.open pra um
+  // .xlsx abre uma janela nova que fica branca/travada (a resposta é download,
+  // não HTML). A âncora dispara direto o "Salvar como", sem abrir janela.
   function gerarConciliacao(bank: "ITAU" | "SANTANDER") {
     const year = new Date().getFullYear();
-    window.open(`/api/financeiro/extrato/export?bank=${bank}&year=${year}`, "_blank");
+    const url = `/api/financeiro/extrato/export?bank=${bank}&year=${year}`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = ""; // nome vem do servidor (Content-Disposition)
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   // Abre o seletor de títulos da Contas a Pagar pra adicionar como linha.
