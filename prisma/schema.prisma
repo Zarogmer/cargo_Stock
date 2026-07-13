@@ -684,6 +684,13 @@ model PurchaseOrder {
   quantity       Float     @default(1) // QUANTIDADE
   total_value    Float     @default(0) // VALOR total (R$) = unit_value * quantity
   payment_method String? // FORMA DE PAGAMENTO
+  // Prazo em dias quando FORMA DE PAGAMENTO = FATURADO. O vencimento no Contas a
+  // Pagar sai de purchase_date + payment_term_days (controle de meses futuros).
+  payment_term_days Int?
+  // Cartão usado quando FORMA DE PAGAMENTO = CARTÃO DE CRÉDITO (só marca qual foi,
+  // pra saber o fechamento; a fatura do cartão é lançada como um boleto à parte).
+  card_id        Int?
+  card           Card?     @relation(fields: [card_id], references: [id], onDelete: SetNull)
   notes          String? // OBSERVAÇÃO
   image_url      String? // foto do produto (herdada da solicitação ou anexada)
   product_url    String? // link do produto (Mercado Livre etc.), usado pra puxar nome/valor/foto
@@ -704,7 +711,29 @@ model PurchaseOrder {
   @@index([department])
   @@index([request_id])
   @@index([ship_id])
+  @@index([card_id])
   @@map("purchase_orders")
+}
+
+// Cartão de crédito vinculado a uma conta bancária (aba Contas bancárias da
+// Conciliação). Guarda os 4 últimos dígitos e o dia de fechamento da fatura —
+// assim dá pra saber, numa compra no cartão, qual cartão foi usado e quando ele
+// fecha. A fatura em si vira um boleto no Contas a Pagar (lançamento à parte).
+model Card {
+  id              Int         @id @default(autoincrement())
+  bank_account_id Int
+  bank_accounts   BankAccount @relation(fields: [bank_account_id], references: [id], onDelete: Cascade)
+  last4           String // 4 últimos dígitos
+  closing_day     Int // dia do mês em que a fatura fecha (1-31)
+  label           String? // apelido opcional (ex.: "Itaú 8168")
+  active          Boolean     @default(true)
+  created_by      String
+  created_at      DateTime    @default(now()) @db.Timestamptz()
+
+  purchases PurchaseOrder[]
+
+  @@index([bank_account_id])
+  @@map("cards")
 }
 
 // ── Suppliers (Fornecedores) ─────────────────────────────────────────────────
@@ -998,6 +1027,7 @@ model BankAccount {
   updated_at     DateTime @default(now()) @updatedAt @db.Timestamptz()
 
   transactions BankTransaction[]
+  cards        Card[]
 
   @@map("bank_accounts")
 }

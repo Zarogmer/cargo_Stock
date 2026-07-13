@@ -14,7 +14,12 @@ export async function GET() {
   if (guard.error) return guard.error;
 
   const purchases = await prisma.purchaseOrder.findMany({
-    where: { payable_invoice: null },
+    where: {
+      payable_invoice: null,
+      // Compra no cartão só marca qual cartão foi usado — a fatura vira 1 boleto
+      // à parte, então não entra aqui como título individual.
+      payment_method: { notIn: ["CARTÃO DE CRÉDITO", "CARTÃO DE DÉBITO"] },
+    },
     orderBy: [{ purchase_date: "desc" }, { created_at: "desc" }],
     take: 300,
     select: {
@@ -25,6 +30,7 @@ export async function GET() {
       purchase_date: true,
       total_value: true,
       payment_method: true,
+      payment_term_days: true,
       ship_name: true,
       notes: true,
     },
@@ -74,10 +80,26 @@ export async function POST(request: NextRequest) {
     const supplierId = po.supplier ? byName.get(po.supplier.trim().toLowerCase()) ?? null : null;
     const autoReason = autoApproveReason(amount, autoSetting?.value);
 
-    // Observação: junta navio, forma de pagamento e a nota original da compra.
+    // Vencimento: FATURADO com prazo em dias vence em purchase_date + dias
+    // (controle de meses futuros). Sem prazo, cai na própria data da compra
+    // (que serve de referência do mês no controle).
+    let dueDate: Date | null = po.purchase_date ?? null;
+    if (po.payment_method === "FATURADO" && po.payment_term_days && po.purchase_date) {
+      const d = new Date(po.purchase_date);
+      d.setUTCDate(d.getUTCDate() + po.payment_term_days);
+      dueDate = d;
+    }
+
+    // Observação: junta navio, forma de pagamento (+ prazo) e a nota original.
+    const pgtoLabel =
+      po.payment_method === "FATURADO" && po.payment_term_days
+        ? `Pagamento: FATURADO ${po.payment_term_days} dias`
+        : po.payment_method
+          ? `Pagamento: ${po.payment_method}`
+          : null;
     const noteParts = [
       po.ship_name ? `Navio: ${po.ship_name}` : null,
-      po.payment_method ? `Pagamento: ${po.payment_method}` : null,
+      pgtoLabel,
       po.notes || null,
     ].filter(Boolean);
 
@@ -85,9 +107,7 @@ export async function POST(request: NextRequest) {
       data: {
         description: po.description,
         amount: new Prisma.Decimal(amount.toFixed(2)),
-        // A compra não tem vencimento próprio; usa a data da compra como
-        // referência do mês (o controle agrupa por ela).
-        due_date: po.purchase_date ?? null,
+        due_date: dueDate,
         supplier_id: supplierId,
         payee_name: supplierId ? null : po.supplier?.trim() || null,
         expense_type: po.department || null,

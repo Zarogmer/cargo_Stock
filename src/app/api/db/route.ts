@@ -23,6 +23,8 @@ const TABLE_MAP: Record<string, string> = {
   product_links: "productLink",
   suppliers: "supplier",
   purchase_orders: "purchaseOrder",
+  cards: "card",
+  bank_accounts: "bankAccount",
   // Sistema financeiro
   job_functions: "jobFunction",
   job_function_rates: "jobFunctionRate",

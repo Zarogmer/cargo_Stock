@@ -44,6 +44,8 @@ interface PurchaseOrder {
   quantity: number;
   total_value: number;
   payment_method: string | null;
+  payment_term_days: number | null;
+  card_id: number | null;
   notes: string | null;
   image_url: string | null;
   product_url: string | null;
@@ -55,6 +57,30 @@ interface PurchaseOrder {
   created_by: string;
   created_at: string;
   updated_at: string;
+}
+
+// Cartão de crédito (aba Contas bancárias da Conciliação) — pro seletor "qual
+// cartão foi usado" no Nova Compra. Traz o banco junto pra rotular.
+interface CardOption {
+  id: number;
+  last4: string;
+  closing_day: number;
+  label: string | null;
+  bank_account_id: number;
+  bank_accounts?: { bank: string; nickname: string } | null;
+}
+
+// Rótulo do cartão no seletor: "final 8403 · fecha dia 12 (Itaú)".
+function cardLabel(c: CardOption): string {
+  const bank = c.bank_accounts?.bank
+    ? c.bank_accounts.bank === "ITAU"
+      ? "Itaú"
+      : c.bank_accounts.bank === "SANTANDER"
+        ? "Santander"
+        : c.bank_accounts.bank
+    : "";
+  const base = c.label?.trim() || `final ${c.last4}`;
+  return `${base} · fecha dia ${c.closing_day}${bank ? ` (${bank})` : ""}`;
 }
 
 // Navio cadastrado (aba Navios) — só os campos que o seletor/rotulagem usa aqui.
@@ -311,6 +337,7 @@ export default function SolicitacoesPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchases, setPurchases] = useState<PurchaseOrder[]>([]);
   const [ships, setShips] = useState<Ship[]>([]);
+  const [cards, setCards] = useState<CardOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -371,13 +398,15 @@ export default function SolicitacoesPage() {
     setLoading(true);
     setDbError(null);
     try {
-      const [reqRes, linksRes, suppRes, purchRes, shipsRes] = await Promise.all([
+      const [reqRes, linksRes, suppRes, purchRes, shipsRes, cardsRes] = await Promise.all([
         db.from("tool_requests").select("*").order("created_at", { ascending: false }),
         db.from("product_links").select("*").order("category").order("name"),
         db.from("suppliers").select("*").order("name"),
         db.from("purchase_orders").select("*").order("purchase_date", { ascending: false }).order("created_at", { ascending: false }),
         // Navios pro seletor de "Navio" do Nova Compra (mais recentes primeiro).
         db.from("ships").select("id, name, status, port, arrival_date").order("created_at", { ascending: false }),
+        // Cartões (com o banco) pro seletor "qual cartão" do Nova Compra.
+        db.from("cards").select("*, bank_accounts(bank, nickname)").order("last4"),
       ]);
 
       const errors: string[] = [];
@@ -386,6 +415,8 @@ export default function SolicitacoesPage() {
       if (suppRes.error) errors.push(`suppliers: ${suppRes.error.code} ${suppRes.error.message}`);
       if (purchRes.error) errors.push(`purchase_orders: ${purchRes.error.code} ${purchRes.error.message}`);
       if (shipsRes.error) errors.push(`ships: ${shipsRes.error.code} ${shipsRes.error.message}`);
+      // Cartões: falha aqui não bloqueia a tela (recurso opcional do Nova Compra).
+      if (cardsRes.error) console.warn("cards:", cardsRes.error);
       if (errors.length > 0) {
         console.error("DB errors:", errors);
         setDbError(errors.join(" | "));
@@ -396,6 +427,7 @@ export default function SolicitacoesPage() {
       setSuppliers((suppRes.data as Supplier[]) || []);
       setPurchases((purchRes.data as PurchaseOrder[]) || []);
       setShips((shipsRes.data as Ship[]) || []);
+      setCards((cardsRes.data as CardOption[]) || []);
     } catch (err) {
       console.error("loadAll error:", err);
       setDbError(String(err));
@@ -816,13 +848,29 @@ export default function SolicitacoesPage() {
         // de destino (próximo do prefixo, mesma regra do Almoxarifado). Setor sem
         // código devolve null. Mesmo código vai pra compra e pra reposição.
         const code = data.code || (stock ? await resolveWarehouseCode(stock.dest, data.description || "") : null);
-        const { error } = await db.from("purchase_orders").insert({
+        const { data: createdPurchase, error } = await db.from("purchase_orders").insert({
           ...data,
           code,
           request_id: fromRequestId,
           created_by: actor,
         } as any);
         if (error) throw error;
+        // FATURADO com prazo → já cria o título no Contas a Pagar (vencimento =
+        // data + dias). Falha aqui é não-fatal: a compra já foi salva.
+        const newId = (createdPurchase as unknown as { id?: string } | null)?.id;
+        if (newId && data.payment_method === "FATURADO" && data.payment_term_days) {
+          try {
+            const r = await fetch("/api/financeiro/contas/from-compras", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ purchase_ids: [newId] }),
+            });
+            if (r.ok) setSaveOk("💳 Compra faturada lançada no Contas a Pagar com o vencimento calculado.");
+            else setSaveError("Compra salva, mas falhou ao lançar no Contas a Pagar — puxe manual depois.");
+          } catch {
+            setSaveError("Compra salva, mas falhou ao lançar no Contas a Pagar — puxe manual depois.");
+          }
+        }
         // Compra originada de uma solicitação aprovada -> marca como Comprada.
         if (fromRequestId) {
           await db.from("tool_requests").update({
@@ -1731,6 +1779,7 @@ export default function SolicitacoesPage() {
         fromRequest={purchaseFromRequest}
         suppliers={suppliers}
         ships={ships}
+        cards={cards}
         saving={saving}
       />
 
@@ -2232,13 +2281,14 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
   );
 }
 
-function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers, ships, saving }: {
+function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers, ships, cards, saving }: {
   open: boolean; onClose: () => void;
   onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null, notify?: WhatsappTarget | null) => void;
   item: PurchaseOrder | null;
   fromRequest: ToolRequest | null;
   suppliers: Supplier[];
   ships: Ship[];
+  cards: CardOption[];
   saving: boolean;
 }) {
   const [description, setDescription] = useState("");
@@ -2258,6 +2308,11 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
   const [code, setCode] = useState("");
   // Navio vinculado (opcional) — guarda o id do navio escolhido na aba Navios.
   const [shipId, setShipId] = useState("");
+  // Prazo em dias (só FATURADO) e cartão usado (só CARTÃO DE CRÉDITO).
+  const [paymentTermDays, setPaymentTermDays] = useState("");
+  const [cardId, setCardId] = useState("");
+  // Leitura da NF em PDF (pré-preenche os campos, igual ao Contas a Pagar).
+  const [readingNf, setReadingNf] = useState(false);
   // Avisar o fornecedor no WhatsApp ao salvar (opcional, SEMPRE começa desmarcado).
   const [notifySupplier, setNotifySupplier] = useState(false);
 
@@ -2281,6 +2336,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       setImageUrl(item.image_url || null);
       setCode(item.code || "");
       setShipId(item.ship_id || "");
+      setPaymentTermDays(item.payment_term_days != null ? String(item.payment_term_days) : "");
+      setCardId(item.card_id != null ? String(item.card_id) : "");
     } else if (fromRequest) {
       setDescription(fromRequest.tool_name || "");
       setLink(fromRequest.product_url || "");
@@ -2294,11 +2351,49 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       setImageUrl(fromRequest.image_url || null);
       setCode(fromRequest.code || "");
       setShipId("");
+      setPaymentTermDays(""); setCardId("");
     } else {
       setDescription(""); setLink(""); setDestSpec({ ...DEFAULT_DEST_SPEC }); setSupplier(""); setPurchaseDate(todayISO);
       setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setImageUrl(null); setCode(""); setShipId("");
+      setPaymentTermDays(""); setCardId("");
     }
   }, [item, fromRequest, open]);
+
+  // Lê uma NF em PDF e pré-preenche descrição, valor, fornecedor e observação
+  // (mesmo leitor do Contas a Pagar). Não grava nada — só preenche o form.
+  async function handleReadNf(file: File) {
+    setReadingNf(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/financeiro/contas/analisar-pdf", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao ler a NF");
+        return;
+      }
+      const p = data.parsed || {};
+      if (p.description) setDescription((prev) => prev.trim() ? prev : p.description);
+      if (p.amount != null) {
+        setUnitValue(String(p.amount).replace(".", ","));
+        setQuantity((q) => q || "1");
+      }
+      // Fornecedor: casa pelo cadastro (supplier_id) ou usa o nome do emitente.
+      const matched = p.supplier_id ? suppliers.find((s) => s.id === p.supplier_id) : null;
+      const supName = matched?.name || p.payee_name;
+      if (supName) setSupplier((prev) => prev.trim() ? prev : supName);
+      if (p.notes) setNotes((prev) => (prev ? `${prev} · ${p.notes}` : p.notes));
+      if (p.scanned) {
+        alert("PDF escaneado (sem texto). Confira/preencha os campos à mão.");
+      } else if (p.ocr) {
+        alert("NF lida por OCR — confira os campos antes de salvar.");
+      } else if (p.amount == null) {
+        alert("Li a NF, mas não achei o valor com segurança. Confira e preencha.");
+      }
+    } finally {
+      setReadingNf(false);
+    }
+  }
 
   const unit = parseDecimalBR(unitValue);
   const qty = parseDecimalBR(quantity);
@@ -2340,6 +2435,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       quantity: qty || 1,
       total_value: total,
       payment_method: paymentMethod || null,
+      // Prazo só faz sentido no FATURADO; cartão só no CARTÃO DE CRÉDITO.
+      payment_term_days: paymentMethod === "FATURADO" && paymentTermDays ? Number(paymentTermDays) : null,
+      card_id: paymentMethod === "CARTÃO DE CRÉDITO" && cardId ? Number(cardId) : null,
       notes: notes || null,
       image_url: imageUrl,
       product_url: link.trim() || null,
@@ -2363,6 +2461,26 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
           </div>
         )}
         <ProductLinkField link={link} onLinkChange={setLink} onData={applyPreview} open={open} />
+        {/* Importar NF (PDF) — lê a nota e pré-preenche descrição/valor/fornecedor */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className={`inline-flex items-center ${readingNf ? "opacity-50" : "cursor-pointer"}`}>
+            <span className="bg-gray-100 hover:bg-gray-200 text-text text-xs font-medium px-3 py-1.5 rounded-lg">
+              {readingNf ? "Lendo NF..." : "📄 Importar NF (PDF)"}
+            </span>
+            <input
+              type="file"
+              accept="application/pdf"
+              className="hidden"
+              disabled={readingNf}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleReadNf(f);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          <span className="text-[11px] text-text-light">Lê a nota fiscal e preenche os campos. Revise antes de salvar.</span>
+        </div>
         <div>
           <label className="block text-sm font-medium mb-1">Descrição *</label>
           <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} required
@@ -2401,6 +2519,42 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
             </select>
           </div>
         </div>
+
+        {/* FATURADO: prazo em dias → vira o vencimento no Contas a Pagar. */}
+        {paymentMethod === "FATURADO" && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+            <label className="block text-sm font-medium mb-1">Prazo (dias) *</label>
+            <input
+              type="number"
+              min={0}
+              value={paymentTermDays}
+              onChange={(e) => setPaymentTermDays(e.target.value)}
+              placeholder="Ex.: 28"
+              className={inputCls}
+            />
+            <p className="text-[11px] text-text-light mt-1">
+              Vira um título no Contas a Pagar com vencimento = data da compra + dias.
+            </p>
+          </div>
+        )}
+
+        {/* CARTÃO DE CRÉDITO: qual cartão foi usado (pra saber o fechamento). */}
+        {paymentMethod === "CARTÃO DE CRÉDITO" && (
+          <div>
+            <label className="block text-sm font-medium mb-1">Cartão usado</label>
+            <select value={cardId} onChange={(e) => setCardId(e.target.value)} className={inputCls}>
+              <option value="">— Selecionar cartão</option>
+              {cards.map((c) => <option key={c.id} value={c.id}>{cardLabel(c)}</option>)}
+              {/* Cartão já vinculado mas que saiu da lista: preserva o vínculo. */}
+              {cardId && !cards.some((c) => String(c.id) === cardId) && (
+                <option value={cardId}>cartão #{cardId} (fora da lista)</option>
+              )}
+            </select>
+            <p className="text-[10px] text-text-light mt-1">
+              Cadastre os cartões em Financeiro › Conciliação › Contas bancárias. A fatura do cartão é lançada como um boleto à parte.
+            </p>
+          </div>
+        )}
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium mb-1">Valor unit. (R$)</label>

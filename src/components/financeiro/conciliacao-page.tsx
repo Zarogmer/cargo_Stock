@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { hasPermission, canAccessFinanceiroBanco } from "@/lib/rbac";
+import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { formatCurrency, parseDecimalBR } from "@/lib/utils";
@@ -22,6 +23,15 @@ interface BankAccount {
   active: boolean;
   opening_balance: string;
   _count: { transactions: number };
+}
+
+interface Card {
+  id: number;
+  bank_account_id: number;
+  last4: string;
+  closing_day: number;
+  label: string | null;
+  active: boolean;
 }
 
 interface Transaction {
@@ -103,6 +113,13 @@ export function ConciliacaoPage() {
   const [newAccount, setNewAccount] = useState({ bank: "ITAU" as BankKind, nickname: "", agency: "", account_number: "" });
   const [savingAccount, setSavingAccount] = useState(false);
 
+  // Cartões de crédito por conta bancária (final 4 + dia de fechamento).
+  const [cards, setCards] = useState<Card[]>([]);
+  const [cardModalAccount, setCardModalAccount] = useState<BankAccount | null>(null);
+  const [newCard, setNewCard] = useState({ last4: "", closing_day: "", label: "" });
+  const [savingCard, setSavingCard] = useState(false);
+  const [deletingCardId, setDeletingCardId] = useState<number | null>(null);
+
   // Import
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
@@ -135,9 +152,17 @@ export function ConciliacaoPage() {
     }
   }, []);
 
+  const loadCards = useCallback(async () => {
+    const { data } = await db.from("cards").select("*").order("last4");
+    setCards((data as Card[]) || []);
+  }, []);
+
   useEffect(() => {
-    if (canView) loadAccounts();
-  }, [canView, loadAccounts]);
+    if (canView) {
+      loadAccounts();
+      loadCards();
+    }
+  }, [canView, loadAccounts, loadCards]);
 
   useEffect(() => {
     if (selectedAccount != null) loadTransactions(selectedAccount);
@@ -186,6 +211,53 @@ export function ConciliacaoPage() {
       setNewAccount({ bank: "ITAU", nickname: "", agency: "", account_number: "" });
     } finally {
       setSavingAccount(false);
+    }
+  }
+
+  // ── Cartões (final 4 + dia de fechamento), vinculados a uma conta ──────────
+  function openCardModal(account: BankAccount) {
+    setCardModalAccount(account);
+    setNewCard({ last4: "", closing_day: "", label: "" });
+  }
+
+  async function handleCreateCard() {
+    if (!cardModalAccount) return;
+    const last4 = newCard.last4.replace(/\D/g, "");
+    const closing = Number(newCard.closing_day);
+    if (last4.length !== 4) return alert("Informe os 4 últimos dígitos do cartão");
+    if (!Number.isInteger(closing) || closing < 1 || closing > 31) return alert("Dia de fechamento inválido (1 a 31)");
+    setSavingCard(true);
+    try {
+      const { error } = await db.from("cards").insert({
+        bank_account_id: cardModalAccount.id,
+        last4,
+        closing_day: closing,
+        label: newCard.label.trim() || null,
+        created_by: profile?.full_name || "Sistema",
+      });
+      if (error) {
+        alert(error.message || "Erro ao cadastrar cartão");
+        return;
+      }
+      await loadCards();
+      setCardModalAccount(null);
+    } finally {
+      setSavingCard(false);
+    }
+  }
+
+  async function handleDeleteCard(card: Card) {
+    if (!window.confirm(`Excluir o cartão final ${card.last4}?`)) return;
+    setDeletingCardId(card.id);
+    try {
+      const { error } = await db.from("cards").delete().eq("id", card.id);
+      if (error) {
+        alert(error.message || "Erro ao excluir cartão");
+        return;
+      }
+      await loadCards();
+    } finally {
+      setDeletingCardId(null);
     }
   }
 
@@ -433,6 +505,44 @@ export function ConciliacaoPage() {
                     )}
                   </div>
                   <p className="text-xs text-text-light mt-2">{a._count.transactions} movimentação(ões)</p>
+
+                  {/* Cartões de crédito vinculados a esta conta */}
+                  <div className="mt-3 pt-3 border-t border-border">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-xs font-semibold text-text">Cartões</p>
+                      {canEdit && (
+                        <button onClick={() => openCardModal(a)} className="text-xs text-primary hover:underline">
+                          + cartão
+                        </button>
+                      )}
+                    </div>
+                    {cards.filter((c) => c.bank_account_id === a.id).length === 0 ? (
+                      <p className="text-[11px] text-text-light">Nenhum cartão cadastrado.</p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {cards
+                          .filter((c) => c.bank_account_id === a.id)
+                          .map((c) => (
+                            <li key={c.id} className="flex items-center justify-between gap-2 text-xs">
+                              <span className="text-text">
+                                💳 {c.label?.trim() || `final ${c.last4}`}
+                                <span className="text-text-light"> · fecha dia {c.closing_day}</span>
+                              </span>
+                              {canEdit && (
+                                <button
+                                  onClick={() => handleDeleteCard(c)}
+                                  disabled={deletingCardId === c.id}
+                                  className="text-text-light hover:text-red-600 leading-none px-1"
+                                  title="Excluir cartão"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </li>
+                          ))}
+                      </ul>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -789,6 +899,61 @@ export function ConciliacaoPage() {
               </div>
             );
           })()}
+        </div>
+      </Modal>
+
+      {/* Modal novo cartão */}
+      <Modal
+        open={!!cardModalAccount}
+        onClose={() => setCardModalAccount(null)}
+        title={`Novo cartão${cardModalAccount ? ` — ${cardModalAccount.nickname}` : ""}`}
+      >
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-text-light">4 últimos dígitos *</label>
+              <input
+                value={newCard.last4}
+                onChange={(e) => setNewCard({ ...newCard, last4: e.target.value.replace(/\D/g, "").slice(0, 4) })}
+                className={inputCls}
+                placeholder="8403"
+                inputMode="numeric"
+                maxLength={4}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-text-light">Dia de fechamento *</label>
+              <input
+                type="number"
+                min={1}
+                max={31}
+                value={newCard.closing_day}
+                onChange={(e) => setNewCard({ ...newCard, closing_day: e.target.value })}
+                className={inputCls}
+                placeholder="Ex.: 12"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-text-light">Apelido (opcional)</label>
+            <input
+              value={newCard.label}
+              onChange={(e) => setNewCard({ ...newCard, label: e.target.value })}
+              className={inputCls}
+              placeholder="Ex.: Itaú 8168"
+            />
+          </div>
+          <p className="text-[11px] text-text-light">
+            Aparece no Nova Compra como &quot;Cartão com Final {newCard.last4 || "xxxx"}&quot; pra você saber qual cartão usou e quando fecha.
+          </p>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="secondary" onClick={() => setCardModalAccount(null)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleCreateCard} disabled={savingCard}>
+              {savingCard ? "Salvando..." : "Adicionar cartão"}
+            </Button>
+          </div>
         </div>
       </Modal>
 
