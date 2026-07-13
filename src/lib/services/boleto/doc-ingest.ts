@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { extractDocumentFromPdf, type DocExtract } from "./nf-extract";
+import { extractDocumentFromPdf, nfeNoteSummary, type DocExtract } from "./nf-extract";
 
 export interface DocIngestResult {
   status: "created" | "duplicate" | "scanned";
@@ -63,9 +63,7 @@ export async function ingestDocumentPdf(
     supplierId = sup?.id ?? null;
   }
 
-  const notes = doc.nfe
-    ? `NF ${doc.nfe.numero} série ${doc.nfe.serie} · emissão ${doc.nfe.emissao || doc.nfe.competencia} · chave ${doc.nfe.chave}`
-    : null;
+  const notes = doc.nfe ? nfeNoteSummary(doc.nfe) : null;
 
   const invoice = await prisma.payableInvoice.create({
     data: {

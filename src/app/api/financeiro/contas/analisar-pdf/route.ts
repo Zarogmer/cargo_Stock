@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireFinance } from "@/lib/financeiro-api";
-import { extractDocumentFromPdf } from "@/lib/services/boleto/nf-extract";
+import { extractDocumentFromPdf, nfeNoteSummary } from "@/lib/services/boleto/nf-extract";
 
 const MAX_SIZE = 15 * 1024 * 1024;
 
@@ -29,9 +29,7 @@ export async function POST(request: NextRequest) {
     supplierId = sup?.id ?? null;
   }
 
-  const notes = doc.nfe
-    ? `NF ${doc.nfe.numero} série ${doc.nfe.serie} · emissão ${doc.nfe.emissao || doc.nfe.competencia} · chave ${doc.nfe.chave}`
-    : null;
+  const notes = doc.nfe ? nfeNoteSummary(doc.nfe) : null;
 
   return NextResponse.json({
     parsed: {

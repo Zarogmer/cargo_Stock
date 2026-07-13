@@ -967,7 +967,7 @@ export function ContasAPagarPage() {
             </Button>
             {canEdit && !readOnly && (
               <Button onClick={handleSave} disabled={saving}>
-                {saving ? "Salvando..." : editing ? "Salvar alterações" : "Criar título"}
+                {saving ? "Salvando..." : editing ? "Salvar alterações" : "Adicionar"}
               </Button>
             )}
             {canEdit && editing && !isPaid(editing) && (

@@ -13,6 +13,12 @@
 import { extractPdfItems, type PdfItem } from "./pdf";
 import { findLinhaDigitavel, type BoletoParsed } from "./linha-digitavel";
 
+export interface NfeDuplicata {
+  numero: string | null; // "001", "002"...
+  vencimento: string; // "YYYY-MM-DD"
+  valor: number | null;
+}
+
 export interface NfeParsed {
   chave: string; // 44 dígitos
   cnpjEmitente: string; // 14 dígitos
@@ -23,6 +29,7 @@ export interface NfeParsed {
   emissao: string | null; // "YYYY-MM-DD" (do texto, quando achado)
   emitenteName: string | null;
   valor: number | null; // valor total da nota (sugerido)
+  duplicatas: NfeDuplicata[]; // quadro FATURA/DUPLICATA (vazio se a NF não fatura)
 }
 
 export interface DocExtract {
@@ -68,7 +75,7 @@ function findChave(text: string): string | null {
   return dvOk ?? valid[0] ?? null;
 }
 
-function parseChave(c: string): Omit<NfeParsed, "emissao" | "emitenteName" | "valor"> {
+function parseChave(c: string): Omit<NfeParsed, "emissao" | "emitenteName" | "valor" | "duplicatas"> {
   const aa = c.slice(2, 4);
   const mm = c.slice(4, 6);
   return {
@@ -117,6 +124,84 @@ function valorPorPosicao(items: PdfItem[]): number | null {
   if (cands.length === 0) return null;
   const nonZero = cands.find((c) => c.v > 0);
   return nonZero ? nonZero.v : cands[0].v;
+}
+
+// ── Duplicatas (quadro FATURA/DUPLICATA do DANFE) ───────────────────────────
+//
+// O vencimento da NF fica nas duplicatas, e o layout varia (colunas lado a
+// lado ou pilhas verticais). Estratégia POR POSIÇÃO: âncora no rótulo
+// "FATURA"/"DUPLICATA", pega as DATAS logo abaixo dele e casa cada data com o
+// valor e o número de parcela mais próximos. NF sem esse quadro (venda à
+// vista/sem fatura) simplesmente não tem vencimento no PDF.
+
+function parseDateBR(s: string): string | null {
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return null;
+  const [, d, mo, y] = m;
+  if (Number(mo) < 1 || Number(mo) > 12 || Number(d) < 1 || Number(d) > 31) return null;
+  return `${y}-${mo}-${d}`;
+}
+
+function duplicatasPorPosicao(items: PdfItem[]): NfeDuplicata[] {
+  const label = items.find((it) => /FATURA|DUPLICATA/i.test(it.s));
+  if (!label) return [];
+  // Região abaixo do rótulo (o quadro tem ~75pt de altura nos layouts comuns).
+  const region = items.filter(
+    (it) => it.page === label.page && it.y < label.y && label.y - it.y < 75
+  );
+  const dups: NfeDuplicata[] = [];
+  for (const dateIt of region) {
+    const venc = parseDateBR(dateIt.s);
+    if (!venc) continue;
+    // Valor: número BR mais próximo da data (mesma coluna ou célula ao lado).
+    const valorIt = region
+      .filter((it) => it !== dateIt && brNum(it.s) != null)
+      .map((it) => ({ it, dx: Math.abs(it.x - dateIt.x), dy: Math.abs(it.y - dateIt.y) }))
+      .filter((c) => c.dx < 80 && c.dy < 20)
+      .sort((a, b) => a.dx + a.dy - (b.dx + b.dy))[0];
+    // Número da parcela: 1-3 dígitos puros perto da data.
+    const numIt = region
+      .filter((it) => it !== dateIt && /^\d{1,3}$/.test(it.s))
+      .map((it) => ({ it, dx: Math.abs(it.x - dateIt.x), dy: Math.abs(it.y - dateIt.y) }))
+      .filter((c) => c.dx < 60 && c.dy < 20)
+      .sort((a, b) => a.dx + a.dy - (b.dx + b.dy))[0];
+    dups.push({
+      numero: numIt ? numIt.it.s : null,
+      vencimento: venc,
+      valor: valorIt ? brNum(valorIt.it.s) : null,
+    });
+  }
+  dups.sort((a, b) => a.vencimento.localeCompare(b.vencimento));
+  return dups;
+}
+
+// Fallback por texto: layouts que rotulam cada vencimento ("Dt. Vencimento 03/02/2026").
+function duplicatasPorTexto(text: string): NfeDuplicata[] {
+  const dups: NfeDuplicata[] = [];
+  const re = /Dt\.?\s*Venc[a-zç]*\.?\s*:?\s*(\d{2}\/\d{2}\/\d{4})/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const venc = parseDateBR(m[1]);
+    if (venc) dups.push({ numero: null, vencimento: venc, valor: null });
+  }
+  dups.sort((a, b) => a.vencimento.localeCompare(b.vencimento));
+  return dups;
+}
+
+// Resumo pro campo Observações — compartilhado pelas rotas de análise/import.
+export function nfeNoteSummary(nfe: NfeParsed): string {
+  let s = `NF ${nfe.numero} série ${nfe.serie} · emissão ${nfe.emissao || nfe.competencia} · chave ${nfe.chave}`;
+  if (nfe.duplicatas.length > 1) {
+    const parcelas = nfe.duplicatas
+      .map((d) => {
+        const [y, mo, dd] = d.vencimento.split("-");
+        const data = `${dd}/${mo}/${y}`;
+        return d.valor != null ? `${data} R$ ${d.valor.toFixed(2).replace(".", ",")}` : data;
+      })
+      .join(" + ");
+    s += ` · ${nfe.duplicatas.length} parcela(s): ${parcelas}`;
+  }
+  return s;
 }
 
 // Fallback de valor por texto (alguns layouts trazem "VALOR TOTAL: R$ ... nn,nn").
@@ -174,14 +259,22 @@ export async function extractDocumentFromPdf(buffer: Buffer): Promise<DocExtract
   const boleto = findLinhaDigitavel(text);
   if (boleto) {
     const cnpj = firstCnpj(text);
+    // Linha sem valor/vencimento (boleto "contra apresentação" ou arrecadação):
+    // cai pro texto impresso no documento.
+    const amount = boleto.amount ?? valorPorTexto(text);
+    let dueDate = boleto.dueDate ? boleto.dueDate.toISOString().slice(0, 10) : null;
+    if (!dueDate) {
+      const m = text.match(/VENCIMENTO\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i);
+      if (m) dueDate = parseDateBR(m[1]);
+    }
     return {
       kind: "BOLETO",
       scanned: false,
       boleto,
       nfe: null,
       cnpj,
-      amount: boleto.amount,
-      dueDate: boleto.dueDate ? boleto.dueDate.toISOString().slice(0, 10) : null,
+      amount,
+      dueDate,
       digitableLine: boleto.digits,
       suggestedDescription: cnpj ? `Boleto ${formatCnpj(cnpj)}` : "Boleto",
     };
@@ -193,11 +286,14 @@ export async function extractDocumentFromPdf(buffer: Buffer): Promise<DocExtract
     const base = parseChave(chave);
     const valor = valorPorPosicao(items) ?? valorPorTexto(text);
     const emitenteName = parseEmitente(text);
+    const posDups = duplicatasPorPosicao(items);
+    const duplicatas = posDups.length > 0 ? posDups : duplicatasPorTexto(text);
     const nfe: NfeParsed = {
       ...base,
       emissao: parseEmissao(text),
       emitenteName,
       valor,
+      duplicatas,
     };
     const nome = emitenteName || formatCnpj(base.cnpjEmitente);
     return {
@@ -207,7 +303,8 @@ export async function extractDocumentFromPdf(buffer: Buffer): Promise<DocExtract
       nfe,
       cnpj: base.cnpjEmitente,
       amount: valor,
-      dueDate: null,
+      // Vencimento = 1ª duplicata do quadro FATURA (NF sem fatura não tem data).
+      dueDate: duplicatas[0]?.vencimento ?? null,
       digitableLine: null,
       suggestedDescription: `NF ${base.numero} - ${nome}`,
     };
