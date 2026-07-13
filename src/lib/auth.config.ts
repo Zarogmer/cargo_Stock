@@ -10,7 +10,10 @@ export const authConfig = {
   },
   session: {
     strategy: "jwt",
-    maxAge: 5 * 60, // 5 minutes
+    // 8h (jornada): com 5 min a sessão morria no MEIO do trabalho (ex.: 10 min
+    // direto na conciliação sem trocar de janela) e os salvamentos passavam a
+    // falhar com 401 silencioso — edição sumia no próximo reload.
+    maxAge: 8 * 60 * 60,
   },
   callbacks: {
     authorized({ auth, request }) {

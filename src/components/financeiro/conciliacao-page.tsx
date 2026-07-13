@@ -239,28 +239,41 @@ export function ConciliacaoPage() {
     return t.review_status === "CONCILIADO" || t.reconciliation?.status === "CONFIRMADA";
   }
 
+  // O PATCH falhava CALADO (ex.: sessão expirada → 401) e a edição sumia no
+  // próximo reload, parecendo bug de UI. Agora qualquer falha avisa — e 401
+  // manda pro login recarregando a página (o middleware redireciona).
+  async function patchExtratoOrWarn(id: string, body: Record<string, unknown>): Promise<boolean> {
+    const res = await fetch(`/api/financeiro/extrato/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => null);
+    if (res?.ok) return true;
+    if (res?.status === 401) {
+      alert("Sua sessão expirou — entre de novo pra salvar. A alteração NÃO foi salva.");
+      window.location.reload();
+      return false;
+    }
+    const data = res ? await res.json().catch(() => ({})) : {};
+    alert((data as { error?: string }).error || "Erro ao salvar — a alteração NÃO foi salva.");
+    if (selectedAccount != null) loadTransactions(selectedAccount); // desfaz o otimista
+    return false;
+  }
+
   async function toggleOk(t: Transaction) {
     // Auto-conciliada (via conta a pagar) não é desmarcada aqui — se preciso,
     // rejeita na aba Conciliação.
     if (t.reconciliation?.status === "CONFIRMADA") return;
     const next = t.review_status === "CONCILIADO" ? "PENDENTE" : "CONCILIADO";
     setTransactions((prev) => prev.map((x) => (x.id === t.id ? { ...x, review_status: next } : x)));
-    await fetch(`/api/financeiro/extrato/${t.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ review_status: next }),
-    });
+    await patchExtratoOrWarn(t.id, { review_status: next });
   }
 
   async function saveNote(t: Transaction) {
     const note = noteEdits[t.id];
     if (note === undefined || note === (t.review_note ?? "")) return;
     setTransactions((prev) => prev.map((x) => (x.id === t.id ? { ...x, review_note: note || null } : x)));
-    await fetch(`/api/financeiro/extrato/${t.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ review_note: note }),
-    });
+    await patchExtratoOrWarn(t.id, { review_note: note });
   }
 
   // Gera a planilha de conciliação do ano (uma aba por mês, formato da
