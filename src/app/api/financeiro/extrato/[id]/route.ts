@@ -76,20 +76,16 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   return NextResponse.json({ transaction: tx });
 }
 
-// DELETE /api/financeiro/extrato/[id] — remove a linha, só se for manual.
+// DELETE /api/financeiro/extrato/[id] — remove a linha (manual OU importada
+// do OFX). Excluir uma linha do OFX não é permanente: reimportar o mesmo
+// arquivo recria a linha (o dedupe_hash some junto com ela).
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const guard = await requireFinance("edit");
   if (guard.error) return guard.error;
   const { id } = await params;
 
-  const existing = await prisma.bankTransaction.findUnique({ where: { id }, select: { raw: true } });
+  const existing = await prisma.bankTransaction.findUnique({ where: { id }, select: { id: true } });
   if (!existing) return NextResponse.json({ error: "Lançamento não encontrado" }, { status: 404 });
-  if (!isManual(existing.raw)) {
-    return NextResponse.json(
-      { error: "Só linhas adicionadas manualmente podem ser excluídas (as do extrato são do banco)." },
-      { status: 422 }
-    );
-  }
   await prisma.reconciliation.deleteMany({ where: { transaction_id: id } });
   await prisma.bankTransaction.delete({ where: { id } });
   return NextResponse.json({ ok: true });

@@ -62,6 +62,14 @@ const BANK_LABELS: Record<BankKind, string> = {
 const inputCls =
   "w-full border border-border rounded-lg px-3 py-2 text-sm bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40";
 
+const MONTHS_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+
+// "2026-02" → "fevereiro/2026"
+function fmtMonth(ym: string): string {
+  const [y, m] = ym.split("-");
+  return `${MONTHS_PT[Number(m) - 1] ?? m}/${y}`;
+}
+
 function fmtDateOnly(iso: string | null): string {
   if (!iso) return "—";
   const [y, m, d] = iso.slice(0, 10).split("-");
@@ -80,6 +88,8 @@ export function ConciliacaoPage() {
   const [selectedAccount, setSelectedAccount] = useState<number | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loadingTx, setLoadingTx] = useState(false);
+  // Filtro de mês ("" = todos) — pra fazer a conciliação mês a mês.
+  const [monthFilter, setMonthFilter] = useState("");
   // Nota (lançamento reescrito) em edição, por linha.
   const [noteEdits, setNoteEdits] = useState<Record<string, string>>({});
 
@@ -126,24 +136,33 @@ export function ConciliacaoPage() {
 
   useEffect(() => {
     if (selectedAccount != null) loadTransactions(selectedAccount);
+    setMonthFilter(""); // extrato de outra conta = outros meses
   }, [selectedAccount, loadTransactions]);
 
+  // Meses disponíveis no extrato da conta selecionada (mais recente primeiro).
+  const months = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of transactions) set.add(t.posted_at.slice(0, 7));
+    return Array.from(set).sort().reverse();
+  }, [transactions]);
+
   const visibleTx = useMemo(
-    () => transactions,
-    [transactions]
+    () => (monthFilter ? transactions.filter((t) => t.posted_at.slice(0, 7) === monthFilter) : transactions),
+    [transactions, monthFilter]
   );
 
+  // Totais acompanham o filtro de mês.
   const totals = useMemo(() => {
     let debit = 0;
     let credit = 0;
-    for (const t of transactions) {
+    for (const t of visibleTx) {
       if (!t.reconcilable) continue;
       const v = Number(t.amount);
       if (v < 0) debit += v;
       else credit += v;
     }
     return { debit, credit };
-  }, [transactions]);
+  }, [visibleTx]);
 
   async function handleCreateAccount() {
     if (!newAccount.nickname.trim()) return alert("Informe um apelido para a conta");
@@ -203,6 +222,18 @@ export function ConciliacaoPage() {
     }
     return map;
   }, [transactions, accounts, selectedAccount]);
+
+  // "SALDO ANTERIOR" da visão atual: com filtro de mês, é o saldo acumulado
+  // até o fim do mês anterior; sem filtro, o saldo inicial da conta.
+  const prevBalance = useMemo(() => {
+    const acc = accounts.find((a) => a.id === selectedAccount);
+    let running = acc ? Number(acc.opening_balance) : 0;
+    if (!monthFilter) return running;
+    for (const t of transactions) {
+      if (t.posted_at.slice(0, 7) < monthFilter) running += Number(t.amount);
+    }
+    return running;
+  }, [transactions, accounts, selectedAccount, monthFilter]);
 
   function isConciliada(t: Transaction): boolean {
     return t.review_status === "CONCILIADO" || t.reconciliation?.status === "CONFIRMADA";
@@ -309,18 +340,23 @@ export function ConciliacaoPage() {
     }
   }
 
-  async function deleteTx() {
-    if (!editTx) return;
-    if (!window.confirm(`Excluir "${editForm.description}" da conciliação?`)) return;
+  // Exclui qualquer linha do extrato — manual ou importada do OFX. A do OFX
+  // não some pra sempre: reimportar o mesmo arquivo recria a linha.
+  async function deleteTransaction(t: Transaction) {
+    const label = t.review_note || t.payee_name || t.description || "lançamento";
+    const aviso = isManualTx(t)
+      ? `Excluir "${label}" da conciliação?`
+      : `Excluir "${label}" do extrato?\n\n(Se importar o mesmo OFX de novo, a linha volta.)`;
+    if (!window.confirm(aviso)) return;
     setSavingTx(true);
     try {
-      const res = await fetch(`/api/financeiro/extrato/${editTx.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/financeiro/extrato/${t.id}`, { method: "DELETE" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         alert(data.error || "Erro ao excluir");
         return;
       }
-      if (selectedAccount != null) await loadTransactions(selectedAccount);
+      if (selectedAccount != null) await Promise.all([loadTransactions(selectedAccount), loadAccounts()]);
       setEditTx(null);
     } finally {
       setSavingTx(false);
@@ -464,6 +500,20 @@ export function ConciliacaoPage() {
                     {BANK_LABELS[a.bank]}
                   </button>
                 ))}
+                {months.length > 0 && (
+                  <select
+                    value={monthFilter}
+                    onChange={(e) => setMonthFilter(e.target.value)}
+                    className="text-xs font-medium px-2 py-1.5 rounded-lg border border-border bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  >
+                    <option value="">Todos os meses</option>
+                    {months.map((m) => (
+                      <option key={m} value={m}>
+                        {fmtMonth(m)}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 {canEdit && selectedAccount != null && (
                   <Button size="sm" onClick={openAdd} className="ml-2">
                     Adicionar
@@ -522,7 +572,8 @@ export function ConciliacaoPage() {
                             {acc.account_number ? ` · CC ${acc.account_number}` : ""}
                           </p>
                           <p>
-                            <span className="font-medium text-text">Período:</span> todos os lançamentos
+                            <span className="font-medium text-text">Período:</span>{" "}
+                            {monthFilter ? fmtMonth(monthFilter) : "todos os lançamentos"}
                           </p>
                         </div>
                       );
@@ -539,20 +590,14 @@ export function ConciliacaoPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(() => {
-                        const acc = accounts.find((a) => a.id === selectedAccount);
-                        const open = acc ? Number(acc.opening_balance) : 0;
-                        return (
-                          <tr className="border-b border-border bg-gray-50/60 text-xs">
-                            <td className="px-3 py-2" />
-                            <td className="px-3 py-2 text-text-light" />
-                            <td className="px-3 py-2 font-medium text-text-light">SALDO ANTERIOR</td>
-                            <td className="px-3 py-2" />
-                            <td className="px-3 py-2" />
-                            <td className="px-3 py-2 text-right text-text-light">{formatCurrency(open)}</td>
-                          </tr>
-                        );
-                      })()}
+                      <tr className="border-b border-border bg-gray-50/60 text-xs">
+                        <td className="px-3 py-2" />
+                        <td className="px-3 py-2 text-text-light" />
+                        <td className="px-3 py-2 font-medium text-text-light">SALDO ANTERIOR</td>
+                        <td className="px-3 py-2" />
+                        <td className="px-3 py-2" />
+                        <td className="px-3 py-2 text-right text-text-light">{formatCurrency(prevBalance)}</td>
+                      </tr>
                       {visibleTx.map((t) => {
                         const v = Number(t.amount);
                         const ok = isConciliada(t);
@@ -598,14 +643,24 @@ export function ConciliacaoPage() {
                                   )}
                                 </div>
                               ) : canEdit ? (
-                                <input
-                                  value={noteVal}
-                                  placeholder={t.payee_name || t.description || ""}
-                                  onChange={(e) => setNoteEdits((prev) => ({ ...prev, [t.id]: e.target.value }))}
-                                  onBlur={() => saveNote(t)}
-                                  className="w-full min-w-[240px] bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-1.5 py-1 text-text focus:outline-none"
-                                  title={t.description || ""}
-                                />
+                                <div className="flex items-center gap-1 min-w-[240px]">
+                                  <input
+                                    value={noteVal}
+                                    placeholder={t.payee_name || t.description || ""}
+                                    onChange={(e) => setNoteEdits((prev) => ({ ...prev, [t.id]: e.target.value }))}
+                                    onBlur={() => saveNote(t)}
+                                    className="flex-1 bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-1.5 py-1 text-text focus:outline-none"
+                                    title={t.description || ""}
+                                  />
+                                  <button
+                                    onClick={() => deleteTransaction(t)}
+                                    disabled={savingTx}
+                                    title="Excluir lançamento do extrato"
+                                    className="text-text-light hover:text-red-600 text-sm leading-none px-1 transition"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
                               ) : (
                                 <span className="text-text" title={t.description || ""}>
                                   {t.review_note || t.payee_name || t.description || "—"}
@@ -672,7 +727,7 @@ export function ConciliacaoPage() {
             </div>
           </div>
           <div className="flex justify-between gap-3 pt-2">
-            <Button variant="danger" onClick={deleteTx} disabled={savingTx}>
+            <Button variant="danger" onClick={() => editTx && deleteTransaction(editTx)} disabled={savingTx}>
               Excluir
             </Button>
             <div className="flex gap-2">
