@@ -65,6 +65,20 @@ interface Supplier {
   cnpj: string | null;
 }
 
+// Compra do Controle de Compras (purchase_orders) disponível pra puxar — só os
+// campos que o seletor mostra. Vem de /api/financeiro/contas/from-compras.
+interface PurchaseOption {
+  id: string;
+  description: string;
+  supplier: string | null;
+  department: string | null;
+  purchase_date: string | null;
+  total_value: number;
+  payment_method: string | null;
+  ship_name: string | null;
+  notes: string | null;
+}
+
 // ── Helpers de data (due_date é DATE puro — não passar por timezone) ────────
 
 function fmtDateOnly(iso: string | null): string {
@@ -93,6 +107,17 @@ function addDaysStr(days: number): string {
 function fmtDateTime(iso: string | null): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+}
+
+// Normaliza o que foi digitado no campo de valor pra sempre exibir 2 casas
+// (1.234,50). Campo vazio continua vazio. Usado no onBlur dos valores (R$).
+function formatAmountBR(value: string): string {
+  const s = String(value).trim();
+  if (s === "") return "";
+  return parseDecimalBR(s).toLocaleString("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 // ── Estado "pago" e badge ────────────────────────────────────────────────────
@@ -186,6 +211,20 @@ export function ContasAPagarPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [uploadingExtra, setUploadingExtra] = useState(false);
+
+  // Cadastro rápido de fornecedor dentro do modal de "Nova conta".
+  const [showNewSupplier, setShowNewSupplier] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState("");
+  const [newSupplierCnpj, setNewSupplierCnpj] = useState("");
+  const [creatingSupplier, setCreatingSupplier] = useState(false);
+
+  // Picker "Puxar do Controle de Compras".
+  const [comprasOpen, setComprasOpen] = useState(false);
+  const [compras, setCompras] = useState<PurchaseOption[]>([]);
+  const [comprasLoading, setComprasLoading] = useState(false);
+  const [comprasSearch, setComprasSearch] = useState("");
+  const [selectedCompras, setSelectedCompras] = useState<Set<string>>(new Set());
+  const [importingCompras, setImportingCompras] = useState(false);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -305,10 +344,17 @@ export function ContasAPagarPage() {
 
   // ── Ações ─────────────────────────────────────────────────────────────────
 
+  function resetNewSupplier() {
+    setShowNewSupplier(false);
+    setNewSupplierName("");
+    setNewSupplierCnpj("");
+  }
+
   function openCreate() {
     setEditing(null);
     setForm(EMPTY_FORM);
     setFormFile(null);
+    resetNewSupplier();
     setModalOpen(true);
   }
 
@@ -316,7 +362,7 @@ export function ContasAPagarPage() {
     setEditing(inv);
     setForm({
       description: inv.description,
-      amount: String(Number(inv.amount)).replace(".", ","),
+      amount: formatAmountBR(String(Number(inv.amount))),
       due_date: inv.due_date?.slice(0, 10) || "",
       supplier_id: inv.suppliers ? String(inv.suppliers.id) : "",
       payee_name: inv.payee_name || "",
@@ -324,12 +370,45 @@ export function ContasAPagarPage() {
       digitable_line: inv.digitable_line || "",
       bank: inv.bank || "",
       expense_type: inv.expense_type || "",
-      paid_amount: inv.paid_amount != null ? String(Number(inv.paid_amount)).replace(".", ",") : "",
+      paid_amount: inv.paid_amount != null ? formatAmountBR(String(Number(inv.paid_amount))) : "",
       payment_date: inv.payment_date?.slice(0, 10) || "",
       notes: inv.notes || "",
     });
     setFormFile(null);
+    resetNewSupplier();
     setModalOpen(true);
+  }
+
+  // Cadastra um fornecedor sem sair do modal e já vincula ao título.
+  async function handleCreateSupplier() {
+    const name = newSupplierName.trim();
+    if (!name) return alert("Informe o nome do fornecedor");
+    setCreatingSupplier(true);
+    try {
+      const actor = profile?.full_name || "Sistema";
+      const cnpj = newSupplierCnpj.replace(/\D/g, "") || null;
+      const { data, error } = await db.from("suppliers").insert({
+        name,
+        cnpj,
+        created_by: actor,
+        updated_by: actor,
+      });
+      if (error || !data) {
+        const dup = /unique|constraint|P2002/i.test(error?.message || "") || error?.code === "P2002";
+        alert(dup ? "Já existe um fornecedor com esse CNPJ." : error?.message || "Erro ao cadastrar fornecedor");
+        return;
+      }
+      const created = data as unknown as Supplier;
+      setSuppliers((prev) =>
+        [...prev, { id: created.id, name: created.name, cnpj: created.cnpj }].sort((a, b) =>
+          a.name.localeCompare(b.name, "pt-BR")
+        )
+      );
+      setForm((f) => ({ ...f, supplier_id: String(created.id) }));
+      resetNewSupplier();
+    } finally {
+      setCreatingSupplier(false);
+    }
   }
 
   // Import em LOTE pelo header: lê 1..N PDFs (boleto ou nota fiscal) e cria os
@@ -376,7 +455,7 @@ export function ContasAPagarPage() {
       setForm((prev) => ({
         ...prev,
         description: p.description || prev.description,
-        amount: p.amount != null ? String(p.amount).replace(".", ",") : prev.amount,
+        amount: p.amount != null ? formatAmountBR(String(p.amount)) : prev.amount,
         due_date: p.due_date || prev.due_date,
         payee_name: p.payee_name || prev.payee_name,
         payee_document: p.payee_document || prev.payee_document,
@@ -513,6 +592,76 @@ export function ContasAPagarPage() {
     }
   }
 
+  // ── Puxar do Controle de Compras ──────────────────────────────────────────
+
+  async function openCompras() {
+    setComprasOpen(true);
+    setSelectedCompras(new Set());
+    setComprasSearch("");
+    setComprasLoading(true);
+    try {
+      const res = await fetch("/api/financeiro/contas/from-compras");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao carregar as compras");
+        setCompras([]);
+        return;
+      }
+      setCompras((data.purchases as PurchaseOption[]) || []);
+    } finally {
+      setComprasLoading(false);
+    }
+  }
+
+  function toggleCompra(id: string) {
+    setSelectedCompras((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleImportCompras() {
+    if (selectedCompras.size === 0) return;
+    setImportingCompras(true);
+    try {
+      const res = await fetch("/api/financeiro/contas/from-compras", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ purchase_ids: [...selectedCompras] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao puxar as compras");
+        return;
+      }
+      alert(
+        `${data.created} título(s) criado(s)` +
+          (data.skipped ? `\n${data.skipped} já existia(m) e foi(ram) ignorada(s).` : "")
+      );
+      setComprasOpen(false);
+      await loadAll();
+    } finally {
+      setImportingCompras(false);
+    }
+  }
+
+  const comprasFiltered = useMemo(() => {
+    if (!comprasSearch.trim()) return compras;
+    return compras.filter((c) =>
+      matchSearch(
+        [c.description, c.supplier, c.department, c.ship_name].filter(Boolean).join(" "),
+        comprasSearch
+      )
+    );
+  }, [compras, comprasSearch]);
+
+  const comprasSelectedTotal = useMemo(
+    () => compras.filter((c) => selectedCompras.has(c.id)).reduce((s, c) => s + (Number(c.total_value) || 0), 0),
+    [compras, selectedCompras]
+  );
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (!canView) {
@@ -541,9 +690,12 @@ export function ContasAPagarPage() {
         </div>
         {canEdit && (
           <div className="flex gap-2 flex-wrap">
+            <Button variant="secondary" onClick={openCompras}>
+              Puxar do Controle de Compras
+            </Button>
             <label className={`inline-flex items-center ${importingPdf ? "opacity-50" : "cursor-pointer"}`}>
               <span className="bg-primary hover:bg-primary-dark text-white text-sm font-medium px-4 py-2.5 rounded-lg transition">
-                {importingPdf ? "Importando..." : "Import Boleto (PDF)"}
+                {importingPdf ? "Importando..." : "Import NF (PDF)"}
               </span>
               <input
                 type="file"
@@ -725,7 +877,9 @@ export function ContasAPagarPage() {
                     ? "Extrato (OFX)"
                     : editing.origin === "BOLETO_PDF"
                       ? "Boleto (PDF)"
-                      : "Manual"}
+                      : editing.origin === "COMPRA"
+                        ? "Controle de Compras"
+                        : "Manual"}
                 {"  ·  "}
                 {editing.created_by} · {fmtDateTime(editing.created_at)}
               </p>
@@ -756,6 +910,7 @@ export function ContasAPagarPage() {
                 <input
                   value={form.amount}
                   onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                  onBlur={(e) => setForm((f) => ({ ...f, amount: formatAmountBR(e.target.value) }))}
                   className={inputCls}
                   placeholder="0,00"
                   inputMode="decimal"
@@ -772,7 +927,18 @@ export function ContasAPagarPage() {
               </div>
             </div>
             <div>
-              <label className="text-xs font-medium text-text-light">Fornecedor (cadastro)</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-text-light">Fornecedor (cadastro)</label>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    onClick={() => setShowNewSupplier((v) => !v)}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    {showNewSupplier ? "cancelar" : "+ novo fornecedor"}
+                  </button>
+                )}
+              </div>
               <select
                 value={form.supplier_id}
                 onChange={(e) => setForm({ ...form, supplier_id: e.target.value })}
@@ -786,6 +952,36 @@ export function ContasAPagarPage() {
                   </option>
                 ))}
               </select>
+              {showNewSupplier && !readOnly && (
+                <div className="mt-2 border border-border rounded-lg p-3 bg-gray-50 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs font-medium text-text-light">Nome *</label>
+                      <input
+                        value={newSupplierName}
+                        onChange={(e) => setNewSupplierName(e.target.value)}
+                        className={inputCls}
+                        placeholder="Nome do fornecedor"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-text-light">CNPJ/CPF</label>
+                      <input
+                        value={newSupplierCnpj}
+                        onChange={(e) => setNewSupplierCnpj(e.target.value)}
+                        className={inputCls}
+                        placeholder="só números (opcional)"
+                        inputMode="numeric"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button size="sm" onClick={handleCreateSupplier} disabled={creatingSupplier}>
+                      {creatingSupplier ? "Salvando..." : "Salvar fornecedor"}
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -841,6 +1037,7 @@ export function ContasAPagarPage() {
                 <input
                   value={form.paid_amount}
                   onChange={(e) => setForm({ ...form, paid_amount: e.target.value })}
+                  onBlur={(e) => setForm((f) => ({ ...f, paid_amount: formatAmountBR(e.target.value) }))}
                   className={inputCls}
                   placeholder="se diferente do valor"
                   inputMode="decimal"
@@ -875,7 +1072,7 @@ export function ContasAPagarPage() {
             </div>
             {!editing && (
               <div>
-                <label className="text-xs font-medium text-text-light">Import Boleto (PDF)</label>
+                <label className="text-xs font-medium text-text-light">Import NF (PDF)</label>
                 <label className={`mt-1 block ${analyzing ? "opacity-50" : "cursor-pointer"}`}>
                   <span className="inline-block bg-gray-100 hover:bg-gray-200 text-text text-xs font-medium px-3 py-1.5 rounded-lg">
                     {analyzing ? "Lendo..." : formFile ? `📎 ${formFile.name}` : "Escolher PDF e ler os dados"}
@@ -983,6 +1180,92 @@ export function ContasAPagarPage() {
                 {togglingPaid ? "..." : "Reabrir (não pago)"}
               </Button>
             )}
+          </div>
+        </div>
+      </Modal>
+
+      {/* Puxar do Controle de Compras */}
+      <Modal
+        open={comprasOpen}
+        onClose={() => setComprasOpen(false)}
+        title="Puxar do Controle de Compras"
+        maxWidth="max-w-3xl"
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-text-light">
+            Selecione as compras já registradas para criar títulos em Contas a Pagar. Compras já
+            puxadas não aparecem aqui.
+          </p>
+          <input
+            value={comprasSearch}
+            onChange={(e) => setComprasSearch(e.target.value)}
+            placeholder="Buscar por descrição, fornecedor, setor, navio..."
+            className={inputCls}
+          />
+
+          {comprasLoading ? (
+            <p className="p-6 text-center text-text-light text-sm">Carregando...</p>
+          ) : comprasFiltered.length === 0 ? (
+            <p className="p-6 text-center text-text-light text-sm">
+              {compras.length === 0
+                ? "Nenhuma compra disponível para puxar."
+                : "Nenhuma compra bate com a busca."}
+            </p>
+          ) : (
+            <div className="max-h-[420px] overflow-y-auto border border-border rounded-lg divide-y divide-border">
+              {comprasFiltered.map((c) => {
+                const checked = selectedCompras.has(c.id);
+                return (
+                  <label
+                    key={c.id}
+                    className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-gray-50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleCompra(c.id)}
+                      className="shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-text truncate">{c.description}</p>
+                      <p className="text-xs text-text-light truncate">
+                        {[
+                          c.supplier || "(sem fornecedor)",
+                          c.department,
+                          c.ship_name,
+                          fmtDateOnly(c.purchase_date),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-sm font-medium text-text whitespace-nowrap">
+                      {formatCurrency(Number(c.total_value) || 0)}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between gap-2 flex-wrap border-t border-border pt-3">
+            <p className="text-sm text-text-light">
+              {selectedCompras.size} selecionada(s)
+              {selectedCompras.size > 0 && (
+                <span className="text-text font-medium"> · {formatCurrency(comprasSelectedTotal)}</span>
+              )}
+            </p>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setComprasOpen(false)}>
+                Fechar
+              </Button>
+              <Button
+                onClick={handleImportCompras}
+                disabled={importingCompras || selectedCompras.size === 0}
+              >
+                {importingCompras ? "Puxando..." : `Criar ${selectedCompras.size || ""} título(s)`}
+              </Button>
+            </div>
           </div>
         </div>
       </Modal>

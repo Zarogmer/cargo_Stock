@@ -697,6 +697,9 @@ model PurchaseOrder {
   created_at     DateTime  @default(now()) @db.Timestamptz()
   updated_at     DateTime  @default(now()) @db.Timestamptz()
 
+  // Título de Contas a Pagar gerado a partir desta compra, se houver.
+  payable_invoice PayableInvoice?
+
   @@index([purchase_date(sort: Desc)])
   @@index([department])
   @@index([request_id])
@@ -868,6 +871,7 @@ enum PayableOrigin {
   MANUAL // lançado à mão na UI
   BOLETO_PDF // importado de um PDF de boleto
   EXTRATO // gerado do débito de um extrato OFX (já pago)
+  COMPRA // puxado de um registro do Controle de Compras (purchase_orders)
 }
 
 enum BankKind {
@@ -926,6 +930,12 @@ model PayableInvoice {
   import_hash  String?  @unique
 
   notes String?
+
+  // Origem "Controle de Compras": quando o título nasce de um registro de
+  // purchase_orders, guarda o vínculo (único) pra não puxar a mesma compra duas
+  // vezes e pra referência cruzada. SetNull preserva o título se a compra sumir.
+  purchase_order_id String?        @unique @db.Uuid
+  purchase_order    PurchaseOrder? @relation(fields: [purchase_order_id], references: [id], onDelete: SetNull)
 
   // ── Trilha de auditoria da máquina de estados ────────────────────────────
   approved_by   String?
