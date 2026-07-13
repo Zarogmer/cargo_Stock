@@ -500,20 +500,19 @@ export function ConciliacaoPage() {
                     {BANK_LABELS[a.bank]}
                   </button>
                 ))}
-                {months.length > 0 && (
-                  <select
-                    value={monthFilter}
-                    onChange={(e) => setMonthFilter(e.target.value)}
-                    className="text-xs font-medium px-2 py-1.5 rounded-lg border border-border bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
-                  >
-                    <option value="">Todos os meses</option>
-                    {months.map((m) => (
-                      <option key={m} value={m}>
-                        {fmtMonth(m)}
-                      </option>
-                    ))}
-                  </select>
-                )}
+                <select
+                  value={monthFilter}
+                  onChange={(e) => setMonthFilter(e.target.value)}
+                  title={months.length === 0 ? "Importe um extrato pra ter meses aqui" : "Filtrar por mês"}
+                  className="text-sm font-medium px-3 py-1.5 rounded-lg border border-border bg-card text-text cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40"
+                >
+                  <option value="">Todos os meses</option>
+                  {months.map((m) => (
+                    <option key={m} value={m}>
+                      {fmtMonth(m)}
+                    </option>
+                  ))}
+                </select>
                 {canEdit && selectedAccount != null && (
                   <Button size="sm" onClick={openAdd} className="ml-2">
                     Adicionar
