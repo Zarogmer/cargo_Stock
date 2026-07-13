@@ -39,6 +39,14 @@ function fmtBrDate(d: Date): string {
   return `${dd}/${m}/${y}`;
 }
 
+// Token do banco pro nome do arquivo (sem acento) — a conciliação do Itaú e a
+// do Santander vão pra contabilidade separadas, então o nome tem que dizer qual.
+function bankTag(bank: string): string {
+  if (bank === "ITAU") return "Itau";
+  if (bank === "SANTANDER") return "Santander";
+  return "Outro";
+}
+
 function num(v: Prisma.Decimal | number): number {
   return Number(v);
 }
@@ -244,7 +252,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const fname = `Conciliacao_${account.nickname.replace(/\s+/g, "_")}_${year}.xlsx`;
+    const fname = `Conciliacao_${bankTag(account.bank)}_${account.nickname.replace(/\s+/g, "_")}_${year}.xlsx`;
     return xlsxResponse(wb, fname);
   }
 
@@ -290,6 +298,6 @@ export async function GET(request: NextRequest) {
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
-  const fname = `Conciliacao_${account.nickname.replace(/\s+/g, "_")}_${from || "tudo"}.xlsx`;
+  const fname = `Conciliacao_${bankTag(account.bank)}_${account.nickname.replace(/\s+/g, "_")}_${from || "tudo"}.xlsx`;
   return xlsxResponse(wb, fname);
 }
