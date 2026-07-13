@@ -49,6 +49,20 @@ export async function POST(request: NextRequest) {
   let account = null as Awaited<ReturnType<typeof prisma.bankAccount.findUnique>> | null;
   if (Number.isInteger(explicitId) && explicitId > 0) {
     account = await prisma.bankAccount.findUnique({ where: { id: explicitId } });
+    // Trava de segurança: extrato do Santander NÃO entra na conta do Itaú (e
+    // vice-versa). São conciliações separadas — nunca misturar bancos.
+    if (
+      account &&
+      (statement.bank === "ITAU" || statement.bank === "SANTANDER") &&
+      account.bank !== statement.bank
+    ) {
+      return NextResponse.json(
+        {
+          error: `Este extrato é do ${statement.bank}, mas a conta escolhida é do ${account.bank}. Importe na conta do ${statement.bank}.`,
+        },
+        { status: 422 }
+      );
+    }
   } else if (statement.bank === "ITAU" || statement.bank === "SANTANDER") {
     account = await prisma.bankAccount.findFirst({ where: { bank: statement.bank }, orderBy: { id: "asc" } });
     if (!account) {

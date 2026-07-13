@@ -76,6 +76,11 @@ function fmtDateOnly(iso: string | null): string {
   return `${d}/${m}/${y}`;
 }
 
+// Normaliza nome de banco pra comparar (sem acento, minúsculo): "Itaú" ≈ "itau".
+function normBank(s: string): string {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+}
+
 export function ConciliacaoPage() {
   const { profile } = useAuth();
   const role = profile?.role || "FINANCEIRO";
@@ -347,29 +352,6 @@ export function ConciliacaoPage() {
         return;
       }
       if (selectedAccount != null) await loadTransactions(selectedAccount);
-      setEditTx(null);
-    } finally {
-      setSavingTx(false);
-    }
-  }
-
-  // Exclui qualquer linha do extrato — manual ou importada do OFX. A do OFX
-  // não some pra sempre: reimportar o mesmo arquivo recria a linha.
-  async function deleteTransaction(t: Transaction) {
-    const label = t.review_note || t.payee_name || t.description || "lançamento";
-    const aviso = isManualTx(t)
-      ? `Excluir "${label}" da conciliação?`
-      : `Excluir "${label}" do extrato?\n\n(Se importar o mesmo OFX de novo, a linha volta.)`;
-    if (!window.confirm(aviso)) return;
-    setSavingTx(true);
-    try {
-      const res = await fetch(`/api/financeiro/extrato/${t.id}`, { method: "DELETE" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        alert(data.error || "Erro ao excluir");
-        return;
-      }
-      if (selectedAccount != null) await Promise.all([loadTransactions(selectedAccount), loadAccounts()]);
       setEditTx(null);
     } finally {
       setSavingTx(false);
@@ -664,14 +646,6 @@ export function ConciliacaoPage() {
                                     className="flex-1 bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-1.5 py-1 text-text focus:outline-none"
                                     title={t.description || ""}
                                   />
-                                  <button
-                                    onClick={() => deleteTransaction(t)}
-                                    disabled={savingTx}
-                                    title="Excluir lançamento do extrato"
-                                    className="text-text-light hover:text-red-600 text-sm leading-none px-1 transition"
-                                  >
-                                    ✕
-                                  </button>
                                 </div>
                               ) : (
                                 <span className="text-text" title={t.description || ""}>
@@ -738,18 +712,13 @@ export function ConciliacaoPage() {
               />
             </div>
           </div>
-          <div className="flex justify-between gap-3 pt-2">
-            <Button variant="danger" onClick={() => editTx && deleteTransaction(editTx)} disabled={savingTx}>
-              Excluir
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setEditTx(null)}>
+              Fechar
             </Button>
-            <div className="flex gap-2">
-              <Button variant="secondary" onClick={() => setEditTx(null)}>
-                Fechar
-              </Button>
-              <Button onClick={saveEditTx} disabled={savingTx}>
-                {savingTx ? "Salvando..." : "Salvar"}
-              </Button>
-            </div>
+            <Button onClick={saveEditTx} disabled={savingTx}>
+              {savingTx ? "Salvando..." : "Salvar"}
+            </Button>
           </div>
         </div>
       </Modal>
@@ -763,8 +732,12 @@ export function ConciliacaoPage() {
       >
         <div className="space-y-3">
           <p className="text-xs text-text-light">
-            Escolha um título lançado na Contas a Pagar pra incluir na conciliação deste banco
-            (ex.: pagamento em dinheiro/pix que não veio no extrato). Entra já marcado como conciliado.
+            Escolha um título lançado na Contas a Pagar pra incluir na conciliação
+            {selectedBank ? ` do ${BANK_LABELS[selectedBank]}` : " deste banco"} (ex.: pagamento em
+            dinheiro/pix que não veio no extrato). Entra já marcado como conciliado.
+            {selectedBank && (
+              <> Só aparecem títulos do {BANK_LABELS[selectedBank]} ou sem banco definido.</>
+            )}
           </p>
           <input
             value={cpSearch}
@@ -773,7 +746,12 @@ export function ConciliacaoPage() {
             className={inputCls}
           />
           {(() => {
+            const bankLabel = selectedBank ? BANK_LABELS[selectedBank] : null;
             const list = cpInvoices.filter((i) => {
+              // Não deixa puxar título de OUTRO banco (ex.: Itaú no Santander) —
+              // são conciliações separadas. Título sem banco (dinheiro/pix) pode
+              // entrar em qualquer uma.
+              if (bankLabel && i.bank && normBank(i.bank) !== normBank(bankLabel)) return false;
               if (!cpSearch) return true;
               const blob = `${i.description} ${i.bank || ""}`.toLowerCase();
               return blob.includes(cpSearch.toLowerCase());
