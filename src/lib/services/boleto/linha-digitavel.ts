@@ -28,6 +28,38 @@ const FATOR_BASE = Date.UTC(1997, 9, 7);
 // dígitos, escolhemos a ocorrência mais próxima de hoje.
 const FATOR_CYCLE = 9000;
 
+// DV geral do código de barras (mod 11 FEBRABAN): calculado sobre os 43
+// dígitos (todos menos a posição 5, que é o próprio DV), pesos 2..9 da direita
+// pra esquerda; resultado 0/10/11 vira 1. É o que separa uma linha digitável
+// REAL de uma janela de dígitos que passou nos mod10 de campo por acaso
+// (chance ~1/1000 — alta demais quando se varre chave de acesso, CNPJ etc.).
+function mod11Barcode(barcode44: string): number {
+  const d43 = barcode44.slice(0, 4) + barcode44.slice(5);
+  let sum = 0;
+  let w = 2;
+  for (let i = d43.length - 1; i >= 0; i--) {
+    sum += Number(d43[i]) * w;
+    w = w === 9 ? 2 : w + 1;
+  }
+  const dv = 11 - (sum % 11);
+  return dv === 0 || dv >= 10 ? 1 : dv;
+}
+
+// mod11 de bloco de arrecadação (pesos 2..9 da direita; DAC = 11 - resto,
+// com resto 0/1 → 0 e resto 10 → 1, conforme layout FEBRABAN de arrecadação).
+function mod11Arrecadacao(block: string): number {
+  let sum = 0;
+  let w = 2;
+  for (let i = block.length - 1; i >= 0; i--) {
+    sum += Number(block[i]) * w;
+    w = w === 9 ? 2 : w + 1;
+  }
+  const resto = sum % 11;
+  if (resto === 0 || resto === 1) return 0;
+  if (resto === 10) return 1;
+  return 11 - resto;
+}
+
 // mod10 de um campo da linha digitável (pesos 2,1,2,1... da direita p/ esquerda).
 function mod10(field: string): number {
   let sum = 0;
@@ -72,11 +104,22 @@ export function parseLinhaDigitavel(input: string): BoletoParsed | null {
   // ── Arrecadação/convênio: 48 dígitos, começa com 8 ──────────────────────
   if (digits.length === 48 && digits[0] === "8") {
     const barcode = arrecadacaoBarcode(digits);
-    // pos 3 (id valor): 6/7 = valor efetivo em reais; 8/9 = valor referenciado.
+    // pos 3 (id valor): 6/7 = valor efetivo em reais (DV mod10); 8/9 = valor
+    // referenciado (DV mod11).
     const valorId = barcode[2];
+    if (valorId !== "6" && valorId !== "7" && valorId !== "8" && valorId !== "9") return null;
+    // DV de cada bloco de 12 (11 dados + DV). Sem isso, qualquer janela de 48
+    // dígitos começando com 8 (ex.: recorte da chave de acesso de NF-e) passa
+    // como "arrecadação" — foi um falso positivo real.
+    const useMod10 = valorId === "6" || valorId === "7";
+    let dvValid = true;
+    for (let b = 0; b < 4; b++) {
+      const data = digits.substr(b * 12, 11);
+      const dv = Number(digits[b * 12 + 11]);
+      dvValid &&= (useMod10 ? mod10(data) : mod11Arrecadacao(data)) === dv;
+    }
     const valorRaw = barcode.substring(4, 15); // 11 dígitos
-    const hasValue = valorId === "6" || valorId === "7";
-    const amount = hasValue ? Number(valorRaw) / 100 : null;
+    const amount = useMod10 ? Number(valorRaw) / 100 : null;
     return {
       tipo: "ARRECADACAO",
       digits,
@@ -84,7 +127,7 @@ export function parseLinhaDigitavel(input: string): BoletoParsed | null {
       bankCode: null,
       amount: amount && amount > 0 ? amount : null,
       dueDate: null, // arrecadação não tem fator de vencimento padrão
-      dvValid: true, // (DV mod10/mod11 de arrecadação varia por segmento; não bloqueia)
+      dvValid,
     };
   }
 
@@ -96,7 +139,7 @@ export function parseLinhaDigitavel(input: string): BoletoParsed | null {
     // campo4 = digits[32] (DV geral); campo5 = digits.substring(33) (14 díg)
     const campo5 = digits.substring(33); // fator(4) + valor(10)
 
-    const dvValid =
+    const fieldsValid =
       mod10(campo1.slice(0, 9)) === Number(campo1[9]) &&
       mod10(campo2.slice(0, 10)) === Number(campo2[10]) &&
       mod10(campo3.slice(0, 10)) === Number(campo3[10]);
@@ -121,7 +164,7 @@ export function parseLinhaDigitavel(input: string): BoletoParsed | null {
       bankCode: campo1.substring(0, 3),
       amount: amount > 0 ? amount : null,
       dueDate: fatorVencimentoToDate(fator),
-      dvValid,
+      dvValid: fieldsValid && mod11Barcode(barcode) === Number(digits[32]),
     };
   }
 
@@ -143,7 +186,7 @@ export function findLinhaDigitavel(text: string): BoletoParsed | null {
         const slice = only.substring(i, i + len);
         if (len === 48 && slice[0] !== "8") continue;
         const parsed = parseLinhaDigitavel(slice);
-        if (parsed && (parsed.tipo === "ARRECADACAO" || parsed.dvValid)) return parsed;
+        if (parsed && parsed.dvValid) return parsed;
       }
     }
   }

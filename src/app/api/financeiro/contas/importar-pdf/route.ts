@@ -42,6 +42,7 @@ export async function POST(request: NextRequest) {
   const duplicates = results.filter((r) => r.status === "duplicate").length;
   const errors = results.filter((r) => r.status === "error").length;
   const needsAmount = results.filter((r) => "needsAmount" in r && r.needsAmount).length;
+  const ocr = results.filter((r) => "ocr" in r && r.ocr).length;
 
-  return NextResponse.json({ created, scanned, duplicates, errors, needsAmount, results });
+  return NextResponse.json({ created, scanned, duplicates, errors, needsAmount, ocr, results });
 }

@@ -12,6 +12,7 @@
 
 import { extractPdfItems, type PdfItem } from "./pdf";
 import { findLinhaDigitavel, type BoletoParsed } from "./linha-digitavel";
+import { ocrPdf } from "./ocr";
 
 export interface NfeDuplicata {
   numero: string | null; // "001", "002"...
@@ -34,7 +35,8 @@ export interface NfeParsed {
 
 export interface DocExtract {
   kind: "BOLETO" | "NFE" | "DESCONHECIDO";
-  scanned: boolean; // PDF sem texto legível (provável scan → precisa OCR/manual)
+  scanned: boolean; // PDF sem texto legível E que o OCR também não decifrou
+  ocr: boolean; // campos vieram de OCR (scan) — sugerir conferência ao usuário
   boleto: BoletoParsed | null;
   nfe: NfeParsed | null;
   cnpj: string | null; // melhor palpite do CNPJ do fornecedor
@@ -244,17 +246,38 @@ function parseEmitente(text: string): string | null {
 export async function extractDocumentFromPdf(buffer: Buffer): Promise<DocExtract> {
   let text = "";
   let items: PdfItem[] = [];
+  let viaOcr = false;
   try {
     const r = await extractPdfItems(buffer);
     text = r.text;
     items = r.items;
   } catch {
-    return blank("DESCONHECIDO", true);
+    text = "";
+    items = [];
   }
 
-  const scanned = text.replace(/\s/g, "").length < 20;
-  if (scanned) return blank("DESCONHECIDO", true);
+  // Sem camada de texto (scan/foto) → tenta OCR antes de desistir.
+  if (text.replace(/\s/g, "").length < 20) {
+    try {
+      const r = await ocrPdf(buffer);
+      text = r.text;
+      items = r.items;
+      viaOcr = true;
+    } catch {
+      return blank("DESCONHECIDO", true);
+    }
+    if (text.replace(/\s/g, "").length < 20) return blank("DESCONHECIDO", true);
+  }
 
+  const doc = extractFromContent(text, items, viaOcr);
+  // OCR que não achou NADA aproveitável = continua "escaneado, preencher à mão".
+  if (viaOcr && doc.kind === "DESCONHECIDO" && !doc.cnpj && doc.amount == null) {
+    return blank("DESCONHECIDO", true);
+  }
+  return doc;
+}
+
+function extractFromContent(text: string, items: PdfItem[], viaOcr: boolean): DocExtract {
   // 1) Boleto? (linha digitável dá valor + vencimento com precisão)
   const boleto = findLinhaDigitavel(text);
   if (boleto) {
@@ -270,6 +293,7 @@ export async function extractDocumentFromPdf(buffer: Buffer): Promise<DocExtract
     return {
       kind: "BOLETO",
       scanned: false,
+      ocr: viaOcr,
       boleto,
       nfe: null,
       cnpj,
@@ -299,6 +323,7 @@ export async function extractDocumentFromPdf(buffer: Buffer): Promise<DocExtract
     return {
       kind: "NFE",
       scanned: false,
+      ocr: viaOcr,
       boleto: null,
       nfe,
       cnpj: base.cnpjEmitente,
@@ -315,6 +340,7 @@ export async function extractDocumentFromPdf(buffer: Buffer): Promise<DocExtract
   return {
     kind: "DESCONHECIDO",
     scanned: false,
+    ocr: viaOcr,
     boleto: null,
     nfe: null,
     cnpj,
@@ -329,6 +355,7 @@ function blank(kind: DocExtract["kind"], scanned: boolean): DocExtract {
   return {
     kind,
     scanned,
+    ocr: false,
     boleto: null,
     nfe: null,
     cnpj: null,
@@ -344,8 +371,9 @@ function blank(kind: DocExtract["kind"], scanned: boolean): DocExtract {
 const CARGO_CNPJS = new Set(["41560212000100"]); // CARGO SHIPS CLEANING LTDA
 function firstCnpj(text: string): string | null {
   const all = (text.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/g) || []).map((c) => c.replace(/\D/g, ""));
-  const other = all.find((c) => !CARGO_CNPJS.has(c));
-  return other || all[0] || null;
+  // Só o CNPJ da própria Cargo no documento (scan em que o OCR pegou apenas a
+  // destinatária) = fornecedor desconhecido, não "Cargo fornecendo pra Cargo".
+  return all.find((c) => !CARGO_CNPJS.has(c)) ?? null;
 }
 
 function formatCnpj(d: string): string {

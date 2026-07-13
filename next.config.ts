@@ -5,7 +5,9 @@ const nextConfig: NextConfig = {
   // to bundle it for any non-Node target. `pdfjs-dist` roda no servidor pra
   // ler boletos (src/lib/services/boleto/pdf.ts) — externalizar evita que o
   // bundler quebre a resolução do worker embutido.
-  serverExternalPackages: ["ws", "pdfjs-dist"],
+  // `tesseract.js` (OCR de PDF escaneado) e `@napi-rs/canvas` (render da página
+  // pra imagem) também são Node-only, com worker_threads e binário nativo.
+  serverExternalPackages: ["ws", "pdfjs-dist", "tesseract.js", "@napi-rs/canvas"],
 
   // Don't fail the production build on ESLint warnings/errors. Type errors
   // still block the build via tsc.

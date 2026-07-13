@@ -349,6 +349,7 @@ export function ContasAPagarPage() {
         `Importação concluída:\n` +
           `• ${data.created} título(s) criado(s)\n` +
           `• ${data.duplicates} já existiam\n` +
+          (data.ocr ? `• ${data.ocr} lido(s) por OCR (scan) — conferir os dados\n` : "") +
           `• ${data.scanned} escaneado(s)/ilegível(is) — anexados, preencher à mão\n` +
           `• ${data.errors} com erro\n\n` +
           `${data.needsAmount} sem valor detectado — confira e complete o valor.`
@@ -386,6 +387,8 @@ export function ContasAPagarPage() {
       setFormFile(file); // anexa junto ao criar
       if (p.scanned) {
         alert("Este PDF parece escaneado (sem texto legível). Preencha os campos à mão — o arquivo será anexado ao criar.");
+      } else if (p.ocr) {
+        alert("PDF escaneado lido por OCR — confira os campos antes de criar (dígitos podem sair trocados).");
       } else if (p.amount == null) {
         alert("Li o documento, mas não consegui o valor com segurança. Confira e preencha o valor.");
       }

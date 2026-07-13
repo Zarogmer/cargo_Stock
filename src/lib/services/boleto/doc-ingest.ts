@@ -18,6 +18,7 @@ export interface DocIngestResult {
   description: string;
   amount: number | null;
   needsAmount: boolean; // valor não detectado — usuário completa
+  ocr: boolean; // campos lidos por OCR (PDF escaneado) — conferir
 }
 
 export async function ingestDocumentPdf(
@@ -34,7 +35,7 @@ export async function ingestDocumentPdf(
     select: { invoice_id: true },
   });
   if (existing) {
-    return { status: "duplicate", invoiceId: existing.invoice_id, filename, kind: "DESCONHECIDO", description: nameNoExt, amount: null, needsAmount: false };
+    return { status: "duplicate", invoiceId: existing.invoice_id, filename, kind: "DESCONHECIDO", description: nameNoExt, amount: null, needsAmount: false, ocr: false };
   }
 
   const doc = await extractDocumentFromPdf(buffer);
@@ -52,7 +53,7 @@ export async function ingestDocumentPdf(
     });
     if (dup) {
       await attachSafe(dup.id, buffer, sha256, filename, createdBy);
-      return { status: "duplicate", invoiceId: dup.id, filename, kind: doc.kind, description, amount, needsAmount: false };
+      return { status: "duplicate", invoiceId: dup.id, filename, kind: doc.kind, description, amount, needsAmount: false, ocr: doc.ocr };
     }
   }
 
@@ -63,7 +64,8 @@ export async function ingestDocumentPdf(
     supplierId = sup?.id ?? null;
   }
 
-  const notes = doc.nfe ? nfeNoteSummary(doc.nfe) : null;
+  const ocrNote = doc.ocr ? "lido por OCR (PDF escaneado) — conferir os dados" : null;
+  const notes = [doc.nfe ? nfeNoteSummary(doc.nfe) : null, ocrNote].filter(Boolean).join(" · ") || null;
 
   const invoice = await prisma.payableInvoice.create({
     data: {
@@ -100,6 +102,7 @@ export async function ingestDocumentPdf(
     description,
     amount,
     needsAmount: amount == null || amount === 0,
+    ocr: doc.ocr,
   };
 }
 

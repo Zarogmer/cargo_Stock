@@ -29,12 +29,14 @@ export async function POST(request: NextRequest) {
     supplierId = sup?.id ?? null;
   }
 
-  const notes = doc.nfe ? nfeNoteSummary(doc.nfe) : null;
+  const ocrNote = doc.ocr ? "lido por OCR (PDF escaneado) — conferir os dados" : null;
+  const notes = [doc.nfe ? nfeNoteSummary(doc.nfe) : null, ocrNote].filter(Boolean).join(" · ") || null;
 
   return NextResponse.json({
     parsed: {
       kind: doc.kind,
       scanned: doc.scanned,
+      ocr: doc.ocr,
       description: doc.suggestedDescription,
       amount: doc.amount,
       due_date: doc.dueDate,
