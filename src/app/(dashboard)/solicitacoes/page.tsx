@@ -357,6 +357,8 @@ export default function SolicitacoesPage() {
   const [showPurchaseForm, setShowPurchaseForm] = useState(false);
   const [editPurchase, setEditPurchase] = useState<PurchaseOrder | null>(null);
   const [purchaseFromRequest, setPurchaseFromRequest] = useState<ToolRequest | null>(null);
+  // Abre o form já disparando o seletor de NF (botão "Importar NF" ao lado de Nova Compra).
+  const [purchaseAutoNf, setPurchaseAutoNf] = useState(false);
   const [deletePurchase, setDeletePurchase] = useState<PurchaseOrder | null>(null);
   // "Armazenar no Estoque": lança uma solicitação já comprada no estoque do galpão.
   const [stockRequest, setStockRequest] = useState<ToolRequest | null>(null);
@@ -1292,9 +1294,14 @@ export default function SolicitacoesPage() {
           <div className="flex flex-wrap justify-between items-center gap-3">
             <p className="text-sm text-text-light">Registro das compras realizadas, por mês — inspirado na planilha oficial de compras</p>
             {canManagePurchases && (
-              <Button size="sm" onClick={() => { setEditPurchase(null); setPurchaseFromRequest(null); setShowPurchaseForm(true); }}>
-                <PlusIcon className="w-4 h-4" />Nova Compra
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="secondary" onClick={() => { setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(true); setShowPurchaseForm(true); }}>
+                  📄 Importar NF
+                </Button>
+                <Button size="sm" onClick={() => { setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(false); setShowPurchaseForm(true); }}>
+                  <PlusIcon className="w-4 h-4" />Nova Compra
+                </Button>
+              </div>
             )}
           </div>
 
@@ -1773,10 +1780,11 @@ export default function SolicitacoesPage() {
       {/* Purchase Form Modal */}
       <PurchaseFormModal
         open={showPurchaseForm}
-        onClose={() => { setShowPurchaseForm(false); setEditPurchase(null); setPurchaseFromRequest(null); }}
+        onClose={() => { setShowPurchaseForm(false); setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(false); }}
         onSave={handleSavePurchase}
         item={editPurchase}
         fromRequest={purchaseFromRequest}
+        autoOpenNf={purchaseAutoNf}
         suppliers={suppliers}
         ships={ships}
         cards={cards}
@@ -2281,11 +2289,12 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
   );
 }
 
-function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers, ships, cards, saving }: {
+function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenNf, suppliers, ships, cards, saving }: {
   open: boolean; onClose: () => void;
   onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null, notify?: WhatsappTarget | null) => void;
   item: PurchaseOrder | null;
   fromRequest: ToolRequest | null;
+  autoOpenNf?: boolean;
   suppliers: Supplier[];
   ships: Ship[];
   cards: CardOption[];
@@ -2313,6 +2322,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
   const [cardId, setCardId] = useState("");
   // Leitura da NF em PDF (pré-preenche os campos, igual ao Contas a Pagar).
   const [readingNf, setReadingNf] = useState(false);
+  const nfInputRef = useRef<HTMLInputElement>(null);
   // Avisar o fornecedor no WhatsApp ao salvar (opcional, SEMPRE começa desmarcado).
   const [notifySupplier, setNotifySupplier] = useState(false);
 
@@ -2358,6 +2368,12 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
       setPaymentTermDays(""); setCardId("");
     }
   }, [item, fromRequest, open]);
+
+  // "Importar NF" (atalho ao lado de Nova Compra): abre o seletor de arquivo assim
+  // que o form aparece, pra ir direto pra nota fiscal sem um clique a mais.
+  useEffect(() => {
+    if (open && autoOpenNf) nfInputRef.current?.click();
+  }, [open, autoOpenNf]);
 
   // Lê uma NF em PDF e pré-preenche descrição, valor, fornecedor e observação
   // (mesmo leitor do Contas a Pagar). Não grava nada — só preenche o form.
@@ -2468,6 +2484,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, suppliers
               {readingNf ? "Lendo NF..." : "📄 Importar NF (PDF)"}
             </span>
             <input
+              ref={nfInputRef}
               type="file"
               accept="application/pdf"
               className="hidden"
