@@ -132,7 +132,7 @@ const PRODUCT_CATEGORIES = [
 // escolhido — é a ponte entre Compras/Solicitações e o Almoxarifado inteiro.
 // Substitui o antigo "Departamento" (que era só rótulo e não batia com as abas
 // do Almoxarifado). "OUTROS" = só registra a compra, sem mexer no estoque.
-type WarehouseDest = "ESTOQUE" | "RANCHO" | "EPI" | "UNIFORME" | "MAQUINARIO" | "FERRAMENTA" | "ELETRICA" | "ESCRITORIO" | "OUTROS";
+type WarehouseDest = "ESTOQUE" | "RANCHO" | "EPI" | "UNIFORME" | "MAQUINARIO" | "FERRAMENTA" | "ELETRICA" | "ESCRITORIO" | "OUTROS" | "NENHUM";
 
 const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
   { value: "ESTOQUE", label: "📦 Utensílios" },
@@ -150,7 +150,7 @@ const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
 // há setor de estoque pra eles). Escritório é o caso típico. Rancho (card #46)
 // também entra aqui: a compra de comida só soma o gasto na aba de Compras, sem
 // virar item de estoque nem usar código.
-const STOCKLESS_DESTS: WarehouseDest[] = ["RANCHO", "ESCRITORIO", "OUTROS"];
+const STOCKLESS_DESTS: WarehouseDest[] = ["RANCHO", "ESCRITORIO", "OUTROS", "NENHUM"];
 function destStocks(dest: WarehouseDest): boolean {
   return !STOCKLESS_DESTS.includes(dest);
 }
@@ -158,7 +158,7 @@ function destStocks(dest: WarehouseDest): boolean {
 // Rótulo curto pro badge na tabela de Controle de Compras.
 const DEST_SHORT_LABEL: Record<string, string> = {
   ESTOQUE: "Utensílios", RANCHO: "Rancho", EPI: "EPI",
-  UNIFORME: "Uniforme", MAQUINARIO: "Maquinário", FERRAMENTA: "Ferramenta", ELETRICA: "Elétrica", ESCRITORIO: "Escritório", OUTROS: "Outros",
+  UNIFORME: "Uniforme", MAQUINARIO: "Maquinário", FERRAMENTA: "Ferramenta", ELETRICA: "Elétrica", ESCRITORIO: "Escritório", OUTROS: "Outros", NENHUM: "Sem destino",
 };
 function departmentLabel(dep: string | null): string {
   if (!dep) return "";
@@ -2180,13 +2180,16 @@ function useWarehouseCodes(dest: WarehouseDest, team: string, open: boolean): { 
 // casar pelo nome) e preenche o nome com o do item, pra ficar consistente com a aba
 // do Almoxarifado. Em branco = o sistema GERA o código pelo nome ao salvar (próximo
 // do prefixo) — não precisa mais cadastrar o item antes no Almoxarifado.
-function CodeField({ dest, team, value, name = "", onChange, onResolveName, open }: {
+function CodeField({ dest, team, value, name = "", onChange, onResolveName, open, required = false }: {
   dest: WarehouseDest; team: string; value: string;
   // Nome do produto digitado — base da sugestão de código novo quando em branco.
   name?: string;
   onChange: (v: string) => void;
   onResolveName?: (name: string) => void;
   open: boolean;
+  // required: quando um destino de estoque foi escolhido, o código passa a ser
+  // obrigatório (usado no Controle de Compras).
+  required?: boolean;
 }) {
   const { codes, items } = useWarehouseCodes(dest, team, open);
   if (!CODED_DESTS.includes(dest)) return null;
@@ -2205,7 +2208,9 @@ function CodeField({ dest, team, value, name = "", onChange, onResolveName, open
     <div>
       <label className="block text-sm font-medium mb-1">
         Código no Almoxarifado{" "}
-        <span className="font-normal text-text-light">(opcional)</span>
+        {required
+          ? <span className="text-danger">*</span>
+          : <span className="font-normal text-text-light">(opcional)</span>}
       </label>
       <input type="text" list={listId} value={value}
         onChange={(e) => handleChange(e.target.value)}
@@ -2219,9 +2224,11 @@ function CodeField({ dest, team, value, name = "", onChange, onResolveName, open
           ? <>Repõe <strong>{matched.name}</strong>{matched.qty != null ? ` · ${formatQty(matched.qty)} em estoque` : ""}.</>
           : value.trim()
             ? "Código novo — o item será criado no Almoxarifado."
-            : suggested
-              ? <>Em branco = gera o código automaticamente pelo nome: <strong>{suggested}</strong>.</>
-              : "Em branco = gera um código automático pelo nome ao salvar."}
+            : required
+              ? "Obrigatório com destino selecionado — escolha um item ou digite um código novo."
+              : suggested
+                ? <>Em branco = gera o código automaticamente pelo nome: <strong>{suggested}</strong>.</>
+                : "Em branco = gera um código automático pelo nome ao salvar."}
       </p>
     </div>
   );
@@ -2231,10 +2238,13 @@ function CodeField({ dest, team, value, name = "", onChange, onResolveName, open
 // Controlado (o pai guarda o DestSpec). Compartilhado por Nova Compra, Aprovar
 // e Armazenar. `stocking=false` (ex.: edição de compra) mostra só o seletor,
 // sem campos nem lançamento, pra não contar a quantidade duas vezes.
-function WarehouseDestinationFields({ value, onChange, quantity, stocking = true }: {
+function WarehouseDestinationFields({ value, onChange, quantity, stocking = true, allowNoDest = false }: {
   value: DestSpec; onChange: (v: DestSpec) => void; quantity?: number; stocking?: boolean;
+  // allowNoDest: mostra "— Sem destino" (NENHUM) e deixa o campo opcional (usado no
+  // Controle de Compras, onde nem toda compra vira item de estoque).
+  allowNoDest?: boolean;
 }) {
-  const known = WAREHOUSE_DESTINATIONS.some((d) => d.value === value.dest);
+  const known = WAREHOUSE_DESTINATIONS.some((d) => d.value === value.dest) || value.dest === "NENHUM";
   // Trocar de destino reseta os campos específicos pra não vazar valor de um
   // setor pro outro (ex.: "Elétrica" do Estoque indo parar na categoria do Rancho).
   const setDest = (dest: WarehouseDest) =>
@@ -2244,12 +2254,22 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
   return (
     <div className="space-y-3">
       <div>
-        <label className="block text-sm font-medium mb-1">Destino no Almoxarifado</label>
+        <label className="block text-sm font-medium mb-1">
+          Destino no Almoxarifado{" "}
+          {allowNoDest && <span className="font-normal text-text-light">(opcional)</span>}
+        </label>
         <select value={value.dest} onChange={(e) => setDest(e.target.value as WarehouseDest)} className={selCls}>
+          {allowNoDest && <option value="NENHUM">— Sem destino no Almoxarifado</option>}
           {!known && value.dest && <option value={value.dest}>{value.dest} (legado)</option>}
           {WAREHOUSE_DESTINATIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
         </select>
       </div>
+
+      {stocking && value.dest === "NENHUM" && (
+        <p className="text-xs text-text-light bg-gray-50 border border-border rounded-lg p-3">
+          Sem destino — a compra é só registrada nesta aba, não entra no Almoxarifado.
+        </p>
+      )}
 
       {/* Rancho (card #46): só registra o gasto na aba de Compras — não lança no
           Almoxarifado nem usa código, então não mostramos Equipe/Categoria/Unidade. */}
@@ -2274,7 +2294,7 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
         </p>
       )}
 
-      {stocking && !destStocks(value.dest) && (
+      {stocking && value.dest !== "NENHUM" && !destStocks(value.dest) && (
         <p className="text-xs text-text-light bg-gray-50 border border-border rounded-lg p-3">
           {value.dest === "ESCRITORIO"
             ? "🏢 Compra de escritório — só registra a compra, não lança no Almoxarifado."
@@ -2336,7 +2356,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       setDescription(item.description || "");
       setLink(item.product_url || "");
       // Edição: o destino salvo vira só rótulo (pode ser um valor legado da planilha).
-      setDestSpec({ ...DEFAULT_DEST_SPEC, dest: (item.department as WarehouseDest) || "OUTROS" });
+      setDestSpec({ ...DEFAULT_DEST_SPEC, dest: (item.department as WarehouseDest) || "NENHUM" });
       setSupplier(item.supplier || "");
       setPurchaseDate((item.purchase_date || "").slice(0, 10) || todayISO);
       setUnitValue(numToInput(item.unit_value));
@@ -2351,7 +2371,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     } else if (fromRequest) {
       setDescription(fromRequest.tool_name || "");
       setLink(fromRequest.product_url || "");
-      setDestSpec({ ...DEFAULT_DEST_SPEC, dest: (fromRequest.department as WarehouseDest) || "ESTOQUE" });
+      setDestSpec({ ...DEFAULT_DEST_SPEC, dest: (fromRequest.department as WarehouseDest) || "NENHUM" });
       setSupplier(fromRequest.supplier || "");
       setPurchaseDate(todayISO);
       setUnitValue(numToInput(parseDecimalBR(fromRequest.estimated_value)));
@@ -2363,7 +2383,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       setShipId("");
       setPaymentTermDays(""); setCardId("");
     } else {
-      setDescription(""); setLink(""); setDestSpec({ ...DEFAULT_DEST_SPEC }); setSupplier(""); setPurchaseDate(todayISO);
+      setDescription(""); setLink(""); setDestSpec({ ...DEFAULT_DEST_SPEC, dest: "NENHUM" }); setSupplier(""); setPurchaseDate(todayISO);
       setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setImageUrl(null); setCode(""); setShipId("");
       setPaymentTermDays(""); setCardId("");
     }
@@ -2426,6 +2446,12 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Destino é opcional; mas se um destino de estoque foi escolhido (só em compra
+    // nova, que é quando lançamos no Almoxarifado), o código passa a ser obrigatório.
+    if (!item && CODED_DESTS.includes(destSpec.dest) && !code.trim()) {
+      alert("Escolha o código no Almoxarifado para o destino selecionado (ou deixe o destino como “Sem destino”).");
+      return;
+    }
     // Navio: resolve o nome pelo id escolhido. Se o navio foi apagado (edição de
     // uma compra antiga), mantém o ship_name já salvo pra não perder o vínculo.
     const selectedShip = ships.find((s) => s.id === shipId);
@@ -2443,7 +2469,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       : null;
     onSave({
       description,
-      department: destSpec.dest || null,
+      department: destSpec.dest && destSpec.dest !== "NENHUM" ? destSpec.dest : null,
       code: code.trim().toUpperCase() || null,
       supplier: supplier || null,
       purchase_date: purchaseDate || null,
@@ -2503,8 +2529,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
           <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} required
             placeholder="Ex: Fita silver tape, Água 1,5 L..." className={inputCls} />
         </div>
-        <WarehouseDestinationFields value={destSpec} onChange={(v) => { if (v.dest !== destSpec.dest) setCode(""); setDestSpec(v); }} quantity={qty} stocking={!item} />
-        {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} name={description} onChange={setCode} onResolveName={setDescription} open={open} />}
+        <WarehouseDestinationFields value={destSpec} onChange={(v) => { if (v.dest !== destSpec.dest) setCode(""); setDestSpec(v); }} quantity={qty} stocking={!item} allowNoDest />
+        {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} name={description} onChange={setCode} onResolveName={setDescription} open={open} required={CODED_DESTS.includes(destSpec.dest)} />}
         <div>
           <label className="block text-sm font-medium mb-1">Fornecedor</label>
           <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
