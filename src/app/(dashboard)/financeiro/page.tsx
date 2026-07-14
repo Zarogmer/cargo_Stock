@@ -3277,17 +3277,26 @@ function JobDetailModal({
         const folha = +(total - Number(a.pluxee_value || 0)).toFixed(2);
         totalFolha += folha;
         totalNavio += total;
+        // Sem conta bancária = pagamento em espécie ("TRAZER SALÁRIO"). É o valor
+        // que a coluna ITAÚ/SANTANDER passa a mostrar, pra filtrar quem recebe fora
+        // do banco. Com conta, mostra o banco (base do filtro Itaú/Santander).
+        const hasAccount = !!(e?.bank_account && String(e.bank_account).trim());
+        const bankCell = hasAccount
+          ? formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null)
+          : "TRAZER SALÁRIO";
         set(`B${row}`, idx + 1, styleCellCenter, "n");
         set(`C${row}`, e?.name || a.job_functions?.name || `#${a.function_id}`, styleCellCenter);
         set(`D${row}`, e?.bank_agency || "", styleCellCenter);
         set(`E${row}`, e?.bank_account || "", styleCellCenter);
-        set(`F${row}`, formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null), styleCellCenter);
+        set(`F${row}`, bankCell, styleCellCenter);
         set(`G${row}`, folha, styleCellMoney, "n");
         set(`H${row}`, 0, styleCellMoney, "n");
         set(`I${row}`, 0, styleCellMoney, "n");
         set(`J${row}`, total, styleCellMoney, "n");
         row++;
       });
+      // Última linha de funcionário — base do AutoFilter (o filtro do banco).
+      const lastDataRow = row - 1;
 
       row++; // linha em branco
       const totalRow = row;
@@ -3318,6 +3327,12 @@ function JobDetailModal({
       ws["!merges"] = [
         { s: { c: 3, r: 2 }, e: { c: 6, r: 2 } }, // D3:G3 título mesclado
       ];
+      // Filtro na planilha (cabeçalho C7:J7 + funcionários): permite filtrar a
+      // coluna ITAÚ/SANTANDER pra mandar a folha só do Itaú, só do Santander ou
+      // "TRAZER SALÁRIO" (sem conta). Só faz sentido com pelo menos 1 funcionário.
+      if (lastDataRow >= 9) {
+        ws["!autofilter"] = { ref: `C7:J${lastDataRow}` };
+      }
 
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "PLANILHA BASE");
