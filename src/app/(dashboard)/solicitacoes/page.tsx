@@ -835,7 +835,6 @@ export default function SolicitacoesPage() {
     data: Partial<PurchaseOrder>,
     fromRequestId: string | null,
     stock?: DestSpec | null,
-    notify?: WhatsappTarget | null,
   ) {
     setSaving(true);
     setSaveError(null);
@@ -901,9 +900,6 @@ export default function SolicitacoesPage() {
       setShowPurchaseForm(false);
       setEditPurchase(null);
       setPurchaseFromRequest(null);
-      // Compra salva: se o usuário marcou "Avisar o fornecedor", abre o modal de
-      // revisão com a mensagem pronta (e a foto) pra ele conferir e clicar Enviar.
-      if (notify) setWhatsappTarget(notify);
       loadAll();
     } catch (err: any) {
       console.error("Erro ao salvar compra:", err);
@@ -2311,7 +2307,7 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
 
 function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenNf, suppliers, ships, cards, saving }: {
   open: boolean; onClose: () => void;
-  onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null, notify?: WhatsappTarget | null) => void;
+  onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null) => void;
   item: PurchaseOrder | null;
   fromRequest: ToolRequest | null;
   autoOpenNf?: boolean;
@@ -2343,13 +2339,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   // Leitura da NF em PDF (pré-preenche os campos, igual ao Contas a Pagar).
   const [readingNf, setReadingNf] = useState(false);
   const nfInputRef = useRef<HTMLInputElement>(null);
-  // Avisar o fornecedor no WhatsApp ao salvar (opcional, SEMPRE começa desmarcado).
-  const [notifySupplier, setNotifySupplier] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    // O aviso ao fornecedor sempre reinicia DESMARCADO a cada abertura do form.
-    setNotifySupplier(false);
     const today = new Date();
     const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     if (item) {
@@ -2456,17 +2448,6 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     // uma compra antiga), mantém o ship_name já salvo pra não perder o vínculo.
     const selectedShip = ships.find((s) => s.id === shipId);
     const shipName = selectedShip ? selectedShip.name : (shipId ? (item?.ship_name || null) : null);
-    // Aviso opcional ao fornecedor: só em compra nova, com fornecedor cadastrado e
-    // com telefone, e quando o usuário marcou a opção. Senão é só registro da compra.
-    const matched = suppliers.find((s) => s.name === supplier);
-    const notify: WhatsappTarget | null = (!item && notifySupplier && matched && hasWhatsapp(matched.contact))
-      ? {
-          to: matched.contact!,
-          name: matched.name,
-          imageUrl,
-          message: purchaseConfirmMessage({ description, quantity: qty || 1, paymentMethod }),
-        }
-      : null;
     onSave({
       description,
       department: destSpec.dest && destSpec.dest !== "NENHUM" ? destSpec.dest : null,
@@ -2487,8 +2468,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       ship_name: shipName,
     }, fromRequest?.id || null,
       // Só lança no Almoxarifado em compras novas (na edição vira só rótulo).
-      !item ? destSpec : null,
-      notify);
+      !item ? destSpec : null);
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
@@ -2622,30 +2602,6 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
             placeholder="Ex: Crédito de 354,22, frete incluso, rancho M/V Atlântico..." className={`${inputCls} resize-none`} />
         </div>
         <ImagePicker value={imageUrl} onChange={setImageUrl} />
-
-        {/* Avisar o fornecedor no WhatsApp (opcional, sempre começa desmarcado).
-            Só habilita com fornecedor cadastrado e com telefone — senão é só
-            registro da compra (às vezes o usuário só quer anotar). */}
-        {!item && (() => {
-          const matched = suppliers.find((s) => s.name === supplier);
-          const canNotify = !!matched && hasWhatsapp(matched.contact);
-          return (
-            <div className="border border-border rounded-lg p-3 bg-gray-50/60">
-              <label className={`flex items-start gap-2.5 ${canNotify ? "cursor-pointer" : "opacity-60 cursor-not-allowed"}`}>
-                <input type="checkbox" checked={canNotify && notifySupplier} disabled={!canNotify}
-                  onChange={(e) => setNotifySupplier(e.target.checked)} className="mt-0.5 w-4 h-4 accent-emerald-600" />
-                <span className="text-sm">
-                  <span className="font-medium inline-flex items-center gap-1.5"><WhatsappIcon className="w-4 h-4 text-emerald-600" /> Avisar o fornecedor no WhatsApp</span>
-                  <span className="block text-xs text-text-light mt-0.5">
-                    {canNotify
-                      ? `Ao salvar, abre a mensagem pronta${imageUrl ? " (com a foto)" : ""} pra você revisar e enviar a ${matched!.name}.`
-                      : "Selecione um fornecedor cadastrado e com telefone (aba Fornecedores) pra habilitar."}
-                  </span>
-                </span>
-              </label>
-            </div>
-          );
-        })()}
 
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
