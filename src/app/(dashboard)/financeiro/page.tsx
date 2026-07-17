@@ -1007,8 +1007,18 @@ const FIXED_COST_SEED: FixedCostSeed[] = [
   { key: "custo_fixo_medio", label: "Custo fixo médio", qty: 0.3, valor: 49500, perPorao: false },
 ];
 
-const OPERACAO_STORAGE_KEY = "financeiro:custo-operacao";
+// v2: modelo passou a guardar só os overrides do usuário (antes gravava a
+// planilha inteira), pra o Custo Fixo Médio vindo do sistema poder fluir.
+const OPERACAO_STORAGE_KEY = "financeiro:custo-operacao:v2";
 const DEFAULT_POROES = 5;
+
+// A linha "Custo fixo médio" não usa o valor da planilha (49.500): puxa a média
+// mensal real das despesas fixas da empresa da Demonstração Financeira. "Fixo"
+// aqui = Escritório (6.x) + Impostos/Taxas (7.x) + Patrimônio (11) + Seguros
+// (12). Fica de fora a Folha (já contada na mão de obra) e a Distribuição aos
+// Sócios (lucro, não custo). Sem Demonstração importada, cai no valor da planilha.
+const CUSTO_FIXO_MEDIO_KEY = "custo_fixo_medio";
+const FIXED_COST_SECTIONS = new Set(["6.1", "6.2", "6.3", "6.4", "7.1", "11", "12"]);
 
 function defaultHeadcountForName(name: string): number {
   const key = name.trim().toUpperCase();
@@ -1021,18 +1031,14 @@ function parseSimNumber(raw: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-interface FixedCostState { qty: number; valor: number; }
+interface FixedCostState { qty?: number; valor?: number; }
 interface SimState {
   poroes: number;
   labor: Record<number, number>; // fnId → headcount
   laborRate: Record<number, number>; // fnId → valor un. (override; ausente = default_rate)
-  fixed: Record<string, FixedCostState>; // key → override do custo fixo
-}
-
-function seedFixed(): Record<string, FixedCostState> {
-  const out: Record<string, FixedCostState> = {};
-  for (const s of FIXED_COST_SEED) out[s.key] = { qty: s.qty, valor: s.valor };
-  return out;
+  // Só overrides do usuário. Linha ausente/campo ausente = usa o valor-base
+  // (da planilha, ou do sistema no caso do Custo Fixo Médio).
+  fixed: Record<string, FixedCostState>;
 }
 
 function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
@@ -1044,11 +1050,12 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
 
   const [collapsed, setCollapsed] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [sim, setSim] = useState<SimState>({ poroes: DEFAULT_POROES, labor: {}, laborRate: {}, fixed: seedFixed() });
+  const [sim, setSim] = useState<SimState>({ poroes: DEFAULT_POROES, labor: {}, laborRate: {}, fixed: {} });
+  // Média mensal das despesas fixas, da Demonstração Financeira. null = ainda
+  // carregando ou nada importado (aí o Custo Fixo Médio cai no valor da planilha).
+  const [monthlyFixed, setMonthlyFixed] = useState<number | null>(null);
 
-  // Carrega o que estiver salvo (uma vez). Custos fixos sempre partem do seed e
-  // recebem os overrides salvos por cima — assim uma linha nova no código
-  // aparece mesmo pra quem já tinha simulação salva.
+  // Carrega o que estiver salvo (uma vez). fixed guarda só overrides do usuário.
   useEffect(() => {
     let saved: Partial<SimState> = {};
     try {
@@ -1061,9 +1068,32 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
       poroes: Number.isFinite(saved.poroes) ? Number(saved.poroes) : DEFAULT_POROES,
       labor: { ...(saved.labor || {}) },
       laborRate: { ...(saved.laborRate || {}) },
-      fixed: { ...seedFixed(), ...(saved.fixed || {}) },
+      fixed: { ...(saved.fixed || {}) },
     });
     setLoaded(true);
+  }, []);
+
+  // Custo fixo médio mensal, calculado da Demonstração Financeira importada.
+  // Usa o ano mais recente e divide pela quantidade de meses que têm dados —
+  // assim um ano ainda em andamento não vira média baixa artificial.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await db
+          .from("financial_statement_entries")
+          .select("year, month, section, value");
+        const rows = (data as Array<{ year: number; month: number; section: string; value: string }> | null) || [];
+        const fixed = rows.filter((r) => FIXED_COST_SECTIONS.has(r.section));
+        if (fixed.length === 0) { setMonthlyFixed(null); return; }
+        const maxYear = Math.max(...fixed.map((r) => r.year));
+        const inYear = fixed.filter((r) => r.year === maxYear);
+        const sum = inYear.reduce((a, r) => a + Number(r.value), 0);
+        const months = new Set(inYear.map((r) => r.month)).size;
+        setMonthlyFixed(months > 0 ? +(sum / months).toFixed(2) : null);
+      } catch {
+        setMonthlyFixed(null);
+      }
+    })();
   }, []);
 
   // Garante um headcount pra cada função (default da equipe padrão) quando ela
@@ -1102,14 +1132,14 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
   }
   function setFixed(key: string, field: "qty" | "valor", raw: string) {
     setSim((s) => {
-      const cur = s.fixed[key] ?? { qty: 0, valor: 0 };
+      const cur = s.fixed[key] ?? {};
       return { ...s, fixed: { ...s.fixed, [key]: { ...cur, [field]: Math.max(0, parseSimNumber(raw)) } } };
     });
   }
   function resetDefaults() {
     const labor: Record<number, number> = {};
     for (const f of poraoFns) labor[f.id] = defaultHeadcountForName(f.name);
-    setSim({ poroes: DEFAULT_POROES, labor, laborRate: {}, fixed: seedFixed() });
+    setSim({ poroes: DEFAULT_POROES, labor, laborRate: {}, fixed: {} });
   }
 
   // Mão de obra: cada função × porões. Rate vem do override ou do cadastro.
@@ -1121,10 +1151,16 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
   const laborHeadcount = laborRows.reduce((a, r) => a + r.qty, 0);
   const laborTotal = laborRows.reduce((a, r) => a + r.total, 0);
 
-  // Custos fixos: qty × valor, e × porões só nas linhas marcadas.
+  // Custos fixos: qty × valor, e × porões só nas linhas marcadas. O Custo Fixo
+  // Médio usa a média da Demonstração como valor-base (a não ser que o usuário
+  // tenha digitado outro); as demais linhas usam o valor da planilha.
   const fixedRows = FIXED_COST_SEED.map((seed) => {
-    const fc = sim.fixed[seed.key] ?? { qty: seed.qty, valor: seed.valor };
-    return { seed, qty: fc.qty, valor: fc.valor, total: fc.qty * fc.valor * (seed.perPorao ? poroes : 1) };
+    const ov = sim.fixed[seed.key] || {};
+    const qty = ov.qty ?? seed.qty;
+    const systemValor = seed.key === CUSTO_FIXO_MEDIO_KEY && monthlyFixed != null ? monthlyFixed : null;
+    const valor = ov.valor ?? systemValor ?? seed.valor;
+    const fromSystem = seed.key === CUSTO_FIXO_MEDIO_KEY && monthlyFixed != null && ov.valor == null;
+    return { seed, qty, valor, fromSystem, total: qty * valor * (seed.perPorao ? poroes : 1) };
   });
   const fixedTotal = fixedRows.reduce((a, r) => a + r.total, 0);
 
@@ -1162,7 +1198,7 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
               className={numCls}
             />
             <p className="text-[11px] text-amber-900/70 leading-snug">
-              Mão de obra e Kimi Klap multiplicam pelos porões; os demais custos são fixos por operação.
+              Mão de obra (valores do cadastro) e Kimi Klap multiplicam pelos porões; os demais são fixos por operação. O Custo Fixo Médio vem da Demonstração Financeira.
             </p>
           </div>
 
@@ -1216,11 +1252,12 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
                 </tr>
               </thead>
               <tbody>
-                {fixedRows.map(({ seed, qty, valor, total }) => (
+                {fixedRows.map(({ seed, qty, valor, total, fromSystem }) => (
                   <tr key={seed.key} className="border-b border-amber-100 last:border-0">
                     <td className="px-3 py-1.5 font-medium text-text" colSpan={2}>
                       {seed.label}
                       {seed.perPorao && <span className="ml-1.5 text-[9px] font-semibold text-amber-700 bg-amber-100 px-1 py-0.5 rounded">× porão</span>}
+                      {fromSystem && <span className="ml-1.5 text-[9px] font-semibold text-blue-700 bg-blue-100 px-1 py-0.5 rounded" title="Média mensal das despesas fixas (Escritório + Impostos + Patrimônio + Seguros), vinda da Demonstração Financeira. Edite pra sobrepor.">Demonstração</span>}
                     </td>
                     <td className="px-3 py-1.5 text-center">
                       <input type="number" min={0} step="0.1" value={qty}
