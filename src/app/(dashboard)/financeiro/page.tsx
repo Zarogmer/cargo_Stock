@@ -965,12 +965,15 @@ function InlineRateEditor({ value, canEdit, onSave }: { value: number; canEdit: 
   );
 }
 
-// ─── Custo Base por Porão ──────────────────────────────────────────────────
-// Calcula quanto sai um porão considerando a equipe padrão:
-// 4 ajudantes + 4 esfregão + 4 wap + 1 maquinista + 1 supervisor + 1 cozinheiro.
-// Headcounts são editáveis pra simular variações (nem sempre escala completa),
-// e ficam persistidos no localStorage. Mensalistas (analista RH etc.) não
-// entram na conta — porão é só Embarque por produção.
+// ─── Custo Médio por Operação ──────────────────────────────────────────────
+// Simulador espelhando a planilha "SIMULAÇÃO CUSTO OPERAÇÃO.xlsx" da diretoria.
+// Estima o custo de uma operação inteira (não de 1 porão), somando:
+//   • mão de obra — cada função × qtd × porões (valor vem do cadastro, editável);
+//   • custos fixos por operação — Mercado, Uniformes+EPIs, Alimentação,
+//     Manutenções, Kimi Klap, Custo Fixo Médio... (valores da planilha).
+// O usuário escolhe o nº de porões; o card mostra o custo total e a média por
+// porão (total ÷ porões). Tudo fica salvo no navegador — é uma simulação, não
+// altera navio nenhum. Mensalistas (analista RH etc.) não entram.
 
 const POR_PORAO_UNITS: ReadonlyArray<JobUnit> = ["PORAO", "POR_NAVIO", "POR_OPERACAO"];
 
@@ -984,78 +987,154 @@ const DEFAULT_HEADCOUNTS_BY_NAME: Record<string, number> = {
   COZINHEIRO: 1,
 };
 
-const HEADCOUNTS_STORAGE_KEY = "financeiro:porao-headcounts";
+// Custos fixos por operação, com os valores-base da planilha de simulação.
+// `perPorao` marca as linhas que a planilha multiplica pelo nº de porões
+// (Kimi Klap); o resto é fixo por operação, independente de porões. As
+// quantidades fracionadas (0.1 de uma manutenção, 0.3 do custo fixo mensal)
+// são rateios da planilha e ficam editáveis.
+interface FixedCostSeed { key: string; label: string; qty: number; valor: number; perPorao: boolean; }
+const FIXED_COST_SEED: FixedCostSeed[] = [
+  { key: "kimi_klap", label: "Kimi Klap", qty: 2, valor: 422, perPorao: true },
+  { key: "remocom", label: "Remocom", qty: 0, valor: 0, perPorao: false },
+  { key: "mercado", label: "Mercado", qty: 1, valor: 2800, perPorao: false },
+  { key: "uniformes_epis", label: "Uniformes + EPIs", qty: 15, valor: 15, perPorao: false },
+  { key: "alimentacao", label: "Alimentação pré-embarque", qty: 15, valor: 35, perPorao: false },
+  { key: "manut_avarias", label: "Manutenção de avarias", qty: 1, valor: 3000, perPorao: false },
+  { key: "manut_preventiva", label: "Manutenção preventiva", qty: 0.1, valor: 17000, perPorao: false },
+  { key: "lancha", label: "Lancha", qty: 0, valor: 2200, perPorao: false },
+  { key: "transp_pessoal", label: "Transporte pessoal", qty: 0, valor: 250, perPorao: false },
+  { key: "transp_equip", label: "Transporte de equipamento", qty: 0, valor: 1240, perPorao: false },
+  { key: "custo_fixo_medio", label: "Custo fixo médio", qty: 0.3, valor: 49500, perPorao: false },
+];
+
+const OPERACAO_STORAGE_KEY = "financeiro:custo-operacao";
+const DEFAULT_POROES = 5;
 
 function defaultHeadcountForName(name: string): number {
   const key = name.trim().toUpperCase();
   return DEFAULT_HEADCOUNTS_BY_NAME[key] ?? 0;
 }
 
-function CustoPorPoraoPanel({ functions }: { functions: JobFunction[] }) {
-  // Só funções de porão e ativas entram aqui.
+// Aceita vírgula ou ponto; devolve 0 pra entrada inválida.
+function parseSimNumber(raw: string): number {
+  const n = parseFloat(String(raw).replace(/\s/g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+
+interface FixedCostState { qty: number; valor: number; }
+interface SimState {
+  poroes: number;
+  labor: Record<number, number>; // fnId → headcount
+  laborRate: Record<number, number>; // fnId → valor un. (override; ausente = default_rate)
+  fixed: Record<string, FixedCostState>; // key → override do custo fixo
+}
+
+function seedFixed(): Record<string, FixedCostState> {
+  const out: Record<string, FixedCostState> = {};
+  for (const s of FIXED_COST_SEED) out[s.key] = { qty: s.qty, valor: s.valor };
+  return out;
+}
+
+function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
+  // Só funções de porão e ativas entram na mão de obra.
   const poraoFns = useMemo(
     () => functions.filter((f) => f.active && POR_PORAO_UNITS.includes(f.unit)),
     [functions],
   );
 
-  // headcounts[fnId] = qty selecionada. Inicializa a partir do localStorage,
-  // com fallback nos defaults da equipe padrão.
-  const [headcounts, setHeadcounts] = useState<Record<number, number>>({});
   const [collapsed, setCollapsed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [sim, setSim] = useState<SimState>({ poroes: DEFAULT_POROES, labor: {}, laborRate: {}, fixed: seedFixed() });
 
-  // Seed inicial: mistura defaults com valores salvos. Roda toda vez que a
-  // lista de funções muda (após criar/excluir função nova).
+  // Carrega o que estiver salvo (uma vez). Custos fixos sempre partem do seed e
+  // recebem os overrides salvos por cima — assim uma linha nova no código
+  // aparece mesmo pra quem já tinha simulação salva.
   useEffect(() => {
-    let saved: Record<string, number> = {};
+    let saved: Partial<SimState> = {};
     try {
-      const raw = typeof window !== "undefined" ? window.localStorage.getItem(HEADCOUNTS_STORAGE_KEY) : null;
-      if (raw) saved = JSON.parse(raw) as Record<string, number>;
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(OPERACAO_STORAGE_KEY) : null;
+      if (raw) saved = JSON.parse(raw) as Partial<SimState>;
     } catch {
       saved = {};
     }
-    const next: Record<number, number> = {};
-    for (const f of poraoFns) {
-      const fromSaved = saved[String(f.id)];
-      next[f.id] = Number.isFinite(fromSaved) ? Number(fromSaved) : defaultHeadcountForName(f.name);
-    }
-    setHeadcounts(next);
+    setSim({
+      poroes: Number.isFinite(saved.poroes) ? Number(saved.poroes) : DEFAULT_POROES,
+      labor: { ...(saved.labor || {}) },
+      laborRate: { ...(saved.laborRate || {}) },
+      fixed: { ...seedFixed(), ...(saved.fixed || {}) },
+    });
+    setLoaded(true);
+  }, []);
+
+  // Garante um headcount pra cada função (default da equipe padrão) quando ela
+  // ainda não tem valor salvo — cobre função criada depois da última simulação.
+  useEffect(() => {
+    setSim((prev) => {
+      const labor = { ...prev.labor };
+      let changed = false;
+      for (const f of poraoFns) {
+        if (labor[f.id] === undefined) { labor[f.id] = defaultHeadcountForName(f.name); changed = true; }
+      }
+      return changed ? { ...prev, labor } : prev;
+    });
   }, [poraoFns]);
 
-  function updateQty(fnId: number, qtyRaw: string) {
-    const n = Math.max(0, Math.floor(parseFloat(qtyRaw.replace(",", ".")) || 0));
-    setHeadcounts((prev) => {
-      const next = { ...prev, [fnId]: n };
-      try {
-        if (typeof window !== "undefined") {
-          window.localStorage.setItem(HEADCOUNTS_STORAGE_KEY, JSON.stringify(next));
-        }
-      } catch {
-        // localStorage cheio / privado — silencioso.
-      }
-      return next;
+  // Persiste a cada mudança (depois do load, pra não gravar o estado inicial por cima).
+  useEffect(() => {
+    if (!loaded) return;
+    try {
+      if (typeof window !== "undefined") window.localStorage.setItem(OPERACAO_STORAGE_KEY, JSON.stringify(sim));
+    } catch {
+      // localStorage cheio / privado — silencioso.
+    }
+  }, [sim, loaded]);
+
+  const poroes = Math.max(1, Math.floor(sim.poroes || 1));
+
+  function setPoroes(raw: string) {
+    setSim((s) => ({ ...s, poroes: Math.max(1, Math.floor(parseSimNumber(raw) || 1)) }));
+  }
+  function setLaborQty(fnId: number, raw: string) {
+    setSim((s) => ({ ...s, labor: { ...s.labor, [fnId]: Math.max(0, Math.floor(parseSimNumber(raw))) } }));
+  }
+  function setLaborRate(fnId: number, raw: string) {
+    setSim((s) => ({ ...s, laborRate: { ...s.laborRate, [fnId]: Math.max(0, parseSimNumber(raw)) } }));
+  }
+  function setFixed(key: string, field: "qty" | "valor", raw: string) {
+    setSim((s) => {
+      const cur = s.fixed[key] ?? { qty: 0, valor: 0 };
+      return { ...s, fixed: { ...s.fixed, [key]: { ...cur, [field]: Math.max(0, parseSimNumber(raw)) } } };
     });
   }
-
   function resetDefaults() {
-    const next: Record<number, number> = {};
-    for (const f of poraoFns) next[f.id] = defaultHeadcountForName(f.name);
-    setHeadcounts(next);
-    try {
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(HEADCOUNTS_STORAGE_KEY, JSON.stringify(next));
-      }
-    } catch {
-      // ignore
-    }
+    const labor: Record<number, number> = {};
+    for (const f of poraoFns) labor[f.id] = defaultHeadcountForName(f.name);
+    setSim({ poroes: DEFAULT_POROES, labor, laborRate: {}, fixed: seedFixed() });
   }
 
-  const totalHeadcount = poraoFns.reduce((acc, f) => acc + (headcounts[f.id] ?? 0), 0);
-  const totalCost = poraoFns.reduce(
-    (acc, f) => acc + Number(f.default_rate) * (headcounts[f.id] ?? 0),
-    0,
-  );
+  // Mão de obra: cada função × porões. Rate vem do override ou do cadastro.
+  const laborRows = poraoFns.map((f) => {
+    const qty = sim.labor[f.id] ?? 0;
+    const rate = sim.laborRate[f.id] ?? Number(f.default_rate);
+    return { f, qty, rate, total: qty * rate * poroes };
+  });
+  const laborHeadcount = laborRows.reduce((a, r) => a + r.qty, 0);
+  const laborTotal = laborRows.reduce((a, r) => a + r.total, 0);
+
+  // Custos fixos: qty × valor, e × porões só nas linhas marcadas.
+  const fixedRows = FIXED_COST_SEED.map((seed) => {
+    const fc = sim.fixed[seed.key] ?? { qty: seed.qty, valor: seed.valor };
+    return { seed, qty: fc.qty, valor: fc.valor, total: fc.qty * fc.valor * (seed.perPorao ? poroes : 1) };
+  });
+  const fixedTotal = fixedRows.reduce((a, r) => a + r.total, 0);
+
+  const grandTotal = laborTotal + fixedTotal;
+  const perPoraoAvg = grandTotal / poroes;
 
   if (poraoFns.length === 0) return null;
+
+  const numCls = "w-16 px-1.5 py-0.5 border border-amber-200 rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-amber-300";
+  const moneyCls = "w-24 px-1.5 py-0.5 border border-amber-200 rounded text-right text-sm focus:outline-none focus:ring-2 focus:ring-amber-300";
 
   return (
     <div className="bg-amber-50/50 border border-amber-200 rounded-xl">
@@ -1064,77 +1143,128 @@ function CustoPorPoraoPanel({ functions }: { functions: JobFunction[] }) {
         onClick={() => setCollapsed((c) => !c)}
         className="w-full flex items-center justify-between px-4 py-3 hover:bg-amber-50 transition rounded-xl"
       >
-        <div className="flex items-baseline gap-2">
-          <span className="text-sm font-semibold text-amber-900">💰 Custo Base por Porão</span>
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <span className="text-sm font-semibold text-amber-900">🛳️ Custo Médio por Operação</span>
           <span className="text-xs text-amber-800">
-            {totalHeadcount} {totalHeadcount === 1 ? "pessoa" : "pessoas"} · <strong>{brl(totalCost)}</strong> / porão
+            {poroes} {poroes === 1 ? "porão" : "porões"} · total <strong>{brl(grandTotal)}</strong> · média <strong>{brl(perPoraoAvg)}</strong>/porão
           </span>
         </div>
         <span className="text-amber-700 text-xs">{collapsed ? "▾ Expandir" : "▴ Recolher"}</span>
       </button>
 
       {!collapsed && (
-        <div className="px-4 pb-4 space-y-2">
-          <p className="text-[11px] text-amber-900/80 leading-snug">
-            Equipe padrão por porão: <strong>4 ajudantes</strong> + <strong>4 esfregão</strong> + <strong>4 WAP</strong> + <strong>1 maquinista</strong> + <strong>1 supervisor</strong> + <strong>1 cozinheiro</strong>.
-            Ajuste a quantidade pra simular outras formações. Mensalistas (analista RH etc.) não entram.
-          </p>
+        <div className="px-4 pb-4 space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="text-[11px] font-semibold text-amber-900">Porões da operação:</label>
+            <input
+              type="number" min={1} step={1} value={sim.poroes}
+              onChange={(e) => setPoroes(e.target.value)}
+              className={numCls}
+            />
+            <p className="text-[11px] text-amber-900/70 leading-snug">
+              Mão de obra e Kimi Klap multiplicam pelos porões; os demais custos são fixos por operação.
+            </p>
+          </div>
 
+          {/* Mão de obra */}
           <div className="bg-white border border-amber-200 rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-amber-50/70 border-b border-amber-200">
                 <tr>
-                  <th className="px-3 py-2 text-left text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Função</th>
+                  <th className="px-3 py-2 text-left text-[10px] font-semibold text-amber-900 uppercase tracking-wider" colSpan={2}>Mão de obra</th>
                   <th className="px-3 py-2 text-center text-[10px] font-semibold text-amber-900 uppercase tracking-wider w-20">Qtde</th>
                   <th className="px-3 py-2 text-right text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Valor un.</th>
-                  <th className="px-3 py-2 text-right text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Subtotal</th>
+                  <th className="px-3 py-2 text-right text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Total</th>
                 </tr>
               </thead>
               <tbody>
-                {poraoFns.map((f) => {
-                  const qty = headcounts[f.id] ?? 0;
-                  const rate = Number(f.default_rate);
-                  const sub = qty * rate;
-                  return (
-                    <tr key={f.id} className="border-b border-amber-100 last:border-0">
-                      <td className="px-3 py-1.5 font-medium text-text">{f.name}</td>
-                      <td className="px-3 py-1.5 text-center">
-                        <input
-                          type="number"
-                          min={0}
-                          step={1}
-                          value={qty}
-                          onChange={(e) => updateQty(f.id, e.target.value)}
-                          className="w-14 px-1.5 py-0.5 border border-amber-200 rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
-                        />
-                      </td>
-                      <td className="px-3 py-1.5 text-right text-text-light text-xs">{brl(rate)}</td>
-                      <td className="px-3 py-1.5 text-right font-semibold text-emerald-700">{brl(sub)}</td>
-                    </tr>
-                  );
-                })}
+                {laborRows.map(({ f, qty, rate, total }) => (
+                  <tr key={f.id} className="border-b border-amber-100 last:border-0">
+                    <td className="px-3 py-1.5 font-medium text-text" colSpan={2}>{f.name}</td>
+                    <td className="px-3 py-1.5 text-center">
+                      <input type="number" min={0} step={1} value={qty}
+                        onChange={(e) => setLaborQty(f.id, e.target.value)} className={numCls} />
+                    </td>
+                    <td className="px-3 py-1.5 text-right">
+                      <input type="number" min={0} step="0.01" value={rate}
+                        onChange={(e) => setLaborRate(f.id, e.target.value)} className={moneyCls} />
+                    </td>
+                    <td className="px-3 py-1.5 text-right font-semibold text-emerald-700 whitespace-nowrap">{brl(total)}</td>
+                  </tr>
+                ))}
               </tbody>
-              <tfoot className="bg-amber-50 border-t-2 border-amber-200">
+              <tfoot className="bg-amber-50 border-t border-amber-200">
                 <tr>
-                  <td className="px-3 py-2 text-xs font-semibold text-amber-900 uppercase tracking-wider">Total por porão</td>
-                  <td className="px-3 py-2 text-center font-semibold text-amber-900">{totalHeadcount}</td>
-                  <td className="px-3 py-2"></td>
-                  <td className="px-3 py-2 text-right font-bold text-emerald-800">{brl(totalCost)}</td>
+                  <td className="px-3 py-1.5 text-xs font-semibold text-amber-900" colSpan={2}>Subtotal mão de obra</td>
+                  <td className="px-3 py-1.5 text-center text-xs font-semibold text-amber-900">{laborHeadcount}</td>
+                  <td className="px-3 py-1.5"></td>
+                  <td className="px-3 py-1.5 text-right font-bold text-emerald-800 whitespace-nowrap">{brl(laborTotal)}</td>
                 </tr>
               </tfoot>
             </table>
           </div>
 
+          {/* Custos fixos por operação */}
+          <div className="bg-white border border-amber-200 rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-amber-50/70 border-b border-amber-200">
+                <tr>
+                  <th className="px-3 py-2 text-left text-[10px] font-semibold text-amber-900 uppercase tracking-wider" colSpan={2}>Custos da operação</th>
+                  <th className="px-3 py-2 text-center text-[10px] font-semibold text-amber-900 uppercase tracking-wider w-20">Qtde</th>
+                  <th className="px-3 py-2 text-right text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Valor un.</th>
+                  <th className="px-3 py-2 text-right text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fixedRows.map(({ seed, qty, valor, total }) => (
+                  <tr key={seed.key} className="border-b border-amber-100 last:border-0">
+                    <td className="px-3 py-1.5 font-medium text-text" colSpan={2}>
+                      {seed.label}
+                      {seed.perPorao && <span className="ml-1.5 text-[9px] font-semibold text-amber-700 bg-amber-100 px-1 py-0.5 rounded">× porão</span>}
+                    </td>
+                    <td className="px-3 py-1.5 text-center">
+                      <input type="number" min={0} step="0.1" value={qty}
+                        onChange={(e) => setFixed(seed.key, "qty", e.target.value)} className={numCls} />
+                    </td>
+                    <td className="px-3 py-1.5 text-right">
+                      <input type="number" min={0} step="0.01" value={valor}
+                        onChange={(e) => setFixed(seed.key, "valor", e.target.value)} className={moneyCls} />
+                    </td>
+                    <td className="px-3 py-1.5 text-right font-semibold text-emerald-700 whitespace-nowrap">{brl(total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-amber-50 border-t border-amber-200">
+                <tr>
+                  <td className="px-3 py-1.5 text-xs font-semibold text-amber-900" colSpan={4}>Subtotal custos da operação</td>
+                  <td className="px-3 py-1.5 text-right font-bold text-emerald-800 whitespace-nowrap">{brl(fixedTotal)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          {/* Totais da operação */}
+          <div className="bg-amber-100/70 border-2 border-amber-300 rounded-lg px-4 py-3 flex flex-wrap items-baseline justify-between gap-2">
+            <div>
+              <p className="text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Custo total da operação · {poroes} {poroes === 1 ? "porão" : "porões"}</p>
+              <p className="text-xl font-bold text-amber-900 tabular-nums">{brl(grandTotal)}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Custo médio por porão</p>
+              <p className="text-xl font-bold text-amber-900 tabular-nums">{brl(perPoraoAvg)}</p>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between gap-2">
             <p className="text-[10px] text-amber-800/80 italic">
-              Quantidades ficam salvas no seu navegador. Use como base — nem todo navio escala equipe cheia.
+              Valores ficam salvos no seu navegador. É uma simulação — não altera nenhum navio.
             </p>
             <button
               type="button"
               onClick={resetDefaults}
               className="text-[10px] font-semibold text-amber-900 hover:bg-amber-100 px-2 py-1 rounded transition"
             >
-              ↺ Resetar pra equipe padrão
+              ↺ Resetar pra planilha padrão
             </button>
           </div>
         </div>
@@ -1348,9 +1478,9 @@ function FuncoesTab({
         </div>
       )}
 
-      {/* Custo Base por Porão — simulador embaixo da lista pra calcular
-          quanto sai um porão com base nos valores configurados acima. */}
-      <CustoPorPoraoPanel functions={functions} />
+      {/* Custo Médio por Operação — simulador embaixo da lista pra estimar
+          quanto sai uma operação inteira (mão de obra + custos fixos). */}
+      <CustoPorOperacaoPanel functions={functions} />
 
       <FunctionFormModal
         open={showFnForm}
