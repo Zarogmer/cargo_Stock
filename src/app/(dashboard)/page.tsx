@@ -316,13 +316,15 @@ export default function DashboardPage() {
       // sobrou disponível. Mesma regra da coluna "Escalação" do RH: quem tem
       // alocação ATIVA está ocupado (kind diz se é Embarque ou Costado); o
       // resto está disponível, tirando demitidos e inativos na escalação
-      // (férias/afastamento). Sem join no facade do db: monta os mapas à mão.
+      // (férias/afastamento). Só o setor Operacional entra: o Administrativo é
+      // rateado no custo de todo Embarque, então apareceria sempre "Embarcado"
+      // sem estar a bordo. Sem join no facade do db: monta os mapas à mão.
       const [crewEmpRes, crewAllocRes] = await Promise.all([
-        db.from("employees").select("id, name, role, status, escala_unavailable").neq("status", "INATIVO").order("name"),
+        db.from("employees").select("id, name, role, sector, status, escala_unavailable").neq("status", "INATIVO").order("name"),
         db.from("job_allocations").select("employee_id, kind, job_id").eq("status", "ATIVO"),
       ]);
-      const crewEmps = ((crewEmpRes.data as Array<{ id: number; name: string; role: string | null; escala_unavailable: boolean | null }> | null) || [])
-        .filter((e) => !e.escala_unavailable);
+      const crewEmps = ((crewEmpRes.data as Array<{ id: number; name: string; role: string | null; sector: string | null; escala_unavailable: boolean | null }> | null) || [])
+        .filter((e) => !e.escala_unavailable && e.sector !== "ADMINISTRATIVO");
       const crewAllocs = ((crewAllocRes.data as Array<{ employee_id: number | null; kind: string | null; job_id: string | null }> | null) || [])
         .filter((a) => a.employee_id != null);
 

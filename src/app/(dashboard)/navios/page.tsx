@@ -525,8 +525,8 @@ export default function NaviosPage() {
   function selectTeamMembersForForm(team: string) {
     if (editingShip) return;
     const validTeam = team === "EQUIPE_1" || team === "EQUIPE_2";
-    // Elegíveis pra Embarque: ATIVO/PENDENCIA com telefone (Administrativo
-    // incluso), da equipe escolhida e livres (não presos em outra operação).
+    // Elegíveis pra Embarque: Operacional ATIVO/PENDENCIA com telefone, da
+    // equipe escolhida e livres (não presos em outra operação).
     const teamAvailable = validTeam
       ? employees.filter((e) => {
           const status = e.status ?? "ATIVO";
@@ -534,6 +534,7 @@ export default function NaviosPage() {
             e.team === team &&
             (status === "ATIVO" || status === "PENDENCIA") &&
             !e.escala_unavailable &&
+            e.sector !== "ADMINISTRATIVO" &&
             (e.phone || "").trim().length > 0 &&
             !occupiedEmployeeKind.has(e.id)
           );
@@ -2207,15 +2208,16 @@ export default function NaviosPage() {
 
                   {createGroup && (() => {
                     const isCostadoForm = form.operation_type === "COSTADO";
-                    // No Costado, o setor Administrativo não aparece pra escalar
-                    // — eles entram só pela caixinha "Incluir setor Administrativo
-                    // no grupo". No Embarque, o RH pediu pra deixar Administrativo
-                    // na lista também (alguns vão pra bordo). ATIVO + PENDENCIA
-                    // aparecem (PENDENCIA ainda pode trabalhar, só sinaliza doc
-                    // vencida). INATIVO/demitido fica fora, assim como quem está
-                    // marcado como inativo na escalação (férias/afastamento) —
-                    // mesma regra das abas Escalação. Quem ja esta em outra
-                    // operacao continua na lista mas desabilitado (cinza + badge).
+                    // Só o setor Operacional é escalável — vale pro Embarque e
+                    // pro Costado. O Administrativo entra no navio pela caixinha
+                    // "Incluir setor Administrativo no grupo" (WhatsApp) e no
+                    // custo pelo rateio automático, nunca escalado à mão.
+                    // ATIVO + PENDENCIA aparecem (PENDENCIA ainda pode trabalhar,
+                    // só sinaliza doc vencida). INATIVO/demitido fica fora, assim
+                    // como quem está marcado como inativo na escalação
+                    // (férias/afastamento) — mesma regra das abas Escalação. Quem
+                    // ja esta em outra operacao continua na lista mas desabilitado
+                    // (cinza + badge).
                     const eligible = employees.filter(
                       (e) => {
                         const status = e.status ?? "ATIVO";
@@ -2223,7 +2225,7 @@ export default function NaviosPage() {
                           (status === "ATIVO" || status === "PENDENCIA") &&
                           !e.escala_unavailable &&
                           (e.phone || "").trim().length > 0 &&
-                          (!isCostadoForm || e.sector !== "ADMINISTRATIVO")
+                          e.sector !== "ADMINISTRATIVO"
                         );
                       },
                     );
