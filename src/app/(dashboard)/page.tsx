@@ -546,7 +546,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard label="Estoque" value={stats.totalMateriais} icon="🧰" tone="blue" href="/almoxarifado?tab=estoque" />
         <StatCard label="Rancho" value={stats.totalRancho} icon="🛒" tone="amber" href="/almoxarifado?tab=rancho" />
-        <StatCard label="RH" value={stats.totalEmployees} icon="👷" tone="emerald" href="/colaboradores" />
+        <StatCard label="Colaboradores" value={stats.totalEmployees} icon="👷" tone="emerald" href="/colaboradores" />
         <StatCard label="Maquinário" value={stats.totalMaquinario} icon="⚙️" tone="teal" href="/almoxarifado?tab=maquinario" />
         <StatCard label="Ferramenta" value={stats.totalFerramentas} icon="🔧" tone="slate" href="/almoxarifado?tab=ferramenta" />
         <StatCard label="Elétrica" value={stats.totalEletrica} icon="⚡" tone="yellow" href="/almoxarifado?tab=eletrica" />
