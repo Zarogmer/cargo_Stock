@@ -62,6 +62,11 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { DocumentosTab } from "./documentos-tab";
 import { DemonstracaoFinanceiraPage } from "@/components/financeiro/demonstracao-financeira-page";
+import { RelatorioValesPage } from "@/components/financeiro/relatorio-vales-page";
+import {
+  type Advance, type AdvanceDiscount as AdvanceDiscountRow,
+  balanceOf, jobDiscountFor, openAdvances,
+} from "@/lib/vales";
 import type {
   JobFunction,
   JobFunctionRate,
@@ -708,6 +713,11 @@ export default function FinanceiroPage() {
           profileName={profile?.full_name || "Sistema"}
         />
       ),
+    },
+    {
+      key: "vales",
+      label: "🧾 Relatório de Vales",
+      content: <RelatorioValesPage canEdit={canEdit} profileName={profile?.full_name || "Sistema"} />,
     },
     // Espelho da planilha da diretoria (import por script, tela só leitura).
     // Restrita como o módulo bancário — mostra folha e distribuição aos sócios.
@@ -2607,6 +2617,25 @@ function JobDetailModal({
   const [allocPluxee, setAllocPluxee] = useState("0");
   const [editAllocId, setEditAllocId] = useState<number | null>(null);
 
+  // Vales (adiantamentos) — coluna Adiant. O vale nasce no Relatório de Vales;
+  // aqui só se escolhe qual abater neste navio. Carrega todos os vales porque a
+  // tela precisa dos que estão em aberto (que não têm vínculo com o navio ainda)
+  // e dos já descontados aqui. Ver @/lib/vales.
+  const [advances, setAdvances] = useState<Advance[]>([]);
+  const [advDiscounts, setAdvDiscounts] = useState<AdvanceDiscountRow[]>([]);
+  // Alocação cuja coluna Adiant. foi clicada — abre o seletor de vales.
+  const [valeAlloc, setValeAlloc] = useState<JobAllocation | null>(null);
+
+  const loadVales = useCallback(async () => {
+    const [advRes, discRes] = await Promise.all([
+      db.from("employee_advances").select("*"),
+      db.from("advance_discounts").select("*"),
+    ]);
+    setAdvances((advRes.data as Advance[]) || []);
+    setAdvDiscounts((discRes.data as AdvanceDiscountRow[]) || []);
+  }, []);
+  useEffect(() => { loadVales(); }, [loadVales]);
+
   const [showAddAdj, setShowAddAdj] = useState(false);
   const [adjCategory, setAdjCategory] = useState<ExpenseCategory>("COMPRAS");
   const [adjDesc, setAdjDesc] = useState("");
@@ -3268,7 +3297,7 @@ function JobDetailModal({
       set("D3", `PAGAMENTO EM ${dateLabel || ""}`, styleTitle);
       // Linha 6: rótulos C=FUNCIONÁRIOS, J=cliente
       set("C6", "FUNCIONÁRIOS", styleSummaryTitle);
-      set("J6", job!.client || "", styleClient);
+      set("K6", job!.client || "", styleClient);
       // Linha 7: cabeçalho da tabela (sem coluna Pluxee)
       set("C7", "Limpeza de porão", styleSubHeader);
       set("D7", "AGÊNCIA", styleHeader);
@@ -3277,19 +3306,26 @@ function JobDetailModal({
       set("G7", "PAGTO NA FOLHA", styleHeader);
       set("H7", "DESCONTO GERAL", styleHeader);
       set("I7", "Perda de Material", styleHeader);
-      set("J7", `MV 1: ${shipLabel}`, styleHeader);
+      // ADIANTAMENTO: vale que a pessoa já pegou e volta agora. Vem dos vales
+      // descontados neste navio (Relatório de Vales) — não do valor do navio.
+      set("J7", "ADIANTAMENTO", styleHeader);
+      set("K7", `MV 1: ${shipLabel}`, styleHeader);
 
       // Funcionários começam na linha 9 (linha 8 fica em branco como no template)
       let row = 9;
-      let totalFolha = 0, totalNavio = 0;
+      let totalFolha = 0, totalNavio = 0, totalAdto = 0;
       allocations.forEach((a, idx) => {
         const e = a.employees;
         const total = allocTotalPerson(a);
         // PAGTO NA FOLHA = líquido do Relatório de Líquidos (guardado como
         // total - pluxee_value). Sem import, pluxee_value = 0 → folha = total.
         const folha = +(total - Number(a.pluxee_value || 0)).toFixed(2);
+        // Vale descontado neste navio. Sai do bolso da pessoa (ela já pegou o
+        // dinheiro), então não entra em totalNavio — só na coluna ADIANTAMENTO.
+        const adto = jobDiscountFor(job!.id, a.employee_id ?? null, advDiscounts);
         totalFolha += folha;
         totalNavio += total;
+        totalAdto += adto;
         // Sem conta bancária = pagamento em espécie ("TRAZER SALÁRIO"). É o valor
         // que a coluna ITAÚ/SANTANDER passa a mostrar, pra filtrar quem recebe fora
         // do banco. Com conta, mostra o banco (base do filtro Itaú/Santander).
@@ -3305,7 +3341,8 @@ function JobDetailModal({
         set(`G${row}`, folha, styleCellMoney, "n");
         set(`H${row}`, 0, styleCellMoney, "n");
         set(`I${row}`, 0, styleCellMoney, "n");
-        set(`J${row}`, total, styleCellMoney, "n");
+        set(`J${row}`, adto, styleCellMoney, "n");
+        set(`K${row}`, total, styleCellMoney, "n");
         row++;
       });
       // Última linha de funcionário — base do AutoFilter (o filtro do banco).
@@ -3317,7 +3354,8 @@ function JobDetailModal({
       set(`G${totalRow}`, totalFolha, styleTotalMoney, "n");
       set(`H${totalRow}`, 0, styleTotalMoney, "n");
       set(`I${totalRow}`, 0, styleTotalMoney, "n");
-      set(`J${totalRow}`, totalNavio, styleTotalMoney, "n");
+      set(`J${totalRow}`, totalAdto, styleTotalMoney, "n");
+      set(`K${totalRow}`, totalNavio, styleTotalMoney, "n");
       row += 2;
 
       set(`C${row}`, "TOTAL PAGAMENTO DOS MVs s/ desconto:", styleSummaryTitle); row++;
@@ -3325,16 +3363,16 @@ function JobDetailModal({
       set(`F${row}`, "TOTAIS:", styleSummaryLabel); row++;
       set(`C${row}`, totalNavio, styleSummaryMoney, "n");
       set(`F${row}`, "ADTO:", styleSummaryLabel);
-      set(`G${row}`, 0, styleSummaryMoney, "n"); row++;
+      set(`G${row}`, totalAdto, styleSummaryMoney, "n"); row++;
       set(`F${row}`, "PAGTO FOLHA:", styleSummaryLabel);
       set(`G${row}`, totalFolha, styleSummaryMoney, "n"); row++;
       set(`F${row}`, "PAGTO NAVIO:", styleSummaryLabel);
       set(`G${row}`, totalNavio, styleSummaryMoney, "n");
 
-      ws["!ref"] = `A1:L${row + 2}`;
+      ws["!ref"] = `A1:M${row + 2}`;
       ws["!cols"] = [
         { wch: 3 }, { wch: 5 }, { wch: 38 }, { wch: 10 }, { wch: 16 },
-        { wch: 18 }, { wch: 15 }, { wch: 14 }, { wch: 16 }, { wch: 70 },
+        { wch: 18 }, { wch: 15 }, { wch: 14 }, { wch: 16 }, { wch: 15 }, { wch: 70 },
       ];
       ws["!rows"] = Array.from({ length: row + 2 }, (_, i) => (i === 6 ? { hpt: 38 } : { hpt: 18 }));
       ws["!merges"] = [
@@ -3344,7 +3382,7 @@ function JobDetailModal({
       // coluna ITAÚ/SANTANDER pra mandar a folha só do Itaú, só do Santander ou
       // "TRAZER SALÁRIO" (sem conta). Só faz sentido com pelo menos 1 funcionário.
       if (lastDataRow >= 9) {
-        ws["!autofilter"] = { ref: `C7:J${lastDataRow}` };
+        ws["!autofilter"] = { ref: `C7:K${lastDataRow}` };
       }
 
       const wb = XLSX.utils.book_new();
@@ -4335,6 +4373,7 @@ function JobDetailModal({
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light" title="Valor especial + rateio">Extra</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Total</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-purple-700 whitespace-nowrap" title="PAGTO NA FOLHA — líquido do Relatório de Líquidos. Sem import, igual ao Total.">Folha</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-amber-700 whitespace-nowrap" title="ADIANTAMENTO — vale que o colaborador já pegou e está sendo descontado neste navio. Não muda o custo do navio, só o que ele recebe agora.">Adiant.</th>
                     {canEdit && !isReadOnly && !peopleReadOnly && <th className="w-14"></th>}
                   </tr>
                 </thead>
@@ -4616,6 +4655,29 @@ function JobDetailModal({
                             </button>
                           )}
                         </td>
+                        {/* Adiant. — desconto de vale neste navio. Clicar abre o
+                            seletor com os vales em aberto do colaborador. */}
+                        <td className="px-2 py-2 text-right whitespace-nowrap">
+                          {(() => {
+                            const desc = jobDiscountFor(job!.id, a.employee_id ?? null, advDiscounts);
+                            const clickable = canEdit && !isReadOnly && a.employee_id != null;
+                            return (
+                              <button
+                                type="button"
+                                disabled={!clickable}
+                                onClick={() => setValeAlloc(a)}
+                                className={`${desc > 0 ? "text-amber-700 font-semibold" : "text-text-light"} ${clickable ? "hover:bg-amber-50 rounded px-1 -mx-1 cursor-pointer" : ""}`}
+                                title={
+                                  a.employee_id == null
+                                    ? "Sem colaborador vinculado"
+                                    : clickable ? "Clique para descontar um vale" : ""
+                                }
+                              >
+                                {desc > 0 ? `− ${brl(desc)}` : "—"}
+                              </button>
+                            );
+                          })()}
+                        </td>
                         {canEdit && !isReadOnly && !peopleReadOnly && (
                           <td className="px-2 py-2">
                             <div className="flex gap-1 justify-end">
@@ -4674,6 +4736,23 @@ function JobDetailModal({
                         </td>
                         <td className="px-2 py-2 text-right text-emerald-700 whitespace-nowrap">{brl(baseTotal + extraTotal)}</td>
                         <td className="px-2 py-2 text-right text-purple-700 whitespace-nowrap">{brl(baseTotal + extraTotal - pluxeeTotal)}</td>
+                        {(() => {
+                          // Total descontado de vale neste navio, entre quem está
+                          // na tabela. Conta cada colaborador UMA vez: o desconto é
+                          // do navio, e no Costado a pessoa aparece uma vez por turno.
+                          const seen = new Set<number>();
+                          let descTotal = 0;
+                          for (const a of totalAllocs) {
+                            if (a.employee_id == null || seen.has(a.employee_id)) continue;
+                            seen.add(a.employee_id);
+                            descTotal += jobDiscountFor(job!.id, a.employee_id, advDiscounts);
+                          }
+                          return (
+                            <td className="px-2 py-2 text-right text-amber-700 whitespace-nowrap">
+                              {descTotal > 0 ? `− ${brl(descTotal)}` : "—"}
+                            </td>
+                          );
+                        })()}
                         {canEdit && !isReadOnly && !peopleReadOnly && <td></td>}
                       </tr>
                     );
@@ -4927,6 +5006,163 @@ function JobDetailModal({
             </button>
           </div>
         )}
+      </div>
+
+      {/* Seletor de vale — abre pela coluna Adiant. da Equipe Alocada */}
+      {valeAlloc && (
+        <ValeDiscountModal
+          open={!!valeAlloc}
+          onClose={() => setValeAlloc(null)}
+          jobId={job!.id}
+          jobName={job!.name}
+          employeeId={valeAlloc.employee_id!}
+          employeeName={valeAlloc.employees?.name || "Colaborador"}
+          advances={advances}
+          discounts={advDiscounts}
+          profileName={profileName}
+          onChanged={loadVales}
+        />
+      )}
+    </Modal>
+  );
+}
+
+// Escolhe qual vale do colaborador descontar neste navio. Só aparecem vales com
+// saldo — não dá pra descontar o que ele não deve. O valor sugerido é o saldo
+// inteiro, mas dá pra descontar em partes (a planilha faz isso: o Jean pegou
+// 1.840 e voltou 1.560 num navio, sobrando 280).
+function ValeDiscountModal({
+  open, onClose, jobId, jobName, employeeId, employeeName,
+  advances, discounts, profileName, onChanged,
+}: {
+  open: boolean;
+  onClose: () => void;
+  jobId: string;
+  jobName: string;
+  employeeId: number;
+  employeeName: string;
+  advances: Advance[];
+  discounts: AdvanceDiscountRow[];
+  profileName: string;
+  onChanged: () => void;
+}) {
+  const [amounts, setAmounts] = useState<Record<number, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const mine = advances.filter((a) => a.employee_id === employeeId);
+  const open_ = openAdvances(mine, discounts);
+  // Descontos já aplicados neste navio — dá pra estornar por aqui.
+  const applied = discounts.filter((d) => d.job_id === jobId && d.employee_id === employeeId);
+
+  async function handleApply(advanceId: number, max: number) {
+    // Campo vazio = descontar o saldo inteiro, que é o caso comum.
+    const raw = (amounts[advanceId] ?? "").trim();
+    const value = raw ? Number(raw.replace(/\./g, "").replace(",", ".")) : max;
+    if (!Number.isFinite(value)) { setError("Valor inválido."); return; }
+    if (!(value > 0)) { setError("Informe um valor maior que zero."); return; }
+    if (value > max) { setError(`O saldo deste vale é ${brl(max)} — não dá pra descontar mais que isso.`); return; }
+    setSaving(true);
+    setError(null);
+    const { error: err } = await db.from("advance_discounts").insert({
+      advance_id: advanceId,
+      job_id: jobId,
+      employee_id: employeeId,
+      amount: value,
+      created_by: profileName,
+    });
+    setSaving(false);
+    if (err) { setError(err.message); return; }
+    setAmounts({});
+    onChanged();
+  }
+
+  async function handleRemove(id: number) {
+    setSaving(true);
+    const { error: err } = await db.from("advance_discounts").delete().eq("id", id);
+    setSaving(false);
+    if (err) { setError(err.message); return; }
+    onChanged();
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Adiantamento — ${employeeName}`} maxWidth="max-w-lg">
+      <div className="space-y-4">
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm text-red-700">{error}</div>
+        )}
+
+        <p className="text-xs text-text-light">
+          Descontos de vale em <strong>{jobName}</strong>. Não muda o custo do navio — só reduz o que o
+          colaborador recebe agora, na coluna ADIANTAMENTO da Folha de Pagamento.
+        </p>
+
+        {applied.length > 0 && (
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-text-light mb-2">Descontado neste navio</h4>
+            <ul className="space-y-1">
+              {applied.map((d) => {
+                const adv = advances.find((a) => a.id === d.advance_id);
+                return (
+                  <li key={d.id} className="flex items-center justify-between gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    <span className="text-sm min-w-0 truncate">
+                      <strong className="tabular-nums">− {brl(Number(d.amount))}</strong>
+                      <span className="text-text-light"> · {adv?.origin || "vale"}</span>
+                    </span>
+                    <button onClick={() => handleRemove(d.id)} disabled={saving} className="text-xs text-red-500 hover:text-red-700 shrink-0">
+                      estornar
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
+        <div>
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-text-light mb-2">Vales em aberto</h4>
+          {open_.length === 0 ? (
+            <p className="text-sm text-text-light">
+              {mine.length === 0
+                ? "Este colaborador não tem vale lançado. Lance em Financeiro › Relatório de Vales."
+                : "Todos os vales deste colaborador já foram descontados."}
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {open_.map((a) => {
+                const saldo = balanceOf(a, discounts);
+                return (
+                  <li key={a.id} className="border border-border rounded-lg px-3 py-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{a.origin}</p>
+                        <p className="text-[11px] text-text-light">
+                          {a.advance_date.slice(0, 10).split("-").reverse().join("/")} · saldo {brl(saldo)}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <input
+                          type="text"
+                          value={amounts[a.id] ?? ""}
+                          onChange={(e) => setAmounts((p) => ({ ...p, [a.id]: e.target.value }))}
+                          placeholder={String(saldo).replace(".", ",")}
+                          className="w-24 text-right px-2 py-1 border border-border rounded text-sm outline-none focus:ring-2 focus:ring-primary/40"
+                        />
+                        <button
+                          onClick={() => handleApply(a.id, saldo)}
+                          disabled={saving}
+                          className="px-2 py-1 text-xs font-medium bg-primary text-white rounded hover:bg-primary-dark transition disabled:opacity-50"
+                        >
+                          Descontar
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       </div>
     </Modal>
   );

@@ -212,8 +212,65 @@ model Employee {
 
   job_allocations      JobAllocation[]
   function_rates       EmployeeFunctionRate[]
+  advances             EmployeeAdvance[]
 
   @@map("employees")
+}
+
+// ── Relatório de Vales (adiantamentos) ───────────────────────────────────────
+// Espelha o "Relatório de Vales <ano>.xlsx" (SERVIDOR - Documentos › 2 -DIRETORIA
+// › 00 - FUNCIONÁRIOS - CONTROLE DE PAGAMENTOS): o funcionário pega dinheiro
+// adiantado na empresa e isso é descontado depois, no pagamento de um navio.
+//
+// Na planilha são duas metades da mesma linha: as colunas ADIANTAMENTO (quanto
+// pegou, uma coluna por evento: "Folha 04/07/2026", "Pegou com a Rose") e as
+// colunas DESCONTAR-NAVIO (quanto já voltou, uma coluna por navio). O
+// "TOTAL A DESCONTAR" é o saldo: adiantado − descontado.
+//
+// Aqui isso vira duas tabelas: o vale (EmployeeAdvance) e cada desconto dele num
+// navio (AdvanceDiscount). O saldo é sempre calculado, nunca gravado — assim não
+// tem como o saldo divergir dos descontos.
+model EmployeeAdvance {
+  id           Int      @id @default(autoincrement())
+  employee_id  Int
+  employees    Employee @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  advance_date DateTime @db.Date // quando o funcionário pegou
+  // Sempre positivo. O saldo em aberto = amount − Σ discounts.amount.
+  amount       Decimal  @db.Decimal(10, 2)
+  // De onde saiu o dinheiro, como na planilha: "Folha 04/07/2026",
+  // "Pegou com a Rose 07/07/2026", "Pix Francisco"...
+  origin       String
+  notes        String?
+  created_by   String
+  created_at   DateTime @default(now()) @db.Timestamptz()
+
+  discounts AdvanceDiscount[]
+
+  @@index([employee_id])
+  @@map("employee_advances")
+}
+
+// Um desconto de vale no pagamento de um navio. Aponta pro job + employee (e não
+// pra alocação) porque no Costado a mesma pessoa tem várias alocações no mesmo
+// navio — uma por turno — e o desconto é um só, do navio inteiro.
+//
+// Não mexe no custo do navio: o dinheiro já saiu quando o vale foi criado. Só
+// reduz o que a pessoa recebe agora (coluna ADIANTAMENTO da Folha de Pagamento).
+model AdvanceDiscount {
+  id          Int             @id @default(autoincrement())
+  advance_id  Int
+  advances    EmployeeAdvance @relation(fields: [advance_id], references: [id], onDelete: Cascade)
+  job_id      String
+  jobs        Job             @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  employee_id Int
+  // Sempre positivo; nunca pode passar do saldo do vale (validado na tela).
+  amount      Decimal         @db.Decimal(10, 2)
+  created_by  String
+  created_at  DateTime        @default(now()) @db.Timestamptz()
+
+  @@index([advance_id])
+  @@index([job_id, employee_id])
+  @@map("advance_discounts")
 }
 
 // ── Config Pluxee (Navios PLUXEE / PLANSIP4C) ────────────────────────────────
@@ -510,6 +567,7 @@ model Job {
 
   allocations JobAllocation[]
   adjustments JobAdjustment[]
+  advance_discounts AdvanceDiscount[]
   created_at  DateTime        @default(now()) @db.Timestamptz()
   updated_at  DateTime        @updatedAt @db.Timestamptz()
   created_by  String
