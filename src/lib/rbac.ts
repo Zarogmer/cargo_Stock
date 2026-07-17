@@ -331,6 +331,9 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Contas a Pagar", href: "/financeiro/contas", roles: FINANCEIRO_BANCO_ROLES },
       { label: "Conciliação Bancária", href: "/financeiro/conciliacao", roles: FINANCEIRO_BANCO_ROLES },
       { label: "Boletos por e-mail", href: "/financeiro/email", roles: FINANCEIRO_BANCO_ROLES },
+      // Espelho da planilha da diretoria. Restrita como o módulo bancário: traz
+      // folha de pagamento e distribuição aos sócios da empresa inteira.
+      { label: "Demonstração Financeira", href: "/financeiro?tab=demonstracao", roles: FINANCEIRO_BANCO_ROLES },
     ],
   },
   { label: "Conversas", href: "/conversas", icon: "conversas", module: "CONVERSAS" },

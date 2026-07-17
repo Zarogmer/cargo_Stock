@@ -52,7 +52,7 @@ if (typeof window !== "undefined") {
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { hasPermission } from "@/lib/rbac";
+import { hasPermission, canAccessFinanceiroBanco } from "@/lib/rbac";
 import { db } from "@/lib/db";
 import { allocCountsAsWorked } from "@/lib/alloc-worked";
 import { Tabs } from "@/components/ui/tabs";
@@ -61,6 +61,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { DocumentosTab } from "./documentos-tab";
+import { DemonstracaoFinanceiraPage } from "@/components/financeiro/demonstracao-financeira-page";
 import type {
   JobFunction,
   JobFunctionRate,
@@ -482,6 +483,9 @@ export default function FinanceiroPage() {
   // Trocar a função de um colaborador só neste navio (override travado) é só
   // Executivo/Tecnologia — mesma régua da "Paga" em Colaboradores.
   const canEditFunction = role === "EXECUTIVO" || role === "TECNOLOGIA";
+  // Demonstração Financeira traz folha e distribuição aos sócios: mesma régua do
+  // módulo bancário (Estágio fica de fora). Casa com o roles: do menu em rbac.ts.
+  const canSeeDemonstracao = canAccessFinanceiroBanco(role);
 
   const [functions, setFunctions] = useState<JobFunction[]>([]);
   const [rates, setRates] = useState<JobFunctionRate[]>([]);
@@ -705,6 +709,15 @@ export default function FinanceiroPage() {
         />
       ),
     },
+    // Espelho da planilha da diretoria (import por script, tela só leitura).
+    // Restrita como o módulo bancário — mostra folha e distribuição aos sócios.
+    ...(canSeeDemonstracao
+      ? [{
+          key: "demonstracao",
+          label: "📑 Demonstração Financeira",
+          content: <DemonstracaoFinanceiraPage />,
+        }]
+      : []),
   ];
 
   const activeTabLabel = financeiroTabs.find((t) => t.key === initialTab)?.label;
