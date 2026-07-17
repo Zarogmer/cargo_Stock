@@ -63,6 +63,8 @@ interface Employee {
   status: string | null;
   role: string | null;
   sector: "OPERACIONAL" | "ADMINISTRATIVO" | null;
+  // "Inativo na escalação" (férias/afastamento): não pode ser escalado.
+  escala_unavailable: boolean | null;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -321,7 +323,7 @@ export default function NaviosPage() {
     try {
       const { data } = await db
         .from("employees")
-        .select("id, name, team, phone, status, role, sector")
+        .select("id, name, team, phone, status, role, sector, escala_unavailable")
         .order("name");
       setEmployees((data as any[]) || []);
     } catch (err) {
@@ -531,6 +533,7 @@ export default function NaviosPage() {
           return (
             e.team === team &&
             (status === "ATIVO" || status === "PENDENCIA") &&
+            !e.escala_unavailable &&
             (e.phone || "").trim().length > 0 &&
             !occupiedEmployeeKind.has(e.id)
           );
@@ -2209,13 +2212,16 @@ export default function NaviosPage() {
                     // no grupo". No Embarque, o RH pediu pra deixar Administrativo
                     // na lista também (alguns vão pra bordo). ATIVO + PENDENCIA
                     // aparecem (PENDENCIA ainda pode trabalhar, só sinaliza doc
-                    // vencida). INATIVO/demitido fica fora. Quem ja esta em outra
+                    // vencida). INATIVO/demitido fica fora, assim como quem está
+                    // marcado como inativo na escalação (férias/afastamento) —
+                    // mesma regra das abas Escalação. Quem ja esta em outra
                     // operacao continua na lista mas desabilitado (cinza + badge).
                     const eligible = employees.filter(
                       (e) => {
                         const status = e.status ?? "ATIVO";
                         return (
                           (status === "ATIVO" || status === "PENDENCIA") &&
+                          !e.escala_unavailable &&
                           (e.phone || "").trim().length > 0 &&
                           (!isCostadoForm || e.sector !== "ADMINISTRATIVO")
                         );
@@ -2233,6 +2239,7 @@ export default function NaviosPage() {
                     const adminMembers = employees.filter(
                       (e) =>
                         (e.status ?? "ATIVO") === "ATIVO" &&
+                        !e.escala_unavailable &&
                         e.sector === "ADMINISTRATIVO" &&
                         (e.phone || "").trim().length > 0,
                     );

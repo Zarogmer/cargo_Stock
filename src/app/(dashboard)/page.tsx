@@ -82,6 +82,19 @@ interface VacationLimit {
   overdue: boolean;
 }
 
+interface CrewMember {
+  employee_id: number;
+  employee_name: string;
+  role: string | null;
+  ship_name: string | null;
+}
+
+interface CrewSituation {
+  embarcados: CrewMember[];
+  costado: CrewMember[];
+  disponiveis: CrewMember[];
+}
+
 interface DollarQuote {
   bid: string;
   ask: string;
@@ -105,6 +118,7 @@ export default function DashboardPage() {
   const [trainingAlerts, setTrainingAlerts] = useState<TrainingAlert[]>([]);
   const [birthdays, setBirthdays] = useState<Birthday[]>([]);
   const [vacationLimits, setVacationLimits] = useState<VacationLimit[]>([]);
+  const [crew, setCrew] = useState<CrewSituation>({ embarcados: [], costado: [], disponiveis: [] });
   const [loading, setLoading] = useState(true);
 
   const loadDashboard = useCallback(async () => {
@@ -298,6 +312,63 @@ export default function DashboardPage() {
         .limit(10);
       setRecentPurchases((purchasesRes.data as any[]) || []);
 
+      // Situação da equipe — quem está Embarcado, quem está no Costado e quem
+      // sobrou disponível. Mesma regra da coluna "Escalação" do RH: quem tem
+      // alocação ATIVA está ocupado (kind diz se é Embarque ou Costado); o
+      // resto está disponível, tirando demitidos e inativos na escalação
+      // (férias/afastamento). Sem join no facade do db: monta os mapas à mão.
+      const [crewEmpRes, crewAllocRes] = await Promise.all([
+        db.from("employees").select("id, name, role, status, escala_unavailable").neq("status", "INATIVO").order("name"),
+        db.from("job_allocations").select("employee_id, kind, job_id").eq("status", "ATIVO"),
+      ]);
+      const crewEmps = ((crewEmpRes.data as Array<{ id: number; name: string; role: string | null; escala_unavailable: boolean | null }> | null) || [])
+        .filter((e) => !e.escala_unavailable);
+      const crewAllocs = ((crewAllocRes.data as Array<{ employee_id: number | null; kind: string | null; job_id: string | null }> | null) || [])
+        .filter((a) => a.employee_id != null);
+
+      // job_id → nome do navio, pra mostrar onde a pessoa está.
+      const jobIds = Array.from(new Set(crewAllocs.map((a) => a.job_id).filter(Boolean))) as string[];
+      const jobToShipName = new Map<string, string>();
+      if (jobIds.length > 0) {
+        const jobsRes = await db.from("jobs").select("id, ship_id").in("id", jobIds);
+        const jobRows = (jobsRes.data as Array<{ id: string; ship_id: string | null }> | null) || [];
+        const shipIds = Array.from(new Set(jobRows.map((j) => j.ship_id).filter(Boolean))) as string[];
+        if (shipIds.length > 0) {
+          const shipsRes = await db.from("ships").select("id, name").in("id", shipIds);
+          const shipNames = new Map<string, string>();
+          ((shipsRes.data as Array<{ id: string; name: string }> | null) || []).forEach((s) => shipNames.set(s.id, s.name));
+          jobRows.forEach((j) => {
+            const n = j.ship_id ? shipNames.get(j.ship_id) : null;
+            if (n) jobToShipName.set(j.id, n);
+          });
+        }
+      }
+
+      // employee_id → { kind, navio }. COSTADO ganha se a pessoa aparecer nos
+      // dois (vínculo mais específico: tem data + turno), igual na aba Navios.
+      const allocByEmp = new Map<number, { kind: "EMBARQUE" | "COSTADO"; ship: string | null }>();
+      crewAllocs.forEach((a) => {
+        const kind: "EMBARQUE" | "COSTADO" = a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE";
+        const ship = a.job_id ? jobToShipName.get(a.job_id) || null : null;
+        const prev = allocByEmp.get(a.employee_id!);
+        if (!prev || kind === "COSTADO") allocByEmp.set(a.employee_id!, { kind, ship });
+      });
+
+      const situation: CrewSituation = { embarcados: [], costado: [], disponiveis: [] };
+      crewEmps.forEach((e) => {
+        const alloc = allocByEmp.get(e.id);
+        const member: CrewMember = {
+          employee_id: e.id,
+          employee_name: e.name,
+          role: e.role,
+          ship_name: alloc?.ship ?? null,
+        };
+        if (!alloc) situation.disponiveis.push(member);
+        else if (alloc.kind === "COSTADO") situation.costado.push(member);
+        else situation.embarcados.push(member);
+      });
+      setCrew(situation);
+
       // Load training alerts: ASO, NRs, Meio Ambiente — each renewed yearly.
       // Inativos na escalação (escala_unavailable) ficam de fora, igual demitidos.
       const trainingEmpRes = await db
@@ -487,6 +558,26 @@ export default function DashboardPage() {
           <StatCard label="Compras" value={stats.totalCompras} icon="🧾" tone="orange" href="/solicitacoes?tab=compras" />
         )}
       </div>
+
+      {/* Situação da equipe: Embarcado / Costado / Disponível */}
+      {(crew.embarcados.length + crew.costado.length + crew.disponiveis.length) > 0 && (
+        <CollapsibleSection
+          storageKey="crew-situation"
+          title="⚓ Situação da equipe"
+          subtitle={`${crew.embarcados.length} embarcado(s) · ${crew.costado.length} no costado · ${crew.disponiveis.length} disponível(is)`}
+          headerRight={
+            <Link href="/colaboradores" className="text-xs font-medium text-primary hover:text-primary-dark whitespace-nowrap">
+              Ver RH →
+            </Link>
+          }
+        >
+          <div className="grid grid-cols-1 lg:grid-cols-3 divide-y lg:divide-y-0 lg:divide-x divide-border">
+            <CrewColumn title="Embarcados" icon="⚓" dotClass="bg-blue-600" badgeClass="bg-blue-100 text-blue-700" members={crew.embarcados} emptyText="Ninguém embarcado" />
+            <CrewColumn title="Costado" icon="⛏️" dotClass="bg-amber-600" badgeClass="bg-amber-100 text-amber-700" members={crew.costado} emptyText="Ninguém no costado" />
+            <CrewColumn title="Disponíveis" icon="✓" dotClass="bg-emerald-600" badgeClass="bg-emerald-100 text-emerald-700" members={crew.disponiveis} emptyText="Ninguém disponível" />
+          </div>
+        </CollapsibleSection>
+      )}
 
       {/* Training renewal alerts (ASO + NRs + Meio Ambiente) */}
       {trainingAlerts.length > 0 && (
@@ -832,6 +923,47 @@ const STAT_TONE: Record<StatTone, { chip: string; accent: string }> = {
   yellow:  { chip: "bg-yellow-50 text-yellow-600",   accent: "bg-yellow-500" },
   orange:  { chip: "bg-orange-50 text-orange-600",   accent: "bg-orange-500" },
 };
+
+// Uma coluna do card "Situação da equipe". A lista rola porque a coluna de
+// disponíveis pode ter dezenas de nomes — as três colunas ficam do mesmo tamanho.
+function CrewColumn({
+  title, icon, dotClass, badgeClass, members, emptyText,
+}: {
+  title: string;
+  icon: string;
+  dotClass: string;
+  badgeClass: string;
+  members: CrewMember[];
+  emptyText: string;
+}) {
+  return (
+    <div className="p-6">
+      <div className="flex items-center gap-2 mb-4">
+        <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
+        <span className="text-xs font-semibold uppercase tracking-wider text-text-light">
+          {icon} {title}
+        </span>
+        <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-semibold tabular-nums ${badgeClass}`}>
+          {members.length}
+        </span>
+      </div>
+      {members.length === 0 ? (
+        <p className="text-sm text-text-light py-2">{emptyText}</p>
+      ) : (
+        <ul className="space-y-2 max-h-72 overflow-y-auto pr-1">
+          {members.map((m) => (
+            <li key={m.employee_id} className="min-w-0">
+              <p className="text-sm font-medium text-text truncate">{m.employee_name}</p>
+              <p className="text-[11px] text-text-light truncate">
+                {[m.role, m.ship_name && `🚢 ${m.ship_name}`].filter(Boolean).join(" · ") || "—"}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function StatCard({
   label, value, icon, tone, href,
