@@ -318,7 +318,7 @@ export const NAV_ITEMS: NavItem[] = [
       // a visibilidade de quem tinha EMBARQUE (Gestor/Manutenção não enxergavam)
       // — sem isso, ao herdar SOLICITACOES eles passariam a ver a aba que baixa
       // estoque. A rota segue /escalacao/estoque.
-      { label: "Embarque", href: "/escalacao/estoque", roles: ["EXECUTIVO", "FINANCEIRO", "RH", "TECNOLOGIA", "ESTAGIO"] },
+      { label: "Embarque/Retorno", href: "/escalacao/estoque", roles: ["EXECUTIVO", "FINANCEIRO", "RH", "TECNOLOGIA", "ESTAGIO"] },
     ],
   },
   {

@@ -466,8 +466,46 @@ model Ship {
   externalShipId String?
   externalShip   ExternalShip? @relation(fields: [externalShipId], references: [id])
   jobs           Job[]
+  material_returns MaterialReturn[]
 
   @@map("ships")
+}
+
+// ── Retorno de materiais (Embarque/Retorno) ──────────────────────────────────
+// Quando o navio volta, a manutenção confere o material que embarcou: quanto
+// voltou bom e quanto voltou quebrado, item por item. O que volta bom credita o
+// Estoque de novo (movimento de ENTRADA); o quebrado fica de fora e é anotado.
+// Um registro por conferência (dá pra ter mais de uma por navio); a lista de
+// quebrados pode ser mandada pro grupo do WhatsApp das solicitações.
+model MaterialReturn {
+  id         Int      @id @default(autoincrement())
+  ship_id    String
+  ships      Ship     @relation(fields: [ship_id], references: [id], onDelete: Cascade)
+  team       String // EQUIPE_1 / EQUIPE_2 / EQUIPE_3
+  notes      String?
+  created_by String
+  created_at DateTime @default(now()) @db.Timestamptz()
+
+  material_return_items MaterialReturnItem[]
+
+  @@index([ship_id])
+  @@map("material_returns")
+}
+
+model MaterialReturnItem {
+  id              Int            @id @default(autoincrement())
+  return_id       Int
+  material_return MaterialReturn @relation(fields: [return_id], references: [id], onDelete: Cascade)
+  // Material do Estoque de onde saiu/volta (null se o item não existe mais).
+  stock_item_id   Int?
+  item_name       String // snapshot do nome, pra história não sumir se o item for apagado
+  went_qty        Int    @default(0) // referência: quanto foi (kit da equipe)
+  returned_qty    Int    @default(0) // voltou em bom estado (credita o Estoque)
+  broken_qty      Int    @default(0) // voltou quebrado (não credita; vai pro aviso)
+  note            String? // o que quebrou / observação da manutenção
+
+  @@index([return_id])
+  @@map("material_return_items")
 }
 
 // ── Modelos de "Situação do Embarque" salvos pelo usuário ───────────────────

@@ -29,6 +29,34 @@ interface KitItem {
   stock_items: { id: number; name: string; quantity: number; location: string | null } | null;
 }
 
+// Conferência de retorno de material (material_returns + itens).
+interface ReturnItemRow {
+  id: number;
+  return_id: number;
+  stock_item_id: number | null;
+  item_name: string;
+  went_qty: number;
+  returned_qty: number;
+  broken_qty: number;
+  note: string | null;
+}
+interface MaterialReturn {
+  id: number;
+  ship_id: string;
+  team: string;
+  notes: string | null;
+  created_by: string;
+  created_at: string;
+  material_return_items: ReturnItemRow[];
+}
+
+// Rascunho por material na tela de Retorno (o que voltou / quebrou / obs).
+interface ReturnDraft { returned: string; broken: string; note: string }
+
+const TEAM_LABELS: Record<string, string> = {
+  EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3",
+};
+
 export function EscalacaoEstoquePage() {
   const { profile } = useAuth();
   const pathname = usePathname();
@@ -44,17 +72,29 @@ export function EscalacaoEstoquePage() {
   const [confirmEmbark, setConfirmEmbark] = useState(false);
   const [embarking, setEmbarking] = useState(false);
 
+  // Aba Embarque (preparar/baixar) x Retorno (conferir o que voltou).
+  const [tab, setTab] = useState<"embarque" | "retorno">("embarque");
+  const [returns, setReturns] = useState<MaterialReturn[]>([]);
+  // Rascunho da conferência de retorno, por stock_item_id do material.
+  const [returnDraft, setReturnDraft] = useState<Record<number, ReturnDraft>>({});
+  const [returnNotes, setReturnNotes] = useState("");
+  const [savingReturn, setSavingReturn] = useState(false);
+  const [sendingWhats, setSendingWhats] = useState(false);
+  const [returnMsg, setReturnMsg] = useState<string | null>(null);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [shipsRes, stockRes, kitRes] = await Promise.all([
+      const [shipsRes, stockRes, kitRes, retRes] = await Promise.all([
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
         db.from("stock_items").select("*").order("name"),
         db.from("embark_kit_items").select("*, stock_items(id, name, quantity, location)"),
+        db.from("material_returns").select("*, material_return_items(id, return_id, stock_item_id, item_name, went_qty, returned_qty, broken_qty, note)").order("created_at", { ascending: false }),
       ]);
       setShips((shipsRes.data as Ship[]) || []);
       setStockItems(stockRes.data || []);
       setKitItems((kitRes.data as KitItem[]) || []);
+      setReturns((retRes.data as MaterialReturn[]) || []);
     } catch (err) {
       console.error("Load error:", err);
     } finally {
@@ -157,6 +197,128 @@ export function EscalacaoEstoquePage() {
     loadData();
   }
 
+  // Retornos já registrados deste navio (histórico, mais recente primeiro).
+  const shipReturns = returns.filter((r) => r.ship_id === selectedShip);
+
+  function setDraft(stockItemId: number, patch: Partial<ReturnDraft>) {
+    setReturnDraft((prev) => {
+      const base: ReturnDraft = prev[stockItemId] ?? { returned: "", broken: "", note: "" };
+      return { ...prev, [stockItemId]: { ...base, ...patch } };
+    });
+  }
+
+  // Linhas do retorno preenchidas (algum voltou/quebrou/obs). Usadas pra salvar
+  // e pra montar o aviso de quebrados.
+  function buildReturnRows() {
+    return teamKit
+      .map((k) => {
+        const d = returnDraft[k.stock_item_id] || { returned: "", broken: "", note: "" };
+        const returned = Math.max(0, Math.floor(parseFloat(d.returned) || 0));
+        const broken = Math.max(0, Math.floor(parseFloat(d.broken) || 0));
+        const note = d.note.trim();
+        return { k, returned, broken, note };
+      })
+      .filter((r) => r.returned > 0 || r.broken > 0 || r.note);
+  }
+
+  async function handleSaveReturn() {
+    if (!currentShip) return;
+    const rows = buildReturnRows();
+    if (rows.length === 0) {
+      setReturnMsg("Preencha quanto voltou ou quebrou em pelo menos um item.");
+      return;
+    }
+    setSavingReturn(true);
+    setReturnMsg(null);
+    const actor = profile?.full_name || "Sistema";
+    try {
+      const insRes: any = await db.from("material_returns").insert({
+        ship_id: selectedShip,
+        team: selectedTeam,
+        notes: returnNotes.trim() || null,
+        created_by: actor,
+      });
+      const created = insRes.data;
+      const returnId = Array.isArray(created) ? created[0]?.id : created?.id;
+      if (!returnId) throw new Error("Falha ao criar o retorno.");
+
+      for (const r of rows) {
+        await db.from("material_return_items").insert({
+          return_id: returnId,
+          stock_item_id: r.k.stock_item_id,
+          item_name: r.k.estName,
+          went_qty: r.k.need,
+          returned_qty: r.returned,
+          broken_qty: r.broken,
+          note: r.note || null,
+        });
+        // O que voltou em bom estado credita o Estoque de volta (ENTRADA); o
+        // quebrado não volta pro estoque.
+        if (r.returned > 0) {
+          await db.from("stock_movements").insert({
+            stock_item_id: r.k.stock_item_id,
+            movement_type: "ENTRADA",
+            quantity: r.returned,
+            movement_date: new Date().toISOString().split("T")[0],
+            notes: `Retorno: ${currentShip.name} (${selectedTeam})`,
+            created_by: actor,
+          } as any);
+          await db.from("stock_items").update({
+            quantity: r.k.emEstoque + r.returned,
+            updated_by: actor,
+          } as any).eq("id", r.k.stock_item_id);
+        }
+      }
+      setReturnDraft({});
+      setReturnNotes("");
+      setReturnMsg("✅ Retorno registrado. O que voltou bom foi creditado no Estoque.");
+      loadData();
+    } catch (err) {
+      setReturnMsg(`Erro ao salvar retorno: ${(err as Error).message}`);
+    } finally {
+      setSavingReturn(false);
+    }
+  }
+
+  async function handleSendBroken() {
+    if (!currentShip) return;
+    const rows = buildReturnRows().filter((r) => r.broken > 0 || (r.note && r.returned === 0));
+    const brokenItems = rows.map((r) => ({ name: r.k.estName, qty: r.broken, note: r.note || null }));
+    if (brokenItems.length === 0) {
+      setReturnMsg("Nada de quebrado pra enviar — preencha a coluna Quebrou (ou uma observação).");
+      return;
+    }
+    setSendingWhats(true);
+    setReturnMsg(null);
+    try {
+      const res = await fetch("/api/retorno/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shipName: currentShip.name,
+          team: selectedTeam,
+          brokenItems,
+          notes: returnNotes.trim() || null,
+          checkedBy: profile?.full_name || null,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (data?.sent) {
+        setReturnMsg(`📨 Enviado pro WhatsApp (${data.group || "grupo de compras"}).`);
+      } else if (data?.warning) {
+        setReturnMsg(`⚠️ ${data.warning}`);
+      } else if (data?.skipped) {
+        setReturnMsg(`⚠️ ${data.skipped}`);
+      } else {
+        setReturnMsg("Não consegui enviar pro WhatsApp.");
+      }
+    } catch (err) {
+      setReturnMsg(`Erro ao enviar: ${(err as Error).message}`);
+    } finally {
+      setSendingWhats(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -171,7 +333,7 @@ export function EscalacaoEstoquePage() {
   if (ships.length === 0) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-bold text-text">Embarque 📦</h1>
+        <h1 className="text-2xl font-bold text-text">Embarque/Retorno 📦</h1>
         <div className="bg-card rounded-xl shadow-sm border border-border p-8 text-center text-text-light">
           <span className="text-4xl block mb-3">🚢</span>
           <p className="font-medium text-text mb-1">Nenhum navio agendado ou em operação</p>
@@ -183,13 +345,29 @@ export function EscalacaoEstoquePage() {
 
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-bold text-text">Embarque 📦</h1>
+      <h1 className="text-2xl font-bold text-text">Embarque/Retorno 📦</h1>
 
       <ShipSelector
         ships={ships}
         selectedShip={selectedShip}
         onSelect={setSelectedShip}
       />
+
+      {/* Abas: Embarque (preparar/baixar) x Retorno (conferir o que voltou) */}
+      <div className="flex gap-1 border-b border-border">
+        {([["embarque", "📦 Embarque"], ["retorno", "🛠️ Retorno"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => { setTab(key); setReturnMsg(null); }}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
+              tab === key ? "border-primary text-primary" : "border-transparent text-text-light hover:text-text"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
       <div className="flex flex-wrap gap-2 items-center justify-between">
         <div className="flex gap-2 items-center">
@@ -204,13 +382,33 @@ export function EscalacaoEstoquePage() {
             <option value="EQUIPE_3">Equipe 3</option>
           </select>
         </div>
-        {canEmbarcar && (teamItems.length > 0 || teamKit.length > 0) && (
+        {tab === "embarque" && canEmbarcar && (teamItems.length > 0 || teamKit.length > 0) && (
           <Button size="sm" variant="warning" onClick={() => setConfirmEmbark(true)}>
             ⚓ Embarcar
           </Button>
         )}
       </div>
 
+      {tab === "retorno" && (
+        <RetornoSection
+          shipName={currentShip?.name || ""}
+          team={selectedTeam}
+          teamKit={teamKit}
+          draft={returnDraft}
+          setDraft={setDraft}
+          notes={returnNotes}
+          setNotes={setReturnNotes}
+          onSave={handleSaveReturn}
+          onSend={handleSendBroken}
+          saving={savingReturn}
+          sending={sendingWhats}
+          canEdit={canEmbarcar}
+          message={returnMsg}
+          history={shipReturns}
+        />
+      )}
+
+      {tab === "embarque" && (<>
       {/* Materiais — baixados do Estoque (GALPAO) ao embarcar */}
       <section className="space-y-2">
         <div className="flex items-center justify-between flex-wrap gap-2">
@@ -319,6 +517,7 @@ export function EscalacaoEstoquePage() {
           </div>
         </div>
       </section>
+      </>)}
 
       <ConfirmDialog
         open={confirmEmbark}
@@ -330,6 +529,152 @@ export function EscalacaoEstoquePage() {
         variant="warning"
         loading={embarking}
       />
+    </div>
+  );
+}
+
+// ─── Retorno de material ────────────────────────────────────────────────────
+// Conferência do que voltou do navio: por material do kit, quanto voltou bom e
+// quanto quebrou. O bom credita o Estoque ao salvar; a lista de quebrados pode
+// ir pro grupo do WhatsApp das solicitações.
+function RetornoSection({
+  shipName, team, teamKit, draft, setDraft, notes, setNotes,
+  onSave, onSend, saving, sending, canEdit, message, history,
+}: {
+  shipName: string;
+  team: string;
+  teamKit: Array<{ id: number; stock_item_id: number; estName: string; need: number; emEstoque: number; location: string }>;
+  draft: Record<number, ReturnDraft>;
+  setDraft: (stockItemId: number, patch: Partial<ReturnDraft>) => void;
+  notes: string;
+  setNotes: (v: string) => void;
+  onSave: () => void;
+  onSend: () => void;
+  saving: boolean;
+  sending: boolean;
+  canEdit: boolean;
+  message: string | null;
+  history: MaterialReturn[];
+}) {
+  const numCls = "w-16 px-2 py-1 border border-border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40";
+
+  return (
+    <div className="space-y-4">
+      {message && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5 text-sm text-blue-800">{message}</div>
+      )}
+
+      <section className="space-y-2">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h2 className="text-sm font-bold text-text uppercase tracking-wider">🛠️ Retorno de material — {TEAM_LABELS[team] || team}</h2>
+          <span className="text-xs text-text-light">Bom volta pro estoque; quebrado é anotado e enviado.</span>
+        </div>
+
+        <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b border-border">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Material</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto a equipe leva (referência do kit)">Foi</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Voltou</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Quebrou</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">O que quebrou / obs.</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {teamKit.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-10 text-center text-text-light">
+                      <span className="text-3xl block mb-2">🧰</span>
+                      Sem kit de materiais para esta equipe
+                    </td>
+                  </tr>
+                ) : (
+                  teamKit.map((k) => {
+                    const d = draft[k.stock_item_id] || { returned: "", broken: "", note: "" };
+                    return (
+                      <tr key={k.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-2.5 font-medium">{k.estName}</td>
+                        <td className="px-4 py-2.5 text-center text-text-light">{k.need}</td>
+                        <td className="px-4 py-2.5 text-center">
+                          <input type="number" min={0} step={1} value={d.returned} disabled={!canEdit}
+                            onChange={(e) => setDraft(k.stock_item_id, { returned: e.target.value })}
+                            className={numCls} placeholder="0" />
+                        </td>
+                        <td className="px-4 py-2.5 text-center">
+                          <input type="number" min={0} step={1} value={d.broken} disabled={!canEdit}
+                            onChange={(e) => setDraft(k.stock_item_id, { broken: e.target.value })}
+                            className={`${numCls} ${(parseInt(d.broken) || 0) > 0 ? "border-red-300 text-red-700" : ""}`} placeholder="0" />
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <input type="text" value={d.note} disabled={!canEdit}
+                            onChange={(e) => setDraft(k.stock_item_id, { note: e.target.value })}
+                            placeholder="Ex.: cabo partido, motor queimado..."
+                            className="w-full px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} disabled={!canEdit} rows={2}
+          placeholder="Observações gerais do retorno (opcional)..."
+          className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 resize-none" />
+
+        {canEdit && teamKit.length > 0 && (
+          <div className="flex flex-wrap gap-2 justify-end">
+            <Button size="sm" variant="secondary" onClick={onSend} disabled={sending || saving}>
+              {sending ? "Enviando..." : "📨 Enviar quebrados pro WhatsApp"}
+            </Button>
+            <Button size="sm" onClick={onSave} disabled={saving || sending}>
+              {saving ? "Salvando..." : "💾 Salvar retorno"}
+            </Button>
+          </div>
+        )}
+      </section>
+
+      {/* Histórico de retornos deste navio */}
+      {history.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-bold text-text uppercase tracking-wider">📋 Retornos anteriores — {shipName}</h2>
+          <div className="space-y-2">
+            {history.map((r) => {
+              const broken = (r.material_return_items || []).filter((it) => it.broken_qty > 0 || (it.note && it.returned_qty === 0));
+              const returned = (r.material_return_items || []).filter((it) => it.returned_qty > 0);
+              return (
+                <div key={r.id} className="bg-card border border-border rounded-lg px-4 py-3 text-sm">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="font-medium">
+                      {new Date(r.created_at).toLocaleDateString("pt-BR")} · {TEAM_LABELS[r.team] || r.team}
+                    </span>
+                    <span className="text-xs text-text-light">por {r.created_by}</span>
+                  </div>
+                  {returned.length > 0 && (
+                    <p className="text-xs text-emerald-700 mt-1">
+                      ✓ Voltou: {returned.map((it) => `${it.item_name} (${it.returned_qty})`).join(", ")}
+                    </p>
+                  )}
+                  {broken.length > 0 && (
+                    <ul className="mt-1 space-y-0.5">
+                      {broken.map((it) => (
+                        <li key={it.id} className="text-xs text-red-700">
+                          🔧 {it.item_name}{it.broken_qty > 0 ? ` (${it.broken_qty})` : ""}{it.note ? ` — ${it.note}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {r.notes && <p className="text-xs text-text-light mt-1 italic">📝 {r.notes}</p>}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

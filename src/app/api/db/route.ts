@@ -38,6 +38,8 @@ const TABLE_MAP: Record<string, string> = {
   financial_statement_entries: "financialStatementEntry",
   employee_advances: "employeeAdvance",
   advance_discounts: "advanceDiscount",
+  material_returns: "materialReturn",
+  material_return_items: "materialReturnItem",
   // Also support "profiles" alias -> reads from users table
   profiles: "user",
   // WhatsApp
