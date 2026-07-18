@@ -15,11 +15,15 @@ export interface Ship {
 }
 
 export function ShipSelector({
-  ships, selectedShip, onSelect,
+  ships, selectedShip, onSelect, showFinished, onToggleFinished,
 }: {
   ships: Ship[];
   selectedShip: string;
   onSelect: (id: string) => void;
+  // Opcionais: quando passados, mostra o toggle "Ver navios finalizados" pra
+  // consultar escalações antigas (navios CONCLUIDO/CANCELADO).
+  showFinished?: boolean;
+  onToggleFinished?: (v: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -47,14 +51,31 @@ export function ShipSelector({
       ? { cls: "bg-blue-100 text-blue-700", label: "Agendado", icon: "📅" }
       : status === "EM_OPERACAO"
         ? { cls: "bg-amber-100 text-amber-700", label: "Em Operação", icon: "⚓" }
-        : { cls: "bg-gray-100 text-gray-700", label: status, icon: "🚢" };
+        : status === "CONCLUIDO"
+          ? { cls: "bg-emerald-100 text-emerald-700", label: "Concluído", icon: "✅" }
+          : status === "CANCELADO"
+            ? { cls: "bg-red-100 text-red-700", label: "Cancelado", icon: "🚫" }
+            : { cls: "bg-gray-100 text-gray-700", label: status, icon: "🚢" };
   }
 
   return (
     <div ref={ref} className="relative">
-      <label className="block text-xs font-semibold text-text-light uppercase tracking-wider mb-1.5">
-        🚢 Navio
-      </label>
+      <div className="flex items-center justify-between mb-1.5">
+        <label className="block text-xs font-semibold text-text-light uppercase tracking-wider">
+          🚢 Navio
+        </label>
+        {onToggleFinished && (
+          <label className="flex items-center gap-1.5 text-xs text-text-light cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!showFinished}
+              onChange={(e) => onToggleFinished(e.target.checked)}
+              className="w-3.5 h-3.5 accent-primary"
+            />
+            Ver navios finalizados
+          </label>
+        )}
+      </div>
       <button
         type="button"
         onClick={() => setOpen(!open)}
@@ -137,7 +158,7 @@ export function ShipSelector({
             )}
           </div>
           <div className="px-3 py-2 bg-gray-50 border-t border-border text-[10px] text-text-light text-center">
-            {ships.length} navio(s) disponível(eis) (Agendado / Em Operação)
+            {ships.length} navio(s) {showFinished ? "(inclui finalizados)" : "(Agendado / Em Operação)"}
           </div>
         </div>
       )}

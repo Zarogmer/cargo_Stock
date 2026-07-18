@@ -65,6 +65,8 @@ export function EscalacaoCostadoPage() {
 
   const [ships, setShips] = useState<Ship[]>([]);
   const [selectedShip, setSelectedShip] = useState<string>("");
+  // Ver navios finalizados (CONCLUIDO/CANCELADO) pra consultar escalações antigas.
+  const [showFinished, setShowFinished] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string>(todayISO());
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [functions, setFunctions] = useState<JobFunction[]>([]);
@@ -80,7 +82,7 @@ export function EscalacaoCostadoPage() {
     setLoading(true);
     try {
       const [shipsRes, empRes, fnRes, jobsRes, allocsRes, marksRes] = await Promise.all([
-        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
+        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]).order("arrival_date"),
         db.from("employees").select("id, name, role, status, sector, escala_unavailable").order("name"),
         db.from("job_functions").select("*").order("name"),
         db.from("jobs").select("*"),
@@ -104,11 +106,21 @@ export function EscalacaoCostadoPage() {
 
   useEffect(() => { loadData(); }, [loadData, pathname]);
 
+  // Navios finalizados só entram no seletor com o toggle ligado.
+  const isActiveShip = (s: Ship) => s.status === "AGENDADO" || s.status === "EM_OPERACAO";
+  const visibleShips = useMemo(
+    () => (showFinished ? ships : ships.filter(isActiveShip)),
+    [ships, showFinished],
+  );
+
+  // Seleciona o 1º navio visível; se o selecionado saiu da lista (desligou o
+  // toggle e ele era finalizado), cai pro 1º visível de novo.
   useEffect(() => {
-    if (ships.length > 0 && !selectedShip) {
-      setSelectedShip(ships[0].id);
+    if (visibleShips.length === 0) return;
+    if (!selectedShip || !visibleShips.some((s) => s.id === selectedShip)) {
+      setSelectedShip(visibleShips[0].id);
     }
-  }, [ships, selectedShip]);
+  }, [visibleShips, selectedShip]);
 
   const currentShip = ships.find((s) => s.id === selectedShip);
   const shipJob = useMemo(() => jobs.find((j) => j.ship_id === selectedShip) ?? null, [jobs, selectedShip]);
@@ -141,20 +153,20 @@ export function EscalacaoCostadoPage() {
     return empty;
   }, [shipCostadoAllocations, selectedDate]);
 
-  // Funcionarios em job_allocations ATIVAS em QUALQUER OUTRO job (excluindo
-  // o job do navio Costado atual) com o tipo de operacao em que estao.
-  // Aparecem no seletor desabilitados com badge Costado/Embarcado --
-  // regra do RH: ninguem em duas operacoes ao mesmo tempo, mas a equipe
-  // quer ver o nome pra saber por que nao da pra escalar.
+  // Funcionarios EMBARCADOS (job_allocations ATIVAS de EMBARQUE em outro job).
+  // No Costado, so quem esta embarcado numa voyage fica bloqueado -- quem ja
+  // esta em OUTRO Costado pode ser escalado de novo (a mesma pessoa cobre dois
+  // navios de costado). Por isso ignoramos alocacoes COSTADO aqui. Aparecem no
+  // seletor desabilitados com badge "Embarcado".
   const otherJobOccupiedKind = useMemo(() => {
     const map = new Map<number, "EMBARQUE" | "COSTADO">();
     for (const a of allocations) {
       if (a.status !== "ATIVO") continue;
       if (a.employee_id == null) continue;
       if (shipJob && a.job_id === shipJob.id) continue;
-      const k: "EMBARQUE" | "COSTADO" = a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE";
-      const prev = map.get(a.employee_id);
-      if (!prev || k === "COSTADO") map.set(a.employee_id, k);
+      // Estar em outro Costado nao impede uma nova escala de Costado.
+      if (a.kind === "COSTADO") continue;
+      map.set(a.employee_id, "EMBARQUE");
     }
     return map;
   }, [allocations, shipJob]);
@@ -290,7 +302,7 @@ export function EscalacaoCostadoPage() {
     <div className="space-y-4 max-w-7xl mx-auto">
       <h1 className="text-2xl font-bold text-text">Escalação de Costado ⛏️</h1>
 
-      <ShipSelector ships={ships} selectedShip={selectedShip} onSelect={setSelectedShip} />
+      <ShipSelector ships={visibleShips} selectedShip={selectedShip} onSelect={setSelectedShip} showFinished={showFinished} onToggleFinished={setShowFinished} />
 
       {/* In-page sub-tabs */}
       <div className="flex gap-1 border-b border-border">
@@ -998,7 +1010,7 @@ function AddCostadoCrewModal({
           />
           {otherJobOccupiedKind.size > 0 && (
             <p className="text-[10px] text-text-light mt-1">
-              ℹ️ Colaboradores em <span className="italic">cinza</span> já estão em outra operação ativa.
+              ℹ️ Colaboradores em <span className="italic">cinza</span> estão embarcados em outra operação. (Quem está em outro costado pode ser escalado.)
             </p>
           )}
           <div className="mt-2 max-h-56 overflow-y-auto border border-border rounded-lg bg-card">

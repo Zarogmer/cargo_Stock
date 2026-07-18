@@ -247,7 +247,6 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       { label: "Escalação de Costado", href: "/escalacao/costado" },
       { label: "Escalação de Embarque", href: "/escalacao/embarque" },
-      { label: "Embarque", href: "/escalacao/estoque" },
     ],
   },
   {
@@ -315,6 +314,11 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Controle de Compras", href: "/solicitacoes?tab=compras", roles: COMPRAS_ROLES },
       { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos", roles: PRODUTOS_ROLES },
       { label: "Fornecedores", href: "/solicitacoes?tab=fornecedores" },
+      // "Embarque" (loadout: kit de embarque + rancho) veio da Escalação. Mantém
+      // a visibilidade de quem tinha EMBARQUE (Gestor/Manutenção não enxergavam)
+      // — sem isso, ao herdar SOLICITACOES eles passariam a ver a aba que baixa
+      // estoque. A rota segue /escalacao/estoque.
+      { label: "Embarque", href: "/escalacao/estoque", roles: ["EXECUTIVO", "FINANCEIRO", "RH", "TECNOLOGIA", "ESTAGIO"] },
     ],
   },
   {

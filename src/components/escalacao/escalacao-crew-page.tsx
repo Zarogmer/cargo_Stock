@@ -50,6 +50,9 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
 
   const [ships, setShips] = useState<Ship[]>([]);
   const [selectedShip, setSelectedShip] = useState<string>("");
+  // Mostrar navios finalizados (CONCLUIDO/CANCELADO) pra consultar escalações
+  // antigas. Por padrão off — o dia a dia é só navio agendado/em operação.
+  const [showFinished, setShowFinished] = useState(false);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [functions, setFunctions] = useState<JobFunction[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -60,7 +63,7 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
     setLoading(true);
     try {
       const [shipsRes, empRes, fnRes, jobsRes, allocsRes] = await Promise.all([
-        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
+        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]).order("arrival_date"),
         db.from("employees").select("id, name, role, status, sector, escala_unavailable, bank_name, bank_agency, bank_account, bank_account_type").order("name"),
         db.from("job_functions").select("*").order("name"),
         db.from("jobs").select("*"),
@@ -82,11 +85,21 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
 
   useEffect(() => { loadData(); }, [loadData, pathname]);
 
+  // Navios finalizados só entram no seletor com o toggle ligado.
+  const isActiveShip = (s: Ship) => s.status === "AGENDADO" || s.status === "EM_OPERACAO";
+  const visibleShips = useMemo(
+    () => (showFinished ? ships : ships.filter(isActiveShip)),
+    [ships, showFinished],
+  );
+
+  // Seleciona o 1º navio visível; se o selecionado saiu da lista (ex.: desligou
+  // o toggle e ele era finalizado), cai pro 1º visível de novo.
   useEffect(() => {
-    if (ships.length > 0 && !selectedShip) {
-      setSelectedShip(ships[0].id);
+    if (visibleShips.length === 0) return;
+    if (!selectedShip || !visibleShips.some((s) => s.id === selectedShip)) {
+      setSelectedShip(visibleShips[0].id);
     }
-  }, [ships, selectedShip]);
+  }, [visibleShips, selectedShip]);
 
   const currentShip = ships.find((s) => s.id === selectedShip);
   const shipJob = useMemo(() => jobs.find((j) => j.ship_id === selectedShip) ?? null, [jobs, selectedShip]);
@@ -143,9 +156,11 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
       <h1 className="text-2xl font-bold text-text">{config.title} {config.emoji}</h1>
 
       <ShipSelector
-        ships={ships}
+        ships={visibleShips}
         selectedShip={selectedShip}
         onSelect={setSelectedShip}
+        showFinished={showFinished}
+        onToggleFinished={setShowFinished}
       />
 
       <EscalacaoTab
@@ -167,11 +182,13 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
 // ─── SHIP SELECTOR ──────────────────────────────────────────────────────────
 
 function ShipSelector({
-  ships, selectedShip, onSelect,
+  ships, selectedShip, onSelect, showFinished, onToggleFinished,
 }: {
   ships: Ship[];
   selectedShip: string;
   onSelect: (id: string) => void;
+  showFinished: boolean;
+  onToggleFinished: (v: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -199,14 +216,30 @@ function ShipSelector({
       ? { cls: "bg-blue-100 text-blue-700", label: "Agendado", icon: "📅" }
       : status === "EM_OPERACAO"
         ? { cls: "bg-amber-100 text-amber-700", label: "Em Operação", icon: "⚓" }
-        : { cls: "bg-gray-100 text-gray-700", label: status, icon: "🚢" };
+        : status === "CONCLUIDO"
+          ? { cls: "bg-emerald-100 text-emerald-700", label: "Concluído", icon: "✅" }
+          : status === "CANCELADO"
+            ? { cls: "bg-red-100 text-red-700", label: "Cancelado", icon: "🚫" }
+            : { cls: "bg-gray-100 text-gray-700", label: status, icon: "🚢" };
   }
 
   return (
     <div ref={ref} className="relative">
-      <label className="block text-xs font-semibold text-text-light uppercase tracking-wider mb-1.5">
-        🚢 Navio
-      </label>
+      <div className="flex items-center justify-between mb-1.5">
+        <label className="block text-xs font-semibold text-text-light uppercase tracking-wider">
+          🚢 Navio
+        </label>
+        {/* Consultar escalações antigas: traz navios finalizados pro seletor. */}
+        <label className="flex items-center gap-1.5 text-xs text-text-light cursor-pointer">
+          <input
+            type="checkbox"
+            checked={showFinished}
+            onChange={(e) => onToggleFinished(e.target.checked)}
+            className="w-3.5 h-3.5 accent-primary"
+          />
+          Ver navios finalizados
+        </label>
+      </div>
 
       <button
         type="button"
@@ -307,7 +340,7 @@ function ShipSelector({
             )}
           </div>
           <div className="px-3 py-2 bg-gray-50 border-t border-border text-[10px] text-text-light text-center">
-            {ships.length} navio(s) disponível(eis) (Agendado / Em Operação)
+            {ships.length} navio(s) {showFinished ? "(inclui finalizados)" : "(Agendado / Em Operação)"}
           </div>
         </div>
       )}
