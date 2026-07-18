@@ -479,7 +479,7 @@ model Ship {
 // quebrados pode ser mandada pro grupo do WhatsApp das solicitações.
 model MaterialReturn {
   id         Int      @id @default(autoincrement())
-  ship_id    String
+  ship_id    String   @db.Uuid
   ships      Ship     @relation(fields: [ship_id], references: [id], onDelete: Cascade)
   team       String // EQUIPE_1 / EQUIPE_2 / EQUIPE_3
   notes      String?

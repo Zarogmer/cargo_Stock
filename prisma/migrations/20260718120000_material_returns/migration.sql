@@ -1,7 +1,7 @@
 -- CreateTable
 CREATE TABLE "material_returns" (
     "id" SERIAL NOT NULL,
-    "ship_id" TEXT NOT NULL,
+    "ship_id" UUID NOT NULL,
     "team" TEXT NOT NULL,
     "notes" TEXT,
     "created_by" TEXT NOT NULL,
