@@ -992,32 +992,40 @@ const DEFAULT_HEADCOUNTS_BY_NAME: Record<string, number> = {
 // (Kimi Klap); o resto é fixo por operação, independente de porões. As
 // quantidades fracionadas (0.1 de uma manutenção, 0.3 do custo fixo mensal)
 // são rateios da planilha e ficam editáveis.
-interface FixedCostSeed { key: string; label: string; qty: number; valor: number; perPorao: boolean; }
-const FIXED_COST_SEED: FixedCostSeed[] = [
-  { key: "kimi_klap", label: "Kimi Klap", qty: 2, valor: 422, perPorao: true },
-  { key: "remocom", label: "Remocom", qty: 0, valor: 0, perPorao: false },
-  { key: "mercado", label: "Mercado", qty: 1, valor: 2800, perPorao: false },
-  { key: "uniformes_epis", label: "Uniformes + EPIs", qty: 15, valor: 15, perPorao: false },
-  { key: "alimentacao", label: "Alimentação pré-embarque", qty: 15, valor: 35, perPorao: false },
-  { key: "manut_avarias", label: "Manutenção de avarias", qty: 1, valor: 3000, perPorao: false },
-  { key: "manut_preventiva", label: "Manutenção preventiva", qty: 0.1, valor: 17000, perPorao: false },
-  { key: "lancha", label: "Lancha", qty: 0, valor: 2200, perPorao: false },
-  { key: "transp_pessoal", label: "Transporte pessoal", qty: 0, valor: 250, perPorao: false },
-  { key: "transp_equip", label: "Transporte de equipamento", qty: 0, valor: 1240, perPorao: false },
-  { key: "custo_fixo_medio", label: "Custo fixo médio", qty: 0.3, valor: 49500, perPorao: false },
-];
+// Custos da operação — uma tabela-referência ("um norte") totalmente editável:
+// nome, quantidade, valor e o "× porão" de cada linha, além de adicionar e
+// remover linhas. Parte dos itens da planilha de simulação como ponto de
+// partida. `valor: null` marca a linha que puxa o valor do sistema (o Custo
+// Fixo Médio, da Demonstração Financeira); ao digitar um valor, vira manual.
+interface CostItem { id: string; label: string; qty: number; valor: number | null; perPorao: boolean; auto?: "demonstracao"; }
 
-// v2: modelo passou a guardar só os overrides do usuário (antes gravava a
-// planilha inteira), pra o Custo Fixo Médio vindo do sistema poder fluir.
-const OPERACAO_STORAGE_KEY = "financeiro:custo-operacao:v2";
+function seedCostItems(): CostItem[] {
+  return [
+    { id: "kimi_klap", label: "Kimi Klap", qty: 2, valor: 422, perPorao: true },
+    { id: "remocom", label: "Remocom", qty: 0, valor: 0, perPorao: false },
+    { id: "mercado", label: "Mercado", qty: 1, valor: 2800, perPorao: false },
+    { id: "uniformes_epis", label: "Uniformes + EPIs", qty: 15, valor: 15, perPorao: false },
+    { id: "alimentacao", label: "Alimentação pré-embarque", qty: 15, valor: 35, perPorao: false },
+    { id: "manut_avarias", label: "Manutenção de avarias", qty: 1, valor: 3000, perPorao: false },
+    { id: "manut_preventiva", label: "Manutenção preventiva", qty: 0.1, valor: 17000, perPorao: false },
+    { id: "lancha", label: "Lancha", qty: 0, valor: 2200, perPorao: false },
+    { id: "transp_pessoal", label: "Transporte pessoal", qty: 0, valor: 250, perPorao: false },
+    { id: "transp_equip", label: "Transporte de equipamento", qty: 0, valor: 1240, perPorao: false },
+    { id: "custo_fixo_medio", label: "Custo fixo médio", qty: 0.3, valor: null, perPorao: false, auto: "demonstracao" },
+  ];
+}
+
+// v3: os custos da operação viraram uma lista editável (antes eram overrides
+// sobre um seed fixo). Chave nova pra não misturar com a estrutura antiga.
+const OPERACAO_STORAGE_KEY = "financeiro:custo-operacao:v3";
 const DEFAULT_POROES = 5;
 
-// A linha "Custo fixo médio" não usa o valor da planilha (49.500): puxa a média
-// mensal real das despesas fixas da empresa da Demonstração Financeira. "Fixo"
-// aqui = Escritório (6.x) + Impostos/Taxas (7.x) + Patrimônio (11) + Seguros
-// (12). Fica de fora a Folha (já contada na mão de obra) e a Distribuição aos
-// Sócios (lucro, não custo). Sem Demonstração importada, cai no valor da planilha.
-const CUSTO_FIXO_MEDIO_KEY = "custo_fixo_medio";
+// A linha com `auto: "demonstracao"` (Custo Fixo Médio) puxa a média mensal real
+// das despesas fixas da empresa da Demonstração Financeira. "Fixo" aqui =
+// Escritório (6.x) + Impostos/Taxas (7.x) + Patrimônio (11) + Seguros (12). Fica
+// de fora a Folha (já na mão de obra) e a Distribuição aos Sócios (lucro). Sem
+// Demonstração importada, cai neste valor de referência.
+const CUSTO_FIXO_MEDIO_FALLBACK = 49500;
 const FIXED_COST_SECTIONS = new Set(["6.1", "6.2", "6.3", "6.4", "7.1", "11", "12"]);
 
 function defaultHeadcountForName(name: string): number {
@@ -1031,14 +1039,16 @@ function parseSimNumber(raw: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-interface FixedCostState { qty?: number; valor?: number; }
+// Id estável pra linha nova, sem depender de índice (que muda ao remover).
+function newCostId(): string {
+  return "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
 interface SimState {
   poroes: number;
   labor: Record<number, number>; // fnId → headcount
   laborRate: Record<number, number>; // fnId → valor un. (override; ausente = default_rate)
-  // Só overrides do usuário. Linha ausente/campo ausente = usa o valor-base
-  // (da planilha, ou do sistema no caso do Custo Fixo Médio).
-  fixed: Record<string, FixedCostState>;
+  items: CostItem[]; // custos da operação, editáveis
 }
 
 function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
@@ -1048,14 +1058,16 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
     [functions],
   );
 
-  const [collapsed, setCollapsed] = useState(false);
+  // Recolhida por padrão — é uma referência de consulta, não o foco da aba.
+  const [collapsed, setCollapsed] = useState(true);
   const [loaded, setLoaded] = useState(false);
-  const [sim, setSim] = useState<SimState>({ poroes: DEFAULT_POROES, labor: {}, laborRate: {}, fixed: {} });
+  const [sim, setSim] = useState<SimState>({ poroes: DEFAULT_POROES, labor: {}, laborRate: {}, items: seedCostItems() });
   // Média mensal das despesas fixas, da Demonstração Financeira. null = ainda
-  // carregando ou nada importado (aí o Custo Fixo Médio cai no valor da planilha).
+  // carregando ou nada importado (aí o Custo Fixo Médio cai no valor de referência).
   const [monthlyFixed, setMonthlyFixed] = useState<number | null>(null);
 
-  // Carrega o que estiver salvo (uma vez). fixed guarda só overrides do usuário.
+  // Carrega o que estiver salvo (uma vez). Os custos da operação vêm salvos como
+  // lista; sem nada salvo, começam com os itens de referência da planilha.
   useEffect(() => {
     let saved: Partial<SimState> = {};
     try {
@@ -1068,7 +1080,7 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
       poroes: Number.isFinite(saved.poroes) ? Number(saved.poroes) : DEFAULT_POROES,
       labor: { ...(saved.labor || {}) },
       laborRate: { ...(saved.laborRate || {}) },
-      fixed: { ...(saved.fixed || {}) },
+      items: Array.isArray(saved.items) && saved.items.length > 0 ? saved.items : seedCostItems(),
     });
     setLoaded(true);
   }, []);
@@ -1130,16 +1142,19 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
   function setLaborRate(fnId: number, raw: string) {
     setSim((s) => ({ ...s, laborRate: { ...s.laborRate, [fnId]: Math.max(0, parseSimNumber(raw)) } }));
   }
-  function setFixed(key: string, field: "qty" | "valor", raw: string) {
-    setSim((s) => {
-      const cur = s.fixed[key] ?? {};
-      return { ...s, fixed: { ...s.fixed, [key]: { ...cur, [field]: Math.max(0, parseSimNumber(raw)) } } };
-    });
+  function updateItem(id: string, patch: Partial<CostItem>) {
+    setSim((s) => ({ ...s, items: s.items.map((it) => (it.id === id ? { ...it, ...patch } : it)) }));
+  }
+  function addItem() {
+    setSim((s) => ({ ...s, items: [...s.items, { id: newCostId(), label: "Novo item", qty: 1, valor: 0, perPorao: false }] }));
+  }
+  function removeItem(id: string) {
+    setSim((s) => ({ ...s, items: s.items.filter((it) => it.id !== id) }));
   }
   function resetDefaults() {
     const labor: Record<number, number> = {};
     for (const f of poraoFns) labor[f.id] = defaultHeadcountForName(f.name);
-    setSim({ poroes: DEFAULT_POROES, labor, laborRate: {}, fixed: {} });
+    setSim({ poroes: DEFAULT_POROES, labor, laborRate: {}, items: seedCostItems() });
   }
 
   // Mão de obra: cada função × porões. Rate vem do override ou do cadastro.
@@ -1151,18 +1166,16 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
   const laborHeadcount = laborRows.reduce((a, r) => a + r.qty, 0);
   const laborTotal = laborRows.reduce((a, r) => a + r.total, 0);
 
-  // Custos fixos: qty × valor, e × porões só nas linhas marcadas. O Custo Fixo
-  // Médio usa a média da Demonstração como valor-base (a não ser que o usuário
-  // tenha digitado outro); as demais linhas usam o valor da planilha.
-  const fixedRows = FIXED_COST_SEED.map((seed) => {
-    const ov = sim.fixed[seed.key] || {};
-    const qty = ov.qty ?? seed.qty;
-    const systemValor = seed.key === CUSTO_FIXO_MEDIO_KEY && monthlyFixed != null ? monthlyFixed : null;
-    const valor = ov.valor ?? systemValor ?? seed.valor;
-    const fromSystem = seed.key === CUSTO_FIXO_MEDIO_KEY && monthlyFixed != null && ov.valor == null;
-    return { seed, qty, valor, fromSystem, total: qty * valor * (seed.perPorao ? poroes : 1) };
+  // Custos da operação: qty × valor, e × porões só nas linhas marcadas. A linha
+  // "auto" (Custo Fixo Médio) usa a média da Demonstração como valor enquanto o
+  // usuário não digita um número; aí passa a valer o que ele digitou.
+  const itemRows = sim.items.map((it) => {
+    const isAuto = it.auto === "demonstracao" && it.valor == null;
+    const valor = it.valor != null ? it.valor : (monthlyFixed ?? CUSTO_FIXO_MEDIO_FALLBACK);
+    const fromSystem = isAuto && monthlyFixed != null;
+    return { it, valor, fromSystem, total: it.qty * valor * (it.perPorao ? poroes : 1) };
   });
-  const fixedTotal = fixedRows.reduce((a, r) => a + r.total, 0);
+  const fixedTotal = itemRows.reduce((a, r) => a + r.total, 0);
 
   const grandTotal = laborTotal + fixedTotal;
   const perPoraoAvg = grandTotal / poroes;
@@ -1171,6 +1184,7 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
 
   const numCls = "w-16 px-1.5 py-0.5 border border-amber-200 rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-amber-300";
   const moneyCls = "w-24 px-1.5 py-0.5 border border-amber-200 rounded text-right text-sm focus:outline-none focus:ring-2 focus:ring-amber-300";
+  const labelCls = "w-full min-w-[8rem] px-2 py-0.5 border border-amber-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-amber-300";
 
   return (
     <div className="bg-amber-50/50 border border-amber-200 rounded-xl">
@@ -1198,7 +1212,7 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
               className={numCls}
             />
             <p className="text-[11px] text-amber-900/70 leading-snug">
-              Mão de obra (valores do cadastro) e Kimi Klap multiplicam pelos porões; os demais são fixos por operação. O Custo Fixo Médio vem da Demonstração Financeira.
+              Tabela de referência — edite nomes e valores à vontade. Mão de obra vem do cadastro; os custos da operação você monta como quiser. O Custo Fixo Médio vem da Demonstração Financeira.
             </p>
           </div>
 
@@ -1240,41 +1254,65 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
             </table>
           </div>
 
-          {/* Custos fixos por operação */}
+          {/* Custos da operação — tabela editável (nome, ×porão, qtd, valor) */}
           <div className="bg-white border border-amber-200 rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-amber-50/70 border-b border-amber-200">
                 <tr>
-                  <th className="px-3 py-2 text-left text-[10px] font-semibold text-amber-900 uppercase tracking-wider" colSpan={2}>Custos da operação</th>
+                  <th className="px-3 py-2 text-left text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Custos da operação</th>
+                  <th className="px-3 py-2 text-center text-[10px] font-semibold text-amber-900 uppercase tracking-wider w-16" title="Multiplica pelo nº de porões">× porão</th>
                   <th className="px-3 py-2 text-center text-[10px] font-semibold text-amber-900 uppercase tracking-wider w-20">Qtde</th>
                   <th className="px-3 py-2 text-right text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Valor un.</th>
                   <th className="px-3 py-2 text-right text-[10px] font-semibold text-amber-900 uppercase tracking-wider">Total</th>
+                  <th className="px-2 py-2 w-8"></th>
                 </tr>
               </thead>
               <tbody>
-                {fixedRows.map(({ seed, qty, valor, total, fromSystem }) => (
-                  <tr key={seed.key} className="border-b border-amber-100 last:border-0">
-                    <td className="px-3 py-1.5 font-medium text-text" colSpan={2}>
-                      {seed.label}
-                      {seed.perPorao && <span className="ml-1.5 text-[9px] font-semibold text-amber-700 bg-amber-100 px-1 py-0.5 rounded">× porão</span>}
-                      {fromSystem && <span className="ml-1.5 text-[9px] font-semibold text-blue-700 bg-blue-100 px-1 py-0.5 rounded" title="Média mensal das despesas fixas (Escritório + Impostos + Patrimônio + Seguros), vinda da Demonstração Financeira. Edite pra sobrepor.">Demonstração</span>}
+                {itemRows.map(({ it, valor, total, fromSystem }) => (
+                  <tr key={it.id} className="border-b border-amber-100 last:border-0">
+                    <td className="px-3 py-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <input type="text" value={it.label}
+                          onChange={(e) => updateItem(it.id, { label: e.target.value })} className={labelCls} />
+                        {fromSystem && <span className="text-[9px] font-semibold text-blue-700 bg-blue-100 px-1 py-0.5 rounded whitespace-nowrap" title="Média mensal das despesas fixas (Escritório + Impostos + Patrimônio + Seguros), vinda da Demonstração Financeira. Digite um valor pra sobrepor.">Demonstração</span>}
+                      </div>
                     </td>
                     <td className="px-3 py-1.5 text-center">
-                      <input type="number" min={0} step="0.1" value={qty}
-                        onChange={(e) => setFixed(seed.key, "qty", e.target.value)} className={numCls} />
+                      <input type="checkbox" checked={it.perPorao}
+                        onChange={(e) => updateItem(it.id, { perPorao: e.target.checked })}
+                        className="w-4 h-4 accent-amber-600" title="Multiplica pelo nº de porões" />
+                    </td>
+                    <td className="px-3 py-1.5 text-center">
+                      <input type="number" min={0} step="0.1" value={it.qty}
+                        onChange={(e) => updateItem(it.id, { qty: Math.max(0, parseSimNumber(e.target.value)) })} className={numCls} />
                     </td>
                     <td className="px-3 py-1.5 text-right">
                       <input type="number" min={0} step="0.01" value={valor}
-                        onChange={(e) => setFixed(seed.key, "valor", e.target.value)} className={moneyCls} />
+                        onChange={(e) => updateItem(it.id, { valor: Math.max(0, parseSimNumber(e.target.value)) })} className={moneyCls} />
                     </td>
                     <td className="px-3 py-1.5 text-right font-semibold text-emerald-700 whitespace-nowrap">{brl(total)}</td>
+                    <td className="px-2 py-1.5 text-center">
+                      <button type="button" onClick={() => removeItem(it.id)}
+                        className="p-1 text-danger hover:bg-red-50 rounded" title="Remover linha">
+                        <TrashIcon className="w-3 h-3" />
+                      </button>
+                    </td>
                   </tr>
                 ))}
+                <tr>
+                  <td colSpan={6} className="px-3 py-1.5">
+                    <button type="button" onClick={addItem}
+                      className="text-[11px] font-semibold text-amber-900 hover:bg-amber-100 px-2 py-1 rounded transition">
+                      + Adicionar item
+                    </button>
+                  </td>
+                </tr>
               </tbody>
               <tfoot className="bg-amber-50 border-t border-amber-200">
                 <tr>
                   <td className="px-3 py-1.5 text-xs font-semibold text-amber-900" colSpan={4}>Subtotal custos da operação</td>
                   <td className="px-3 py-1.5 text-right font-bold text-emerald-800 whitespace-nowrap">{brl(fixedTotal)}</td>
+                  <td className="px-2 py-1.5"></td>
                 </tr>
               </tfoot>
             </table>
@@ -1294,14 +1332,14 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
 
           <div className="flex items-center justify-between gap-2">
             <p className="text-[10px] text-amber-800/80 italic">
-              Valores ficam salvos no seu navegador. É uma simulação — não altera nenhum navio.
+              Sua tabela fica salva no navegador. É só uma referência — não altera nenhum navio.
             </p>
             <button
               type="button"
               onClick={resetDefaults}
               className="text-[10px] font-semibold text-amber-900 hover:bg-amber-100 px-2 py-1 rounded transition"
             >
-              ↺ Resetar pra planilha padrão
+              ↺ Resetar pra tabela de referência
             </button>
           </div>
         </div>
