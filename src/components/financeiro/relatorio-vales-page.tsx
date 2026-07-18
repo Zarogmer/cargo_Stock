@@ -84,7 +84,9 @@ export function RelatorioValesPage({
     [jobs],
   );
 
-  // Uma linha por funcionário que tem algum vale, igual à planilha.
+  // Uma linha por funcionário que tem algum vale, igual à planilha. `ships` são
+  // os navios onde os vales dele já foram descontados (Pagamento de Navios) —
+  // pra ver de relance onde o adiantamento voltou, sem precisar expandir.
   const rows = useMemo(() => {
     const withAdvances = employees.filter((e) => advances.some((a) => a.employee_id === e.id));
     return withAdvances
@@ -92,11 +94,14 @@ export function RelatorioValesPage({
         employee: e,
         advanced: employeeAdvanced(e.id, advances),
         balance: employeeBalance(e.id, advances, discounts),
+        ships: Array.from(new Set(
+          discounts.filter((d) => d.employee_id === e.id).map((d) => jobName(d.job_id)),
+        )),
       }))
       .filter((r) => (onlyOpen ? r.balance > 0 : true))
       .filter((r) => (search ? matchSearch(r.employee.name, search) : true))
       .sort((a, b) => b.balance - a.balance || a.employee.name.localeCompare(b.employee.name));
-  }, [employees, advances, discounts, onlyOpen, search]);
+  }, [employees, advances, discounts, onlyOpen, search, jobName]);
 
   const totalBalance = useMemo(() => rows.reduce((s, r) => s + r.balance, 0), [rows]);
   const totalAdvanced = useMemo(() => rows.reduce((s, r) => s + r.advanced, 0), [rows]);
@@ -196,19 +201,33 @@ export function RelatorioValesPage({
               <thead>
                 <tr className="text-left text-[11px] uppercase tracking-wider text-text-light border-b border-border">
                   <th className="px-5 py-2 font-semibold">Colaborador</th>
+                  <th className="px-5 py-2 font-semibold">Navio (desconto)</th>
                   <th className="px-5 py-2 font-semibold text-right w-40">Total adiantado</th>
                   <th className="px-5 py-2 font-semibold text-right w-40">Total a descontar</th>
                   <th className="px-5 py-2 w-10" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {rows.map(({ employee, advanced, balance }) => (
+                {rows.map(({ employee, advanced, balance, ships }) => (
                   <Fragment key={employee.id}>
                     <tr
                       onClick={() => setExpanded(expanded === employee.id ? null : employee.id)}
                       className="hover:bg-gray-50/60 transition cursor-pointer"
                     >
                       <td className="px-5 py-2.5 font-medium text-text">{employee.name}</td>
+                      <td className="px-5 py-2.5">
+                        {ships.length === 0 ? (
+                          <span className="text-xs text-text-light italic">ainda não descontado</span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {ships.map((s) => (
+                              <span key={s} className="text-[11px] bg-amber-50 text-amber-800 border border-amber-200 rounded px-1.5 py-0.5 whitespace-nowrap">
+                                🚢 {s}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </td>
                       <td className="px-5 py-2.5 text-right tabular-nums text-text-light">{formatCurrency(advanced)}</td>
                       <td className={`px-5 py-2.5 text-right tabular-nums font-semibold ${balance > 0 ? "text-amber-700" : "text-emerald-600"}`}>
                         {formatCurrency(balance)}
@@ -217,7 +236,7 @@ export function RelatorioValesPage({
                     </tr>
                     {expanded === employee.id && (
                       <tr>
-                        <td colSpan={4} className="px-5 py-3 bg-gray-50/60">
+                        <td colSpan={5} className="px-5 py-3 bg-gray-50/60">
                           <AdvanceDetail
                             advances={advances.filter((a) => a.employee_id === employee.id)}
                             discounts={discounts}
