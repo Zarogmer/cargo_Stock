@@ -28,6 +28,13 @@ interface Entry {
 
 const ALL = "ALL";
 
+// Tira a numeração do começo do rótulo, pra tela não mostrar "6.1", "10" nem
+// "6)". O número segue existindo no dado (chave da seção); some só na exibição.
+// Pega "6.1 ", "10 ", "6) ", "10-12) ".
+function stripNum(label: string): string {
+  return label.replace(/^\d+(?:[.-]\d+)?\)?\s+/, "");
+}
+
 export function DemonstracaoFinanceiraPage() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -145,9 +152,9 @@ export function DemonstracaoFinanceiraPage() {
         <select value={section} onChange={(e) => setSection(e.target.value)} className={selectCls}>
           <option value={ALL}>Todas as seções</option>
           {STATEMENT_GROUPS.map((group) => (
-            <optgroup key={group} label={group}>
+            <optgroup key={group} label={stripNum(group)}>
               {STATEMENT_SECTIONS.filter((s) => s.group === group).map((s) => (
-                <option key={s.key} value={s.key}>{s.key} · {s.shortLabel}</option>
+                <option key={s.key} value={s.key}>{s.shortLabel}</option>
               ))}
             </optgroup>
           ))}
@@ -181,7 +188,7 @@ export function DemonstracaoFinanceiraPage() {
         <p className="text-sm text-text-light py-8 text-center">Nenhum lançamento com esses filtros.</p>
       ) : (
         bySection.map(({ sec, rows, total: secTotal }) => (
-          <SectionTable key={sec.key} label={sec.label} rows={rows} total={secTotal} showMonth={month === ALL} />
+          <SectionTable key={sec.key} label={stripNum(sec.label)} rows={rows} total={secTotal} showMonth={month === ALL} />
         ))
       )}
     </div>
