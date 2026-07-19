@@ -2643,25 +2643,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
           <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} required
             placeholder="Ex: Fita silver tape, Água 1,5 L..." className={inputCls} />
         </div>
-        <WarehouseDestinationFields value={destSpec} onChange={(v) => { if (v.dest !== destSpec.dest) setCode(""); setDestSpec(v); }} quantity={qty} stocking={!item} allowNoDest />
-        {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} name={description} onChange={setCode} onResolveName={setDescription} open={open} required={CODED_DESTS.includes(destSpec.dest)} />}
         <div>
           <label className="block text-sm font-medium mb-1">Fornecedor</label>
           <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">
-            Navio <span className="text-text-light font-normal">(opcional)</span>
-          </label>
-          <select value={shipId} onChange={(e) => setShipId(e.target.value)} className={inputCls}>
-            <option value="">— Sem navio</option>
-            {ships.map((s) => <option key={s.id} value={s.id}>{shipSelectLabel(s)}</option>)}
-            {/* Navio já vinculado mas que saiu da lista (apagado): preserva o vínculo. */}
-            {shipId && item?.ship_name && !ships.some((s) => s.id === shipId) && (
-              <option value={shipId}>{item.ship_name} (fora da lista)</option>
-            )}
-          </select>
-          <p className="text-[10px] text-text-light mt-1">Vincula esta compra a um navio cadastrado na aba Navios.</p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
@@ -2847,6 +2831,26 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
               {formatCurrency(total)}
             </div>
           </div>
+        </div>
+        {/* ── Opcionais no fim: destino no Almoxarifado, navio, observação, foto ── */}
+        <div className="pt-3 border-t border-border">
+          <p className="text-[11px] font-semibold text-text-light uppercase tracking-wide">Opcional</p>
+        </div>
+        <WarehouseDestinationFields value={destSpec} onChange={(v) => { if (v.dest !== destSpec.dest) setCode(""); setDestSpec(v); }} quantity={qty} stocking={!item} allowNoDest />
+        {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} name={description} onChange={setCode} onResolveName={setDescription} open={open} required={CODED_DESTS.includes(destSpec.dest)} />}
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Navio <span className="text-text-light font-normal">(opcional)</span>
+          </label>
+          <select value={shipId} onChange={(e) => setShipId(e.target.value)} className={inputCls}>
+            <option value="">— Sem navio</option>
+            {ships.map((s) => <option key={s.id} value={s.id}>{shipSelectLabel(s)}</option>)}
+            {/* Navio já vinculado mas que saiu da lista (apagado): preserva o vínculo. */}
+            {shipId && item?.ship_name && !ships.some((s) => s.id === shipId) && (
+              <option value={shipId}>{item.ship_name} (fora da lista)</option>
+            )}
+          </select>
+          <p className="text-[10px] text-text-light mt-1">Vincula esta compra a um navio cadastrado na aba Navios.</p>
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Observação</label>
