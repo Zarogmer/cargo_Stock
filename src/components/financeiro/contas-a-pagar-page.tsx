@@ -198,7 +198,7 @@ export function ContasAPagarPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [statusFilter, setStatusFilter] = useState<"ABERTAS" | "PAGO">("ABERTAS");
+  const [statusFilter, setStatusFilter] = useState<"ABERTAS" | "PAGO" | "TODAS">("ABERTAS");
   const [search, setSearch] = useState("");
 
   // Modal único (detalhe + edição na mesma tela).
@@ -781,6 +781,7 @@ export function ContasAPagarPage() {
         >
           <option value="ABERTAS">Em aberto</option>
           <option value="PAGO">Pago</option>
+          <option value="TODAS">Todas</option>
         </select>
         <select
           value={supplierFilter}
