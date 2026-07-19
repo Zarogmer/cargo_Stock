@@ -71,6 +71,13 @@ export const STATEMENT_SECTIONS: StatementSection[] = [
 
 export const SECTION_BY_KEY = new Map(STATEMENT_SECTIONS.map((s) => [s.key, s]));
 
+// Tira a numeração do começo do rótulo, pra UI não mostrar "6.1", "10" nem
+// "6)". O número segue existindo no dado (chave da seção); some só na exibição.
+// Pega "6.1 ", "10 ", "6) ", "10-12) ".
+export function stripSectionNum(label: string): string {
+  return label.replace(/^\d+(?:[.-]\d+)?\)?\s+/, "");
+}
+
 /** Nomes das abas na planilha, na ordem — o índice + 1 é o mês. */
 export const SHEET_MONTHS = [
   "JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",

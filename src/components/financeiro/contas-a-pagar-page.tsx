@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatCurrency, parseDecimalBR, matchSearch } from "@/lib/utils";
-import { STATEMENT_SECTIONS, STATEMENT_GROUPS, SECTION_BY_KEY } from "@/lib/demonstracao-financeira";
+import { STATEMENT_SECTIONS, STATEMENT_GROUPS, SECTION_BY_KEY, stripSectionNum } from "@/lib/demonstracao-financeira";
 import type { PayableStatus } from "@/types/financeiro";
 
 // ── Tipos das respostas da API ───────────────────────────────────────────────
@@ -1080,7 +1080,7 @@ export function ContasAPagarPage() {
               >
                 <option value="">— sem seção (não aparece na Demonstração)</option>
                 {STATEMENT_GROUPS.map((group) => (
-                  <optgroup key={group} label={group}>
+                  <optgroup key={group} label={stripSectionNum(group)}>
                     {STATEMENT_SECTIONS.filter((s) => s.group === group).map((s) => (
                       <option key={s.key} value={s.key}>{s.shortLabel}</option>
                     ))}

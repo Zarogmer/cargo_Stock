@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { formatCurrency, parseDecimalBR, matchSearch } from "@/lib/utils";
 import {
-  STATEMENT_SECTIONS, STATEMENT_GROUPS, MONTH_LABELS,
+  STATEMENT_SECTIONS, STATEMENT_GROUPS, MONTH_LABELS, stripSectionNum as stripNum,
 } from "@/lib/demonstracao-financeira";
 
 // Só os campos do título que esta tela usa (a API devolve o resto junto).
@@ -45,12 +45,6 @@ interface Row {
 }
 
 const ALL = "ALL";
-
-// Tira a numeração do começo do rótulo, pra tela não mostrar "6.1", "10" nem
-// "6)". O número segue existindo no dado (chave da seção); some só na exibição.
-function stripNum(label: string): string {
-  return label.replace(/^\d+(?:[.-]\d+)?\)?\s+/, "");
-}
 
 function todayISO(): string {
   const now = new Date();
