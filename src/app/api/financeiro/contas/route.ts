@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma, type PayableStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireFinance } from "@/lib/financeiro-api";
+import { SECTION_BY_KEY } from "@/lib/demonstracao-financeira";
 import { AUTO_APPROVE_SETTING_KEY, autoApproveReason } from "@/lib/services/payable-status";
 
 // GET /api/financeiro/contas?status=A,B — lista títulos (sem o conteúdo dos
@@ -83,6 +84,11 @@ export async function POST(request: NextRequest) {
       notes: body.notes ? String(body.notes) : null,
       bank: body.bank ? String(body.bank).trim() : null,
       expense_type: body.expense_type ? String(body.expense_type).trim() : null,
+      // Seção da Demonstração Financeira — só chaves conhecidas ("6.1".."12").
+      statement_section:
+        body.statement_section && SECTION_BY_KEY.has(String(body.statement_section))
+          ? String(body.statement_section)
+          : null,
       origin: "MANUAL",
       status: autoReason ? "APROVADO" : "AGUARDANDO_APROVACAO",
       approved_by: autoReason,

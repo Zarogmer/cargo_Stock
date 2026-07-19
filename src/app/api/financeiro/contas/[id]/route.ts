@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireFinance } from "@/lib/financeiro-api";
+import { SECTION_BY_KEY } from "@/lib/demonstracao-financeira";
 
 // GET /api/financeiro/contas/[id] — detalhe do título (anexos como metadados;
 // o PDF em si é servido por /api/financeiro/anexos/[id]).
@@ -46,6 +47,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   // Campos do controle de vencimentos, editáveis em qualquer status (menos cancelado).
   if (body.bank !== undefined) data.bank = body.bank ? String(body.bank).trim() : null;
   if (body.expense_type !== undefined) data.expense_type = body.expense_type ? String(body.expense_type).trim() : null;
+  // Seção da Demonstração Financeira — só chaves conhecidas; vazio limpa.
+  if (body.statement_section !== undefined) {
+    data.statement_section =
+      body.statement_section && SECTION_BY_KEY.has(String(body.statement_section))
+        ? String(body.statement_section)
+        : null;
+  }
   if (body.paid_amount !== undefined) {
     data.paid_amount = body.paid_amount === null || body.paid_amount === "" ? null : new Prisma.Decimal(Number(body.paid_amount).toFixed(2));
   }

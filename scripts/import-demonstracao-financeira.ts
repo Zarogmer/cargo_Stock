@@ -8,8 +8,11 @@
  *   npx tsx scripts/import-demonstracao-financeira.ts --year=2025 --commit
  *   npx tsx scripts/import-demonstracao-financeira.ts --file=C:/outro.xlsx --commit
  *
- * A planilha continua sendo a fonte: a aba é só leitura e reimportar é a forma
- * de atualizar. Idempotente — apaga e regrava o ANO INTEIRO a cada --commit.
+ * Desde 2026-07 a aba Demonstração Financeira é uma visão dos títulos do
+ * Contas a Pagar (payable_invoices.statement_section) — depois de importar,
+ * rode scripts/sync-demonstracao-contas.ts --commit pra espelhar as linhas
+ * novas como títulos PAGOS. Este import segue idempotente na tabela staging:
+ * apaga e regrava o ANO INTEIRO a cada --commit.
  *
  * Escreve em PRODUÇÃO (DATABASE_URL aponta pro Postgres do Railway). O dry-run
  * imprime o resumo e a conferência de totais; rode ele antes.
@@ -198,6 +201,7 @@ async function main() {
     data: entries.map((e) => ({ ...e, imported_by: "import-demonstracao-financeira" })),
   });
   console.log(`✅ ${YEAR}: ${deleted.count} linha(s) antiga(s) removida(s), ${entries.length} importada(s).`);
+  console.log("➡️  Agora rode: npx tsx scripts/sync-demonstracao-contas.ts --commit (espelha no Contas a Pagar).");
 }
 
 main()

@@ -1003,6 +1003,7 @@ enum PayableOrigin {
   BOLETO_PDF // importado de um PDF de boleto
   EXTRATO // gerado do débito de um extrato OFX (já pago)
   COMPRA // puxado de um registro do Controle de Compras (purchase_orders)
+  DEMONSTRACAO // migrado/sincronizado da planilha da Demonstração Financeira
 }
 
 enum BankKind {
@@ -1055,6 +1056,10 @@ model PayableInvoice {
   // ── Colunas do controle de vencimentos (PLANILHA DE VENCIMENTO) ──────────
   bank         String? // "BANCO" — de qual conta saiu/vai sair (Itaú/Santander)
   expense_type String? // "TIPO DE DESPESA"
+  // Seção da Demonstração Financeira ("6.1".."12" — rótulos em
+  // src/lib/demonstracao-financeira.ts). Título com seção aparece na aba
+  // Demonstração Financeira, agrupado por seção; o Contas a Pagar mostra tudo.
+  statement_section String?
   paid_amount  Decimal? @db.Decimal(12, 2) // "VALOR PAGO" (pode diferir do valor em pagamento parcial/rateado)
   payment_date DateTime? @db.Date          // "DATA DE PAGTO"
   // Idempotência do import de extrato OFX: sha256(banco+data+valor+memo+ocorr.).
@@ -1089,6 +1094,7 @@ model PayableInvoice {
   @@index([due_date])
   @@index([supplier_id])
   @@index([purchase_order_id])
+  @@index([statement_section])
   @@map("payable_invoices")
 }
 

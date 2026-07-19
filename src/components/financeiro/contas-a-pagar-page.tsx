@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatCurrency, parseDecimalBR, matchSearch } from "@/lib/utils";
+import { STATEMENT_SECTIONS, STATEMENT_GROUPS, SECTION_BY_KEY } from "@/lib/demonstracao-financeira";
 import type { PayableStatus } from "@/types/financeiro";
 
 // ── Tipos das respostas da API ───────────────────────────────────────────────
@@ -43,6 +44,9 @@ interface Invoice {
   payee_document: string | null;
   bank: string | null;
   expense_type: string | null;
+  // Seção da Demonstração Financeira ("6.1".."12") — título com seção também
+  // aparece na aba Demonstração Financeira, agrupado por seção.
+  statement_section: string | null;
   paid_amount: string | null;
   payment_date: string | null;
   notes: string | null;
@@ -161,6 +165,7 @@ interface FormState {
   digitable_line: string;
   bank: string;
   expense_type: string;
+  statement_section: string;
   paid_amount: string;
   payment_date: string;
   notes: string;
@@ -176,6 +181,7 @@ const EMPTY_FORM: FormState = {
   digitable_line: "",
   bank: "",
   expense_type: "",
+  statement_section: "",
   paid_amount: "",
   payment_date: "",
   notes: "",
@@ -207,6 +213,8 @@ export function ContasAPagarPage() {
   const [monthFilter, setMonthFilter] = useState<string>("ALL");
   const [supplierFilter, setSupplierFilter] = useState<string>("ALL");
   const [bankFilter, setBankFilter] = useState<string>("ALL");
+  // Filtro por seção da Demonstração Financeira ("NONE" = títulos sem seção).
+  const [sectionFilter, setSectionFilter] = useState<string>("ALL");
   const [togglingPaid, setTogglingPaid] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -296,6 +304,12 @@ export function ContasAPagarPage() {
     return [...set].sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [invoices]);
 
+  // Seções da Demonstração presentes (pro filtro), na ordem da planilha.
+  const sectionOptions = useMemo(() => {
+    const present = new Set(invoices.map((i) => i.statement_section).filter(Boolean) as string[]);
+    return STATEMENT_SECTIONS.filter((s) => present.has(s.key));
+  }, [invoices]);
+
   const filtered = useMemo(() => {
     return invoices.filter((inv) => {
       if (monthFilter !== "ALL" && refMonthOf(inv) !== monthFilter) return false;
@@ -303,6 +317,8 @@ export function ContasAPagarPage() {
       if (statusFilter === "PAGO" && !isPaid(inv)) return false;
       if (supplierFilter !== "ALL" && supplierNameOf(inv) !== supplierFilter) return false;
       if (bankFilter !== "ALL" && inv.bank !== bankFilter) return false;
+      if (sectionFilter === "NONE" && inv.statement_section) return false;
+      if (sectionFilter !== "ALL" && sectionFilter !== "NONE" && inv.statement_section !== sectionFilter) return false;
       if (search) {
         const blob = [
           inv.description,
@@ -312,6 +328,7 @@ export function ContasAPagarPage() {
           inv.suppliers?.cnpj,
           inv.bank,
           inv.expense_type,
+          inv.statement_section ? SECTION_BY_KEY.get(inv.statement_section)?.shortLabel : null,
           inv.digitable_line,
         ]
           .filter(Boolean)
@@ -320,7 +337,7 @@ export function ContasAPagarPage() {
       }
       return true;
     });
-  }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter]);
+  }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter, sectionFilter]);
 
   // RESUMO do mês selecionado (ou de tudo), no espírito da aba RESUMO da
   // planilha: Falta pagar / Pago / Despesas (total) + contagem de vencidas.
@@ -370,6 +387,7 @@ export function ContasAPagarPage() {
       digitable_line: inv.digitable_line || "",
       bank: inv.bank || "",
       expense_type: inv.expense_type || "",
+      statement_section: inv.statement_section || "",
       paid_amount: inv.paid_amount != null ? formatAmountBR(String(Number(inv.paid_amount))) : "",
       payment_date: inv.payment_date?.slice(0, 10) || "",
       notes: inv.notes || "",
@@ -505,6 +523,7 @@ export function ContasAPagarPage() {
         digitable_line: form.digitable_line || null,
         bank: form.bank || null,
         expense_type: form.expense_type || null,
+        statement_section: form.statement_section || null,
         paid_amount: form.paid_amount ? parseDecimalBR(form.paid_amount) : null,
         payment_date: form.payment_date || null,
         notes: form.notes || null,
@@ -789,6 +808,21 @@ export function ContasAPagarPage() {
             ))}
           </select>
         )}
+        {sectionOptions.length > 0 && (
+          <select
+            value={sectionFilter}
+            onChange={(e) => setSectionFilter(e.target.value)}
+            className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40 max-w-[220px]"
+          >
+            <option value="ALL">Todas as seções</option>
+            <option value="NONE">Sem seção</option>
+            {sectionOptions.map((s) => (
+              <option key={s.key} value={s.key}>
+                {s.shortLabel}
+              </option>
+            ))}
+          </select>
+        )}
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -843,7 +877,9 @@ export function ContasAPagarPage() {
                       {inv.paid_amount != null ? formatCurrency(Number(inv.paid_amount)) : ""}
                     </td>
                     <td className="px-3 py-3 text-text-light whitespace-nowrap">{inv.bank || "—"}</td>
-                    <td className="px-3 py-3 text-text-light max-w-[120px] truncate">{inv.expense_type || "—"}</td>
+                    <td className="px-3 py-3 text-text-light max-w-[120px] truncate">
+                      {inv.expense_type || (inv.statement_section && SECTION_BY_KEY.get(inv.statement_section)?.shortLabel) || "—"}
+                    </td>
                     <td className="px-3 py-3">
                       <PaidBadge inv={inv} />
                     </td>
@@ -879,7 +915,9 @@ export function ContasAPagarPage() {
                       ? "Boleto (PDF)"
                       : editing.origin === "COMPRA"
                         ? "Controle de Compras"
-                        : "Manual"}
+                        : editing.origin === "DEMONSTRACAO"
+                          ? "Demonstração Financeira (planilha)"
+                          : "Manual"}
                 {"  ·  "}
                 {editing.created_by} · {fmtDateTime(editing.created_at)}
               </p>
@@ -1030,6 +1068,25 @@ export function ContasAPagarPage() {
                   placeholder="ex.: Rancho, Combustível..."
                 />
               </div>
+            </div>
+            {/* Seção da Demonstração Financeira: com seção, o título também
+                aparece na aba Demonstração, agrupado por seção. */}
+            <div>
+              <label className="text-xs font-medium text-text-light">Seção na Demonstração Financeira</label>
+              <select
+                value={form.statement_section}
+                onChange={(e) => setForm({ ...form, statement_section: e.target.value })}
+                className={inputCls}
+              >
+                <option value="">— sem seção (não aparece na Demonstração)</option>
+                {STATEMENT_GROUPS.map((group) => (
+                  <optgroup key={group} label={group}>
+                    {STATEMENT_SECTIONS.filter((s) => s.group === group).map((s) => (
+                      <option key={s.key} value={s.key}>{s.shortLabel}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
