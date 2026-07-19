@@ -3,6 +3,7 @@ import { Prisma, type PayableStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireFinance } from "@/lib/financeiro-api";
 import { SECTION_BY_KEY } from "@/lib/demonstracao-financeira";
+import { materializeRecurringBills } from "@/lib/services/recurring-bills";
 import { AUTO_APPROVE_SETTING_KEY, autoApproveReason } from "@/lib/services/payable-status";
 
 // GET /api/financeiro/contas?status=A,B — lista títulos (sem o conteúdo dos
@@ -11,6 +12,15 @@ import { AUTO_APPROVE_SETTING_KEY, autoApproveReason } from "@/lib/services/paya
 export async function GET(request: NextRequest) {
   const guard = await requireFinance("view");
   if (guard.error) return guard.error;
+
+  // Contas mensais: gera os títulos do mês atual/próximo que ainda faltam —
+  // lazy, sem cron; o mês novo aparece na primeira abertura da tela dentro
+  // dele. Best-effort: falha aqui não derruba a listagem.
+  try {
+    await materializeRecurringBills();
+  } catch (err) {
+    console.error("[contas] materialize recorrentes:", err);
+  }
 
   const statusParam = request.nextUrl.searchParams.get("status");
   const statuses = statusParam

@@ -47,6 +47,8 @@ interface Invoice {
   // Seção da Demonstração Financeira ("6.1".."12") — título com seção também
   // aparece na aba Demonstração Financeira, agrupado por seção.
   statement_section: string | null;
+  // Conta mensal que gerou este título (null = conta única).
+  recurring_bill_id: number | null;
   paid_amount: string | null;
   payment_date: string | null;
   notes: string | null;
@@ -67,6 +69,39 @@ interface Supplier {
   id: number;
   name: string;
   cnpj: string | null;
+}
+
+// Conta mensal (recorrente) — o modelo que gera um título por mês. Vem de
+// /api/financeiro/contas/recorrentes.
+interface RecurringBillRow {
+  id: number;
+  description: string;
+  amount: string; // Prisma Decimal serializa como string
+  due_day: number;
+  supplier_id: number | null;
+  suppliers: { id: number; name: string } | null;
+  payee_name: string | null;
+  bank: string | null;
+  expense_type: string | null;
+  statement_section: string | null;
+  notes: string | null;
+  active: boolean;
+  start_month: string;
+  end_month: string | null;
+  created_by: string;
+}
+
+// "2027-01" → "01/2027" (rótulo dos meses da conta mensal).
+function fmtMonthKey(m: string): string {
+  const [y, mo] = m.split("-");
+  return `${mo}/${y}`;
+}
+
+// Mês seguinte ao atual, "YYYY-MM" — default do "Começa em" da conta mensal.
+function nextMonthKey(): string {
+  const d = new Date();
+  const n = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
 }
 
 // Compra do Controle de Compras (purchase_orders) disponível pra puxar — só os
@@ -215,6 +250,21 @@ export function ContasAPagarPage() {
   const [bankFilter, setBankFilter] = useState<string>("ALL");
   // Filtro por seção da Demonstração Financeira ("NONE" = títulos sem seção).
   const [sectionFilter, setSectionFilter] = useState<string>("ALL");
+  // Filtro única x mensal (recorrente).
+  const [recurrenceFilter, setRecurrenceFilter] = useState<"ALL" | "MENSAL" | "UNICA">("ALL");
+
+  // "Conta única" x "Conta mensal" no modal de criação + campos da recorrência.
+  const [billKind, setBillKind] = useState<"UNICA" | "MENSAL">("UNICA");
+  const [recDueDay, setRecDueDay] = useState("");
+  const [recStartMonth, setRecStartMonth] = useState(nextMonthKey());
+  const [recEndMonth, setRecEndMonth] = useState("");
+
+  // Gerenciador "Contas mensais" (listar/pausar/apagar recorrências).
+  const [billsOpen, setBillsOpen] = useState(false);
+  const [bills, setBills] = useState<RecurringBillRow[]>([]);
+  const [billsLoading, setBillsLoading] = useState(false);
+  const [togglingBillId, setTogglingBillId] = useState<number | null>(null);
+  const [deleteBill, setDeleteBill] = useState<RecurringBillRow | null>(null);
   const [togglingPaid, setTogglingPaid] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -319,6 +369,8 @@ export function ContasAPagarPage() {
       if (bankFilter !== "ALL" && inv.bank !== bankFilter) return false;
       if (sectionFilter === "NONE" && inv.statement_section) return false;
       if (sectionFilter !== "ALL" && sectionFilter !== "NONE" && inv.statement_section !== sectionFilter) return false;
+      if (recurrenceFilter === "MENSAL" && inv.recurring_bill_id == null) return false;
+      if (recurrenceFilter === "UNICA" && inv.recurring_bill_id != null) return false;
       if (search) {
         const blob = [
           inv.description,
@@ -337,7 +389,7 @@ export function ContasAPagarPage() {
       }
       return true;
     });
-  }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter, sectionFilter]);
+  }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter, sectionFilter, recurrenceFilter]);
 
   // RESUMO do mês selecionado (ou de tudo), no espírito da aba RESUMO da
   // planilha: Falta pagar / Pago / Despesas (total) + contagem de vencidas.
@@ -372,7 +424,61 @@ export function ContasAPagarPage() {
     setForm(EMPTY_FORM);
     setFormFile(null);
     resetNewSupplier();
+    setBillKind("UNICA");
+    setRecDueDay("");
+    setRecStartMonth(nextMonthKey());
+    setRecEndMonth("");
     setModalOpen(true);
+  }
+
+  // ── Contas mensais (recorrências) ─────────────────────────────────────────
+
+  async function openBills() {
+    setBillsOpen(true);
+    setBillsLoading(true);
+    try {
+      const res = await fetch("/api/financeiro/contas/recorrentes");
+      const data = await res.json().catch(() => ({}));
+      setBills((data.bills as RecurringBillRow[]) || []);
+    } finally {
+      setBillsLoading(false);
+    }
+  }
+
+  // Liga/desliga a recorrência — pausada não gera meses novos; ao reativar, o
+  // servidor já completa o mês atual/próximo se faltar.
+  async function toggleBill(bill: RecurringBillRow, active: boolean) {
+    setTogglingBillId(bill.id);
+    try {
+      const res = await fetch(`/api/financeiro/contas/recorrentes/${bill.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao atualizar a conta mensal");
+        return;
+      }
+      setBills((prev) => prev.map((b) => (b.id === bill.id ? (data.bill as RecurringBillRow) : b)));
+      if (active) await loadAll(); // pode ter materializado título novo
+    } finally {
+      setTogglingBillId(null);
+    }
+  }
+
+  async function handleDeleteBill(bill: RecurringBillRow) {
+    try {
+      const res = await fetch(`/api/financeiro/contas/recorrentes/${bill.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao apagar a conta mensal");
+        return;
+      }
+      setBills((prev) => prev.filter((b) => b.id !== bill.id));
+    } finally {
+      setDeleteBill(null);
+    }
   }
 
   function openInvoice(inv: Invoice) {
@@ -510,6 +616,45 @@ export function ContasAPagarPage() {
     const amount = parseDecimalBR(form.amount);
     if (!form.description.trim()) return alert("Informe a descrição");
     if (amount <= 0) return alert("Informe um valor válido");
+
+    // Conta mensal: cria a recorrência (o servidor já materializa o título do
+    // mês, se o "começa em" permitir) em vez de um título avulso.
+    if (!editing && billKind === "MENSAL") {
+      const dueDay = Number(recDueDay);
+      if (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) return alert("Informe o dia do vencimento (1 a 31)");
+      if (!/^\d{4}-\d{2}$/.test(recStartMonth)) return alert("Informe o mês em que a conta começa");
+      if (recEndMonth && recEndMonth < recStartMonth) return alert("O mês final vem antes do início");
+      setSaving(true);
+      try {
+        const res = await fetch("/api/financeiro/contas/recorrentes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            description: form.description,
+            amount,
+            due_day: dueDay,
+            start_month: recStartMonth,
+            end_month: recEndMonth || null,
+            supplier_id: form.supplier_id ? Number(form.supplier_id) : null,
+            payee_name: form.payee_name || null,
+            bank: form.bank || null,
+            expense_type: form.expense_type || null,
+            statement_section: form.statement_section || null,
+            notes: form.notes || null,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          alert(data.error || "Erro ao criar a conta mensal");
+          return;
+        }
+        setModalOpen(false);
+        await loadAll();
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
 
     setSaving(true);
     try {
@@ -729,6 +874,7 @@ export function ContasAPagarPage() {
                 }}
               />
             </label>
+            <Button variant="secondary" onClick={openBills}>🔁 Contas mensais</Button>
             <Button onClick={openCreate}>+ Nova conta</Button>
           </div>
         )}
@@ -824,6 +970,17 @@ export function ContasAPagarPage() {
             ))}
           </select>
         )}
+        {invoices.some((i) => i.recurring_bill_id != null) && (
+          <select
+            value={recurrenceFilter}
+            onChange={(e) => setRecurrenceFilter(e.target.value as typeof recurrenceFilter)}
+            className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
+          >
+            <option value="ALL">Únicas e mensais</option>
+            <option value="MENSAL">🔁 Só mensais</option>
+            <option value="UNICA">Só únicas</option>
+          </select>
+        )}
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -869,6 +1026,7 @@ export function ContasAPagarPage() {
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap text-text-light">{fmtDateOnly(inv.payment_date)}</td>
                     <td className="px-3 py-3 text-text max-w-[300px] truncate">
+                      {inv.recurring_bill_id != null && <span title="Conta mensal (gerada automaticamente)">🔁 </span>}
                       {inv.suppliers?.name || inv.payee_name || inv.description}
                     </td>
                     <td className="px-3 py-3 text-right font-medium text-text whitespace-nowrap">
@@ -934,6 +1092,34 @@ export function ContasAPagarPage() {
 
           {/* Formulário editável */}
           <fieldset disabled={readOnly} className="space-y-3 disabled:opacity-70">
+            {/* Conta única x mensal: a mensal vira uma recorrência que gera um
+                título por mês sozinha (pensa 2027 — ninguém digita de novo). */}
+            {!editing && (
+              <div>
+                <label className="text-xs font-medium text-text-light">Recorrência</label>
+                <div className="flex gap-2 mt-1">
+                  {([["UNICA", "Conta única"], ["MENSAL", "🔁 Conta mensal"]] as const).map(([k, label]) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setBillKind(k)}
+                      className={`text-sm px-3 py-1.5 rounded-lg border transition ${
+                        billKind === k
+                          ? "border-primary bg-primary/10 text-primary font-medium"
+                          : "border-border text-text-light hover:text-text"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {billKind === "MENSAL" && (
+                  <p className="text-[11px] text-text-light mt-1">
+                    Gera um título por mês automaticamente (mês atual e o próximo), até você pausar em “🔁 Contas mensais”.
+                  </p>
+                )}
+              </div>
+            )}
             <div>
               <label className="text-xs font-medium text-text-light">Descrição *</label>
               <input
@@ -955,16 +1141,57 @@ export function ContasAPagarPage() {
                   inputMode="decimal"
                 />
               </div>
-              <div>
-                <label className="text-xs font-medium text-text-light">Vencimento</label>
-                <input
-                  type="date"
-                  value={form.due_date}
-                  onChange={(e) => setForm({ ...form, due_date: e.target.value })}
-                  className={inputCls}
-                />
-              </div>
+              {!editing && billKind === "MENSAL" ? (
+                <div>
+                  <label className="text-xs font-medium text-text-light">Vence todo dia *</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={31}
+                    value={recDueDay}
+                    onChange={(e) => setRecDueDay(e.target.value)}
+                    className={inputCls}
+                    placeholder="Ex.: 10"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="text-xs font-medium text-text-light">Vencimento</label>
+                  <input
+                    type="date"
+                    value={form.due_date}
+                    onChange={(e) => setForm({ ...form, due_date: e.target.value })}
+                    className={inputCls}
+                  />
+                </div>
+              )}
             </div>
+            {!editing && billKind === "MENSAL" && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-text-light">Começa em *</label>
+                  <input
+                    type="month"
+                    value={recStartMonth}
+                    onChange={(e) => setRecStartMonth(e.target.value)}
+                    className={inputCls}
+                  />
+                  <p className="text-[11px] text-text-light mt-1">
+                    Comece no primeiro mês que ainda NÃO está lançado (os meses já lançados à mão continuam valendo).
+                  </p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-text-light">Termina em <span className="font-normal">(opcional)</span></label>
+                  <input
+                    type="month"
+                    value={recEndMonth}
+                    onChange={(e) => setRecEndMonth(e.target.value)}
+                    className={inputCls}
+                  />
+                  <p className="text-[11px] text-text-light mt-1">Em branco, a conta continua até você pausar.</p>
+                </div>
+              </div>
+            )}
             <div>
               <div className="flex items-center justify-between">
                 <label className="text-xs font-medium text-text-light">Fornecedor (cadastro)</label>
@@ -1089,6 +1316,9 @@ export function ContasAPagarPage() {
                 ))}
               </select>
             </div>
+            {/* Pagamento/linha digitável não fazem sentido no modelo da conta
+                mensal — valem por título, depois que cada mês é gerado. */}
+            {(editing || billKind === "UNICA") && (<>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-medium text-text-light">Valor pago (R$)</label>
@@ -1120,6 +1350,7 @@ export function ContasAPagarPage() {
                 placeholder="47 ou 48 dígitos"
               />
             </div>
+            </>)}
             <div>
               <label className="text-xs font-medium text-text-light">Observações</label>
               <textarea
@@ -1128,7 +1359,7 @@ export function ContasAPagarPage() {
                 className={`${inputCls} min-h-[60px]`}
               />
             </div>
-            {!editing && (
+            {!editing && billKind === "UNICA" && (
               <div>
                 <label className="text-xs font-medium text-text-light">Import NF (PDF)</label>
                 <label className={`mt-1 block ${analyzing ? "opacity-50" : "cursor-pointer"}`}>
@@ -1225,7 +1456,7 @@ export function ContasAPagarPage() {
             </Button>
             {canEdit && !readOnly && (
               <Button onClick={handleSave} disabled={saving}>
-                {saving ? "Salvando..." : editing ? "Salvar alterações" : "Adicionar"}
+                {saving ? "Salvando..." : editing ? "Salvar alterações" : billKind === "MENSAL" ? "Criar conta mensal" : "Adicionar"}
               </Button>
             )}
             {canEdit && editing && !isPaid(editing) && (
@@ -1327,6 +1558,80 @@ export function ContasAPagarPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Contas mensais (recorrências): listar, pausar/reativar e apagar */}
+      <Modal open={billsOpen} onClose={() => setBillsOpen(false)} title="🔁 Contas mensais" maxWidth="max-w-2xl">
+        <div className="space-y-3">
+          <p className="text-sm text-text-light">
+            Cada conta daqui gera um título por mês automaticamente (mês atual e o próximo), já aprovado, vencendo no dia
+            escolhido. Pausar ou apagar só para de gerar meses novos — os títulos já lançados ficam.
+          </p>
+          {billsLoading ? (
+            <p className="p-6 text-center text-text-light text-sm">Carregando...</p>
+          ) : bills.length === 0 ? (
+            <p className="p-6 text-center text-text-light text-sm">
+              Nenhuma conta mensal ainda — crie em “+ Nova conta” escolhendo “🔁 Conta mensal”.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {bills.map((b) => (
+                <div
+                  key={b.id}
+                  className={`border border-border rounded-lg px-4 py-3 flex items-start justify-between gap-3 ${
+                    b.active ? "" : "opacity-60 bg-gray-50"
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-text">
+                      {b.description}{" "}
+                      <span className="font-normal text-text-light">· {formatCurrency(Number(b.amount))}/mês</span>
+                    </p>
+                    <p className="text-[11px] text-text-light mt-0.5">
+                      vence dia {b.due_day} · desde {fmtMonthKey(b.start_month)}
+                      {b.end_month ? ` até ${fmtMonthKey(b.end_month)}` : ""}
+                      {b.suppliers?.name ? ` · ${b.suppliers.name}` : ""}
+                      {b.statement_section
+                        ? ` · ${SECTION_BY_KEY.get(b.statement_section)?.shortLabel || b.statement_section}`
+                        : ""}
+                    </p>
+                  </div>
+                  {canEdit && (
+                    <div className="flex items-center gap-3 shrink-0">
+                      <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={b.active}
+                          disabled={togglingBillId === b.id}
+                          onChange={(e) => toggleBill(b, e.target.checked)}
+                          className="w-4 h-4 accent-primary"
+                        />
+                        {b.active ? "Ativa" : "Pausada"}
+                      </label>
+                      <button onClick={() => setDeleteBill(b)} className="text-[11px] text-red-500 hover:text-red-700">
+                        apagar
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={!!deleteBill}
+        onClose={() => setDeleteBill(null)}
+        onConfirm={() => deleteBill && handleDeleteBill(deleteBill)}
+        title="Apagar conta mensal"
+        message={
+          deleteBill
+            ? `Apagar "${deleteBill.description}"? Para de gerar meses novos — os títulos já lançados continuam no Contas a Pagar.`
+            : ""
+        }
+        confirmLabel="Apagar"
+        variant="danger"
+      />
 
       {/* Confirmação de EXCLUSÃO */}
       <ConfirmDialog
