@@ -866,28 +866,15 @@ export default function SolicitacoesPage() {
       return { created, where: dest === "EPI" ? "EPI" : "Uniforme", quantity: addQty };
     }
 
-    // Ferramenta / Elétrica / Fluídos — inventário com quantidade (stock_items
-    // com o team sentinela do setor). Mesma ponte do Estoque: casa por
-    // código/nome e soma a quantidade (reposição) em vez de criar uma linha por
-    // unidade.
-    if (dest === "FERRAMENTA" || dest === "ELETRICA" || dest === "FLUIDOS") {
+    // Ferramenta / Elétrica / Fluídos / Maquinário — inventário com quantidade
+    // (stock_items com o team sentinela do setor; a tabela `tools` ficou sem
+    // uso). Mesma ponte do Estoque: casa por código/nome e SOMA a quantidade
+    // (reposição) em vez de duplicar — é o que faz o código único evitar
+    // repetição mesmo quando a compra vem com nome diferente.
+    if (dest === "FERRAMENTA" || dest === "ELETRICA" || dest === "FLUIDOS" || dest === "MAQUINARIO") {
       const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code, team: dest });
-      const label = dest === "FERRAMENTA" ? "Ferramenta" : dest === "ELETRICA" ? "Elétrica" : "Fluídos";
+      const label = dest === "FERRAMENTA" ? "Ferramenta" : dest === "ELETRICA" ? "Elétrica" : dest === "FLUIDOS" ? "Fluídos" : "Maquinário";
       return { created: r.created, where: `${label}${r.category && r.category !== "Outros" ? ` · ${r.category}` : ""}`, quantity: r.quantity };
-    }
-
-    // Maquinário — tabela `tools` (asset_type), cada unidade é um registro próprio
-    // (controle de empréstimo), sem quantidade. Cria N itens Disponíveis (limite
-    // de segurança de 50 por lançamento).
-    if (dest === "MAQUINARIO") {
-      const units = Math.min(50, Math.max(1, Math.round(qty)));
-      for (let i = 0; i < units; i++) {
-        const { error } = await db.from("tools").insert({
-          name, asset_type: dest, status: "DISPONIVEL", updated_by: actor,
-        } as any);
-        if (error) throw new Error(error.message);
-      }
-      return { created: true, where: "Maquinário", quantity: units };
     }
 
     throw new Error(`Destino inválido: ${dest}`);
@@ -2211,14 +2198,13 @@ async function loadWarehouseItems(dest: WarehouseDest): Promise<WarehouseItem[]>
     const { data } = await db.from("stock_items").select("id, name, quantity").eq("team", STOCK_TEAM);
     return ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, size: null, qty: i.quantity }));
   }
-  if (dest === "FERRAMENTA" || dest === "ELETRICA" || dest === "FLUIDOS") {
+  // Ferramenta/Elétrica/Fluídos/Maquinário são inventário em stock_items com o
+  // team sentinela do setor (a tabela `tools` de empréstimo ficou sem uso). O
+  // Maquinário do Almoxarifado é stock_items team=MAQUINARIO — ler daqui faz os
+  // itens aparecerem no autocomplete e a compra repor o item certo.
+  if (dest === "FERRAMENTA" || dest === "ELETRICA" || dest === "FLUIDOS" || dest === "MAQUINARIO") {
     const { data } = await db.from("stock_items").select("id, name, quantity").eq("team", dest);
     return ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, size: null, qty: i.quantity }));
-  }
-  if (dest === "MAQUINARIO") {
-    // Maquinário vive na tabela `tools` (empréstimo), não em stock_items — sem quantidade.
-    const { data } = await db.from("tools").select("id, name").eq("asset_type", "MAQUINARIO");
-    return ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, size: null, qty: null }));
   }
   // EPI / Uniforme — têm tamanho e estoque próprio (stock_qty).
   const { data } = await db.from(dest === "EPI" ? "epis" : "uniforms").select("id, name, size, stock_qty");
@@ -2374,8 +2360,8 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
 
       {stocking && value.dest === "MAQUINARIO" && (
         <p className="text-xs text-emerald-700 bg-emerald-50/60 border border-emerald-200 rounded-lg p-3">
-          ⚙️ Cada unidade vira uma máquina em <strong>Maquinário</strong>{" "}
-          (status <strong>Disponível</strong>){quantity ? ` — ${Math.min(50, Math.max(1, Math.round(quantity)))} unidade(s)` : ""}.
+          ⚙️ A quantidade é somada em <strong>Maquinário</strong> (Almoxarifado): pelo código, repõe o
+          item existente; sem código/casamento, cria um novo.
         </p>
       )}
 

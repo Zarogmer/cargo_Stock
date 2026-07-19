@@ -11,7 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ImagePicker, ImageLightbox } from "@/components/ui/image-picker";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDateTime, matchSearch, parseDecimalBR, formatQty, buildCodeMap } from "@/lib/utils";
+import { formatDateTime, matchSearch, parseDecimalBR, formatQty, buildCodeMap, normalize } from "@/lib/utils";
 import type { StockItem } from "@/types/database";
 
 // Inventário genérico do Almoxarifado: itens com QUANTIDADE, mínimo, baixa (⬇️) e
@@ -80,6 +80,10 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   const { profile } = useAuth();
   const pathname = usePathname();
   const [items, setItems] = useState<StockItem[]>([]);
+  // Compras (código + descrição) pra mostrar os nomes alternativos com que o
+  // mesmo item foi comprado no Controle de Compras — o código é único, então
+  // ajuda a não duplicar o item quando a nota vem com outro nome.
+  const [purchases, setPurchases] = useState<{ code: string | null; description: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [dbError, setDbError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -113,6 +117,13 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         setDbError(`${error.code}: ${error.message} — ${error.hint || ""}`);
       }
       setItems(data || []);
+      // Best-effort: compras com código, pra cruzar os nomes alternativos.
+      const { data: pos } = await db
+        .from("purchase_orders")
+        .select("code, description");
+      setPurchases(
+        ((pos as { code: string | null; description: string }[]) || []).filter((p) => p.code),
+      );
     } catch (err) {
       console.error("Erro ao carregar itens:", err);
       setDbError(String(err));
@@ -127,6 +138,29 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
 
   // Código derivado do nome (prefixo de iniciais + sequência), por item.
   const codeMap = useMemo(() => buildCodeMap(items, (i) => i.id, (i) => i.name), [items]);
+
+  // Nomes alternativos por código: distintas descrições de compra ligadas ao
+  // mesmo código no Controle de Compras (normaliza p/ comparar sem caixa/acento).
+  const altNamesByCode = useMemo(() => {
+    const map = new Map<string, string[]>();
+    const seen = new Map<string, Set<string>>();
+    for (const po of purchases) {
+      const code = (po.code || "").trim().toUpperCase();
+      const desc = (po.description || "").trim();
+      if (!code || !desc) continue;
+      if (!map.has(code)) { map.set(code, []); seen.set(code, new Set()); }
+      const key = normalize(desc);
+      if (!seen.get(code)!.has(key)) { seen.get(code)!.add(key); map.get(code)!.push(desc); }
+    }
+    return map;
+  }, [purchases]);
+
+  // Nomes de compra do item em edição, tirando o próprio nome do item.
+  const editItemAltNames = useMemo(() => {
+    if (!editItem) return [];
+    const code = (codeMap.get(editItem.id) || "").toUpperCase();
+    return (altNamesByCode.get(code) || []).filter((n) => normalize(n) !== normalize(editItem.name));
+  }, [editItem, codeMap, altNamesByCode]);
 
   const filteredItems = items.filter((i) =>
     assignOf(i) === activeAssign &&
@@ -398,6 +432,8 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         onClose={() => { setShowForm(false); setEditItem(null); }}
         onSave={handleSave}
         item={editItem}
+        itemCode={editItem ? codeMap.get(editItem.id) || null : null}
+        altNames={editItemAltNames}
         newTitle={cfg.newTitle}
         editTitle={cfg.editTitle}
         defaultAssign={activeAssign}
@@ -427,11 +463,14 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   );
 }
 
-function MaterialFormModal({ open, onClose, onSave, item, newTitle, editTitle, defaultAssign, saving }: {
+function MaterialFormModal({ open, onClose, onSave, item, itemCode, altNames = [], newTitle, editTitle, defaultAssign, saving }: {
   open: boolean;
   onClose: () => void;
   onSave: (data: { name: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null; assigned_team: string }) => void;
   item: StockItem | null;
+  itemCode?: string | null;
+  // Nomes com que este mesmo item (mesmo código) foi comprado no Controle de Compras.
+  altNames?: string[];
   newTitle: string;
   editTitle: string;
   defaultAssign: AssignTeam;
@@ -482,9 +521,27 @@ function MaterialFormModal({ open, onClose, onSave, item, newTitle, editTitle, d
     <Modal open={open} onClose={onClose} title={item ? editTitle : newTitle}>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-text mb-1">Nome *</label>
+          <label className="block text-sm font-medium text-text mb-1">
+            Nome *
+            {item && itemCode && (
+              <span className="ml-2 font-mono text-xs text-text-light" title="Código único no Almoxarifado">{itemCode}</span>
+            )}
+          </label>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} />
         </div>
+        {item && altNames.length > 0 && (
+          <div className="bg-blue-50/60 border border-blue-200 rounded-lg px-3 py-2">
+            <p className="text-[11px] font-medium text-blue-900">
+              🛒 Também comprado no Controle de Compras como (mesmo código <span className="font-mono">{itemCode}</span>):
+            </p>
+            <div className="flex flex-wrap gap-1.5 mt-1">
+              {altNames.map((n) => (
+                <span key={n} className="text-[11px] px-2 py-0.5 rounded-full bg-white border border-blue-200 text-blue-800">{n}</span>
+              ))}
+            </div>
+            <p className="text-[10px] text-blue-700/80 mt-1">Compras com esse código repõem este item — não crie um novo pra evitar duplicação.</p>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-text mb-1">Qtd Atual</label>
