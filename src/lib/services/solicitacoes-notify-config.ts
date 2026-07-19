@@ -41,6 +41,9 @@ export interface NotifyConfig {
   // Disparado pelo "Enviar quebrados pro WhatsApp" do Embarque/Retorno
   // (/api/retorno/notify).
   retornoMaterial: RetornoNotifyTarget;
+  // Disparado pelo "Enviar lista pro WhatsApp" da aba Embarque
+  // (/api/embarque/notify) — posta a lista de materiais + rancho no grupo.
+  embarqueLista: RetornoNotifyTarget;
 }
 
 // Defaults = comportamento legado. Nova solicitação avisa os SUPERVISOR por DM;
@@ -50,6 +53,7 @@ export function defaultNotifyConfig(): NotifyConfig {
     novaSolicitacao: { groups: [], functions: ["SUPERVISOR"] },
     compraConcluida: { groups: [], functions: [] },
     retornoMaterial: { groups: [], functions: [], enabled: true },
+    embarqueLista: { groups: [], functions: [], enabled: true },
   };
 }
 
@@ -118,15 +122,18 @@ export function sanitizeNotifyConfig(raw: unknown): NotifyConfig {
   const def = defaultNotifyConfig();
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   // enabled: só o false explícito desliga — ausente/inválido fica ligado.
-  const retRaw = (r.retornoMaterial && typeof r.retornoMaterial === "object"
-    ? r.retornoMaterial
-    : {}) as Record<string, unknown>;
+  const enabledOf = (raw: unknown) =>
+    !(raw && typeof raw === "object" && (raw as Record<string, unknown>).enabled === false);
   return {
     novaSolicitacao: sanitizeTarget(r.novaSolicitacao, def.novaSolicitacao),
     compraConcluida: sanitizeTarget(r.compraConcluida, def.compraConcluida),
     retornoMaterial: {
       ...sanitizeTarget(r.retornoMaterial, def.retornoMaterial),
-      enabled: retRaw.enabled !== false,
+      enabled: enabledOf(r.retornoMaterial),
+    },
+    embarqueLista: {
+      ...sanitizeTarget(r.embarqueLista, def.embarqueLista),
+      enabled: enabledOf(r.embarqueLista),
     },
   };
 }

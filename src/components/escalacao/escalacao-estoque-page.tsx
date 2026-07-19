@@ -81,6 +81,13 @@ export function EscalacaoEstoquePage() {
   const [sendingWhats, setSendingWhats] = useState(false);
   const [returnMsg, setReturnMsg] = useState<string | null>(null);
 
+  // Envio da lista de embarque pro grupo do WhatsApp (aba Embarque).
+  const [sendingEmbarkList, setSendingEmbarkList] = useState(false);
+  const [embarkMsg, setEmbarkMsg] = useState<string | null>(null);
+  // Listas recolhíveis da aba Embarque (Retorno tem as suas no RetornoSection).
+  const [showMat, setShowMat] = useState(true);
+  const [showRancho, setShowRancho] = useState(true);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
@@ -148,6 +155,18 @@ export function EscalacaoEstoquePage() {
     .sort((a, b) => a.estName.localeCompare(b.estName, "pt-BR"));
   const matReady = teamKit.filter((k) => k.ready).length;
   const matMissing = teamKit.length - matReady;
+
+  // Comida do Rancho também entra na conferência de retorno — mesma mecânica
+  // dos materiais (rascunho por stock_item_id; Rancho e materiais são todos
+  // stock_items, então os ids não colidem). O que volta bom credita o Rancho.
+  const ranchoReturnables = itemsWithStatus.map((i) => ({
+    id: i.id,
+    stock_item_id: i.id,
+    estName: i.name,
+    need: i.default_quantity,
+    emEstoque: i.quantity,
+    location: "Rancho",
+  }));
 
   async function handleEmbarcar() {
     if (!currentShip || !selectedTeam) return;
@@ -230,9 +249,9 @@ export function EscalacaoEstoquePage() {
   }
 
   // Linhas do retorno preenchidas (algum voltou/quebrou/obs). Usadas pra salvar
-  // e pra montar o aviso de quebrados.
+  // e pra montar o aviso de quebrados. Materiais do kit + comida do Rancho.
   function buildReturnRows() {
-    return teamKit
+    return [...teamKit, ...ranchoReturnables]
       .map((k) => {
         const d = returnDraft[k.stock_item_id] || { returned: "", broken: "", note: "" };
         const returned = Math.max(0, Math.floor(parseFloat(d.returned) || 0));
@@ -400,6 +419,41 @@ export function EscalacaoEstoquePage() {
     }
   }
 
+  // Manda a lista de embarque (materiais + rancho, com as quantidades que a
+  // equipe leva) pro grupo configurado em Mensagens › "Lista de embarque".
+  async function handleSendEmbarkList() {
+    if (!currentShip || !selectedTeam) return;
+    setSendingEmbarkList(true);
+    setEmbarkMsg(null);
+    try {
+      const res = await fetch("/api/embarque/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shipName: currentShip.name,
+          team: selectedTeam,
+          materials: teamKit.map((k) => ({ name: k.estName, qty: k.need })),
+          rancho: itemsWithStatus.map((i) => ({ name: i.name, qty: i.default_quantity })),
+          sentBy: profile?.full_name || null,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (data?.sent) {
+        setEmbarkMsg(`📨 Lista enviada pro WhatsApp (${data.group}). Fica no histórico da aba Conversas.`);
+      } else if (data?.warning) {
+        setEmbarkMsg(`⚠️ ${data.warning}`);
+      } else if (data?.skipped) {
+        setEmbarkMsg(`⚠️ ${data.skipped}`);
+      } else {
+        setEmbarkMsg("Não consegui enviar a lista pro WhatsApp.");
+      }
+    } catch (err) {
+      setEmbarkMsg(`Erro ao enviar: ${(err as Error).message}`);
+    } finally {
+      setSendingEmbarkList(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -468,17 +522,27 @@ export function EscalacaoEstoquePage() {
           </p>
         )}
         {tab === "embarque" && canEmbarcar && selectedTeam && (teamItems.length > 0 || teamKit.length > 0) && (
-          <Button size="sm" variant="warning" onClick={() => setConfirmEmbark(true)}>
-            ⚓ Embarcar
-          </Button>
+          <div className="flex gap-2 flex-wrap">
+            <Button size="sm" variant="secondary" onClick={handleSendEmbarkList} disabled={sendingEmbarkList || embarking}>
+              {sendingEmbarkList ? "Enviando..." : "📨 Enviar lista pro WhatsApp"}
+            </Button>
+            <Button size="sm" variant="warning" onClick={() => setConfirmEmbark(true)}>
+              ⚓ Embarcar
+            </Button>
+          </div>
         )}
       </div>
+
+      {tab === "embarque" && embarkMsg && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5 text-sm text-blue-800">{embarkMsg}</div>
+      )}
 
       {tab === "retorno" && selectedTeam && (
         <RetornoSection
           shipName={currentShip?.name || ""}
           team={selectedTeam}
           teamKit={teamKit}
+          ranchoKit={ranchoReturnables}
           draft={returnDraft}
           setDraft={setDraft}
           notes={returnNotes}
@@ -498,9 +562,18 @@ export function EscalacaoEstoquePage() {
       {/* Materiais — baixados do Estoque (GALPAO) ao embarcar */}
       <section className="space-y-2">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <h2 className="text-sm font-bold text-text uppercase tracking-wider">🧰 Materiais (do Estoque)</h2>
+          <button
+            type="button"
+            onClick={() => setShowMat((v) => !v)}
+            className="flex items-center gap-1.5 text-sm font-bold text-text uppercase tracking-wider hover:text-primary transition"
+            title={showMat ? "Recolher a lista" : "Mostrar a lista"}
+          >
+            <span className={`inline-block transition-transform ${showMat ? "rotate-90" : ""}`}>▸</span>
+            🧰 Materiais (do Estoque)
+          </button>
           <span className="text-xs text-text-light">{matReady} ok · {matMissing} com falta · {teamKit.length} itens</span>
         </div>
+        {showMat && (
         <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -544,17 +617,27 @@ export function EscalacaoEstoquePage() {
             </table>
           </div>
         </div>
+        )}
       </section>
 
       {/* Comida — baixada do Rancho (estoque por equipe) ao embarcar */}
       <section className="space-y-2">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <h2 className="text-sm font-bold text-text uppercase tracking-wider">🛒 Comida (Rancho)</h2>
+          <button
+            type="button"
+            onClick={() => setShowRancho((v) => !v)}
+            className="flex items-center gap-1.5 text-sm font-bold text-text uppercase tracking-wider hover:text-primary transition"
+            title={showRancho ? "Recolher a lista" : "Mostrar a lista"}
+          >
+            <span className={`inline-block transition-transform ${showRancho ? "rotate-90" : ""}`}>▸</span>
+            🛒 Comida (Rancho)
+          </button>
           <div className="flex items-center gap-3 flex-wrap">
             <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${allReady ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{pct}% pronto</span>
             <span className="text-xs text-text-light">{readyCount} prontos · {missingCount} com falta</span>
           </div>
         </div>
+        {showRancho && (
         <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -602,6 +685,7 @@ export function EscalacaoEstoquePage() {
             </table>
           </div>
         </div>
+        )}
       </section>
       </>)}
 
@@ -623,13 +707,16 @@ export function EscalacaoEstoquePage() {
 // Conferência do que voltou do navio: por material do kit, quanto voltou bom e
 // quanto quebrou. O bom credita o Estoque ao salvar; a lista de quebrados pode
 // ir pro grupo do WhatsApp das solicitações.
+interface ReturnKitRow { id: number; stock_item_id: number; estName: string; need: number; emEstoque: number; location: string }
+
 function RetornoSection({
-  shipName, team, teamKit, draft, setDraft, notes, setNotes,
+  shipName, team, teamKit, ranchoKit, draft, setDraft, notes, setNotes,
   onSave, onSend, saving, sending, canEdit, message, history, editing,
 }: {
   shipName: string;
   team: string;
-  teamKit: Array<{ id: number; stock_item_id: number; estName: string; need: number; emEstoque: number; location: string }>;
+  teamKit: ReturnKitRow[];
+  ranchoKit: ReturnKitRow[];
   draft: Record<number, ReturnDraft>;
   setDraft: (stockItemId: number, patch: Partial<ReturnDraft>) => void;
   notes: string;
@@ -644,6 +731,68 @@ function RetornoSection({
   editing: boolean;
 }) {
   const numCls = "w-16 px-2 py-1 border border-border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40";
+  // Listas recolhíveis: materiais e rancho.
+  const [showMat, setShowMat] = useState(true);
+  const [showRancho, setShowRancho] = useState(true);
+
+  // Tabela de conferência (mesma mecânica pros materiais e pro rancho; muda só
+  // o rótulo da perda: material "Quebrou", comida "Estragou").
+  const renderKitTable = (
+    kit: ReturnKitRow[],
+    labels: { item: string; broken: string; obsPlaceholder: string; empty: string; emptyIcon: string },
+  ) => (
+    <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 border-b border-border">
+            <tr>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">{labels.item}</th>
+              <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto a equipe leva (referência)">Foi</th>
+              <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Voltou</th>
+              <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">{labels.broken}</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Obs.</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {kit.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-10 text-center text-text-light">
+                  <span className="text-3xl block mb-2">{labels.emptyIcon}</span>
+                  {labels.empty}
+                </td>
+              </tr>
+            ) : (
+              kit.map((k) => {
+                const d = draft[k.stock_item_id] || { returned: "", broken: "", note: "" };
+                return (
+                  <tr key={k.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-2.5 font-medium">{k.estName}</td>
+                    <td className="px-4 py-2.5 text-center text-text-light">{k.need}</td>
+                    <td className="px-4 py-2.5 text-center">
+                      <input type="number" min={0} step={1} value={d.returned} disabled={!canEdit}
+                        onChange={(e) => setDraft(k.stock_item_id, { returned: e.target.value })}
+                        className={numCls} placeholder="0" />
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      <input type="number" min={0} step={1} value={d.broken} disabled={!canEdit}
+                        onChange={(e) => setDraft(k.stock_item_id, { broken: e.target.value })}
+                        className={`${numCls} ${(parseInt(d.broken) || 0) > 0 ? "border-red-300 text-red-700" : ""}`} placeholder="0" />
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <input type="text" value={d.note} disabled={!canEdit}
+                        onChange={(e) => setDraft(k.stock_item_id, { note: e.target.value })}
+                        placeholder={labels.obsPlaceholder}
+                        className="w-full px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-4">
@@ -660,57 +809,41 @@ function RetornoSection({
           </p>
         )}
 
-        <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-border">
-                <tr>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Material</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto a equipe leva (referência do kit)">Foi</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Voltou</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Quebrou</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">O que quebrou / obs.</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {teamKit.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-4 py-10 text-center text-text-light">
-                      <span className="text-3xl block mb-2">🧰</span>
-                      Sem kit de materiais para esta equipe
-                    </td>
-                  </tr>
-                ) : (
-                  teamKit.map((k) => {
-                    const d = draft[k.stock_item_id] || { returned: "", broken: "", note: "" };
-                    return (
-                      <tr key={k.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-2.5 font-medium">{k.estName}</td>
-                        <td className="px-4 py-2.5 text-center text-text-light">{k.need}</td>
-                        <td className="px-4 py-2.5 text-center">
-                          <input type="number" min={0} step={1} value={d.returned} disabled={!canEdit}
-                            onChange={(e) => setDraft(k.stock_item_id, { returned: e.target.value })}
-                            className={numCls} placeholder="0" />
-                        </td>
-                        <td className="px-4 py-2.5 text-center">
-                          <input type="number" min={0} step={1} value={d.broken} disabled={!canEdit}
-                            onChange={(e) => setDraft(k.stock_item_id, { broken: e.target.value })}
-                            className={`${numCls} ${(parseInt(d.broken) || 0) > 0 ? "border-red-300 text-red-700" : ""}`} placeholder="0" />
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <input type="text" value={d.note} disabled={!canEdit}
-                            onChange={(e) => setDraft(k.stock_item_id, { note: e.target.value })}
-                            placeholder="Ex.: cabo partido, motor queimado..."
-                            className="w-full px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+        {/* Materiais do kit (recolhível) */}
+        <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => setShowMat((v) => !v)}
+            className="flex items-center gap-1.5 text-sm font-bold text-text uppercase tracking-wider hover:text-primary transition"
+            title={showMat ? "Recolher a lista" : "Mostrar a lista"}
+          >
+            <span className={`inline-block transition-transform ${showMat ? "rotate-90" : ""}`}>▸</span>
+            🧰 Materiais ({teamKit.length})
+          </button>
         </div>
+        {showMat && renderKitTable(teamKit, {
+          item: "Material", broken: "Quebrou",
+          obsPlaceholder: "Ex.: cabo partido, motor queimado...",
+          empty: "Sem kit de materiais para esta equipe", emptyIcon: "🧰",
+        })}
+
+        {/* Comida do Rancho (recolhível) — o que volta bom credita o Rancho */}
+        <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => setShowRancho((v) => !v)}
+            className="flex items-center gap-1.5 text-sm font-bold text-text uppercase tracking-wider hover:text-primary transition"
+            title={showRancho ? "Recolher a lista" : "Mostrar a lista"}
+          >
+            <span className={`inline-block transition-transform ${showRancho ? "rotate-90" : ""}`}>▸</span>
+            🛒 Comida (Rancho) ({ranchoKit.length})
+          </button>
+        </div>
+        {showRancho && renderKitTable(ranchoKit, {
+          item: "Item", broken: "Estragou",
+          obsPlaceholder: "Ex.: estragou no calor, embalagem rasgada...",
+          empty: "Nenhum item com quantidade padrão no Rancho desta equipe", emptyIcon: "🛒",
+        })}
 
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} disabled={!canEdit} rows={2}
           placeholder="Observações gerais do retorno (opcional)..."
@@ -721,7 +854,7 @@ function RetornoSection({
           <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5 text-sm text-blue-800">{message}</div>
         )}
 
-        {canEdit && teamKit.length > 0 && (
+        {canEdit && (teamKit.length > 0 || ranchoKit.length > 0) && (
           <div className="flex flex-wrap gap-2 justify-end">
             <Button size="sm" variant="secondary" onClick={onSend} disabled={sending || saving}>
               {sending ? "Enviando..." : "📨 Enviar quebrados pro WhatsApp"}
