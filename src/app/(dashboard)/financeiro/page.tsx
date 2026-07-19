@@ -693,7 +693,7 @@ export default function FinanceiroPage() {
     },
     {
       key: "controle",
-      label: "🎯 Controle de Pagamentos",
+      label: "🎯 Controle de Funcionários",
       content: (
         <ControleTab
           jobs={jobs}

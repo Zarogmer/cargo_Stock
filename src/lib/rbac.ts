@@ -329,7 +329,7 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       { label: "Valores", href: "/financeiro?tab=funcoes" },
       { label: "Pagamento de Navios", href: "/financeiro?tab=navios" },
-      { label: "Controle de Pagamentos", href: "/financeiro?tab=controle" },
+      { label: "Controle de Funcionários", href: "/financeiro?tab=controle" },
       { label: "Relatório de Vales", href: "/financeiro?tab=vales" },
       // Módulo bancário (fornecedores/bancos) — sub-rotas reais, restritas a
       // FINANCEIRO_BANCO_ROLES (Estágio fica de fora). Ver docs/financeiro/.
