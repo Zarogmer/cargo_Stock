@@ -44,7 +44,11 @@ interface PurchaseOrder {
   quantity: number;
   total_value: number;
   payment_method: string | null;
+  // Legado: prazo único do FATURADO (segue preenchido com a 1ª parcela).
   payment_term_days: number | null;
+  // Parcelas do FATURADO: prazo em dias de cada pagamento (ex.: [28, 35, 42]).
+  // O total é dividido igualmente e cada parcela vira um título no Contas a Pagar.
+  payment_terms: number[] | null;
   card_id: number | null;
   notes: string | null;
   image_url: string | null;
@@ -81,6 +85,34 @@ function cardLabel(c: CardOption): string {
     : "";
   const base = c.label?.trim() || `final ${c.last4}`;
   return `${base} · fecha dia ${c.closing_day}${bank ? ` (${bank})` : ""}`;
+}
+
+// Conta bancária (Financeiro › Conciliação) — só o que o "cadastrar cartão" do
+// Nova Compra precisa pra vincular o cartão novo a uma conta.
+interface BankAccountOption {
+  id: number;
+  nickname: string;
+  bank: string;
+  active?: boolean;
+}
+
+// Dados do formulário inline de "cadastrar novo cartão" do Nova Compra.
+interface NewCardInput {
+  bank_account_id: number;
+  last4: string;
+  closing_day: number;
+  label: string | null;
+}
+
+// Rótulo da forma de pagamento na listagem: FATURADO mostra os prazos das
+// parcelas ("FATURADO 28/35/42") pra enxergar o parcelamento sem abrir a compra.
+function paymentLabel(p: PurchaseOrder): string | null {
+  if (!p.payment_method) return null;
+  if (p.payment_method === "FATURADO") {
+    const terms = p.payment_terms?.length ? p.payment_terms : p.payment_term_days ? [p.payment_term_days] : [];
+    if (terms.length > 0) return `FATURADO ${terms.join("/")}`;
+  }
+  return p.payment_method;
 }
 
 // Navio cadastrado (aba Navios) — só os campos que o seletor/rotulagem usa aqui.
@@ -338,6 +370,8 @@ export default function SolicitacoesPage() {
   const [purchases, setPurchases] = useState<PurchaseOrder[]>([]);
   const [ships, setShips] = useState<Ship[]>([]);
   const [cards, setCards] = useState<CardOption[]>([]);
+  // Contas bancárias ativas — pro "cadastrar novo cartão" do Nova Compra.
+  const [bankAccounts, setBankAccounts] = useState<BankAccountOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -400,7 +434,7 @@ export default function SolicitacoesPage() {
     setLoading(true);
     setDbError(null);
     try {
-      const [reqRes, linksRes, suppRes, purchRes, shipsRes, cardsRes] = await Promise.all([
+      const [reqRes, linksRes, suppRes, purchRes, shipsRes, cardsRes, banksRes] = await Promise.all([
         db.from("tool_requests").select("*").order("created_at", { ascending: false }),
         db.from("product_links").select("*").order("category").order("name"),
         db.from("suppliers").select("*").order("name"),
@@ -409,6 +443,8 @@ export default function SolicitacoesPage() {
         db.from("ships").select("id, name, status, port, arrival_date").order("created_at", { ascending: false }),
         // Cartões (com o banco) pro seletor "qual cartão" do Nova Compra.
         db.from("cards").select("*, bank_accounts(bank, nickname)").order("last4"),
+        // Contas bancárias pro "cadastrar novo cartão" (só id/apelido/banco).
+        db.from("bank_accounts").select("id, nickname, bank, active").order("nickname"),
       ]);
 
       const errors: string[] = [];
@@ -417,8 +453,9 @@ export default function SolicitacoesPage() {
       if (suppRes.error) errors.push(`suppliers: ${suppRes.error.code} ${suppRes.error.message}`);
       if (purchRes.error) errors.push(`purchase_orders: ${purchRes.error.code} ${purchRes.error.message}`);
       if (shipsRes.error) errors.push(`ships: ${shipsRes.error.code} ${shipsRes.error.message}`);
-      // Cartões: falha aqui não bloqueia a tela (recurso opcional do Nova Compra).
+      // Cartões/contas: falha aqui não bloqueia a tela (recurso opcional do Nova Compra).
       if (cardsRes.error) console.warn("cards:", cardsRes.error);
+      if (banksRes.error) console.warn("bank_accounts:", banksRes.error);
       if (errors.length > 0) {
         console.error("DB errors:", errors);
         setDbError(errors.join(" | "));
@@ -430,6 +467,7 @@ export default function SolicitacoesPage() {
       setPurchases((purchRes.data as PurchaseOrder[]) || []);
       setShips((shipsRes.data as Ship[]) || []);
       setCards((cardsRes.data as CardOption[]) || []);
+      setBankAccounts(((banksRes.data as BankAccountOption[]) || []).filter((a) => a.active !== false));
     } catch (err) {
       console.error("loadAll error:", err);
       setDbError(String(err));
@@ -831,6 +869,27 @@ export default function SolicitacoesPage() {
     throw new Error(`Destino inválido: ${dest}`);
   }, [profile, storeInStock]);
 
+  // Cadastra um cartão de crédito direto do Nova Compra (nem todo mundo tem
+  // acesso ao Financeiro › Contas bancárias). Devolve o cartão já com o banco
+  // resolvido pro rótulo e entra na lista local sem recarregar tudo.
+  const handleCreateCard = useCallback(async (input: NewCardInput): Promise<CardOption> => {
+    const actor = profile?.full_name || "Sistema";
+    const { data, error } = await db.from("cards").insert({ ...input, created_by: actor } as any);
+    if (error) throw new Error(error.message);
+    const created = data as unknown as { id: number };
+    const acct = bankAccounts.find((a) => a.id === input.bank_account_id);
+    const card: CardOption = {
+      id: created.id,
+      last4: input.last4,
+      closing_day: input.closing_day,
+      label: input.label,
+      bank_account_id: input.bank_account_id,
+      bank_accounts: acct ? { bank: acct.bank, nickname: acct.nickname } : null,
+    };
+    setCards((prev) => [...prev, card].sort((a, b) => a.last4.localeCompare(b.last4)));
+    return card;
+  }, [profile, bankAccounts]);
+
   async function handleSavePurchase(
     data: Partial<PurchaseOrder>,
     fromRequestId: string | null,
@@ -856,18 +915,25 @@ export default function SolicitacoesPage() {
           created_by: actor,
         } as any);
         if (error) throw error;
-        // FATURADO com prazo → já cria o título no Contas a Pagar (vencimento =
-        // data + dias). Falha aqui é não-fatal: a compra já foi salva.
+        // FATURADO com prazo → já cria os títulos no Contas a Pagar (um por
+        // parcela, vencimento = data + dias). Falha aqui é não-fatal: a compra
+        // já foi salva.
         const newId = (createdPurchase as unknown as { id?: string } | null)?.id;
-        if (newId && data.payment_method === "FATURADO" && data.payment_term_days) {
+        const nParcelas = data.payment_terms?.length || (data.payment_term_days ? 1 : 0);
+        if (newId && data.payment_method === "FATURADO" && nParcelas > 0) {
           try {
             const r = await fetch("/api/financeiro/contas/from-compras", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ purchase_ids: [newId] }),
             });
-            if (r.ok) setSaveOk("💳 Compra faturada lançada no Contas a Pagar com o vencimento calculado.");
-            else setSaveError("Compra salva, mas falhou ao lançar no Contas a Pagar — puxe manual depois.");
+            if (r.ok) {
+              setSaveOk(
+                nParcelas > 1
+                  ? `💳 Compra faturada lançada no Contas a Pagar em ${nParcelas} parcelas com os vencimentos calculados.`
+                  : "💳 Compra faturada lançada no Contas a Pagar com o vencimento calculado.",
+              );
+            } else setSaveError("Compra salva, mas falhou ao lançar no Contas a Pagar — puxe manual depois.");
           } catch {
             setSaveError("Compra salva, mas falhou ao lançar no Contas a Pagar — puxe manual depois.");
           }
@@ -1430,7 +1496,7 @@ export default function SolicitacoesPage() {
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">{formatCurrency(p.unit_value || 0)}</td>
                         <td className="px-3 py-2.5 text-right">{formatQty(p.quantity)}</td>
                         <td className="px-3 py-2.5 text-right font-semibold whitespace-nowrap">{formatCurrency(p.total_value || 0)}</td>
-                        <td className="px-3 py-2.5">{p.payment_method || "—"}</td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">{paymentLabel(p) || "—"}</td>
                         {canManagePurchases && (
                           <td className="px-3 py-2.5">
                             <div className="flex gap-0.5 justify-end">
@@ -1475,7 +1541,7 @@ export default function SolicitacoesPage() {
                           {p.supplier && <span>{p.supplier}</span>}
                           <span>{formatPurchaseDate(p.purchase_date)}</span>
                           <span>{formatQty(p.quantity)} × {formatCurrency(p.unit_value || 0)}</span>
-                          {p.payment_method && <span>{p.payment_method}</span>}
+                          {p.payment_method && <span>{paymentLabel(p)}</span>}
                         </div>
                         {p.notes && <p className="text-xs text-text-light mt-1">{p.notes}</p>}
                       </div>
@@ -1784,6 +1850,8 @@ export default function SolicitacoesPage() {
         suppliers={suppliers}
         ships={ships}
         cards={cards}
+        bankAccounts={bankAccounts}
+        onCreateCard={handleCreateCard}
         saving={saving}
       />
 
@@ -2305,7 +2373,7 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
   );
 }
 
-function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenNf, suppliers, ships, cards, saving }: {
+function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenNf, suppliers, ships, cards, bankAccounts, onCreateCard, saving }: {
   open: boolean; onClose: () => void;
   onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null) => void;
   item: PurchaseOrder | null;
@@ -2314,6 +2382,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   suppliers: Supplier[];
   ships: Ship[];
   cards: CardOption[];
+  bankAccounts: BankAccountOption[];
+  onCreateCard: (input: NewCardInput) => Promise<CardOption>;
   saving: boolean;
 }) {
   const [description, setDescription] = useState("");
@@ -2333,9 +2403,17 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   const [code, setCode] = useState("");
   // Navio vinculado (opcional) — guarda o id do navio escolhido na aba Navios.
   const [shipId, setShipId] = useState("");
-  // Prazo em dias (só FATURADO) e cartão usado (só CARTÃO DE CRÉDITO).
-  const [paymentTermDays, setPaymentTermDays] = useState("");
+  // Parcelas do FATURADO (prazo em dias de cada uma) e cartão usado (só CARTÃO
+  // DE CRÉDITO). O faturado costuma dividir o total em 2-3 pagamentos (28/35/42).
+  const [paymentTerms, setPaymentTerms] = useState<string[]>([""]);
   const [cardId, setCardId] = useState("");
+  // Cadastrar cartão novo direto daqui (nem todo mundo acessa o Financeiro).
+  const [showNewCard, setShowNewCard] = useState(false);
+  const [newCardBankId, setNewCardBankId] = useState("");
+  const [newCardLast4, setNewCardLast4] = useState("");
+  const [newCardClosing, setNewCardClosing] = useState("");
+  const [newCardLabel, setNewCardLabel] = useState("");
+  const [savingCard, setSavingCard] = useState(false);
   // Leitura da NF em PDF (pré-preenche os campos, igual ao Contas a Pagar).
   const [readingNf, setReadingNf] = useState(false);
   const nfInputRef = useRef<HTMLInputElement>(null);
@@ -2344,6 +2422,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     if (!open) return;
     const today = new Date();
     const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    // Formulário de cartão novo sempre começa fechado/limpo.
+    setShowNewCard(false); setNewCardBankId(""); setNewCardLast4(""); setNewCardClosing(""); setNewCardLabel("");
     if (item) {
       setDescription(item.description || "");
       setLink(item.product_url || "");
@@ -2358,7 +2438,14 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       setImageUrl(item.image_url || null);
       setCode(item.code || "");
       setShipId(item.ship_id || "");
-      setPaymentTermDays(item.payment_term_days != null ? String(item.payment_term_days) : "");
+      // Parcelas salvas (novo) ou o prazo único legado como parcela 1.
+      setPaymentTerms(
+        item.payment_terms?.length
+          ? item.payment_terms.map(String)
+          : item.payment_term_days != null
+            ? [String(item.payment_term_days)]
+            : [""],
+      );
       setCardId(item.card_id != null ? String(item.card_id) : "");
     } else if (fromRequest) {
       setDescription(fromRequest.tool_name || "");
@@ -2373,11 +2460,11 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       setImageUrl(fromRequest.image_url || null);
       setCode(fromRequest.code || "");
       setShipId("");
-      setPaymentTermDays(""); setCardId("");
+      setPaymentTerms([""]); setCardId("");
     } else {
       setDescription(""); setLink(""); setDestSpec({ ...DEFAULT_DEST_SPEC, dest: "NENHUM" }); setSupplier(""); setPurchaseDate(todayISO);
       setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setImageUrl(null); setCode(""); setShipId("");
-      setPaymentTermDays(""); setCardId("");
+      setPaymentTerms([""]); setCardId("");
     }
   }, [item, fromRequest, open]);
 
@@ -2427,6 +2514,25 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   const qty = parseDecimalBR(quantity);
   const total = unit * qty;
 
+  // Parcelas válidas do FATURADO (dias preenchidos). O total é dividido em
+  // partes iguais por centavos; a última parcela absorve a sobra do arredondamento.
+  const validTerms = paymentTerms.map((t) => t.trim()).filter(Boolean).map(Number).filter((n) => Number.isFinite(n) && n >= 0);
+  const parcelValue = (index: number): number => {
+    const n = validTerms.length;
+    if (n === 0) return 0;
+    const totalCents = Math.round(total * 100);
+    const baseCents = Math.floor(totalCents / n);
+    return (index === n - 1 ? totalCents - baseCents * (n - 1) : baseCents) / 100;
+  };
+  // "vence 16/08/2026" da parcela — data da compra + dias (datas puras, sem fuso).
+  const parcelDueLabel = (days: number): string | null => {
+    if (!purchaseDate) return null;
+    const [y, m, d] = purchaseDate.slice(0, 10).split("-").map(Number);
+    if (!y || !m || !d) return null;
+    const dt = new Date(Date.UTC(y, m - 1, d + days));
+    return `${String(dt.getUTCDate()).padStart(2, "0")}/${String(dt.getUTCMonth() + 1).padStart(2, "0")}/${dt.getUTCFullYear()}`;
+  };
+
   // Aplica os dados puxados do link (igual à Nova Solicitação): preenche descrição,
   // valor, fornecedor e foto sem sobrescrever o que já foi digitado (salvo "Buscar").
   const applyPreview = useCallback((d: { name?: string; value?: number; supplier?: string; image?: string }, force: boolean) => {
@@ -2435,6 +2541,32 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     if (d.supplier) setSupplier((p) => (force || !p.trim() ? d.supplier! : p));
     if (d.image) setImageUrl((p) => (force || !p ? d.image! : p));
   }, []);
+
+  // Cadastra o cartão novo (via pai, que insere e atualiza a lista) e já o
+  // seleciona como "cartão usado" desta compra.
+  async function handleSaveNewCard() {
+    const last4 = newCardLast4.replace(/\D/g, "");
+    const closing = Number(newCardClosing);
+    if (!newCardBankId) { alert("Escolha a conta bancária do cartão."); return; }
+    if (last4.length !== 4) { alert("Informe os 4 últimos dígitos do cartão."); return; }
+    if (!Number.isInteger(closing) || closing < 1 || closing > 31) { alert("Dia de fechamento deve ser entre 1 e 31."); return; }
+    setSavingCard(true);
+    try {
+      const created = await onCreateCard({
+        bank_account_id: Number(newCardBankId),
+        last4,
+        closing_day: closing,
+        label: newCardLabel.trim() || null,
+      });
+      setCardId(String(created.id));
+      setShowNewCard(false);
+      setNewCardBankId(""); setNewCardLast4(""); setNewCardClosing(""); setNewCardLabel("");
+    } catch (err: any) {
+      alert(`Erro ao cadastrar o cartão: ${err?.message || String(err)}`);
+    } finally {
+      setSavingCard(false);
+    }
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -2458,8 +2590,10 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       quantity: qty || 1,
       total_value: total,
       payment_method: paymentMethod || null,
-      // Prazo só faz sentido no FATURADO; cartão só no CARTÃO DE CRÉDITO.
-      payment_term_days: paymentMethod === "FATURADO" && paymentTermDays ? Number(paymentTermDays) : null,
+      // Parcelas só fazem sentido no FATURADO; cartão só no CARTÃO DE CRÉDITO.
+      // payment_term_days segue com a 1ª parcela por compatibilidade (legado).
+      payment_terms: paymentMethod === "FATURADO" ? validTerms : [],
+      payment_term_days: paymentMethod === "FATURADO" && validTerms.length > 0 ? validTerms[0] : null,
       card_id: paymentMethod === "CARTÃO DE CRÉDITO" && cardId ? Number(cardId) : null,
       notes: notes || null,
       image_url: imageUrl,
@@ -2543,25 +2677,60 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
           </div>
         </div>
 
-        {/* FATURADO: prazo em dias → vira o vencimento no Contas a Pagar. */}
+        {/* FATURADO: parcelas (prazo em dias de cada uma) → cada parcela vira um
+            título no Contas a Pagar, com o total dividido igualmente. */}
         {paymentMethod === "FATURADO" && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-            <label className="block text-sm font-medium mb-1">Prazo (dias) *</label>
-            <input
-              type="number"
-              min={0}
-              value={paymentTermDays}
-              onChange={(e) => setPaymentTermDays(e.target.value)}
-              placeholder="Ex.: 28"
-              className={inputCls}
-            />
-            <p className="text-[11px] text-text-light mt-1">
-              Vira um título no Contas a Pagar com vencimento = data da compra + dias.
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
+            <label className="block text-sm font-medium">Parcelas — prazo em dias *</label>
+            {paymentTerms.map((t, i) => {
+              const n = Number(t.trim());
+              const valid = t.trim() !== "" && Number.isFinite(n) && n >= 0;
+              // Índice desta parcela entre as válidas (pra data/valor certos).
+              const validIdx = paymentTerms.slice(0, i).filter((x) => x.trim() !== "" && Number.isFinite(Number(x.trim())) && Number(x.trim()) >= 0).length;
+              const due = valid ? parcelDueLabel(n) : null;
+              return (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="text-xs text-text-light w-16 shrink-0">Parcela {i + 1}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={t}
+                    onChange={(e) => setPaymentTerms((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
+                    placeholder={i === 0 ? "Ex.: 28" : i === 1 ? "Ex.: 35" : "Ex.: 42"}
+                    className={`${inputCls} !w-24`}
+                  />
+                  <span className="text-xs text-text-light flex-1 min-w-0 truncate">
+                    {valid ? `${due ? `vence ${due}` : "dias"} · ${formatCurrency(parcelValue(validIdx))}` : "dias"}
+                  </span>
+                  {paymentTerms.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setPaymentTerms((prev) => prev.filter((_, j) => j !== i))}
+                      className="p-1 text-danger hover:bg-red-50 rounded shrink-0"
+                      title="Remover parcela"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setPaymentTerms((prev) => [...prev, ""])}
+              className="text-xs font-medium text-primary hover:underline"
+            >
+              + Adicionar parcela
+            </button>
+            <p className="text-[11px] text-text-light">
+              Cada parcela vira um título no Contas a Pagar com vencimento = data da compra + dias. O valor total é dividido igualmente entre as parcelas.
             </p>
           </div>
         )}
 
-        {/* CARTÃO DE CRÉDITO: qual cartão foi usado (pra saber o fechamento). */}
+        {/* CARTÃO DE CRÉDITO: qual cartão foi usado (pra saber o fechamento).
+            Dá pra cadastrar um cartão novo aqui mesmo — nem todo mundo tem
+            acesso ao Financeiro › Contas bancárias. */}
         {paymentMethod === "CARTÃO DE CRÉDITO" && (
           <div>
             <label className="block text-sm font-medium mb-1">Cartão usado</label>
@@ -2573,8 +2742,91 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
                 <option value={cardId}>cartão #{cardId} (fora da lista)</option>
               )}
             </select>
+            {!showNewCard && (
+              <button
+                type="button"
+                onClick={() => setShowNewCard(true)}
+                className="text-xs font-medium text-primary hover:underline mt-1.5"
+              >
+                + Cadastrar novo cartão
+              </button>
+            )}
+            {showNewCard && (
+              <div className="mt-2 border border-border rounded-lg p-3 bg-gray-50 space-y-2">
+                <p className="text-xs font-semibold">Novo cartão</p>
+                <div>
+                  <label className="block text-xs font-medium mb-1">Conta bancária *</label>
+                  <select value={newCardBankId} onChange={(e) => setNewCardBankId(e.target.value)} className={inputCls}>
+                    <option value="">— Selecionar conta</option>
+                    {bankAccounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.nickname}{a.bank === "ITAU" ? " (Itaú)" : a.bank === "SANTANDER" ? " (Santander)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {bankAccounts.length === 0 && (
+                    <p className="text-[10px] text-danger mt-1">
+                      Nenhuma conta bancária cadastrada — peça ao Financeiro pra criar em Conciliação › Contas bancárias.
+                    </p>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-medium mb-1">4 últimos dígitos *</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={4}
+                      value={newCardLast4}
+                      onChange={(e) => setNewCardLast4(e.target.value.replace(/\D/g, ""))}
+                      placeholder="Ex.: 8403"
+                      className={inputCls}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Fatura fecha dia *</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      value={newCardClosing}
+                      onChange={(e) => setNewCardClosing(e.target.value)}
+                      placeholder="Ex.: 12"
+                      className={inputCls}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1">Apelido <span className="text-text-light font-normal">(opcional)</span></label>
+                  <input
+                    type="text"
+                    value={newCardLabel}
+                    onChange={(e) => setNewCardLabel(e.target.value)}
+                    placeholder="Ex.: Itaú corporativo"
+                    className={inputCls}
+                  />
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowNewCard(false)}
+                    className="text-xs font-medium px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveNewCard}
+                    disabled={savingCard || bankAccounts.length === 0}
+                    className="text-xs font-medium px-3 py-1.5 rounded-lg bg-primary text-white hover:opacity-90 disabled:opacity-50"
+                  >
+                    {savingCard ? "Salvando..." : "Salvar cartão"}
+                  </button>
+                </div>
+              </div>
+            )}
             <p className="text-[10px] text-text-light mt-1">
-              Cadastre os cartões em Financeiro › Conciliação › Contas bancárias. A fatura do cartão é lançada como um boleto à parte.
+              A fatura do cartão é lançada como um boleto à parte no Contas a Pagar.
             </p>
           </div>
         )}

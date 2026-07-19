@@ -782,7 +782,12 @@ model PurchaseOrder {
   payment_method String? // FORMA DE PAGAMENTO
   // Prazo em dias quando FORMA DE PAGAMENTO = FATURADO. O vencimento no Contas a
   // Pagar sai de purchase_date + payment_term_days (controle de meses futuros).
+  // Legado: com payment_terms preenchido, guarda só a 1ª parcela.
   payment_term_days Int?
+  // Parcelas do FATURADO: prazo em dias de cada pagamento (ex.: [28, 35, 42]).
+  // O valor total é dividido igualmente entre as parcelas e cada uma vira um
+  // título próprio no Contas a Pagar (compra parcelada pelo fornecedor).
+  payment_terms Int[] @default([])
   // Cartão usado quando FORMA DE PAGAMENTO = CARTÃO DE CRÉDITO (só marca qual foi,
   // pra saber o fechamento; a fatura do cartão é lançada como um boleto à parte).
   card_id        Int?
@@ -800,8 +805,9 @@ model PurchaseOrder {
   created_at     DateTime  @default(now()) @db.Timestamptz()
   updated_at     DateTime  @default(now()) @db.Timestamptz()
 
-  // Título de Contas a Pagar gerado a partir desta compra, se houver.
-  payable_invoice PayableInvoice?
+  // Títulos de Contas a Pagar gerados a partir desta compra, se houver —
+  // FATURADO parcelado gera um título por parcela.
+  payable_invoices PayableInvoice[]
 
   @@index([purchase_date(sort: Desc)])
   @@index([department])
@@ -1057,9 +1063,10 @@ model PayableInvoice {
   notes String?
 
   // Origem "Controle de Compras": quando o título nasce de um registro de
-  // purchase_orders, guarda o vínculo (único) pra não puxar a mesma compra duas
-  // vezes e pra referência cruzada. SetNull preserva o título se a compra sumir.
-  purchase_order_id String?        @unique @db.Uuid
+  // purchase_orders, guarda o vínculo pra não puxar a mesma compra duas vezes e
+  // pra referência cruzada. Não é mais único: FATURADO parcelado gera um título
+  // por parcela da mesma compra. SetNull preserva o título se a compra sumir.
+  purchase_order_id String?        @db.Uuid
   purchase_order    PurchaseOrder? @relation(fields: [purchase_order_id], references: [id], onDelete: SetNull)
 
   // ── Trilha de auditoria da máquina de estados ────────────────────────────
@@ -1081,6 +1088,7 @@ model PayableInvoice {
   @@index([status])
   @@index([due_date])
   @@index([supplier_id])
+  @@index([purchase_order_id])
   @@map("payable_invoices")
 }
 

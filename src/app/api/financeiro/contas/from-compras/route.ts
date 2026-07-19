@@ -5,8 +5,10 @@ import { requireFinance } from "@/lib/financeiro-api";
 import { AUTO_APPROVE_SETTING_KEY, autoApproveReason } from "@/lib/services/payable-status";
 
 // Puxar do Controle de Compras (purchase_orders) para o Contas a Pagar.
-// GET  → lista as compras que ainda NÃO viraram título (payable_invoice null).
-// POST → cria um título por compra selecionada, com o vínculo purchase_order_id.
+// GET  → lista as compras que ainda NÃO viraram título (sem payable_invoices).
+// POST → cria os títulos por compra selecionada, com o vínculo purchase_order_id.
+// FATURADO parcelado (payment_terms) gera um título por parcela, com o valor
+// dividido igualmente entre elas.
 
 // GET /api/financeiro/contas/from-compras — compras disponíveis pra puxar.
 export async function GET() {
@@ -15,7 +17,7 @@ export async function GET() {
 
   const purchases = await prisma.purchaseOrder.findMany({
     where: {
-      payable_invoice: null,
+      payable_invoices: { none: {} },
       // Compra no cartão só marca qual cartão foi usado — a fatura vira 1 boleto
       // à parte, então não entra aqui como título individual.
       payment_method: { notIn: ["CARTÃO DE CRÉDITO", "CARTÃO DE DÉBITO"] },
@@ -31,6 +33,7 @@ export async function GET() {
       total_value: true,
       payment_method: true,
       payment_term_days: true,
+      payment_terms: true,
       ship_name: true,
       notes: true,
     },
@@ -42,6 +45,7 @@ export async function GET() {
 // POST /api/financeiro/contas/from-compras — cria títulos a partir das compras.
 // Body: { purchase_ids: string[] }. Casa o FORNECEDOR (texto da compra) com um
 // fornecedor cadastrado pelo nome; não achando, guarda como favorecido.
+// created conta TÍTULOS (uma compra parcelada em 3 soma 3).
 export async function POST(request: NextRequest) {
   const guard = await requireFinance("create");
   if (guard.error) return guard.error;
@@ -68,32 +72,32 @@ export async function POST(request: NextRequest) {
   for (const id of ids) {
     const po = await prisma.purchaseOrder.findUnique({
       where: { id },
-      include: { payable_invoice: { select: { id: true } } },
+      include: { payable_invoices: { select: { id: true } } },
     });
     // Já virou título ou sumiu — ignora (idempotente).
-    if (!po || po.payable_invoice) {
+    if (!po || po.payable_invoices.length > 0) {
       skipped++;
       continue;
     }
 
     const amount = Number(po.total_value) || 0;
     const supplierId = po.supplier ? byName.get(po.supplier.trim().toLowerCase()) ?? null : null;
-    const autoReason = autoApproveReason(amount, autoSetting?.value);
 
-    // Vencimento: FATURADO com prazo em dias vence em purchase_date + dias
-    // (controle de meses futuros). Sem prazo, cai na própria data da compra
-    // (que serve de referência do mês no controle).
-    let dueDate: Date | null = po.purchase_date ?? null;
-    if (po.payment_method === "FATURADO" && po.payment_term_days && po.purchase_date) {
-      const d = new Date(po.purchase_date);
-      d.setUTCDate(d.getUTCDate() + po.payment_term_days);
-      dueDate = d;
-    }
+    // Parcelas do FATURADO: payment_terms (novo) ou o payment_term_days legado
+    // como parcela única. Fora do FATURADO (ou sem data da compra) não parcela.
+    const terms =
+      po.payment_method === "FATURADO" && po.purchase_date
+        ? po.payment_terms.length > 0
+          ? po.payment_terms
+          : po.payment_term_days
+            ? [po.payment_term_days]
+            : []
+        : [];
 
-    // Observação: junta navio, forma de pagamento (+ prazo) e a nota original.
+    // Observação: junta navio, forma de pagamento (+ prazos) e a nota original.
     const pgtoLabel =
-      po.payment_method === "FATURADO" && po.payment_term_days
-        ? `Pagamento: FATURADO ${po.payment_term_days} dias`
+      po.payment_method === "FATURADO" && terms.length > 0
+        ? `Pagamento: FATURADO ${terms.join("/")} dias`
         : po.payment_method
           ? `Pagamento: ${po.payment_method}`
           : null;
@@ -103,24 +107,46 @@ export async function POST(request: NextRequest) {
       po.notes || null,
     ].filter(Boolean);
 
-    await prisma.payableInvoice.create({
-      data: {
-        description: po.description,
-        amount: new Prisma.Decimal(amount.toFixed(2)),
-        due_date: dueDate,
-        supplier_id: supplierId,
-        payee_name: supplierId ? null : po.supplier?.trim() || null,
-        expense_type: po.department || null,
-        notes: noteParts.length ? noteParts.join(" · ") : null,
-        origin: "COMPRA",
-        purchase_order_id: po.id,
-        status: autoReason ? "APROVADO" : "AGUARDANDO_APROVACAO",
-        approved_by: autoReason,
-        approved_at: autoReason ? new Date() : null,
-        created_by: guard.userName,
-      },
-    });
-    created++;
+    // Valor de cada parcela: divisão igual em centavos; a última absorve a sobra
+    // do arredondamento pra fechar exatamente no total da compra.
+    const totalCents = Math.round(amount * 100);
+    const n = Math.max(1, terms.length);
+    const baseCents = Math.floor(totalCents / n);
+
+    for (let i = 0; i < n; i++) {
+      const parcelCents = i === n - 1 ? totalCents - baseCents * (n - 1) : baseCents;
+      const parcelAmount = parcelCents / 100;
+      const autoReason = autoApproveReason(parcelAmount, autoSetting?.value);
+
+      // Vencimento: FATURADO vence em purchase_date + dias da parcela (controle
+      // de meses futuros). Sem prazo, cai na própria data da compra (que serve
+      // de referência do mês no controle).
+      let dueDate: Date | null = po.purchase_date ?? null;
+      if (terms.length > 0 && po.purchase_date) {
+        const d = new Date(po.purchase_date);
+        d.setUTCDate(d.getUTCDate() + terms[i]);
+        dueDate = d;
+      }
+
+      await prisma.payableInvoice.create({
+        data: {
+          description: terms.length > 1 ? `${po.description} — parcela ${i + 1}/${n}` : po.description,
+          amount: new Prisma.Decimal(parcelAmount.toFixed(2)),
+          due_date: dueDate,
+          supplier_id: supplierId,
+          payee_name: supplierId ? null : po.supplier?.trim() || null,
+          expense_type: po.department || null,
+          notes: noteParts.length ? noteParts.join(" · ") : null,
+          origin: "COMPRA",
+          purchase_order_id: po.id,
+          status: autoReason ? "APROVADO" : "AGUARDANDO_APROVACAO",
+          approved_by: autoReason,
+          approved_at: autoReason ? new Date() : null,
+          created_by: guard.userName,
+        },
+      });
+      created++;
+    }
   }
 
   return NextResponse.json({ created, skipped }, { status: 201 });
