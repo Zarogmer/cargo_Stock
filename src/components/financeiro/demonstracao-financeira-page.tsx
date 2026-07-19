@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { formatCurrency, parseDecimalBR, matchSearch } from "@/lib/utils";
 import { MONTH_LABELS, stripSectionNum as stripNum } from "@/lib/demonstracao-financeira";
-import { mergeSections, type CustomSectionRow, type MergedSection } from "@/lib/statement-sections";
+import { mergeSections, customKeyId, type CustomSectionRow, type MergedSection, type SectionOverrideRow } from "@/lib/statement-sections";
 
 // Só os campos do título que esta tela usa (a API devolve o resto junto).
 interface InvoiceRow {
@@ -58,11 +58,12 @@ export function DemonstracaoFinanceiraPage() {
 
   const [rows, setRows] = useState<Row[]>([]);
   const [customSections, setCustomSections] = useState<CustomSectionRow[]>([]);
+  const [overrides, setOverrides] = useState<SectionOverrideRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Seções fixas (planilha) + personalizadas (banco), mescladas.
-  const merged = useMemo(() => mergeSections(customSections), [customSections]);
+  // Seções fixas (planilha, com rótulos renomeados) + personalizadas (banco).
+  const merged = useMemo(() => mergeSections(customSections, overrides), [customSections, overrides]);
 
   const [year, setYear] = useState<number | null>(null);
   const [month, setMonth] = useState<string>(ALL);
@@ -90,6 +91,7 @@ export function DemonstracaoFinanceiraPage() {
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       const secData = await secRes.json().catch(() => ({}));
       setCustomSections((secData.sections as CustomSectionRow[]) || []);
+      setOverrides((secData.overrides as SectionOverrideRow[]) || []);
       const invoices = (data.invoices as InvoiceRow[]) || [];
       setRows(
         invoices
@@ -359,11 +361,10 @@ export function DemonstracaoFinanceiraPage() {
         </div>
       </Modal>
 
-      {/* Gerenciar seções/subseções personalizadas */}
+      {/* Gerenciar seções/subseções (renomear fixas e personalizadas) */}
       <SectionsManager
         open={sectionsModalOpen}
         onClose={() => setSectionsModalOpen(false)}
-        sections={customSections}
         allSections={merged.sections}
         groups={merged.groups}
         onChanged={load}
@@ -372,15 +373,15 @@ export function DemonstracaoFinanceiraPage() {
   );
 }
 
-// Modal de seções personalizadas: adiciona subseções (num grupo oficial ou num
-// grupo novo), renomeia e remove. Só mexe nas custom — as fixas da planilha
-// aparecem só como referência no seletor de grupo.
+// Modal de seções: cria subseções (num grupo oficial ou novo), renomeia
+// QUALQUER seção — fixa da planilha (via override de rótulo) ou personalizada —
+// e remove as personalizadas. Renomear uma fixa só troca o rótulo exibido; a
+// chave gravada nos títulos não muda.
 function SectionsManager({
-  open, onClose, sections, allSections, groups, onChanged,
+  open, onClose, allSections, groups, onChanged,
 }: {
   open: boolean;
   onClose: () => void;
-  sections: CustomSectionRow[];
   allSections: MergedSection[];
   groups: string[];
   onChanged: () => void | Promise<void>;
@@ -391,7 +392,8 @@ function SectionsManager({
   const [newGroup, setNewGroup] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [editId, setEditId] = useState<number | null>(null);
+  // Edição inline chaveada pela chave da seção ("6.1", "c3"...).
+  const [editKey, setEditKey] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState("");
 
   const inputCls = "w-full border border-border rounded-lg px-3 py-2 text-sm bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40";
@@ -415,23 +417,44 @@ function SectionsManager({
     } finally { setBusy(false); }
   }
 
-  async function handleRename(id: number) {
-    if (!editLabel.trim()) return;
+  // Renomeia a seção. Personalizada → PATCH pelo id; fixa → override de rótulo.
+  async function handleRename(sec: MergedSection) {
+    const name = editLabel.trim();
+    if (!name) return;
     setBusy(true); setErr(null);
     try {
-      const res = await fetch(`/api/financeiro/statement-sections/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: editLabel.trim() }),
-      });
+      const id = customKeyId(sec.key);
+      const res = id !== null
+        ? await fetch(`/api/financeiro/statement-sections/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ label: name }),
+          })
+        : await fetch("/api/financeiro/statement-sections/overrides", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ section_key: sec.key, label: name }),
+          });
       if (!res.ok) { const d = await res.json().catch(() => ({})); setErr(d.error || "Erro ao renomear."); return; }
-      setEditId(null); setEditLabel("");
+      setEditKey(null); setEditLabel("");
       await onChanged();
     } finally { setBusy(false); }
   }
 
-  async function handleDelete(id: number, name: string) {
-    if (!confirm(`Remover a subseção "${name}"? Se houver títulos nela, ela só some das listas (o histórico fica).`)) return;
+  // Volta uma seção fixa renomeada ao rótulo original da planilha.
+  async function handleReset(sec: MergedSection) {
+    setBusy(true); setErr(null);
+    try {
+      const res = await fetch(`/api/financeiro/statement-sections/overrides?section_key=${encodeURIComponent(sec.key)}`, { method: "DELETE" });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setErr(d.error || "Erro ao restaurar."); return; }
+      await onChanged();
+    } finally { setBusy(false); }
+  }
+
+  async function handleDelete(sec: MergedSection) {
+    const id = customKeyId(sec.key);
+    if (id === null) return;
+    if (!confirm(`Remover a subseção "${sec.shortLabel}"? Se houver títulos nela, ela só some das listas (o histórico fica).`)) return;
     setBusy(true); setErr(null);
     try {
       const res = await fetch(`/api/financeiro/statement-sections/${id}`, { method: "DELETE" });
@@ -440,18 +463,18 @@ function SectionsManager({
     } finally { setBusy(false); }
   }
 
-  // Agrupa as custom por grupo, pra listar organizado.
-  const customByGroup = groups
-    .map((g) => ({ group: g, items: sections.filter((s) => s.active && s.group_label === g) }))
+  // Todas as seções (fixas + custom) agrupadas, na ordem do seletor.
+  const byGroup = groups
+    .map((g) => ({ group: g, items: allSections.filter((s) => s.group === g) }))
     .filter((g) => g.items.length > 0);
 
   return (
     <Modal open={open} onClose={onClose} title="Seções da Demonstração" maxWidth="max-w-lg">
       <div className="space-y-4">
         <p className="text-[11px] text-text-light">
-          As seções oficiais da planilha são fixas. Aqui você cria subseções extras — dentro de um
-          grupo que já existe ou de um grupo novo — pra organizar do seu jeito. Elas aparecem no seletor
-          dos títulos e no agrupamento desta tela.
+          Renomeie qualquer seção — as oficiais da planilha (só troca o rótulo exibido, o histórico
+          fica) ou as suas. Também dá pra criar subseções extras num grupo que já existe ou num grupo
+          novo. Tudo aparece no filtro e no seletor dos títulos.
         </p>
 
         {/* Adicionar */}
@@ -481,45 +504,50 @@ function SectionsManager({
           </div>
         </div>
 
-        {/* Lista das personalizadas */}
+        {/* Lista de todas as seções, por grupo */}
         <div className="space-y-3">
-          {customByGroup.length === 0 ? (
-            <p className="text-xs text-text-light">Nenhuma subseção personalizada ainda.</p>
-          ) : (
-            customByGroup.map(({ group, items }) => (
-              <div key={group}>
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-text-light mb-1">{stripNum(group)}</p>
-                <ul className="space-y-1">
-                  {items.map((s) => (
-                    <li key={s.id} className="flex items-center gap-2 text-sm">
-                      {editId === s.id ? (
-                        <>
-                          <input
-                            value={editLabel}
-                            onChange={(e) => setEditLabel(e.target.value)}
-                            className={`${inputCls} flex-1`}
-                            autoFocus
-                          />
-                          <button onClick={() => handleRename(s.id)} disabled={busy} className="text-xs text-primary hover:underline">Salvar</button>
-                          <button onClick={() => { setEditId(null); setEditLabel(""); }} className="text-xs text-text-light hover:underline">Cancelar</button>
-                        </>
-                      ) : (
-                        <>
-                          <span className="flex-1 text-text">{s.label}</span>
-                          <button onClick={() => { setEditId(s.id); setEditLabel(s.label); }} className="text-xs text-primary hover:underline">Renomear</button>
-                          <button onClick={() => handleDelete(s.id, s.label)} disabled={busy} className="text-xs text-danger hover:underline">Remover</button>
-                        </>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))
-          )}
+          {byGroup.map(({ group, items }) => (
+            <div key={group}>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-text-light mb-1">{stripNum(group)}</p>
+              <ul className="space-y-1">
+                {items.map((s) => (
+                  <li key={s.key} className="flex items-center gap-2 text-sm">
+                    {editKey === s.key ? (
+                      <>
+                        <input
+                          value={editLabel}
+                          onChange={(e) => setEditLabel(e.target.value)}
+                          className={`${inputCls} flex-1`}
+                          autoFocus
+                        />
+                        <button onClick={() => handleRename(s)} disabled={busy} className="text-xs text-primary hover:underline">Salvar</button>
+                        <button onClick={() => { setEditKey(null); setEditLabel(""); }} className="text-xs text-text-light hover:underline">Cancelar</button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="flex-1 text-text">
+                          {stripNum(s.label)}
+                          {!s.custom && <span className="ml-1.5 text-[10px] text-text-light">fixa</span>}
+                        </span>
+                        <button onClick={() => { setEditKey(s.key); setEditLabel(s.shortLabel); }} className="text-xs text-primary hover:underline">Renomear</button>
+                        {!s.custom && s.overridden && (
+                          <button onClick={() => handleReset(s)} disabled={busy} className="text-xs text-text-light hover:underline">Restaurar</button>
+                        )}
+                        {s.custom && (
+                          <button onClick={() => handleDelete(s)} disabled={busy} className="text-xs text-danger hover:underline">Remover</button>
+                        )}
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
 
         <p className="text-[10px] text-text-light">
-          {allSections.length} seções no total ({allSections.filter((s) => s.custom).length} personalizadas).
+          {allSections.length} seções no total ({allSections.filter((s) => s.custom).length} personalizadas
+          {allSections.filter((s) => s.overridden).length > 0 && `, ${allSections.filter((s) => s.overridden).length} renomeadas`}).
         </p>
 
         <div className="flex justify-end border-t border-border pt-3">

@@ -16,12 +16,20 @@ export interface CustomSectionRow {
   active: boolean;
 }
 
+// Renomeia uma seção FIXA (só o rótulo; a chave "6.1"/"9.2"/... não muda).
+export interface SectionOverrideRow {
+  section_key: string;
+  label: string;
+}
+
 export interface MergedSection {
   key: string;
   label: string;
   shortLabel: string;
   group: string;
   custom: boolean;
+  /** true quando é uma seção fixa cujo rótulo foi renomeado pelo usuário. */
+  overridden: boolean;
 }
 
 const CUSTOM_KEY_RE = /^c(\d+)$/;
@@ -42,19 +50,30 @@ export function customKey(id: number): string {
 // Lista unificada (fixas + custom ativas) e a ordem dos grupos. Grupos oficiais
 // vêm primeiro (na ordem da planilha); grupos novos criados pelo usuário entram
 // depois, em ordem alfabética.
-export function mergeSections(custom: CustomSectionRow[]): {
+export function mergeSections(
+  custom: CustomSectionRow[],
+  overrides: SectionOverrideRow[] = [],
+): {
   sections: MergedSection[];
   groups: string[];
   byKey: Map<string, MergedSection>;
 } {
-  const builtin: MergedSection[] = STATEMENT_SECTIONS.map((s) => ({
-    key: s.key, label: s.label, shortLabel: s.shortLabel, group: s.group, custom: false,
-  }));
+  const ov = new Map<string, string>();
+  for (const o of overrides) {
+    const l = o.label.trim();
+    if (l) ov.set(o.section_key, l);
+  }
+  const builtin: MergedSection[] = STATEMENT_SECTIONS.map((s) => {
+    const renamed = ov.get(s.key);
+    return renamed
+      ? { key: s.key, label: renamed, shortLabel: renamed, group: s.group, custom: false, overridden: true }
+      : { key: s.key, label: s.label, shortLabel: s.shortLabel, group: s.group, custom: false, overridden: false };
+  });
   const customActive = custom
     .filter((c) => c.active)
     .sort((a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label, "pt-BR"))
     .map((c) => ({
-      key: customKey(c.id), label: c.label, shortLabel: c.label, group: c.group_label, custom: true,
+      key: customKey(c.id), label: c.label, shortLabel: c.label, group: c.group_label, custom: true, overridden: false,
     }));
 
   const sections = [...builtin, ...customActive];

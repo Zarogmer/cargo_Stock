@@ -1375,3 +1375,17 @@ model CustomStatementSection {
 
   @@map("custom_statement_sections")
 }
+
+// Renomeia uma seção FIXA da planilha (STATEMENT_SECTIONS) sem tocar no dado: a
+// chave (ex.: "6.1", "9.2", "12") continua a mesma nos títulos; só o rótulo
+// exibido no filtro e no cabeçalho passa a vir daqui. Sem linha = usa o padrão.
+model StatementSectionOverride {
+  id          Int      @id @default(autoincrement())
+  section_key String   @unique // chave builtin: "6.1", "9.2", "12"...
+  label       String // novo rótulo exibido (sem numeração)
+  created_by  String
+  created_at  DateTime @default(now()) @db.Timestamptz()
+  updated_at  DateTime @updatedAt @db.Timestamptz()
+
+  @@map("statement_section_overrides")
+}

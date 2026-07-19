@@ -6,17 +6,23 @@ import { requireFinance } from "@/lib/financeiro-api";
 // da planilha). GET lista as ativas; POST cria uma nova subseção num grupo
 // (oficial ou novo). Ver src/lib/statement-sections.ts pra como se mesclam.
 
-// GET /api/financeiro/statement-sections — lista as seções personalizadas ativas.
+// GET /api/financeiro/statement-sections — lista as seções personalizadas ativas
+// e os rótulos renomeados das seções fixas (overrides).
 export async function GET() {
   const guard = await requireFinance("view");
   if (guard.error) return guard.error;
 
-  const sections = await prisma.customStatementSection.findMany({
-    where: { active: true },
-    orderBy: [{ sort_order: "asc" }, { label: "asc" }],
-    select: { id: true, label: true, group_label: true, sort_order: true, active: true },
-  });
-  return NextResponse.json({ sections });
+  const [sections, overrides] = await Promise.all([
+    prisma.customStatementSection.findMany({
+      where: { active: true },
+      orderBy: [{ sort_order: "asc" }, { label: "asc" }],
+      select: { id: true, label: true, group_label: true, sort_order: true, active: true },
+    }),
+    prisma.statementSectionOverride.findMany({
+      select: { section_key: true, label: true },
+    }),
+  ]);
+  return NextResponse.json({ sections, overrides });
 }
 
 // POST /api/financeiro/statement-sections — cria uma subseção.
