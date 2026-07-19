@@ -14,6 +14,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatCurrency, parseDecimalBR, matchSearch } from "@/lib/utils";
 import { STATEMENT_SECTIONS, STATEMENT_GROUPS, SECTION_BY_KEY, stripSectionNum } from "@/lib/demonstracao-financeira";
+import { PAYMENT_METHODS } from "@/lib/payment-methods";
 import type { PayableStatus } from "@/types/financeiro";
 
 // ── Tipos das respostas da API ───────────────────────────────────────────────
@@ -47,6 +48,11 @@ interface Invoice {
   // Seção da Demonstração Financeira ("6.1".."12") — título com seção também
   // aparece na aba Demonstração Financeira, agrupado por seção.
   statement_section: string | null;
+  // Forma de pagamento (PIX, DINHEIRO, BOLETO, FATURADO, cartão...) — herdada da
+  // compra de origem ou escolhida à mão.
+  payment_method: string | null;
+  // Classificação p/ filtro: "MENSAL" (repete todo mês) ou "UNICA".
+  recurrence: string;
   // Conta mensal que gerou este título (null = conta única).
   recurring_bill_id: number | null;
   paid_amount: string | null;
@@ -200,6 +206,8 @@ interface FormState {
   digitable_line: string;
   bank: string;
   expense_type: string;
+  payment_method: string;
+  recurrence: "MENSAL" | "UNICA";
   statement_section: string;
   paid_amount: string;
   payment_date: string;
@@ -216,6 +224,8 @@ const EMPTY_FORM: FormState = {
   digitable_line: "",
   bank: "",
   expense_type: "",
+  payment_method: "",
+  recurrence: "UNICA",
   statement_section: "",
   paid_amount: "",
   payment_date: "",
@@ -252,6 +262,8 @@ export function ContasAPagarPage() {
   const [sectionFilter, setSectionFilter] = useState<string>("ALL");
   // Filtro única x mensal (recorrente).
   const [recurrenceFilter, setRecurrenceFilter] = useState<"ALL" | "MENSAL" | "UNICA">("ALL");
+  // Filtro por forma de pagamento ("ALL" = todas).
+  const [paymentFilter, setPaymentFilter] = useState<string>("ALL");
 
   // "Conta única" x "Conta mensal" no modal de criação + campos da recorrência.
   const [billKind, setBillKind] = useState<"UNICA" | "MENSAL">("UNICA");
@@ -360,6 +372,12 @@ export function ContasAPagarPage() {
     return STATEMENT_SECTIONS.filter((s) => present.has(s.key));
   }, [invoices]);
 
+  // Formas de pagamento presentes (pro filtro), na ordem canônica.
+  const paymentOptions = useMemo(() => {
+    const present = new Set(invoices.map((i) => i.payment_method).filter(Boolean) as string[]);
+    return PAYMENT_METHODS.filter((m) => present.has(m));
+  }, [invoices]);
+
   const filtered = useMemo(() => {
     return invoices.filter((inv) => {
       if (monthFilter !== "ALL" && refMonthOf(inv) !== monthFilter) return false;
@@ -369,8 +387,11 @@ export function ContasAPagarPage() {
       if (bankFilter !== "ALL" && inv.bank !== bankFilter) return false;
       if (sectionFilter === "NONE" && inv.statement_section) return false;
       if (sectionFilter !== "ALL" && sectionFilter !== "NONE" && inv.statement_section !== sectionFilter) return false;
-      if (recurrenceFilter === "MENSAL" && inv.recurring_bill_id == null) return false;
-      if (recurrenceFilter === "UNICA" && inv.recurring_bill_id != null) return false;
+      // Mensal = etiqueta recurrence OU título vindo de conta mensal (recurring_bill_id).
+      const isMensal = inv.recurrence === "MENSAL" || inv.recurring_bill_id != null;
+      if (recurrenceFilter === "MENSAL" && !isMensal) return false;
+      if (recurrenceFilter === "UNICA" && isMensal) return false;
+      if (paymentFilter !== "ALL" && (inv.payment_method || "") !== paymentFilter) return false;
       if (search) {
         const blob = [
           inv.description,
@@ -381,6 +402,7 @@ export function ContasAPagarPage() {
           inv.bank,
           inv.expense_type,
           inv.statement_section ? SECTION_BY_KEY.get(inv.statement_section)?.shortLabel : null,
+          inv.payment_method,
           inv.digitable_line,
         ]
           .filter(Boolean)
@@ -389,7 +411,7 @@ export function ContasAPagarPage() {
       }
       return true;
     });
-  }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter, sectionFilter, recurrenceFilter]);
+  }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter, sectionFilter, recurrenceFilter, paymentFilter]);
 
   // RESUMO do mês selecionado (ou de tudo), no espírito da aba RESUMO da
   // planilha: Falta pagar / Pago / Despesas (total) + contagem de vencidas.
@@ -493,6 +515,8 @@ export function ContasAPagarPage() {
       digitable_line: inv.digitable_line || "",
       bank: inv.bank || "",
       expense_type: inv.expense_type || "",
+      payment_method: inv.payment_method || "",
+      recurrence: inv.recurrence === "MENSAL" || inv.recurring_bill_id != null ? "MENSAL" : "UNICA",
       statement_section: inv.statement_section || "",
       paid_amount: inv.paid_amount != null ? formatAmountBR(String(Number(inv.paid_amount))) : "",
       payment_date: inv.payment_date?.slice(0, 10) || "",
@@ -668,6 +692,8 @@ export function ContasAPagarPage() {
         digitable_line: form.digitable_line || null,
         bank: form.bank || null,
         expense_type: form.expense_type || null,
+        payment_method: form.payment_method || null,
+        recurrence: form.recurrence,
         statement_section: form.statement_section || null,
         paid_amount: form.paid_amount ? parseDecimalBR(form.paid_amount) : null,
         payment_date: form.payment_date || null,
@@ -970,15 +996,25 @@ export function ContasAPagarPage() {
             ))}
           </select>
         )}
-        {invoices.some((i) => i.recurring_bill_id != null) && (
+        <select
+          value={recurrenceFilter}
+          onChange={(e) => setRecurrenceFilter(e.target.value as typeof recurrenceFilter)}
+          className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
+        >
+          <option value="ALL">Únicas e mensais</option>
+          <option value="MENSAL">🔁 Só mensais</option>
+          <option value="UNICA">Só únicas</option>
+        </select>
+        {paymentOptions.length > 0 && (
           <select
-            value={recurrenceFilter}
-            onChange={(e) => setRecurrenceFilter(e.target.value as typeof recurrenceFilter)}
+            value={paymentFilter}
+            onChange={(e) => setPaymentFilter(e.target.value)}
             className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
           >
-            <option value="ALL">Únicas e mensais</option>
-            <option value="MENSAL">🔁 Só mensais</option>
-            <option value="UNICA">Só únicas</option>
+            <option value="ALL">Toda forma de pagamento</option>
+            {paymentOptions.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
           </select>
         )}
         <input
@@ -1026,7 +1062,9 @@ export function ContasAPagarPage() {
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap text-text-light">{fmtDateOnly(inv.payment_date)}</td>
                     <td className="px-3 py-3 text-text max-w-[300px] truncate">
-                      {inv.recurring_bill_id != null && <span title="Conta mensal (gerada automaticamente)">🔁 </span>}
+                      {(inv.recurring_bill_id != null || inv.recurrence === "MENSAL") && (
+                        <span title={inv.recurring_bill_id != null ? "Conta mensal (gerada automaticamente)" : "Marcada como conta mensal"}>🔁 </span>
+                      )}
                       {inv.suppliers?.name || inv.payee_name || inv.description}
                     </td>
                     <td className="px-3 py-3 text-right font-medium text-text whitespace-nowrap">
@@ -1036,8 +1074,15 @@ export function ContasAPagarPage() {
                       {inv.paid_amount != null ? formatCurrency(Number(inv.paid_amount)) : ""}
                     </td>
                     <td className="px-3 py-3 text-text-light whitespace-nowrap">{inv.bank || "—"}</td>
-                    <td className="px-3 py-3 text-text-light max-w-[120px] truncate">
-                      {inv.expense_type || (inv.statement_section && SECTION_BY_KEY.get(inv.statement_section)?.shortLabel) || "—"}
+                    <td className="px-3 py-3 text-text-light max-w-[160px]">
+                      <span className="block truncate">
+                        {inv.expense_type || (inv.statement_section && SECTION_BY_KEY.get(inv.statement_section)?.shortLabel) || "—"}
+                      </span>
+                      {inv.payment_method && (
+                        <span className="mt-0.5 inline-block text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 whitespace-nowrap">
+                          {inv.payment_method}
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-3">
                       <PaidBadge inv={inv} />
@@ -1295,6 +1340,39 @@ export function ContasAPagarPage() {
                   className={inputCls}
                   placeholder="ex.: Rancho, Combustível..."
                 />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-text-light">Forma de pagamento</label>
+                <select
+                  value={form.payment_method}
+                  onChange={(e) => setForm({ ...form, payment_method: e.target.value })}
+                  className={inputCls}
+                >
+                  <option value="">— não informado —</option>
+                  {PAYMENT_METHODS.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                  {form.payment_method && !(PAYMENT_METHODS as readonly string[]).includes(form.payment_method) && (
+                    <option value={form.payment_method}>{form.payment_method}</option>
+                  )}
+                </select>
+              </div>
+              {/* Mensal x Única — etiqueta de filtro. Título vindo de "Conta
+                  mensal" já nasce marcado; aqui dá pra marcar qualquer um. */}
+              <div>
+                <label className="text-xs font-medium text-text-light">Recorrência</label>
+                <select
+                  value={form.recurrence}
+                  onChange={(e) => setForm({ ...form, recurrence: e.target.value as "MENSAL" | "UNICA" })}
+                  className={inputCls}
+                  disabled={!!editing?.recurring_bill_id}
+                  title={editing?.recurring_bill_id ? "Título gerado por uma conta mensal" : undefined}
+                >
+                  <option value="UNICA">Conta única</option>
+                  <option value="MENSAL">🔁 Conta mensal (repete)</option>
+                </select>
               </div>
             </div>
             {/* Seção da Demonstração Financeira: com seção, o título também

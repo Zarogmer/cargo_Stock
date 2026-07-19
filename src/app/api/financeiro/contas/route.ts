@@ -3,6 +3,7 @@ import { Prisma, type PayableStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireFinance } from "@/lib/financeiro-api";
 import { SECTION_BY_KEY } from "@/lib/demonstracao-financeira";
+import { normalizePaymentMethod } from "@/lib/payment-methods";
 import { materializeRecurringBills } from "@/lib/services/recurring-bills";
 import { AUTO_APPROVE_SETTING_KEY, autoApproveReason } from "@/lib/services/payable-status";
 
@@ -94,6 +95,8 @@ export async function POST(request: NextRequest) {
       notes: body.notes ? String(body.notes) : null,
       bank: body.bank ? String(body.bank).trim() : null,
       expense_type: body.expense_type ? String(body.expense_type).trim() : null,
+      payment_method: normalizePaymentMethod(body.payment_method),
+      recurrence: body.recurrence === "MENSAL" ? "MENSAL" : "UNICA",
       // Seção da Demonstração Financeira — só chaves conhecidas ("6.1".."12").
       statement_section:
         body.statement_section && SECTION_BY_KEY.has(String(body.statement_section))

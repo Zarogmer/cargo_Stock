@@ -75,6 +75,7 @@ export async function materializeRecurringBills(): Promise<number> {
       statement_section: bill.statement_section,
       notes: bill.notes,
       recurring_bill_id: bill.id,
+      recurrence: "MENSAL" as const, // veio de conta mensal → já entra marcado
       origin: "MANUAL" as const,
       status: "APROVADO" as const,
       approved_by: "conta mensal",

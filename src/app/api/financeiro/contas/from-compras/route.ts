@@ -156,6 +156,9 @@ export async function POST(request: NextRequest) {
           supplier_id: supplierId,
           payee_name: supplierId ? null : po.supplier?.trim() || null,
           expense_type: po.department || null,
+          // Contas a Pagar e Controle de Compras conversam: o título herda a
+          // forma de pagamento da compra (FATURADO/PIX/DINHEIRO/...).
+          payment_method: po.payment_method || null,
           notes: noteParts.length ? noteParts.join(" · ") : null,
           origin: "COMPRA",
           purchase_order_id: po.id,

@@ -1090,6 +1090,14 @@ model PayableInvoice {
   // ── Colunas do controle de vencimentos (PLANILHA DE VENCIMENTO) ──────────
   bank         String? // "BANCO" — de qual conta saiu/vai sair (Itaú/Santander)
   expense_type String? // "TIPO DE DESPESA"
+  // Forma de pagamento — mesmos rótulos do Controle de Compras (PIX, DINHEIRO,
+  // BOLETO, CARTÃO DE CRÉDITO/DÉBITO, FATURADO, TRANSFERÊNCIA). Título vindo de
+  // compra herda a forma dela; usado pelo filtro do Contas a Pagar.
+  payment_method String?
+  // Classificação p/ filtro: "MENSAL" (despesa que repete todo mês — aluguel,
+  // consultoria, infraestrutura...) ou "UNICA". É só a etiqueta de filtragem;
+  // a geração automática de fato fica a cargo da RecurringBill (recurring_bill_id).
+  recurrence   String  @default("UNICA")
   // Seção da Demonstração Financeira ("6.1".."12" — rótulos em
   // src/lib/demonstracao-financeira.ts). Título com seção aparece na aba
   // Demonstração Financeira, agrupado por seção; o Contas a Pagar mostra tudo.
