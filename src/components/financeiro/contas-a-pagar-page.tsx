@@ -13,8 +13,9 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatCurrency, parseDecimalBR, matchSearch } from "@/lib/utils";
-import { STATEMENT_SECTIONS, STATEMENT_GROUPS, SECTION_BY_KEY, stripSectionNum } from "@/lib/demonstracao-financeira";
+import { stripSectionNum } from "@/lib/demonstracao-financeira";
 import { PAYMENT_METHODS } from "@/lib/payment-methods";
+import { mergeSections, sectionShortLabel, type CustomSectionRow } from "@/lib/statement-sections";
 import type { PayableStatus } from "@/types/financeiro";
 
 // ── Tipos das respostas da API ───────────────────────────────────────────────
@@ -241,7 +242,11 @@ export function ContasAPagarPage() {
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [customSections, setCustomSections] = useState<CustomSectionRow[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Seções fixas (planilha) + personalizadas (banco) — pro seletor e os rótulos.
+  const merged = useMemo(() => mergeSections(customSections), [customSections]);
 
   const [statusFilter, setStatusFilter] = useState<"ABERTAS" | "PAGO" | "TODAS">("ABERTAS");
   const [search, setSearch] = useState("");
@@ -299,12 +304,14 @@ export function ContasAPagarPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [invRes, supRes] = await Promise.all([
+      const [invRes, supRes, secRes] = await Promise.all([
         fetch("/api/financeiro/contas").then((r) => r.json()),
         db.from("suppliers").select("id, name, cnpj").order("name"),
+        fetch("/api/financeiro/statement-sections").then((r) => r.json()).catch(() => ({})),
       ]);
       setInvoices((invRes.invoices as Invoice[]) || []);
       setSuppliers((supRes.data as Supplier[]) || []);
+      setCustomSections((secRes.sections as CustomSectionRow[]) || []);
     } catch {
       alert("Erro ao carregar as contas a pagar");
     } finally {
@@ -366,11 +373,11 @@ export function ContasAPagarPage() {
     return [...set].sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [invoices]);
 
-  // Seções da Demonstração presentes (pro filtro), na ordem da planilha.
+  // Seções presentes nos títulos (pro filtro), na ordem mesclada.
   const sectionOptions = useMemo(() => {
     const present = new Set(invoices.map((i) => i.statement_section).filter(Boolean) as string[]);
-    return STATEMENT_SECTIONS.filter((s) => present.has(s.key));
-  }, [invoices]);
+    return merged.sections.filter((s) => present.has(s.key));
+  }, [invoices, merged]);
 
   // Formas de pagamento presentes (pro filtro), na ordem canônica.
   const paymentOptions = useMemo(() => {
@@ -401,7 +408,7 @@ export function ContasAPagarPage() {
           inv.suppliers?.cnpj,
           inv.bank,
           inv.expense_type,
-          inv.statement_section ? SECTION_BY_KEY.get(inv.statement_section)?.shortLabel : null,
+          sectionShortLabel(inv.statement_section, merged.byKey),
           inv.payment_method,
           inv.digitable_line,
         ]
@@ -411,7 +418,7 @@ export function ContasAPagarPage() {
       }
       return true;
     });
-  }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter, sectionFilter, recurrenceFilter, paymentFilter]);
+  }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter, sectionFilter, recurrenceFilter, paymentFilter, merged]);
 
   // RESUMO do mês selecionado (ou de tudo), no espírito da aba RESUMO da
   // planilha: Falta pagar / Pago / Despesas (total) + contagem de vencidas.
@@ -1076,7 +1083,7 @@ export function ContasAPagarPage() {
                     <td className="px-3 py-3 text-text-light whitespace-nowrap">{inv.bank || "—"}</td>
                     <td className="px-3 py-3 text-text-light max-w-[160px]">
                       <span className="block truncate">
-                        {inv.expense_type || (inv.statement_section && SECTION_BY_KEY.get(inv.statement_section)?.shortLabel) || "—"}
+                        {inv.expense_type || sectionShortLabel(inv.statement_section, merged.byKey) || "—"}
                       </span>
                       {inv.payment_method && (
                         <span className="mt-0.5 inline-block text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 whitespace-nowrap">
@@ -1385,13 +1392,17 @@ export function ContasAPagarPage() {
                 className={inputCls}
               >
                 <option value="">— sem seção (não aparece na Demonstração)</option>
-                {STATEMENT_GROUPS.map((group) => (
-                  <optgroup key={group} label={stripSectionNum(group)}>
-                    {STATEMENT_SECTIONS.filter((s) => s.group === group).map((s) => (
-                      <option key={s.key} value={s.key}>{s.shortLabel}</option>
-                    ))}
-                  </optgroup>
-                ))}
+                {merged.groups.map((group) => {
+                  const secs = merged.sections.filter((s) => s.group === group);
+                  if (secs.length === 0) return null;
+                  return (
+                    <optgroup key={group} label={stripSectionNum(group)}>
+                      {secs.map((s) => (
+                        <option key={s.key} value={s.key}>{s.shortLabel}</option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
               </select>
             </div>
             {/* Pagamento/linha digitável não fazem sentido no modelo da conta
@@ -1669,7 +1680,7 @@ export function ContasAPagarPage() {
                       {b.end_month ? ` até ${fmtMonthKey(b.end_month)}` : ""}
                       {b.suppliers?.name ? ` · ${b.suppliers.name}` : ""}
                       {b.statement_section
-                        ? ` · ${SECTION_BY_KEY.get(b.statement_section)?.shortLabel || b.statement_section}`
+                        ? ` · ${sectionShortLabel(b.statement_section, merged.byKey) || b.statement_section}`
                         : ""}
                     </p>
                   </div>

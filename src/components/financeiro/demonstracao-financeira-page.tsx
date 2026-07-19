@@ -16,9 +16,8 @@ import { hasPermission } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { formatCurrency, parseDecimalBR, matchSearch } from "@/lib/utils";
-import {
-  STATEMENT_SECTIONS, STATEMENT_GROUPS, MONTH_LABELS, stripSectionNum as stripNum,
-} from "@/lib/demonstracao-financeira";
+import { MONTH_LABELS, stripSectionNum as stripNum } from "@/lib/demonstracao-financeira";
+import { mergeSections, type CustomSectionRow, type MergedSection } from "@/lib/statement-sections";
 
 // Só os campos do título que esta tela usa (a API devolve o resto junto).
 interface InvoiceRow {
@@ -58,8 +57,12 @@ export function DemonstracaoFinanceiraPage() {
     hasPermission(role, "FINANCEIRO_MOD", "create") || hasPermission(role, "FINANCEIRO_MOD", "edit");
 
   const [rows, setRows] = useState<Row[]>([]);
+  const [customSections, setCustomSections] = useState<CustomSectionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Seções fixas (planilha) + personalizadas (banco), mescladas.
+  const merged = useMemo(() => mergeSections(customSections), [customSections]);
 
   const [year, setYear] = useState<number | null>(null);
   const [month, setMonth] = useState<string>(ALL);
@@ -79,9 +82,14 @@ export function DemonstracaoFinanceiraPage() {
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await fetch("/api/financeiro/contas");
+      const [res, secRes] = await Promise.all([
+        fetch("/api/financeiro/contas"),
+        fetch("/api/financeiro/statement-sections"),
+      ]);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const secData = await secRes.json().catch(() => ({}));
+      setCustomSections((secData.sections as CustomSectionRow[]) || []);
       const invoices = (data.invoices as InvoiceRow[]) || [];
       setRows(
         invoices
@@ -133,9 +141,9 @@ export function DemonstracaoFinanceiraPage() {
     [filtered],
   );
 
-  // Agrupa por seção, na ordem da planilha, e joga fora as seções vazias sob os
-  // filtros atuais.
-  const bySection = useMemo(() => STATEMENT_SECTIONS.map((sec) => {
+  // Agrupa por seção (fixas + custom), na ordem mesclada, e joga fora as vazias
+  // sob os filtros atuais.
+  const bySection = useMemo(() => merged.sections.map((sec) => {
     const secRows = filtered
       .filter((r) => r.section === sec.key)
       .sort((a, b) => {
@@ -146,9 +154,25 @@ export function DemonstracaoFinanceiraPage() {
         return a.date.localeCompare(b.date);
       });
     return { sec, rows: secRows, total: secRows.reduce((s, r) => s + r.value, 0) };
-  }).filter((g) => g.rows.length > 0), [filtered]);
+  }).filter((g) => g.rows.length > 0), [filtered, merged]);
 
   const filterActive = month !== ALL || section !== ALL || !!search;
+
+  // Optgroups (grupo → subseções) da lista mesclada, pros seletores de seção.
+  const sectionOptgroups = merged.groups.map((group) => {
+    const secs = merged.sections.filter((s) => s.group === group);
+    if (secs.length === 0) return null;
+    return (
+      <optgroup key={group} label={stripNum(group)}>
+        {secs.map((s) => (
+          <option key={s.key} value={s.key}>{s.shortLabel}</option>
+        ))}
+      </optgroup>
+    );
+  });
+
+  // Modal de gerenciar seções personalizadas.
+  const [sectionsModalOpen, setSectionsModalOpen] = useState(false);
 
   function openCreate() {
     setFormSection(section !== ALL ? section : "");
@@ -234,16 +258,11 @@ export function DemonstracaoFinanceiraPage() {
           ))}
         </select>
 
-        {/* Seções agrupadas igual à planilha (6.x juntos, 9.x juntos...). */}
+        {/* Seções agrupadas igual à planilha (6.x juntos, 9.x juntos...) +
+            as personalizadas do usuário. */}
         <select value={section} onChange={(e) => setSection(e.target.value)} className={selectCls}>
           <option value={ALL}>Todas as seções</option>
-          {STATEMENT_GROUPS.map((group) => (
-            <optgroup key={group} label={stripNum(group)}>
-              {STATEMENT_SECTIONS.filter((s) => s.group === group).map((s) => (
-                <option key={s.key} value={s.key}>{s.shortLabel}</option>
-              ))}
-            </optgroup>
-          ))}
+          {sectionOptgroups}
         </select>
 
         <input
@@ -261,6 +280,9 @@ export function DemonstracaoFinanceiraPage() {
           </button>
         )}
 
+        {canEdit && (
+          <Button variant="secondary" onClick={() => setSectionsModalOpen(true)}>⚙️ Seções</Button>
+        )}
         {canEdit && <Button onClick={openCreate}>+ Nova conta</Button>}
       </div>
 
@@ -295,13 +317,7 @@ export function DemonstracaoFinanceiraPage() {
             <label className="text-xs font-medium text-text-light">Seção *</label>
             <select value={formSection} onChange={(e) => setFormSection(e.target.value)} className={inputCls}>
               <option value="">— Selecionar seção</option>
-              {STATEMENT_GROUPS.map((group) => (
-                <optgroup key={group} label={stripNum(group)}>
-                  {STATEMENT_SECTIONS.filter((s) => s.group === group).map((s) => (
-                    <option key={s.key} value={s.key}>{s.shortLabel}</option>
-                  ))}
-                </optgroup>
-              ))}
+              {sectionOptgroups}
             </select>
           </div>
           <div>
@@ -342,7 +358,175 @@ export function DemonstracaoFinanceiraPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Gerenciar seções/subseções personalizadas */}
+      <SectionsManager
+        open={sectionsModalOpen}
+        onClose={() => setSectionsModalOpen(false)}
+        sections={customSections}
+        allSections={merged.sections}
+        groups={merged.groups}
+        onChanged={load}
+      />
     </div>
+  );
+}
+
+// Modal de seções personalizadas: adiciona subseções (num grupo oficial ou num
+// grupo novo), renomeia e remove. Só mexe nas custom — as fixas da planilha
+// aparecem só como referência no seletor de grupo.
+function SectionsManager({
+  open, onClose, sections, allSections, groups, onChanged,
+}: {
+  open: boolean;
+  onClose: () => void;
+  sections: CustomSectionRow[];
+  allSections: MergedSection[];
+  groups: string[];
+  onChanged: () => void | Promise<void>;
+}) {
+  const NEW_GROUP = "__new__";
+  const [label, setLabel] = useState("");
+  const [groupChoice, setGroupChoice] = useState(groups[0] || "");
+  const [newGroup, setNewGroup] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editLabel, setEditLabel] = useState("");
+
+  const inputCls = "w-full border border-border rounded-lg px-3 py-2 text-sm bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40";
+
+  async function handleAdd() {
+    const group = groupChoice === NEW_GROUP ? newGroup.trim() : groupChoice;
+    if (!label.trim()) { setErr("Informe o nome da subseção."); return; }
+    if (!group) { setErr("Escolha ou crie um grupo."); return; }
+    setBusy(true); setErr(null);
+    try {
+      const res = await fetch("/api/financeiro/statement-sections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: label.trim(), group_label: group }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(data.error || "Erro ao criar a seção."); return; }
+      setLabel(""); setNewGroup("");
+      if (groupChoice === NEW_GROUP) setGroupChoice(group);
+      await onChanged();
+    } finally { setBusy(false); }
+  }
+
+  async function handleRename(id: number) {
+    if (!editLabel.trim()) return;
+    setBusy(true); setErr(null);
+    try {
+      const res = await fetch(`/api/financeiro/statement-sections/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: editLabel.trim() }),
+      });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setErr(d.error || "Erro ao renomear."); return; }
+      setEditId(null); setEditLabel("");
+      await onChanged();
+    } finally { setBusy(false); }
+  }
+
+  async function handleDelete(id: number, name: string) {
+    if (!confirm(`Remover a subseção "${name}"? Se houver títulos nela, ela só some das listas (o histórico fica).`)) return;
+    setBusy(true); setErr(null);
+    try {
+      const res = await fetch(`/api/financeiro/statement-sections/${id}`, { method: "DELETE" });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setErr(d.error || "Erro ao remover."); return; }
+      await onChanged();
+    } finally { setBusy(false); }
+  }
+
+  // Agrupa as custom por grupo, pra listar organizado.
+  const customByGroup = groups
+    .map((g) => ({ group: g, items: sections.filter((s) => s.active && s.group_label === g) }))
+    .filter((g) => g.items.length > 0);
+
+  return (
+    <Modal open={open} onClose={onClose} title="Seções da Demonstração" maxWidth="max-w-lg">
+      <div className="space-y-4">
+        <p className="text-[11px] text-text-light">
+          As seções oficiais da planilha são fixas. Aqui você cria subseções extras — dentro de um
+          grupo que já existe ou de um grupo novo — pra organizar do seu jeito. Elas aparecem no seletor
+          dos títulos e no agrupamento desta tela.
+        </p>
+
+        {/* Adicionar */}
+        <div className="border border-border rounded-xl p-3 space-y-2">
+          <p className="text-sm font-semibold text-text">Nova subseção</p>
+          <input
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="Nome da subseção (ex.: Marketing Digital)"
+            className={inputCls}
+          />
+          <select value={groupChoice} onChange={(e) => setGroupChoice(e.target.value)} className={inputCls}>
+            {groups.map((g) => <option key={g} value={g}>{stripNum(g)}</option>)}
+            <option value={NEW_GROUP}>+ Novo grupo…</option>
+          </select>
+          {groupChoice === NEW_GROUP && (
+            <input
+              value={newGroup}
+              onChange={(e) => setNewGroup(e.target.value)}
+              placeholder="Nome do novo grupo (ex.: Marketing)"
+              className={inputCls}
+            />
+          )}
+          {err && <p className="text-xs text-danger">{err}</p>}
+          <div className="flex justify-end">
+            <Button onClick={handleAdd} disabled={busy}>{busy ? "Salvando..." : "Adicionar"}</Button>
+          </div>
+        </div>
+
+        {/* Lista das personalizadas */}
+        <div className="space-y-3">
+          {customByGroup.length === 0 ? (
+            <p className="text-xs text-text-light">Nenhuma subseção personalizada ainda.</p>
+          ) : (
+            customByGroup.map(({ group, items }) => (
+              <div key={group}>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-text-light mb-1">{stripNum(group)}</p>
+                <ul className="space-y-1">
+                  {items.map((s) => (
+                    <li key={s.id} className="flex items-center gap-2 text-sm">
+                      {editId === s.id ? (
+                        <>
+                          <input
+                            value={editLabel}
+                            onChange={(e) => setEditLabel(e.target.value)}
+                            className={`${inputCls} flex-1`}
+                            autoFocus
+                          />
+                          <button onClick={() => handleRename(s.id)} disabled={busy} className="text-xs text-primary hover:underline">Salvar</button>
+                          <button onClick={() => { setEditId(null); setEditLabel(""); }} className="text-xs text-text-light hover:underline">Cancelar</button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="flex-1 text-text">{s.label}</span>
+                          <button onClick={() => { setEditId(s.id); setEditLabel(s.label); }} className="text-xs text-primary hover:underline">Renomear</button>
+                          <button onClick={() => handleDelete(s.id, s.label)} disabled={busy} className="text-xs text-danger hover:underline">Remover</button>
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))
+          )}
+        </div>
+
+        <p className="text-[10px] text-text-light">
+          {allSections.length} seções no total ({allSections.filter((s) => s.custom).length} personalizadas).
+        </p>
+
+        <div className="flex justify-end border-t border-border pt-3">
+          <Button variant="secondary" onClick={onClose}>Fechar</Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

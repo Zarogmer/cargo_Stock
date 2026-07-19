@@ -1357,3 +1357,21 @@ model FinancialStatementEntry {
   @@index([year, section])
   @@map("financial_statement_entries")
 }
+
+// Seções/subseções que o usuário cria na Demonstração Financeira, além das
+// fixas da planilha (src/lib/demonstracao-financeira.ts). `group_label` é o
+// grupo onde a subseção aparece (um grupo oficial ou um novo criado pelo
+// usuário — o grupo "existe" por ter subseções). O título do Contas a Pagar
+// referencia estas com a chave "c<id>" em statement_section.
+model CustomStatementSection {
+  id          Int      @id @default(autoincrement())
+  label       String // rótulo da subseção (ex.: "Marketing Digital")
+  group_label String // grupo onde aparece (ex.: "6) Despesas do Escritório" ou novo)
+  sort_order  Int      @default(0)
+  active      Boolean  @default(true)
+  created_by  String
+  created_at  DateTime @default(now()) @db.Timestamptz()
+  updated_at  DateTime @updatedAt @db.Timestamptz()
+
+  @@map("custom_statement_sections")
+}

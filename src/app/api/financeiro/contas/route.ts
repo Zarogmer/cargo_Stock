@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma, type PayableStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireFinance } from "@/lib/financeiro-api";
-import { SECTION_BY_KEY } from "@/lib/demonstracao-financeira";
 import { normalizePaymentMethod } from "@/lib/payment-methods";
+import { resolveStatementSectionKey } from "@/lib/services/statement-section-validate";
 import { materializeRecurringBills } from "@/lib/services/recurring-bills";
 import { AUTO_APPROVE_SETTING_KEY, autoApproveReason } from "@/lib/services/payable-status";
 
@@ -81,6 +81,7 @@ export async function POST(request: NextRequest) {
     where: { key: AUTO_APPROVE_SETTING_KEY },
   });
   const autoReason = autoApproveReason(amount, autoSetting?.value);
+  const statementSection = await resolveStatementSectionKey(body.statement_section);
 
   const invoice = await prisma.payableInvoice.create({
     data: {
@@ -97,11 +98,8 @@ export async function POST(request: NextRequest) {
       expense_type: body.expense_type ? String(body.expense_type).trim() : null,
       payment_method: normalizePaymentMethod(body.payment_method),
       recurrence: body.recurrence === "MENSAL" ? "MENSAL" : "UNICA",
-      // Seção da Demonstração Financeira — só chaves conhecidas ("6.1".."12").
-      statement_section:
-        body.statement_section && SECTION_BY_KEY.has(String(body.statement_section))
-          ? String(body.statement_section)
-          : null,
+      // Seção da Demonstração Financeira — fixas ("6.1".."12") ou custom ("c<id>").
+      statement_section: statementSection,
       origin: "MANUAL",
       status: autoReason ? "APROVADO" : "AGUARDANDO_APROVACAO",
       approved_by: autoReason,
