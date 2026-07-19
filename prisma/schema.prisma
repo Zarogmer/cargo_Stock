@@ -107,6 +107,9 @@ model StockItem {
   // Observação livre do item (ex.: specs técnicas de itens elétricos). Antes
   // ficava em `tools.notes` (Ferramenta/Elétrica eram empréstimo).
   notes            String?
+  // Valor unitário do item (R$). Dado sensível: só STOCK_VALUE_ROLES (rbac) vê —
+  // a coluna é filtrada no /api/db, não só escondida na tela. Rancho não usa.
+  unit_value       Float           @default(0)
   updated_at       DateTime        @default(now()) @db.Timestamptz()
   updated_by       String
   stock_movements  StockMovement[]
@@ -312,6 +315,8 @@ model Epi {
   size          String?
   stock_qty     Int           @default(0)
   min_quantity  Int           @default(0) // mínimo desejado em estoque (0 = sem mínimo); abaixo disso entra na lista de compras
+  // Valor unitário (R$) — visível só p/ STOCK_VALUE_ROLES; filtrado no /api/db.
+  unit_value    Float         @default(0)
   updated_at    DateTime      @default(now()) @db.Timestamptz()
   updated_by    String
   epi_movements EpiMovement[]
@@ -343,6 +348,8 @@ model Uniform {
   size              String?
   stock_qty         Int               @default(0)
   min_quantity      Int               @default(0) // mínimo desejado em estoque (0 = sem mínimo); abaixo disso entra na lista de compras
+  // Valor unitário (R$) — visível só p/ STOCK_VALUE_ROLES; filtrado no /api/db.
+  unit_value        Float             @default(0)
   updated_at        DateTime          @default(now()) @db.Timestamptz()
   updated_by        String
   uniform_movements UniformMovement[]

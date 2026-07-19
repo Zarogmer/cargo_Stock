@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { canViewStockValue } from "@/lib/rbac";
+import type { Role } from "@/types/database";
 
 // Map snake_case table names to Prisma model accessors
 const TABLE_MAP: Record<string, string> = {
@@ -222,6 +224,22 @@ function convertDates(tableName: string, data: Record<string, unknown>): Record<
   return result;
 }
 
+// Tabelas do Almoxarifado que guardam o valor unitário (R$) do item. Só os
+// papéis de STOCK_VALUE_ROLES podem ver/gravar esse número — como todo o CRUD do
+// almoxarifado passa por este gateway, esconder a coluna na tela não bastaria:
+// qualquer usuário logado poderia ler o preço com um POST direto.
+const UNIT_VALUE_TABLES = new Set(["stock_items", "epis", "uniforms"]);
+
+// Remove `unit_value` das linhas devolvidas (aceita 1 registro ou uma lista).
+function stripUnitValue(data: unknown): unknown {
+  if (Array.isArray(data)) return data.map(stripUnitValue);
+  if (data && typeof data === "object" && "unit_value" in data) {
+    const { unit_value: _drop, ...rest } = data as Record<string, unknown>;
+    return rest;
+  }
+  return data;
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Check authentication
@@ -235,6 +253,15 @@ export async function POST(request: NextRequest) {
 
     const spec: QuerySpec = await request.json();
     const model = getModel(spec.table);
+
+    // Valor do item: quem não é gestão não lê nem grava a coluna. `hideValue`
+    // vale só para as tabelas do almoxarifado (UNIT_VALUE_TABLES).
+    const hideValue =
+      UNIT_VALUE_TABLES.has(spec.table) &&
+      !canViewStockValue((session.user as { role?: Role }).role as Role);
+    // Silenciosamente descarta o campo em insert/update — assim um payload
+    // adulterado não grava preço, sem quebrar o resto do save.
+    if (hideValue && spec.data) delete spec.data.unit_value;
 
     if (!model) {
       return NextResponse.json(
@@ -272,7 +299,7 @@ export async function POST(request: NextRequest) {
           data = await model.findMany(queryArgs);
         }
 
-        return NextResponse.json({ data, error: null, count });
+        return NextResponse.json({ data: hideValue ? stripUnitValue(data) : data, error: null, count });
       }
 
       case "insert": {
@@ -286,7 +313,7 @@ export async function POST(request: NextRequest) {
         const insertData = convertDates(spec.table, spec.data);
 
         const data = await model.create({ data: insertData });
-        return NextResponse.json({ data, error: null, count: null });
+        return NextResponse.json({ data: hideValue ? stripUnitValue(data) : data, error: null, count: null });
       }
 
       case "update": {

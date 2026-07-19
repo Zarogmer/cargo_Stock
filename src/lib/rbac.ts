@@ -235,6 +235,17 @@ export function canAccessFinanceiroBanco(role: Role): boolean {
   return FINANCEIRO_BANCO_ROLES.includes(role);
 }
 
+// Papéis que enxergam o VALOR dos itens do Almoxarifado (Estoque, Ferramenta,
+// Elétrica, Fluídos, Maquinário, EPI e Uniforme). Quanto custa cada item é
+// informação de gestão — o operacional (Manutenção) e o RH/Estágio movimentam o
+// estoque sem precisar ver preço. Fonte única: os painéis escondem a coluna e o
+// /api/db remove a coluna `unit_value` da resposta pra quem não está aqui.
+export const STOCK_VALUE_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "COMERCIAL", "FINANCEIRO", "TECNOLOGIA"];
+
+export function canViewStockValue(role: Role): boolean {
+  return STOCK_VALUE_ROLES.includes(role);
+}
+
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/", icon: "dashboard", module: "DASHBOARD" },
   { label: "Navios", href: "/navios", icon: "navios", module: "NAVIOS" },

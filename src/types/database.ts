@@ -41,6 +41,9 @@ export interface StockItem {
   min_quantity: number;
   image_url: string | null;
   notes: string | null;
+  // Valor unitário (R$). Ausente na resposta quando o papel não pode ver valores
+  // (o /api/db remove a coluna) — daí o opcional.
+  unit_value?: number;
   updated_at: string;
   updated_by: string;
 }

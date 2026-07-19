@@ -4,14 +4,14 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
-import { hasPermission, type Module } from "@/lib/rbac";
+import { hasPermission, canViewStockValue, type Module } from "@/lib/rbac";
 import { DataTable } from "@/components/ui/data-table";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ImagePicker, ImageLightbox } from "@/components/ui/image-picker";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDateTime, matchSearch, parseDecimalBR, formatQty, buildCodeMap, normalize } from "@/lib/utils";
+import { formatDateTime, matchSearch, parseDecimalBR, formatQty, formatCurrency, buildCodeMap, normalize } from "@/lib/utils";
 import type { StockItem } from "@/types/database";
 
 // Inventário genérico do Almoxarifado: itens com QUANTIDADE, mínimo, baixa (⬇️) e
@@ -102,6 +102,9 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   const canEdit = hasPermission(role, cfg.module, "edit");
   const canDelete = hasPermission(role, cfg.module, "delete");
   const canBaixar = hasPermission(role, cfg.module, "baixar");
+  // Valor do item é dado de gestão — quem não pode ver nem recebe a coluna do
+  // /api/db, então aqui é só a parte visual da mesma regra.
+  const canSeeValue = canViewStockValue(role);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -167,6 +170,12 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
     (matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search)),
   );
 
+  // Total em R$ do que está listado (sub-aba + busca), pra bater com a tabela.
+  const totalValue = useMemo(
+    () => filteredItems.reduce((sum, i) => sum + (i.unit_value || 0) * i.quantity, 0),
+    [filteredItems],
+  );
+
   // Move o item entre Disponível / Equipe 1 / Equipe 2 (o item inteiro vai junto).
   async function handleAssign(item: StockItem, target: AssignTeam) {
     const actor = profile?.full_name || "Sistema";
@@ -174,7 +183,7 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
     loadItems();
   }
 
-  async function handleSave(formData: { name: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null; assigned_team: string }) {
+  async function handleSave(formData: { name: string; quantity: number; min_quantity: number; unit_value: number; image_url: string | null; notes: string | null; assigned_team: string }) {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
     const payload = {
@@ -188,6 +197,9 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
       notes: formData.notes,
       updated_by: actor,
     } as Record<string, unknown>;
+    // Só manda o valor quem pode vê-lo — senão um save de outro papel zeraria o
+    // preço que ele nem enxerga. (O /api/db descarta o campo de qualquer forma.)
+    if (canSeeValue) payload.unit_value = formData.unit_value;
 
     const today = new Date().toISOString().split("T")[0];
     if (editItem) {
@@ -306,6 +318,25 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         <span className="text-text-light text-sm">{i.min_quantity > 0 ? formatQty(i.min_quantity) : "—"}</span>
       ),
     },
+    // Valor unitário e total da linha (qtd × valor) — só p/ gestão.
+    ...(canSeeValue ? [
+      {
+        key: "unit_value",
+        label: "Valor Un.",
+        render: (i: StockItem) => (
+          <span className="text-sm">{i.unit_value ? formatCurrency(i.unit_value) : <span className="text-text-light">—</span>}</span>
+        ),
+      },
+      {
+        key: "total_value",
+        label: "Total",
+        render: (i: StockItem) => (
+          <span className="text-sm font-semibold">
+            {i.unit_value ? formatCurrency(i.unit_value * i.quantity) : <span className="text-text-light font-normal">—</span>}
+          </span>
+        ),
+      },
+    ] : []),
     {
       key: "assigned_team",
       label: "Equipe",
@@ -393,7 +424,7 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
       )}
 
       {/* Sub-abas: onde está o item — Disponível / Equipe 1 / Equipe 2. */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 flex-wrap items-center">
         {ASSIGN_TABS.map((a) => {
           const count = items.filter((i) => assignOf(i) === a.value).length;
           return (
@@ -406,6 +437,14 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
             </button>
           );
         })}
+        {canSeeValue && totalValue > 0 && (
+          <span
+            className="ml-auto px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-800"
+            title="Soma de quantidade × valor unitário dos itens listados"
+          >
+            Total em estoque: <strong className="font-semibold">{formatCurrency(totalValue)}</strong>
+          </span>
+        )}
       </div>
 
       <DataTable
@@ -437,6 +476,7 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         newTitle={cfg.newTitle}
         editTitle={cfg.editTitle}
         defaultAssign={activeAssign}
+        showValue={canSeeValue}
         saving={saving}
       />
 
@@ -463,10 +503,10 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   );
 }
 
-function MaterialFormModal({ open, onClose, onSave, item, itemCode, altNames = [], newTitle, editTitle, defaultAssign, saving }: {
+function MaterialFormModal({ open, onClose, onSave, item, itemCode, altNames = [], newTitle, editTitle, defaultAssign, showValue, saving }: {
   open: boolean;
   onClose: () => void;
-  onSave: (data: { name: string; quantity: number; min_quantity: number; image_url: string | null; notes: string | null; assigned_team: string }) => void;
+  onSave: (data: { name: string; quantity: number; min_quantity: number; unit_value: number; image_url: string | null; notes: string | null; assigned_team: string }) => void;
   item: StockItem | null;
   itemCode?: string | null;
   // Nomes com que este mesmo item (mesmo código) foi comprado no Controle de Compras.
@@ -474,6 +514,8 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, altNames = [
   newTitle: string;
   editTitle: string;
   defaultAssign: AssignTeam;
+  // Só gestão edita o valor unitário (canViewStockValue).
+  showValue: boolean;
   saving: boolean;
 }) {
   const [name, setName] = useState("");
@@ -481,6 +523,7 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, altNames = [
   // Strings para aceitar vírgula (ex.: "1,5"); convertidas no submit.
   const [quantity, setQuantity] = useState("");
   const [minQuantity, setMinQuantity] = useState("");
+  const [unitValue, setUnitValue] = useState("");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
 
@@ -489,6 +532,7 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, altNames = [
       setName(item.name);
       setQuantity(formatQty(item.quantity));
       setMinQuantity(item.min_quantity ? formatQty(item.min_quantity) : "");
+      setUnitValue(item.unit_value ? formatQty(item.unit_value) : "");
       setImageUrl(item.image_url || null);
       setNotes(item.notes || "");
       setAssignTeam((item.assigned_team as AssignTeam) || "DISPONIVEL");
@@ -496,6 +540,7 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, altNames = [
       setName("");
       setQuantity("");
       setMinQuantity("");
+      setUnitValue("");
       setImageUrl(null);
       setNotes("");
       setAssignTeam(defaultAssign);
@@ -509,6 +554,7 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, altNames = [
       quantity: parseDecimalBR(quantity),
       // Mínimo é inteiro (coluna Int); arredonda caso digitem decimal.
       min_quantity: Math.round(parseDecimalBR(minQuantity)),
+      unit_value: parseDecimalBR(unitValue),
       image_url: imageUrl,
       notes: notes.trim() || null,
       assigned_team: assignTeam,
@@ -552,6 +598,19 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, altNames = [
             <input type="text" inputMode="numeric" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} placeholder="0 = sem mínimo" className={inputCls} />
           </div>
         </div>
+        {showValue && (
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">
+              Valor Unitário <span className="text-text-light font-normal">(R$, opcional)</span>
+            </label>
+            <input type="text" inputMode="decimal" value={unitValue} onChange={(e) => setUnitValue(e.target.value)} placeholder="Ex: 24,90" className={inputCls} />
+            {parseDecimalBR(unitValue) > 0 && parseDecimalBR(quantity) > 0 && (
+              <p className="text-xs text-text-light mt-1">
+                Total em estoque: <strong>{formatCurrency(parseDecimalBR(unitValue) * parseDecimalBR(quantity))}</strong>
+              </p>
+            )}
+          </div>
+        )}
         <div>
           <label className="block text-sm font-medium text-text mb-1">Onde está</label>
           <select value={assignTeam} onChange={(e) => setAssignTeam(e.target.value as AssignTeam)} className={inputCls}>
