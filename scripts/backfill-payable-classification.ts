@@ -13,8 +13,14 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-// Seções da Demonstração que representam despesa recorrente (mensal).
-const MONTHLY_SECTIONS = new Set(["6.1", "6.2", "6.3", "7.1", "9.1", "9.2", "9.3", "12"]);
+// Seções da Demonstração que representam despesa fixa mensal (aluguel/água/luz,
+// impostos, salário e distribuição aos sócios). Fornecedores (6.2), consultorias
+// (6.3), férias/prêmios (9.2/9.3) e seguros (12) são despesa única — ver
+// scripts/reclassify-payable-recurrence.ts, que é a regra canônica.
+const MONTHLY_SECTIONS = new Set(["6.1", "7.1", "9.1", "10"]);
+
+// Prestadores fixos mensais lançados fora dessas seções (ex.: Sandra em 6.4).
+const MONTHLY_NAME_RE = /sandra/i;
 
 const KNOWN_METHODS = ["FATURADO", "CARTÃO DE CRÉDITO", "CARTÃO DE DÉBITO", "PIX", "DINHEIRO", "BOLETO", "TRANSFERÊNCIA"];
 
@@ -32,7 +38,7 @@ async function main() {
   const commit = process.argv.includes("--commit");
   const invoices = await prisma.payableInvoice.findMany({
     select: {
-      id: true, recurrence: true, recurring_bill_id: true, statement_section: true,
+      id: true, description: true, recurrence: true, recurring_bill_id: true, statement_section: true,
       payment_method: true, notes: true, digitable_line: true,
       purchase_order: { select: { payment_method: true } },
     },
@@ -47,6 +53,7 @@ async function main() {
 
     // Recorrência: só (re)classifica quem ainda está no default "UNICA".
     const isMonthly = inv.recurring_bill_id != null
+      || MONTHLY_NAME_RE.test(inv.description ?? "")
       || (inv.statement_section != null && MONTHLY_SECTIONS.has(inv.statement_section));
     const targetRec = isMonthly ? "MENSAL" : "UNICA";
     recCount[targetRec]++;
