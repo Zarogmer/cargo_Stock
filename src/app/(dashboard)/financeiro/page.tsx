@@ -286,6 +286,10 @@ function calcJobCost(job: Job, allocations: JobAllocation[], adjustments: JobAdj
 // atual, sem valor "preso" por navio. Não grava nada — ajusta só em memória, na
 // leitura, então não reescreve histórico. Costado fica de fora: lá todos entram
 // na função fixa "COSTADO" (valor único definido em Valores).
+// Exceção: colaborador escalado 2+ vezes no MESMO navio (ex.: MAQUINISTA e
+// ESFREGÃO) foi escalado de propósito em funções diferentes — cada linha mantém
+// a função da escala (senão as duas virariam o cargo do RH) e só o valor é
+// atualizado pelo cadastro daquela função.
 function applyCadastroToAllocations(
   allocs: JobAllocation[],
   employees: Employee[],
@@ -296,14 +300,27 @@ function applyCadastroToAllocations(
   const fnByName = new Map<string, JobFunction>(
     functions.map((f) => [f.name.trim().toUpperCase(), f]),
   );
+  const fnById = new Map<number, JobFunction>(functions.map((f) => [f.id, f]));
+  const embarkCount = new Map<string, number>();
+  for (const a of allocs) {
+    if ((a.kind || "EMBARQUE") !== "EMBARQUE" || a.employee_id == null) continue;
+    const k = `${a.job_id}|${a.employee_id}`;
+    embarkCount.set(k, (embarkCount.get(k) || 0) + 1);
+  }
   return allocs.map((a) => {
     // Override travado pelo executivo (só neste navio): mantém function_id/rate
     // como ele definiu, não deriva do cadastro.
     if (a.function_locked) return a;
     if ((a.kind || "EMBARQUE") !== "EMBARQUE" || a.employee_id == null) return a;
-    const role = (empById.get(a.employee_id)?.role || "").trim().toUpperCase();
-    if (!role) return a;
-    const fn = fnByName.get(role);
+    const multi = (embarkCount.get(`${a.job_id}|${a.employee_id}`) || 0) > 1;
+    let fn: JobFunction | undefined;
+    if (multi) {
+      fn = fnById.get(a.function_id);
+    } else {
+      const role = (empById.get(a.employee_id)?.role || "").trim().toUpperCase();
+      if (!role) return a;
+      fn = fnByName.get(role);
+    }
     if (!fn) return a;
     const special = specialRates.get(`${a.employee_id}-${fn.id}`);
     const rate = special != null ? special : Number(fn.default_rate);
