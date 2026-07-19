@@ -85,8 +85,10 @@ interface VacationLimit {
 interface CrewMember {
   employee_id: number;
   employee_name: string;
-  role: string | null;
+  role: string | null;       // função escalada (do job); cai no cargo do cadastro
   ship_name: string | null;
+  period: string | null;     // Embarque: "11/06 → 25/06" (datas do job = o "dia")
+  shifts: string[];          // Costado: turnos escalados, ex.: "12/05 · 07h–13h"
 }
 
 interface CrewSituation {
@@ -319,54 +321,80 @@ export default function DashboardPage() {
       // (férias/afastamento). Só o setor Operacional entra: o Administrativo é
       // rateado no custo de todo Embarque, então apareceria sempre "Embarcado"
       // sem estar a bordo. Sem join no facade do db: monta os mapas à mão.
-      const [crewEmpRes, crewAllocRes] = await Promise.all([
+      const [crewEmpRes, crewAllocRes, jobFuncRes] = await Promise.all([
         db.from("employees").select("id, name, role, sector, status, escala_unavailable").neq("status", "INATIVO").order("name"),
-        db.from("job_allocations").select("employee_id, kind, job_id").eq("status", "ATIVO"),
+        db.from("job_allocations").select("employee_id, kind, job_id, function_id, shift_date, shift_period").eq("status", "ATIVO"),
+        db.from("job_functions").select("id, name"),
       ]);
       const crewEmps = ((crewEmpRes.data as Array<{ id: number; name: string; role: string | null; sector: string | null; escala_unavailable: boolean | null }> | null) || [])
         .filter((e) => !e.escala_unavailable && e.sector !== "ADMINISTRATIVO");
-      const crewAllocs = ((crewAllocRes.data as Array<{ employee_id: number | null; kind: string | null; job_id: string | null }> | null) || [])
+      const crewAllocs = ((crewAllocRes.data as Array<{ employee_id: number | null; kind: string | null; job_id: string | null; function_id: number | null; shift_date: string | null; shift_period: string | null }> | null) || [])
         .filter((a) => a.employee_id != null);
+      // function_id → nome da função (o que ela FOI naquele navio, não o cargo fixo).
+      const funcName = new Map<number, string>();
+      ((jobFuncRes.data as Array<{ id: number; name: string }> | null) || []).forEach((f) => funcName.set(f.id, f.name));
 
-      // job_id → nome do navio, pra mostrar onde a pessoa está.
+      // job_id → { navio, período }. O período (datas do job) é o "dia" do embarque.
       const jobIds = Array.from(new Set(crewAllocs.map((a) => a.job_id).filter(Boolean))) as string[];
-      const jobToShipName = new Map<string, string>();
+      const jobInfo = new Map<string, { ship: string | null; period: string | null }>();
       if (jobIds.length > 0) {
-        const jobsRes = await db.from("jobs").select("id, ship_id").in("id", jobIds);
-        const jobRows = (jobsRes.data as Array<{ id: string; ship_id: string | null }> | null) || [];
+        const jobsRes = await db.from("jobs").select("id, ship_id, start_date, end_date").in("id", jobIds);
+        const jobRows = (jobsRes.data as Array<{ id: string; ship_id: string | null; start_date: string | null; end_date: string | null }> | null) || [];
         const shipIds = Array.from(new Set(jobRows.map((j) => j.ship_id).filter(Boolean))) as string[];
+        const shipNames = new Map<string, string>();
         if (shipIds.length > 0) {
           const shipsRes = await db.from("ships").select("id, name").in("id", shipIds);
-          const shipNames = new Map<string, string>();
           ((shipsRes.data as Array<{ id: string; name: string }> | null) || []).forEach((s) => shipNames.set(s.id, s.name));
-          jobRows.forEach((j) => {
-            const n = j.ship_id ? shipNames.get(j.ship_id) : null;
-            if (n) jobToShipName.set(j.id, n);
-          });
         }
+        jobRows.forEach((j) => {
+          const ship = j.ship_id ? shipNames.get(j.ship_id) || null : null;
+          const start = dayShort(j.start_date);
+          const end = dayShort(j.end_date);
+          const period = start ? (end && end !== start ? `${start} → ${end}` : start) : null;
+          jobInfo.set(j.id, { ship, period });
+        });
       }
 
-      // employee_id → { kind, navio }. COSTADO ganha se a pessoa aparecer nos
-      // dois (vínculo mais específico: tem data + turno), igual na aba Navios.
-      const allocByEmp = new Map<number, { kind: "EMBARQUE" | "COSTADO"; ship: string | null }>();
+      // Alocações ATIVAS por colaborador. Costado pode ter 2+ turnos/dia, então
+      // agrupo tudo por pessoa antes de decidir onde ela está.
+      const allocsByEmp = new Map<number, typeof crewAllocs>();
       crewAllocs.forEach((a) => {
-        const kind: "EMBARQUE" | "COSTADO" = a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE";
-        const ship = a.job_id ? jobToShipName.get(a.job_id) || null : null;
-        const prev = allocByEmp.get(a.employee_id!);
-        if (!prev || kind === "COSTADO") allocByEmp.set(a.employee_id!, { kind, ship });
+        const arr = allocsByEmp.get(a.employee_id!) || [];
+        arr.push(a);
+        allocsByEmp.set(a.employee_id!, arr);
       });
 
       const situation: CrewSituation = { embarcados: [], costado: [], disponiveis: [] };
       crewEmps.forEach((e) => {
-        const alloc = allocByEmp.get(e.id);
+        const allocs = allocsByEmp.get(e.id) || [];
+        // COSTADO vence Embarque (vínculo mais específico: tem data + turno).
+        const costadoAllocs = allocs.filter((a) => a.kind === "COSTADO");
+        const isCostado = costadoAllocs.length > 0;
+        const chosen = isCostado ? costadoAllocs : allocs;
+        const primary = chosen[0];
+        const job = primary?.job_id ? jobInfo.get(primary.job_id) : undefined;
+        const fn = primary?.function_id != null ? funcName.get(primary.function_id) : null;
+
+        // Turnos do Costado ("12/05 · 07h–13h"), distintos e em ordem cronológica.
+        const seenShift = new Set<string>();
+        const shifts = isCostado
+          ? costadoAllocs
+              .map((a) => ({ date: a.shift_date ? String(a.shift_date).slice(0, 10) : "", period: a.shift_period || "" }))
+              .sort((x, y) => (x.date + x.period).localeCompare(y.date + y.period))
+              .map((s) => [dayShort(s.date), s.period ? (COSTADO_PERIOD_LABEL[s.period] || s.period) : null].filter(Boolean).join(" · "))
+              .filter((l) => l && !seenShift.has(l) && seenShift.add(l))
+          : [];
+
         const member: CrewMember = {
           employee_id: e.id,
           employee_name: e.name,
-          role: e.role,
-          ship_name: alloc?.ship ?? null,
+          role: fn || e.role,
+          ship_name: job?.ship ?? null,
+          period: isCostado ? null : job?.period ?? null,
+          shifts,
         };
-        if (!alloc) situation.disponiveis.push(member);
-        else if (alloc.kind === "COSTADO") situation.costado.push(member);
+        if (allocs.length === 0) situation.disponiveis.push(member);
+        else if (isCostado) situation.costado.push(member);
         else situation.embarcados.push(member);
       });
       setCrew(situation);
@@ -574,9 +602,9 @@ export default function DashboardPage() {
           }
         >
           <div className="grid grid-cols-1 lg:grid-cols-3 divide-y lg:divide-y-0 lg:divide-x divide-border">
-            <CrewColumn title="Embarcados" icon="⚓" dotClass="bg-blue-600" badgeClass="bg-blue-100 text-blue-700" members={crew.embarcados} emptyText="Ninguém embarcado" />
-            <CrewColumn title="Costado" icon="⛏️" dotClass="bg-amber-600" badgeClass="bg-amber-100 text-amber-700" members={crew.costado} emptyText="Ninguém no costado" />
-            <CrewColumn title="Disponíveis" icon="✓" dotClass="bg-emerald-600" badgeClass="bg-emerald-100 text-emerald-700" members={crew.disponiveis} emptyText="Ninguém disponível" />
+            <CrewColumn title="Embarcados" icon="⚓" dotClass="bg-blue-600" badgeClass="bg-blue-100 text-blue-700" members={crew.embarcados} emptyText="Ninguém embarcado" variant="embarque" />
+            <CrewColumn title="Costado" icon="⛏️" dotClass="bg-amber-600" badgeClass="bg-amber-100 text-amber-700" members={crew.costado} emptyText="Ninguém no costado" variant="costado" />
+            <CrewColumn title="Disponíveis" icon="✓" dotClass="bg-emerald-600" badgeClass="bg-emerald-100 text-emerald-700" members={crew.disponiveis} emptyText="Ninguém disponível" variant="disponivel" />
           </div>
         </CollapsibleSection>
       )}
@@ -929,7 +957,7 @@ const STAT_TONE: Record<StatTone, { chip: string; accent: string }> = {
 // Uma coluna do card "Situação da equipe". A lista rola porque a coluna de
 // disponíveis pode ter dezenas de nomes — as três colunas ficam do mesmo tamanho.
 function CrewColumn({
-  title, icon, dotClass, badgeClass, members, emptyText,
+  title, icon, dotClass, badgeClass, members, emptyText, variant,
 }: {
   title: string;
   icon: string;
@@ -937,6 +965,7 @@ function CrewColumn({
   badgeClass: string;
   members: CrewMember[];
   emptyText: string;
+  variant: "embarque" | "costado" | "disponivel";
 }) {
   return (
     <div className="p-6">
@@ -956,9 +985,35 @@ function CrewColumn({
           {members.map((m) => (
             <li key={m.employee_id} className="min-w-0">
               <p className="text-sm font-medium text-text truncate">{m.employee_name}</p>
-              <p className="text-[11px] text-text-light truncate">
-                {[m.role, m.ship_name && `🚢 ${m.ship_name}`].filter(Boolean).join(" · ") || "—"}
-              </p>
+              {variant === "costado" ? (
+                <>
+                  {m.ship_name && (
+                    <p className="text-[11px] text-text-light truncate">🚢 {m.ship_name}</p>
+                  )}
+                  {m.shifts.length > 0 ? (
+                    <div className="flex flex-wrap gap-1 mt-0.5">
+                      {m.shifts.slice(0, 6).map((s, i) => (
+                        <span key={i} className="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium tabular-nums whitespace-nowrap">
+                          ⏰ {s}
+                        </span>
+                      ))}
+                      {m.shifts.length > 6 && (
+                        <span className="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 font-medium tabular-nums" title={m.shifts.join(" · ")}>
+                          +{m.shifts.length - 6} turno(s)
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    !m.ship_name && <p className="text-[11px] text-text-light truncate">—</p>
+                  )}
+                </>
+              ) : variant === "embarque" ? (
+                <p className="text-[11px] text-text-light truncate">
+                  {[m.role, m.ship_name && `🚢 ${m.ship_name}`, m.period && `📅 ${m.period}`].filter(Boolean).join(" · ") || "—"}
+                </p>
+              ) : (
+                <p className="text-[11px] text-text-light truncate">{m.role || "—"}</p>
+              )}
             </li>
           ))}
         </ul>
@@ -1042,6 +1097,18 @@ function ModuleBadge({ type }: { type: string }) {
     </span>
   );
 }
+
+// "2026-06-11" | ISO → "11/06" (dia/mês curto pro card da equipe).
+function dayShort(s: string | null | undefined): string | null {
+  if (!s) return null;
+  const [, mm, dd] = String(s).slice(0, 10).split("-");
+  return dd && mm ? `${dd}/${mm}` : null;
+}
+
+// Turnos do Costado → horário legível.
+const COSTADO_PERIOD_LABEL: Record<string, string> = {
+  "07-13": "07h–13h", "13-19": "13h–19h", "19-01": "19h–01h", "01-07": "01h–07h",
+};
 
 function getGreeting(): string {
   const hour = new Date().getHours();
