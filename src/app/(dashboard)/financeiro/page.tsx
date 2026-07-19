@@ -432,6 +432,7 @@ function PayShipModal({
   onSaved: () => void;
 }) {
   const [payDate, setPayDate] = useState(isoDate(new Date()));
+  const [contractValue, setContractValue] = useState("");
   const [repasse, setRepasse] = useState("");
   // Repasse já lançado deste navio (categoria REPASSE) — edita em vez de duplicar.
   const [repasseAdjId, setRepasseAdjId] = useState<number | null>(null);
@@ -448,6 +449,7 @@ function PayShipModal({
         (job.closed_at || "").slice(0, 10) ||
           (job.end_date ? addDaysIso(job.end_date.slice(0, 10), 20) : isoDate(new Date())),
       );
+      setContractValue(job.contract_value != null ? formatAmountBR(Number(job.contract_value)) : "");
       setErr(null);
       setRepasse("");
       setRepasseAdjId(null);
@@ -474,10 +476,12 @@ function PayShipModal({
     setSaving(true);
     setErr(null);
     try {
+      // Grava o valor do contrato junto (antes só dava pra editar no lápis).
+      const cv = contractValue.trim() === "" ? null : parseBrlNumber(contractValue);
       const res = await db.from("jobs").update(
         markPaid
-          ? { status: "FECHADO", closed_at: payDate, closed_by: profileName }
-          : { status: "EM_ANDAMENTO", closed_at: null, closed_by: null },
+          ? { status: "FECHADO", closed_at: payDate, closed_by: profileName, contract_value: cv }
+          : { status: "EM_ANDAMENTO", closed_at: null, closed_by: null, contract_value: cv },
       ).eq("id", job!.id);
       if (res.error) throw new Error(res.error.message);
       // Repasse: grava/atualiza (ou remove, se zerado) a despesa do navio. Só
@@ -519,12 +523,19 @@ function PayShipModal({
             Marca este pagamento como <strong>Pago</strong> e registra a data. O navio passa a aparecer no filtro <strong>Pago</strong>.
           </p>
         )}
-        {/* Valor do contrato — referência do que o cliente paga. */}
-        <div className="rounded-lg bg-gray-50 border border-border px-3 py-2.5 flex items-baseline justify-between gap-3 text-sm">
-          <span className="text-text-light">Valor do contrato</span>
-          <span className="font-semibold tabular-nums text-text">
-            {job.contract_value != null ? `R$ ${formatAmountBR(Number(job.contract_value))}` : "—"}
-          </span>
+        {/* Valor do contrato — o que o cliente paga; editável aqui mesmo. */}
+        <div>
+          <label className="block text-sm font-medium mb-1">Valor do contrato (R$)</label>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={contractValue}
+            onChange={(e) => setContractValue(e.target.value)}
+            onBlur={(e) => setContractValue(e.target.value.trim() ? formatAmountBR(parseBrlNumber(e.target.value)) : "")}
+            placeholder="0,00"
+            className={inputCls}
+          />
+          <p className="text-[11px] text-text-light mt-1">Quanto o cliente paga pela operação — salvo ao confirmar.</p>
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Data do pagamento *</label>
@@ -2827,15 +2838,13 @@ function JobFormModal({
             <div><label className="block text-sm font-medium mb-1">Início *</label><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required className={inputCls} /></div>
             <div><label className="block text-sm font-medium mb-1">Fim</label><input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={inputCls} /></div>
           </div>
-          <div className="grid grid-cols-2 gap-4 mt-3">
-            <div>
-              <label className="block text-sm font-medium mb-1">Status</label>
-              <select value={status} onChange={(e) => setStatus(e.target.value as "EM_ANDAMENTO" | "FECHADO")} className={inputCls}>
-                <option value="EM_ANDAMENTO">Em Aberto</option>
-                <option value="FECHADO">Pago</option>
-              </select>
-            </div>
-            <div><label className="block text-sm font-medium mb-1">Valor do Contrato (R$)</label><input type="text" inputMode="decimal" value={contractValue} onChange={(e) => setContractValue(e.target.value)} onBlur={(e) => setContractValue(e.target.value.trim() ? formatAmountBR(parseBrlNumber(e.target.value)) : "")} className={inputCls} placeholder="0,00" /></div>
+          <div className="mt-3">
+            <label className="block text-sm font-medium mb-1">Status</label>
+            <select value={status} onChange={(e) => setStatus(e.target.value as "EM_ANDAMENTO" | "FECHADO")} className={inputCls}>
+              <option value="EM_ANDAMENTO">Em Aberto</option>
+              <option value="FECHADO">Pago</option>
+            </select>
+            <p className="text-[11px] text-text-light mt-1">O valor do contrato agora é preenchido no botão 💰 Pagar (ou 🏁 Fechar Navio).</p>
           </div>
         </div>
 
