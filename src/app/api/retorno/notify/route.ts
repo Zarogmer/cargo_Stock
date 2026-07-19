@@ -8,8 +8,9 @@ import {
   extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { readNotifyConfig } from "@/lib/services/solicitacoes-notify-config";
+import { unitShort } from "@/lib/stock-units";
 
-interface BrokenItem { name: string; qty: number; note?: string | null }
+interface BrokenItem { name: string; qty: number; unit?: string | null; note?: string | null }
 interface NotifyBody {
   shipName: string;
   team?: string | null;
@@ -27,7 +28,9 @@ const TEAM_LABEL: Record<string, string> = {
 function buildMessage(b: NotifyBody): string {
   const team = b.team ? ` · ${TEAM_LABEL[b.team] || b.team}` : "";
   const lines = b.brokenItems.map((it) => {
-    const qty = it.qty > 0 ? ` (x${it.qty})` : "";
+    // "— 2 un" / "— 5 kg"; sem unidade cadastrada sai só o número.
+    const u = unitShort(it.unit);
+    const qty = it.qty > 0 ? ` — ${it.qty}${u ? ` ${u}` : ""}` : "";
     const note = it.note?.trim() ? ` — ${it.note.trim()}` : "";
     return `• *${it.name}*${qty}${note}`;
   });

@@ -26,7 +26,7 @@ interface KitItem {
   team: string;
   stock_item_id: number;
   quantity: number; // quanto a equipe leva
-  stock_items: { id: number; name: string; quantity: number; location: string | null } | null;
+  stock_items: { id: number; name: string; quantity: number; location: string | null; unit: string | null } | null;
 }
 
 // Conferência de retorno de material (material_returns + itens).
@@ -94,7 +94,7 @@ export function EscalacaoEstoquePage() {
       const [shipsRes, stockRes, kitRes, retRes] = await Promise.all([
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
         db.from("stock_items").select("*").order("name"),
-        db.from("embark_kit_items").select("*, stock_items(id, name, quantity, location)"),
+        db.from("embark_kit_items").select("*, stock_items(id, name, quantity, location, unit)"),
         db.from("material_returns").select("*, material_return_items(id, return_id, stock_item_id, item_name, went_qty, returned_qty, broken_qty, note)").order("created_at", { ascending: false }),
       ]);
       setShips((shipsRes.data as Ship[]) || []);
@@ -150,7 +150,7 @@ export function EscalacaoEstoquePage() {
       const estName = k.stock_items?.name || `#${k.stock_item_id}`;
       const emEstoque = k.stock_items?.quantity ?? 0;
       const ready = emEstoque >= k.quantity;
-      return { ...k, estName, emEstoque, need: k.quantity, ready, falta: Math.max(0, k.quantity - emEstoque), location: k.stock_items?.location || "—" };
+      return { ...k, estName, emEstoque, need: k.quantity, ready, falta: Math.max(0, k.quantity - emEstoque), location: k.stock_items?.location || "—", unit: k.stock_items?.unit || null };
     })
     .sort((a, b) => a.estName.localeCompare(b.estName, "pt-BR"));
   const matReady = teamKit.filter((k) => k.ready).length;
@@ -166,6 +166,7 @@ export function EscalacaoEstoquePage() {
     need: i.default_quantity,
     emEstoque: i.quantity,
     location: "Rancho",
+    unit: i.unit || null,
   }));
 
   async function handleEmbarcar() {
@@ -365,7 +366,7 @@ export function EscalacaoEstoquePage() {
   async function handleSendBroken() {
     if (!currentShip || !selectedTeam) return;
     const rows = buildReturnRows().filter((r) => r.broken > 0 || (r.note && r.returned === 0));
-    let brokenItems = rows.map((r) => ({ name: r.k.estName, qty: r.broken, note: r.note || null }));
+    let brokenItems = rows.map((r) => ({ name: r.k.estName, qty: r.broken, unit: r.k.unit ?? null, note: r.note || null }));
     let notesToSend = returnNotes.trim() || null;
     // Tabela zerada (ex.: acabou de salvar o retorno, que limpa o rascunho):
     // manda os quebrados do ÚLTIMO retorno salvo deste navio/equipe — é o fluxo
@@ -375,7 +376,13 @@ export function EscalacaoEstoquePage() {
       const lastBroken = (last?.material_return_items || [])
         .filter((it) => it.broken_qty > 0 || (it.note && it.returned_qty === 0));
       if (lastBroken.length > 0) {
-        brokenItems = lastBroken.map((it) => ({ name: it.item_name, qty: it.broken_qty, note: it.note }));
+        // Unidade não fica gravada no retorno — busca no cadastro do material.
+        brokenItems = lastBroken.map((it) => ({
+          name: it.item_name,
+          qty: it.broken_qty,
+          unit: stockItems.find((s) => s.id === it.stock_item_id)?.unit || null,
+          note: it.note,
+        }));
         notesToSend = last!.notes;
       }
     }
@@ -432,8 +439,9 @@ export function EscalacaoEstoquePage() {
         body: JSON.stringify({
           shipName: currentShip.name,
           team: selectedTeam,
-          materials: teamKit.map((k) => ({ name: k.estName, qty: k.need })),
-          rancho: itemsWithStatus.map((i) => ({ name: i.name, qty: i.default_quantity })),
+          // A unidade (un/kg/...) vai junto pra sair na mensagem do WhatsApp.
+          materials: teamKit.map((k) => ({ name: k.estName, qty: k.need, unit: k.unit })),
+          rancho: itemsWithStatus.map((i) => ({ name: i.name, qty: i.default_quantity, unit: i.unit || null })),
           sentBy: profile?.full_name || null,
         }),
       });

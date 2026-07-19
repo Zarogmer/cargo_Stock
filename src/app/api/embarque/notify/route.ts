@@ -7,8 +7,9 @@ import {
   extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { readNotifyConfig } from "@/lib/services/solicitacoes-notify-config";
+import { unitShort } from "@/lib/stock-units";
 
-interface ListItem { name: string; qty: number }
+interface ListItem { name: string; qty: number; unit?: string | null }
 interface NotifyBody {
   shipName: string;
   team?: string | null;
@@ -26,8 +27,13 @@ const TEAM_LABEL: Record<string, string> = {
 function buildMessage(b: NotifyBody): string {
   const team = b.team ? ` · ${TEAM_LABEL[b.team] || b.team}` : "";
   const fmtQty = (q: number) => (Number.isInteger(q) ? String(q) : String(q).replace(".", ","));
-  const mat = (b.materials || []).map((i) => `• ${i.name} — ${fmtQty(i.qty)}`);
-  const ran = (b.rancho || []).map((i) => `• ${i.name} — ${fmtQty(i.qty)}`);
+  // "10 kg" / "25 un" — a unidade vem do cadastro do item no Almoxarifado.
+  const line = (i: ListItem) => {
+    const u = unitShort(i.unit);
+    return `• ${i.name} — ${fmtQty(i.qty)}${u ? ` ${u}` : ""}`;
+  };
+  const mat = (b.materials || []).map(line);
+  const ran = (b.rancho || []).map(line);
   const by = b.sentBy?.trim() ? `\n👤 Enviado por: ${b.sentBy.trim()}` : "";
   return (
     `📦 *Lista de embarque*\n\n` +

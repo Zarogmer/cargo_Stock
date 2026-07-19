@@ -1225,6 +1225,64 @@ export default function MensagensPage() {
               />
             </div>
 
+            {/* Lista de embarque vem antes do Retorno (ordem do fluxo real:
+                embarca primeiro, confere o retorno depois). */}
+            <div className="border border-border rounded-xl p-4 space-y-3">
+              <div>
+                <p className="text-sm font-semibold">📦 Lista de embarque</p>
+                <p className="text-[11px] text-text-light">
+                  Disparado pelo botão &ldquo;Enviar lista pro WhatsApp&rdquo; da aba Embarque — posta os
+                  materiais + rancho da equipe, com as quantidades que vão pro navio.
+                </p>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm font-medium cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={notifyCfg.embarqueLista?.enabled !== false}
+                  onChange={(e) => setNotifyCfg((c) => {
+                    if (!c) return c;
+                    const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true };
+                    return { ...c, embarqueLista: { ...prev, enabled: e.target.checked } };
+                  })}
+                  disabled={savingCfg}
+                  className="w-4 h-4"
+                />
+                <span>Enviar a lista de embarque</span>
+              </label>
+
+              <div>
+                <label className="block text-xs font-medium mb-1 text-text-light">Grupo de destino</label>
+                <select
+                  value={notifyCfg.embarqueLista?.groups[0]?.jid || ""}
+                  onChange={(e) => {
+                    const jid = e.target.value;
+                    const g = groups.find((x) => x.remote_jid === jid);
+                    setNotifyCfg((c) => {
+                      if (!c) return c;
+                      const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true };
+                      return {
+                        ...c,
+                        embarqueLista: { ...prev, groups: jid ? [{ jid, label: g?.push_name || null }] : [] },
+                      };
+                    });
+                  }}
+                  disabled={savingCfg || notifyCfg.embarqueLista?.enabled === false}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+                >
+                  <option value="">Nenhum grupo</option>
+                  {groups.map((g) => (
+                    <option key={g.remote_jid} value={g.remote_jid}>
+                      {g.push_name || g.remote_jid.replace("@g.us", "")}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-text-light mt-1">
+                  Sem grupo escolhido o botão avisa e não envia — escolha o grupo de teste primeiro, depois o oficial.
+                </p>
+              </div>
+            </div>
+
             <div className="border border-border rounded-xl p-4 space-y-3">
               <div>
                 <p className="text-sm font-semibold">🛠️ Retorno de material (quebrados)</p>
@@ -1301,62 +1359,6 @@ export default function MensagensPage() {
                 </select>
                 <p className="text-[11px] text-text-light mt-1">
                   Se escolher um grupo, o aviso também é postado nele — útil pra testar antes de valer.
-                </p>
-              </div>
-            </div>
-
-            <div className="border border-border rounded-xl p-4 space-y-3">
-              <div>
-                <p className="text-sm font-semibold">📦 Lista de embarque</p>
-                <p className="text-[11px] text-text-light">
-                  Disparado pelo botão &ldquo;Enviar lista pro WhatsApp&rdquo; da aba Embarque — posta os
-                  materiais + rancho da equipe, com as quantidades que vão pro navio.
-                </p>
-              </div>
-
-              <label className="flex items-center gap-2 text-sm font-medium cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={notifyCfg.embarqueLista?.enabled !== false}
-                  onChange={(e) => setNotifyCfg((c) => {
-                    if (!c) return c;
-                    const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true };
-                    return { ...c, embarqueLista: { ...prev, enabled: e.target.checked } };
-                  })}
-                  disabled={savingCfg}
-                  className="w-4 h-4"
-                />
-                <span>Enviar a lista de embarque</span>
-              </label>
-
-              <div>
-                <label className="block text-xs font-medium mb-1 text-text-light">Grupo de destino</label>
-                <select
-                  value={notifyCfg.embarqueLista?.groups[0]?.jid || ""}
-                  onChange={(e) => {
-                    const jid = e.target.value;
-                    const g = groups.find((x) => x.remote_jid === jid);
-                    setNotifyCfg((c) => {
-                      if (!c) return c;
-                      const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true };
-                      return {
-                        ...c,
-                        embarqueLista: { ...prev, groups: jid ? [{ jid, label: g?.push_name || null }] : [] },
-                      };
-                    });
-                  }}
-                  disabled={savingCfg || notifyCfg.embarqueLista?.enabled === false}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
-                >
-                  <option value="">Nenhum grupo</option>
-                  {groups.map((g) => (
-                    <option key={g.remote_jid} value={g.remote_jid}>
-                      {g.push_name || g.remote_jid.replace("@g.us", "")}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[11px] text-text-light mt-1">
-                  Sem grupo escolhido o botão avisa e não envia — escolha o grupo de teste primeiro, depois o oficial.
                 </p>
               </div>
             </div>
