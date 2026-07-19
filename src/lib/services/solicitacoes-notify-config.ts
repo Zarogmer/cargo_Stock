@@ -31,6 +31,10 @@ export interface NotifyConfig {
   novaSolicitacao: NotifyTarget;
   // Disparado quando uma compra é concluída/aprovada (/api/solicitacoes/notify-compras).
   compraConcluida: NotifyTarget;
+  // Disparado pelo "Enviar quebrados pro WhatsApp" do Embarque/Retorno
+  // (/api/retorno/notify). Sem grupo configurado, cai nos grupos da Compra
+  // concluída (comportamento antigo: mesmo alvo dos avisos de compras).
+  retornoMaterial: NotifyTarget;
 }
 
 // Defaults = comportamento legado. Nova solicitação avisa os SUPERVISOR por DM;
@@ -39,6 +43,7 @@ export function defaultNotifyConfig(): NotifyConfig {
   return {
     novaSolicitacao: { groups: [], functions: ["SUPERVISOR"] },
     compraConcluida: { groups: [], functions: [] },
+    retornoMaterial: { groups: [], functions: [] },
   };
 }
 
@@ -109,6 +114,7 @@ export function sanitizeNotifyConfig(raw: unknown): NotifyConfig {
   return {
     novaSolicitacao: sanitizeTarget(r.novaSolicitacao, def.novaSolicitacao),
     compraConcluida: sanitizeTarget(r.compraConcluida, def.compraConcluida),
+    retornoMaterial: sanitizeTarget(r.retornoMaterial, def.retornoMaterial),
   };
 }
 

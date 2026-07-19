@@ -284,9 +284,22 @@ export function EscalacaoEstoquePage() {
   async function handleSendBroken() {
     if (!currentShip || !selectedTeam) return;
     const rows = buildReturnRows().filter((r) => r.broken > 0 || (r.note && r.returned === 0));
-    const brokenItems = rows.map((r) => ({ name: r.k.estName, qty: r.broken, note: r.note || null }));
+    let brokenItems = rows.map((r) => ({ name: r.k.estName, qty: r.broken, note: r.note || null }));
+    let notesToSend = returnNotes.trim() || null;
+    // Tabela zerada (ex.: acabou de salvar o retorno, que limpa o rascunho):
+    // manda os quebrados do ÚLTIMO retorno salvo deste navio/equipe — é o fluxo
+    // natural de "salvar e depois enviar".
     if (brokenItems.length === 0) {
-      setReturnMsg("Nada de quebrado pra enviar — preencha a coluna Quebrou (ou uma observação).");
+      const last = shipReturns.find((r) => r.team === selectedTeam);
+      const lastBroken = (last?.material_return_items || [])
+        .filter((it) => it.broken_qty > 0 || (it.note && it.returned_qty === 0));
+      if (lastBroken.length > 0) {
+        brokenItems = lastBroken.map((it) => ({ name: it.item_name, qty: it.broken_qty, note: it.note }));
+        notesToSend = last!.notes;
+      }
+    }
+    if (brokenItems.length === 0) {
+      setReturnMsg("Nada de quebrado pra enviar — preencha a coluna Quebrou (ou uma observação), ou salve um retorno com quebrados.");
       return;
     }
     setSendingWhats(true);
@@ -299,13 +312,13 @@ export function EscalacaoEstoquePage() {
           shipName: currentShip.name,
           team: selectedTeam,
           brokenItems,
-          notes: returnNotes.trim() || null,
+          notes: notesToSend,
           checkedBy: profile?.full_name || null,
         }),
       });
       const data = await res.json().catch(() => null);
       if (data?.sent) {
-        setReturnMsg(`📨 Enviado pro WhatsApp (${data.group || "grupo de compras"}).`);
+        setReturnMsg(`📨 Enviado pro WhatsApp (${data.group || "grupo de compras"}). A mensagem fica no histórico da aba Conversas.`);
       } else if (data?.warning) {
         setReturnMsg(`⚠️ ${data.warning}`);
       } else if (data?.skipped) {
@@ -565,10 +578,6 @@ function RetornoSection({
 
   return (
     <div className="space-y-4">
-      {message && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5 text-sm text-blue-800">{message}</div>
-      )}
-
       <section className="space-y-2">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="text-sm font-bold text-text uppercase tracking-wider">🛠️ Retorno de material — {TEAM_LABELS[team] || team}</h2>
@@ -630,6 +639,11 @@ function RetornoSection({
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} disabled={!canEdit} rows={2}
           placeholder="Observações gerais do retorno (opcional)..."
           className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 resize-none" />
+
+        {/* Feedback dos botões fica aqui embaixo, perto de onde se clica. */}
+        {message && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5 text-sm text-blue-800">{message}</div>
+        )}
 
         {canEdit && teamKit.length > 0 && (
           <div className="flex flex-wrap gap-2 justify-end">

@@ -4,10 +4,11 @@ import { prisma } from "@/lib/prisma";
 import {
   isEvolutionConfigured,
   sendWhatsappTextToGroup,
+  sendWhatsappText,
   extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { getComprasGroupJid, comprasGroupName } from "@/lib/services/compras-group";
-import { readNotifyConfig } from "@/lib/services/solicitacoes-notify-config";
+import { readNotifyConfig, normalizeFunctionName } from "@/lib/services/solicitacoes-notify-config";
 
 interface BrokenItem { name: string; qty: number; note?: string | null }
 interface NotifyBody {
@@ -65,9 +66,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ status: "skipped", sent: 0, warning: "Nenhum item quebrado pra enviar." }, { status: 200 });
   }
 
-  // Mesmo alvo do aviso de compras: grupos configurados ou o resolvedor por nome.
-  const { compraConcluida: cfg } = await readNotifyConfig();
+  // Alvo próprio (card "Retorno de material" em Mensagens); sem config, cai nos
+  // grupos da Compra concluída e por fim no resolvedor por nome ("Compras") —
+  // preserva o comportamento antigo de quem nunca configurou nada.
+  const notifyCfg = await readNotifyConfig();
+  const cfg = notifyCfg.retornoMaterial;
   let targetGroups = cfg.groups;
+  if (targetGroups.length === 0) targetGroups = notifyCfg.compraConcluida.groups;
   if (targetGroups.length === 0) {
     const fallbackJid = await getComprasGroupJid();
     if (fallbackJid) targetGroups = [{ jid: fallbackJid, label: comprasGroupName() }];
@@ -77,7 +82,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       status: "skipped",
       sent: 0,
-      warning: `Nenhum grupo configurado. Escolha um em Mensagens › Avisos de Solicitações e Compras, ou crie o grupo "${name}" no WhatsApp e rode "Sincronizar grupos".`,
+      warning: `Nenhum grupo configurado. Escolha um em Mensagens › Avisos, card "Retorno de material", ou crie o grupo "${name}" no WhatsApp e rode "Sincronizar grupos".`,
     }, { status: 200 });
   }
 
@@ -111,11 +116,39 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Opcional: DM pros colaboradores das funções configuradas no card "Retorno
+  // de material" (mesmo padrão do notify-compras). Não-fatal.
+  const wantedFns = new Set(cfg.functions.map(normalizeFunctionName));
+  const dmResults: { target: string; ok: boolean; error?: string }[] = [];
+  if (wantedFns.size > 0) {
+    const employees = (
+      await prisma.employee.findMany({
+        where: { role: { not: null } },
+        select: { id: true, name: true, phone: true, role: true, status: true },
+      })
+    ).filter((e) => e.status !== "INATIVO" && wantedFns.has(normalizeFunctionName(e.role || "")));
+
+    for (const emp of employees) {
+      if (!emp.phone || emp.phone.trim().length < 10) {
+        dmResults.push({ target: `dm:${emp.name}`, ok: false, error: "sem telefone válido" });
+        continue;
+      }
+      try {
+        await sendWhatsappText(emp.phone, message);
+        dmResults.push({ target: `dm:${emp.name}`, ok: true });
+      } catch (err) {
+        dmResults.push({ target: `dm:${emp.name}`, ok: false, error: (err as Error).message });
+      }
+    }
+  }
+
+  const dmSent = dmResults.filter((r) => r.ok).length;
   const sent = groupResults.filter((r) => r.ok).length;
   return NextResponse.json({
     status: sent > 0 ? "ok" : "error",
     sent,
     group: groupResults.filter((r) => r.ok).map((r) => r.name).join(", "),
     results: groupResults,
+    ...(dmResults.length ? { dmSent, dmResults } : {}),
   }, { status: 200 });
 }

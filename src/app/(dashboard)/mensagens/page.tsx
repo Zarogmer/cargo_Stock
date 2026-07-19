@@ -33,7 +33,7 @@ type Mode = "colaboradores" | "manual" | "grupo";
 // pra não importar o módulo de servidor (que puxa o Prisma) no bundle do client.
 interface NotifyGroup { jid: string; label: string | null }
 interface NotifyTarget { groups: NotifyGroup[]; functions: string[] }
-interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget }
+interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget; retornoMaterial: NotifyTarget }
 interface FunctionLite { id: number; name: string; active?: boolean }
 interface EmployeeRoleLite { id: number; name: string; phone: string | null; role: string | null; status: string | null }
 interface MemberLite { id: number; name: string; phone: string | null }
@@ -1209,6 +1209,28 @@ export default function MensagensPage() {
                 groupFirst={true}
                 groupLabel="Grupo de destino"
                 groupHint="Sem grupo escolhido, usamos o grupo “Compras” padrão."
+                funcLabel="Funções que também recebem (opcional)"
+                funcHint="Além do grupo, cada pessoa dessas funções recebe no WhatsApp dela."
+                disabled={savingCfg}
+              />
+            </div>
+
+            <div className="border border-border rounded-xl p-4 space-y-3">
+              <div>
+                <p className="text-sm font-semibold">🛠️ Retorno de material (quebrados)</p>
+                <p className="text-[11px] text-text-light">
+                  Disparado pelo botão &ldquo;Enviar quebrados pro WhatsApp&rdquo; da tela Controle › Embarque/Retorno.
+                </p>
+              </div>
+              <NotifyTargetEditor
+                target={notifyCfg.retornoMaterial ?? { groups: [], functions: [] }}
+                onChange={(t) => setNotifyCfg((c) => (c ? { ...c, retornoMaterial: t } : c))}
+                functions={cfgFunctions}
+                membersByFn={membersByFn}
+                groups={groups}
+                groupFirst={true}
+                groupLabel="Grupo de destino"
+                groupHint="Sem grupo escolhido, cai no grupo da Compra concluída (ou no grupo “Compras” padrão)."
                 funcLabel="Funções que também recebem (opcional)"
                 funcHint="Além do grupo, cada pessoa dessas funções recebe no WhatsApp dela."
                 disabled={savingCfg}
