@@ -29,6 +29,10 @@ interface EmployeeLite {
 interface JobLite {
   id: string;
   name: string;
+  // Pro seletor "Descontar no navio" do Novo Vale: só navio ainda não
+  // fechado/cancelado entra, e o mais recente vem primeiro.
+  status?: string | null;
+  start_date?: string | null;
 }
 
 export function RelatorioValesPage({
@@ -62,7 +66,7 @@ export function RelatorioValesPage({
         db.from("employees").select("id, name, status, escala_unavailable").neq("status", "INATIVO").order("name"),
         db.from("employee_advances").select("*").order("advance_date", { ascending: false }),
         db.from("advance_discounts").select("*"),
-        db.from("jobs").select("id, name"),
+        db.from("jobs").select("id, name, status, start_date"),
       ]);
       if (empRes.error) throw new Error(empRes.error.message);
       if (advRes.error) throw new Error(advRes.error.message);
@@ -106,15 +110,35 @@ export function RelatorioValesPage({
   const totalBalance = useMemo(() => rows.reduce((s, r) => s + r.balance, 0), [rows]);
   const totalAdvanced = useMemo(() => rows.reduce((s, r) => s + r.advanced, 0), [rows]);
 
-  async function handleSave(data: { employee_id: number; advance_date: string; amount: number; origin: string; notes: string | null }) {
+  async function handleSave(data: {
+    employee_id: number; advance_date: string; amount: number; origin: string; notes: string | null;
+    // Navio escolhido no modal pra já descontar o vale (opcional).
+    discount_job_id: string | null;
+  }) {
     setSaveError(null);
-    const { error } = await db.from("employee_advances").insert({
-      ...data,
+    const { discount_job_id, ...advance } = data;
+    const { data: created, error } = await db.from("employee_advances").insert({
+      ...advance,
       created_by: profileName,
     });
     if (error) {
       setSaveError(error.message);
       return;
+    }
+    // Vincula o desconto no navio escolhido (valor cheio do vale). Não-fatal:
+    // o vale já foi salvo; falhando aqui, desconta manual no Pagamento de Navios.
+    const advanceId = (created as unknown as { id?: number } | null)?.id;
+    if (discount_job_id && advanceId) {
+      const { error: discErr } = await db.from("advance_discounts").insert({
+        advance_id: advanceId,
+        job_id: discount_job_id,
+        employee_id: data.employee_id,
+        amount: data.amount,
+        created_by: profileName,
+      });
+      if (discErr) {
+        setSaveError(`Vale salvo, mas falhou ao vincular o desconto no navio: ${discErr.message}. Desconte manual em Pagamento de Navios.`);
+      }
     }
     setShowForm(false);
     load();
@@ -261,6 +285,7 @@ export function RelatorioValesPage({
           onClose={() => setShowForm(false)}
           onSave={handleSave}
           employees={employees}
+          jobs={jobs}
         />
       )}
 
@@ -334,18 +359,64 @@ function AdvanceDetail({
 }
 
 function ValeFormModal({
-  open, onClose, onSave, employees,
+  open, onClose, onSave, employees, jobs,
 }: {
   open: boolean;
   onClose: () => void;
-  onSave: (data: { employee_id: number; advance_date: string; amount: number; origin: string; notes: string | null }) => void;
+  onSave: (data: {
+    employee_id: number; advance_date: string; amount: number; origin: string; notes: string | null;
+    discount_job_id: string | null;
+  }) => void;
   employees: EmployeeLite[];
+  jobs: JobLite[];
 }) {
   const [employeeId, setEmployeeId] = useState("");
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [amount, setAmount] = useState("");
   const [origin, setOrigin] = useState("");
   const [notes, setNotes] = useState("");
+  // "Descontar no navio" (opcional): navios onde o colaborador está escalado.
+  const [discountJobId, setDiscountJobId] = useState("");
+  const [empJobIds, setEmpJobIds] = useState<Set<string>>(new Set());
+  const [loadingEmpJobs, setLoadingEmpJobs] = useState(false);
+
+  // Ao trocar o colaborador, busca os navios onde ele está escalado (ATIVO ou
+  // liberado pela finalização automática do navio — a escala vale como histórico
+  // até o pagamento fechar).
+  useEffect(() => {
+    setDiscountJobId("");
+    if (!employeeId) { setEmpJobIds(new Set()); return; }
+    let cancelled = false;
+    (async () => {
+      setLoadingEmpJobs(true);
+      try {
+        const { data } = await db
+          .from("job_allocations")
+          .select("job_id, status, removal_reason")
+          .eq("employee_id", Number(employeeId))
+          .in("status", ["ATIVO", "REMOVIDO"]);
+        if (cancelled) return;
+        const rows = (data as Array<{ job_id: string; status: string; removal_reason: string | null }>) || [];
+        setEmpJobIds(new Set(
+          rows
+            .filter((a) => a.status === "ATIVO" || (a.removal_reason || "").startsWith("Navio finalizado"))
+            .map((a) => a.job_id),
+        ));
+      } finally {
+        if (!cancelled) setLoadingEmpJobs(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employeeId]);
+
+  // Só navio ainda não fechado/cancelado (o desconto entra no pagamento que
+  // ainda vai acontecer), mais recente primeiro.
+  const discountJobOptions = useMemo(
+    () => jobs
+      .filter((j) => empJobIds.has(j.id) && !["FECHADO", "CANCELADO"].includes(j.status || ""))
+      .sort((a, b) => (b.start_date || "").localeCompare(a.start_date || "")),
+    [jobs, empJobIds],
+  );
 
   const value = parseDecimalBR(amount);
   const valid = !!employeeId && !!date && value > 0 && !!origin.trim();
@@ -364,6 +435,7 @@ function ValeFormModal({
             amount: value,
             origin: origin.trim(),
             notes: notes.trim() || null,
+            discount_job_id: discountJobId || null,
           });
         }}
         className="space-y-4"
@@ -404,9 +476,44 @@ function ValeFormModal({
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
         </div>
 
-        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-800">
-          O desconto é feito depois, na aba <strong>Pagamento de Navios</strong>: abra o navio e escolha este vale na coluna Adiant. do colaborador.
+        {/* Vincular o desconto a um navio já daqui (opcional) — cria o
+            advance_discount do valor cheio do vale no navio escolhido. */}
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Descontar no navio <span className="text-text-light font-normal">(opcional)</span>
+          </label>
+          <select
+            value={discountJobId}
+            onChange={(e) => setDiscountJobId(e.target.value)}
+            disabled={!employeeId || loadingEmpJobs}
+            className={inputCls}
+          >
+            <option value="">
+              {!employeeId
+                ? "Escolha o colaborador primeiro"
+                : loadingEmpJobs
+                  ? "Carregando navios..."
+                  : "— Descontar depois (Pagamento de Navios)"}
+            </option>
+            {discountJobOptions.map((j) => <option key={j.id} value={j.id}>{j.name}</option>)}
+          </select>
+          {employeeId && !loadingEmpJobs && discountJobOptions.length === 0 && (
+            <p className="text-[11px] text-amber-700 mt-1">
+              Este colaborador não está escalado em nenhum navio em aberto — desconte depois em Pagamento de Navios.
+            </p>
+          )}
+          {discountJobId && (
+            <p className="text-[11px] text-text-light mt-1">
+              O valor cheio do vale ({value > 0 ? formatCurrency(value) : "—"}) entra como desconto na coluna Adiant. deste navio. Dá pra ajustar depois em Pagamento de Navios.
+            </p>
+          )}
         </div>
+
+        {!discountJobId && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-800">
+            Sem navio escolhido, o desconto é feito depois, na aba <strong>Pagamento de Navios</strong>: abra o navio e escolha este vale na coluna Adiant. do colaborador.
+          </div>
+        )}
 
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
