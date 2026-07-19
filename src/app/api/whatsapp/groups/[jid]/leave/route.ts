@@ -5,7 +5,7 @@ import { isEvolutionConfigured, leaveWhatsappGroup } from "@/lib/services/evolut
 import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 import { clearTeamGroupCache } from "@/lib/services/team-groups";
 
-const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "COMERCIAL", "FINANCEIRO"];
 
 // POST /api/whatsapp/groups/[jid]/leave
 //

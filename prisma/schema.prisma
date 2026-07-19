@@ -17,6 +17,7 @@ enum Role {
   RH
   TECNOLOGIA
   ESTAGIO // mesmas permissões de TECNOLOGIA (ver rbac); categoria "Estágio"
+  COMERCIAL // mesmas permissões de EXECUTIVO (ver rbac); categoria "Comercial"
 }
 
 enum StockCategory {
@@ -684,8 +685,9 @@ model JobAdjustment {
   type        String // ADICIONAL, REDUCAO
   // Categoria estruturada da despesa — usada pela planilha de fechamento
   // pra agrupar os gastos. Valores: COMPRAS, QUIMICA, MATERIAL_DANIFICADO,
-  // AJUDA_DE_CUSTO, ALIMENTACAO, RESTAURANTE, OUTROS. Null = legado/sem
-  // categoria (renderiza como "Outros").
+  // AJUDA_DE_CUSTO, ALIMENTACAO, RESTAURANTE, REPASSE (lançado pelo modal
+  // "Pagar" do Pagamento de Navios), OUTROS. Null = legado/sem categoria
+  // (renderiza como "Outros").
   category    String?
   description String
   amount      Decimal  @db.Decimal(10, 2) // sempre positivo; type define se soma ou subtrai

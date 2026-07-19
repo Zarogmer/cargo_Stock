@@ -3,7 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { extractMentionNumbers, resolveMentionNames } from "@/lib/services/whatsapp-mentions";
 
-const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "COMERCIAL", "FINANCEIRO"];
 
 // Reações chegam como mensagens do tipo "reactionMessage". O emoji e o id da
 // mensagem reagida ficam no payload bruto (raw_event) — extraímos na leitura

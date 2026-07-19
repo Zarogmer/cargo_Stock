@@ -5,7 +5,7 @@ import { findGroupInfo, isEvolutionConfigured } from "@/lib/services/evolution-a
 import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 import { isJidLikeName } from "@/lib/utils";
 
-const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "COMERCIAL", "FINANCEIRO"];
 
 // "5513999999999@s.whatsapp.net" → "5513999999999"
 // Also strips the @lid suffix that newer Baileys versions sometimes emit.

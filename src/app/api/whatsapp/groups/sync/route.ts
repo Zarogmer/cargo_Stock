@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { fetchAllGroups, isEvolutionConfigured } from "@/lib/services/evolution-api";
 import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 
-const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "COMERCIAL", "FINANCEIRO"];
 
 // POST /api/whatsapp/groups/sync
 // Fetches every WhatsApp group the connected number belongs to (via Evolution)

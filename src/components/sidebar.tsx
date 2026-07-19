@@ -196,6 +196,7 @@ export function Sidebar({ open, onClose, collapsed = false }: SidebarProps) {
   const roleLabels: Record<string, string> = {
     GESTOR: "Gestor",
     EXECUTIVO: "Executivo",
+    COMERCIAL: "Comercial",
     MANUTENCAO: "Manutenção",
     FINANCEIRO: "Financeiro",
     RH: "RH",

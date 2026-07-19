@@ -15,7 +15,7 @@ import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 // Enviar pra grupo expõe operação interna (boletins de estoque/prontidão) e
 // segue o mesmo gate das outras rotas de grupo. DM continua liberado pra
 // qualquer usuário logado (comportamento histórico).
-const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "COMERCIAL", "FINANCEIRO"];
 
 // POST { to: string, text: string, label?: string, imageUrl?: string } — envia via
 // Evolution. Com `imageUrl` (data URL/base64 ou URL pública) manda a FOTO com `text`

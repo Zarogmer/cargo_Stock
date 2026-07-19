@@ -10,7 +10,7 @@ import {
 // Papéis que podem EDITAR a config dos avisos — os mesmos que enxergam a aba
 // Mensagens (ver MENSAGENS em src/lib/rbac.ts). Defesa em profundidade: a UI já
 // só aparece pra esses papéis, mas o PUT recusa qualquer outro mesmo assim.
-const EDIT_ROLES = new Set(["TECNOLOGIA", "ESTAGIO", "EXECUTIVO", "FINANCEIRO"]);
+const EDIT_ROLES = new Set(["TECNOLOGIA", "ESTAGIO", "EXECUTIVO", "COMERCIAL", "FINANCEIRO"]);
 
 // GET /api/solicitacoes/notify-config → NotifyConfig (com defaults aplicados).
 // Qualquer usuário autenticado pode ler.

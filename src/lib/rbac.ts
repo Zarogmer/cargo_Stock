@@ -31,6 +31,31 @@ export type Permission =
   | "emprestar"
   | "manutencao";
 
+// EXECUTIVO e COMERCIAL têm exatamente as MESMAS permissões — "Comercial" é só
+// uma categoria à parte no cadastro (mesmo padrão de ESTAGIO≈TECNOLOGIA, mas
+// aqui sem nenhuma diferença). Definimos o bloco uma vez e reaproveitamos nos
+// dois papéis, e toda lista de papéis abaixo que tem EXECUTIVO também traz
+// COMERCIAL. Se as permissões do Executivo mudarem, o Comercial acompanha só.
+const EXECUTIVO_PERMS: Partial<Record<Module, Permission[]>> = {
+  DASHBOARD: ["view"],
+  ALMOXARIFADO: ["view"],
+  EMBARQUE: ["view", "embarcar"],
+  ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
+  EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
+  FERRAMENTAS: ["view", "create", "edit", "delete", "baixar"],
+  MAQUINARIO: ["view", "create", "edit", "delete", "baixar"],
+  ELETRICA: ["view", "create", "edit", "delete", "baixar"],
+  NAVIOS: ["view", "create", "edit", "delete"],
+  MARKETING: ["view", "create", "edit", "delete"],
+  // 2026-06: a pedido do Guilherme, Executivo e Financeiro passam a poder
+  // editar tudo, menos a aba WhatsApp API. Antes o Financeiro era só-leitura
+  // pro Executivo (pedido da Sandra) — essa restrição foi removida.
+  FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
+  SOLICITACOES: ["view", "create", "edit", "delete"],
+  MENSAGENS: ["view", "create"],
+  CONVERSAS: ["view", "create"],
+};
+
 // RBAC matrix - same as your Python app
 const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   GESTOR: {
@@ -49,25 +74,9 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     // usuário) — Gestor e RH não enxergam mais a aba.
     CONVERSAS: ["view", "create"],
   },
-  EXECUTIVO: {
-    DASHBOARD: ["view"],
-    ALMOXARIFADO: ["view"],
-    EMBARQUE: ["view", "embarcar"],
-    ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
-    EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
-    FERRAMENTAS: ["view", "create", "edit", "delete", "baixar"],
-    MAQUINARIO: ["view", "create", "edit", "delete", "baixar"],
-    ELETRICA: ["view", "create", "edit", "delete", "baixar"],
-    NAVIOS: ["view", "create", "edit", "delete"],
-    MARKETING: ["view", "create", "edit", "delete"],
-    // 2026-06: a pedido do Guilherme, Executivo e Financeiro passam a poder
-    // editar tudo, menos a aba WhatsApp API. Antes o Financeiro era só-leitura
-    // pro Executivo (pedido da Sandra) — essa restrição foi removida.
-    FINANCEIRO_MOD: ["view", "create", "edit", "delete"],
-    SOLICITACOES: ["view", "create", "edit", "delete"],
-    MENSAGENS: ["view", "create"],
-    CONVERSAS: ["view", "create"],
-  },
+  EXECUTIVO: EXECUTIVO_PERMS,
+  // COMERCIAL = mesma permissão de EXECUTIVO (ver EXECUTIVO_PERMS acima).
+  COMERCIAL: EXECUTIVO_PERMS,
   MANUTENCAO: {
     DASHBOARD: ["view"],
     ALMOXARIFADO: ["view"],
@@ -207,12 +216,12 @@ export interface NavSubItem {
 // 2026-06: RH foi liberado no Controle (ganhou SOLICITACOES completo), então
 // passa a entrar também aqui.
 // Fonte única: o menu (rbac) e a própria página de Solicitações filtram por isto.
-export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO", "RH"];
+export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO", "RH"];
 
 // Papéis que enxergam "Lista de Produtos" (catálogo de produtos do Controle).
 // Era exclusivo da Tecnologia; depois Executivo e Financeiro; em 2026-06 o RH
 // também (acesso completo ao Controle).
-export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "ESTAGIO", "EXECUTIVO", "FINANCEIRO", "RH"];
+export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "ESTAGIO", "EXECUTIVO", "COMERCIAL", "FINANCEIRO", "RH"];
 
 // Papéis que acessam o módulo bancário do Financeiro (Contas a Pagar,
 // Conciliação Bancária, Boletos por e-mail e o Painel financeiro). Dados de
@@ -220,7 +229,7 @@ export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "ESTAGIO", "EXECUTIVO", "FI
 // Estágio, apesar de ver o resto do Financeiro (Valores/Pagamento de Navios),
 // NÃO entra aqui. Fonte única: sidebar (roles nos sub-itens), páginas e as
 // rotas de API (requireFinance) checam por esta lista.
-export const FINANCEIRO_BANCO_ROLES: Role[] = ["EXECUTIVO", "FINANCEIRO", "TECNOLOGIA"];
+export const FINANCEIRO_BANCO_ROLES: Role[] = ["EXECUTIVO", "COMERCIAL", "FINANCEIRO", "TECNOLOGIA"];
 
 export function canAccessFinanceiroBanco(role: Role): boolean {
   return FINANCEIRO_BANCO_ROLES.includes(role);
@@ -318,7 +327,7 @@ export const NAV_ITEMS: NavItem[] = [
       // a visibilidade de quem tinha EMBARQUE (Gestor/Manutenção não enxergavam)
       // — sem isso, ao herdar SOLICITACOES eles passariam a ver a aba que baixa
       // estoque. A rota segue /escalacao/estoque.
-      { label: "Embarque/Retorno", href: "/escalacao/estoque", roles: ["EXECUTIVO", "FINANCEIRO", "RH", "TECNOLOGIA", "ESTAGIO"] },
+      { label: "Embarque/Retorno", href: "/escalacao/estoque", roles: ["EXECUTIVO", "COMERCIAL", "FINANCEIRO", "RH", "TECNOLOGIA", "ESTAGIO"] },
     ],
   },
   {

@@ -227,6 +227,8 @@ const EXPENSE_CATEGORIES = [
   { value: "AJUDA_DE_CUSTO",     label: "Ajuda de custo" },
   { value: "ALIMENTACAO",        label: "Alimentação" },
   { value: "RESTAURANTE",        label: "Jantar/Restaurante" },
+  // Repasse do pagamento do navio — lançado pelo modal "Pagar" (PayShipModal).
+  { value: "REPASSE",            label: "Repasse" },
   { value: "OUTROS",             label: "Outros" },
 ] as const;
 type ExpenseCategory = typeof EXPENSE_CATEGORIES[number]["value"];
@@ -409,9 +411,18 @@ function CloseShipModal({
   );
 }
 
+// "2026-06-26" + 20 dias → "2026-07-16" (prazo padrão de pagamento do navio).
+function addDaysIso(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
 // Modal de PAGAMENTO do navio — o pessoal do Financeiro marca como Pago e
-// registra a data. Reusa closed_at/closed_by como data/autor do pagamento
-// (FECHADO = "Pago"). Permite reabrir (voltar a Em Andamento).
+// registra a data (padrão: fim da operação + 20 dias, o prazo usual do
+// cliente). Mostra o valor do contrato e aceita o "Repasse", que entra como
+// despesa (JobAdjustment ADICIONAL, categoria REPASSE) no custo do navio.
+// Reusa closed_at/closed_by como data/autor do pagamento (FECHADO = "Pago").
+// Permite reabrir (voltar a Em Andamento).
 function PayShipModal({
   job, profileName, onClose, onSaved,
 }: {
@@ -421,14 +432,39 @@ function PayShipModal({
   onSaved: () => void;
 }) {
   const [payDate, setPayDate] = useState(isoDate(new Date()));
+  const [repasse, setRepasse] = useState("");
+  // Repasse já lançado deste navio (categoria REPASSE) — edita em vez de duplicar.
+  const [repasseAdjId, setRepasseAdjId] = useState<number | null>(null);
+  const [loadingRepasse, setLoadingRepasse] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const paid = job?.status === "FECHADO";
 
   useEffect(() => {
     if (job) {
-      setPayDate((job.closed_at || "").slice(0, 10) || job.end_date?.slice(0, 10) || isoDate(new Date()));
+      // Data padrão: a já registrada; senão fim da operação + 20 dias (prazo
+      // usual de pagamento); sem data de fim, hoje.
+      setPayDate(
+        (job.closed_at || "").slice(0, 10) ||
+          (job.end_date ? addDaysIso(job.end_date.slice(0, 10), 20) : isoDate(new Date())),
+      );
       setErr(null);
+      setRepasse("");
+      setRepasseAdjId(null);
+      setLoadingRepasse(true);
+      (async () => {
+        const { data } = await db
+          .from("job_adjustments")
+          .select("id, amount")
+          .eq("job_id", job.id)
+          .eq("category", "REPASSE");
+        const row = ((data as Array<{ id: number; amount: string }>) || [])[0];
+        if (row) {
+          setRepasseAdjId(row.id);
+          setRepasse(formatAmountBR(Number(row.amount)));
+        }
+        setLoadingRepasse(false);
+      })();
     }
   }, [job]);
 
@@ -444,6 +480,23 @@ function PayShipModal({
           : { status: "EM_ANDAMENTO", closed_at: null, closed_by: null },
       ).eq("id", job!.id);
       if (res.error) throw new Error(res.error.message);
+      // Repasse: grava/atualiza (ou remove, se zerado) a despesa do navio. Só
+      // mexe ao salvar o pagamento — reabrir não toca no repasse.
+      if (markPaid) {
+        const value = parseBrlNumber(repasse);
+        if (value > 0) {
+          const r = repasseAdjId
+            ? await db.from("job_adjustments").update({ amount: value, description: "Repasse" }).eq("id", repasseAdjId)
+            : await db.from("job_adjustments").insert({
+                job_id: job!.id, type: "ADICIONAL", category: "REPASSE", description: "Repasse", amount: value,
+              });
+          if ((r as { error?: { message: string } | null }).error) {
+            throw new Error((r as { error: { message: string } }).error.message);
+          }
+        } else if (repasseAdjId) {
+          await db.from("job_adjustments").delete().eq("id", repasseAdjId);
+        }
+      }
       onSaved();
     } catch (e) {
       setErr((e as Error).message);
@@ -466,9 +519,35 @@ function PayShipModal({
             Marca este pagamento como <strong>Pago</strong> e registra a data. O navio passa a aparecer no filtro <strong>Pago</strong>.
           </p>
         )}
+        {/* Valor do contrato — referência do que o cliente paga. */}
+        <div className="rounded-lg bg-gray-50 border border-border px-3 py-2.5 flex items-baseline justify-between gap-3 text-sm">
+          <span className="text-text-light">Valor do contrato</span>
+          <span className="font-semibold tabular-nums text-text">
+            {job.contract_value != null ? `R$ ${formatAmountBR(Number(job.contract_value))}` : "—"}
+          </span>
+        </div>
         <div>
           <label className="block text-sm font-medium mb-1">Data do pagamento *</label>
           <input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} className={inputCls} />
+          <p className="text-[11px] text-text-light mt-1">
+            Padrão: 20 dias após o fim da operação{job.end_date ? ` (fim ${formatJobDate(job.end_date)})` : ""}.
+          </p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Repasse (R$)</label>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={repasse}
+            onChange={(e) => setRepasse(e.target.value)}
+            onBlur={(e) => setRepasse(e.target.value.trim() ? formatAmountBR(parseBrlNumber(e.target.value)) : "")}
+            placeholder="0,00"
+            disabled={loadingRepasse}
+            className={inputCls}
+          />
+          <p className="text-[11px] text-text-light mt-1">
+            Entra como despesa do navio (categoria Repasse) — soma no custo da operação.
+          </p>
         </div>
         {err && <p className="text-xs text-danger bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</p>}
         <div className="flex gap-3 justify-between pt-2">
@@ -504,7 +583,7 @@ export default function FinanceiroPage() {
   const canEdit = hasPermission(role, "FINANCEIRO_MOD", "edit") || hasPermission(role, "FINANCEIRO_MOD", "create");
   // Trocar a função de um colaborador só neste navio (override travado) é só
   // Executivo/Tecnologia — mesma régua da "Paga" em Colaboradores.
-  const canEditFunction = role === "EXECUTIVO" || role === "TECNOLOGIA";
+  const canEditFunction = role === "EXECUTIVO" || role === "COMERCIAL" || role === "TECNOLOGIA";
   // Demonstração Financeira traz folha e distribuição aos sócios: mesma régua do
   // módulo bancário (Estágio fica de fora). Casa com o roles: do menu em rbac.ts.
   const canSeeDemonstracao = canAccessFinanceiroBanco(role);

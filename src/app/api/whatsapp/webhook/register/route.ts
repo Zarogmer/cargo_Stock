@@ -5,7 +5,7 @@ import { isEvolutionConfigured, registerWebhook } from "@/lib/services/evolution
 export async function POST() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!["TECNOLOGIA", "GESTOR", "EXECUTIVO"].includes(session.user.role)) {
+  if (!["TECNOLOGIA", "GESTOR", "EXECUTIVO", "COMERCIAL"].includes(session.user.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   if (!isEvolutionConfigured()) {

@@ -13,7 +13,7 @@ import { friendlyEvolutionError } from "@/lib/services/evolution-errors";
 import { clearTeamGroupCache, getTeamGroupJid } from "@/lib/services/team-groups";
 import { BOARDING_SAFETY_REMINDER } from "@/lib/services/whatsapp-copy";
 
-const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "FINANCEIRO"];
+const ALLOWED_ROLES = ["RH", "TECNOLOGIA", "ESTAGIO", "GESTOR", "EXECUTIVO", "COMERCIAL", "FINANCEIRO"];
 
 // Mapeia código de serviço pro nome amigável (precisa bater com a UI de Navios).
 const SERVICE_LABELS: Record<string, string> = {
