@@ -142,6 +142,8 @@ const EXPENSE_CATEGORIES: { value: string; label: string }[] = [
   { value: "AJUDA_DE_CUSTO", label: "Ajuda de custo" },
   { value: "ALIMENTACAO", label: "Alimentação" },
   { value: "RESTAURANTE", label: "Jantar/Restaurante" },
+  // Repasse do pagamento do navio — lançado pelo modal "Pagar" do Financeiro.
+  { value: "REPASSE", label: "Repasse" },
   { value: "OUTROS", label: "Outros" },
 ];
 
