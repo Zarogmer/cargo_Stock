@@ -65,7 +65,6 @@ export function EscalacaoEstoquePage() {
 
   const [ships, setShips] = useState<Ship[]>([]);
   const [selectedShip, setSelectedShip] = useState<string>("");
-  const [selectedTeam, setSelectedTeam] = useState<"EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3">("EQUIPE_1");
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [kitItems, setKitItems] = useState<KitItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,13 +106,15 @@ export function EscalacaoEstoquePage() {
   useEffect(() => {
     if (ships.length > 0 && !selectedShip) {
       setSelectedShip(ships[0].id);
-      if (ships[0].assigned_team) {
-        setSelectedTeam(ships[0].assigned_team as "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3");
-      }
     }
   }, [ships, selectedShip]);
 
   const currentShip = ships.find((s) => s.id === selectedShip);
+  // A equipe vem do cadastro do navio (aba Navios) — não se escolhe aqui.
+  // Navio sem equipe (ex.: Costado) mostra aviso e não lista kit nenhum.
+  const selectedTeam = (currentShip?.assigned_team && TEAM_LABELS[currentShip.assigned_team]
+    ? currentShip.assigned_team
+    : null) as "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | null;
 
   const teamItems = stockItems
     .filter((i) => (i as any).team === selectedTeam)
@@ -149,7 +150,7 @@ export function EscalacaoEstoquePage() {
   const matMissing = teamKit.length - matReady;
 
   async function handleEmbarcar() {
-    if (!currentShip) return;
+    if (!currentShip || !selectedTeam) return;
     setEmbarking(true);
     const actor = profile?.full_name || "Sistema";
 
@@ -222,7 +223,7 @@ export function EscalacaoEstoquePage() {
   }
 
   async function handleSaveReturn() {
-    if (!currentShip) return;
+    if (!currentShip || !selectedTeam) return;
     const rows = buildReturnRows();
     if (rows.length === 0) {
       setReturnMsg("Preencha quanto voltou ou quebrou em pelo menos um item.");
@@ -281,7 +282,7 @@ export function EscalacaoEstoquePage() {
   }
 
   async function handleSendBroken() {
-    if (!currentShip) return;
+    if (!currentShip || !selectedTeam) return;
     const rows = buildReturnRows().filter((r) => r.broken > 0 || (r.note && r.returned === 0));
     const brokenItems = rows.map((r) => ({ name: r.k.estName, qty: r.broken, note: r.note || null }));
     if (brokenItems.length === 0) {
@@ -369,27 +370,31 @@ export function EscalacaoEstoquePage() {
         ))}
       </div>
 
+      {/* A equipe é a definida no cadastro do navio (aba Navios) — sem seletor. */}
       <div className="flex flex-wrap gap-2 items-center justify-between">
-        <div className="flex gap-2 items-center">
-          <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Equipe:</span>
-          <select
-            value={selectedTeam}
-            onChange={(e) => setSelectedTeam(e.target.value as any)}
-            className="px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
-          >
-            <option value="EQUIPE_1">Equipe 1</option>
-            <option value="EQUIPE_2">Equipe 2</option>
-            <option value="EQUIPE_3">Equipe 3</option>
-          </select>
-        </div>
-        {tab === "embarque" && canEmbarcar && (teamItems.length > 0 || teamKit.length > 0) && (
+        {selectedTeam ? (
+          <div className="flex gap-2 items-center">
+            <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Equipe:</span>
+            <span
+              className="text-sm font-semibold text-primary bg-primary/10 rounded-lg px-3 py-1.5"
+              title="Equipe definida no cadastro do navio (aba Navios)"
+            >
+              {TEAM_LABELS[selectedTeam]}
+            </span>
+          </div>
+        ) : (
+          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            ⚠️ Este navio não tem equipe definida — edite o navio na aba <strong>Navios</strong> e escolha a equipe.
+          </p>
+        )}
+        {tab === "embarque" && canEmbarcar && selectedTeam && (teamItems.length > 0 || teamKit.length > 0) && (
           <Button size="sm" variant="warning" onClick={() => setConfirmEmbark(true)}>
             ⚓ Embarcar
           </Button>
         )}
       </div>
 
-      {tab === "retorno" && (
+      {tab === "retorno" && selectedTeam && (
         <RetornoSection
           shipName={currentShip?.name || ""}
           team={selectedTeam}
@@ -408,7 +413,7 @@ export function EscalacaoEstoquePage() {
         />
       )}
 
-      {tab === "embarque" && (<>
+      {tab === "embarque" && selectedTeam && (<>
       {/* Materiais — baixados do Estoque (GALPAO) ao embarcar */}
       <section className="space-y-2">
         <div className="flex items-center justify-between flex-wrap gap-2">
@@ -524,7 +529,7 @@ export function EscalacaoEstoquePage() {
         onClose={() => setConfirmEmbark(false)}
         onConfirm={handleEmbarcar}
         title="Confirmar Embarque"
-        message={`Embarcar ${selectedTeam} no navio "${currentShip?.name}"? Os materiais do kit serão baixados do Estoque e a comida do Rancho desta equipe.`}
+        message={`Embarcar ${selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"} no navio "${currentShip?.name}"? Os materiais do kit serão baixados do Estoque e a comida do Rancho desta equipe.`}
         confirmLabel="⚓ Confirmar Embarque"
         variant="warning"
         loading={embarking}
