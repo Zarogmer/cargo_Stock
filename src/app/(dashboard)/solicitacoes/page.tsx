@@ -582,7 +582,7 @@ export default function SolicitacoesPage() {
       const effectiveCode = data.code || (await resolveWarehouseCode(spec.dest, description));
 
       // 1) Registra a compra com os dados conferidos na aprovação.
-      const { error: buyErr } = await db.from("purchase_orders").insert({
+      const { data: createdPurchase, error: buyErr } = await db.from("purchase_orders").insert({
         description,
         department: spec.dest === "OUTROS" ? null : spec.dest,
         code: effectiveCode,
@@ -598,6 +598,27 @@ export default function SolicitacoesPage() {
         created_by: actor,
       } as any);
       if (buyErr) throw buyErr;
+
+      // 1b) Lança a compra no Contas a Pagar (mesma regra do Nova Compra: toda
+      // compra vira título, menos cartão — a fatura entra como boleto à parte).
+      // Best-effort: falha não desfaz a aprovação.
+      let contasMsg = "";
+      const newPurchaseId = (createdPurchase as unknown as { id?: string } | null)?.id;
+      const isCard = data.paymentMethod === "CARTÃO DE CRÉDITO" || data.paymentMethod === "CARTÃO DE DÉBITO";
+      if (newPurchaseId && !isCard) {
+        try {
+          const r = await fetch("/api/financeiro/contas/from-compras", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ purchase_ids: [newPurchaseId] }),
+          });
+          contasMsg = r.ok
+            ? " 🧾 Lançada no Contas a Pagar."
+            : " ⚠️ Falhou ao lançar no Contas a Pagar — puxe manual depois.";
+        } catch {
+          contasMsg = " ⚠️ Falhou ao lançar no Contas a Pagar — puxe manual depois.";
+        }
+      }
 
       // 2) Marca a solicitação como concluída e guarda os valores conferidos
       //    (o card passa a refletir o que foi de fato aprovado). quantity é Int
@@ -665,7 +686,7 @@ export default function SolicitacoesPage() {
       }
 
       setConcludeRequest(null);
-      setSaveOk(`✅ "${description}" concluído — compra registrada.${stockMsg}${groupMsg}`);
+      setSaveOk(`✅ "${description}" concluído — compra registrada.${contasMsg}${stockMsg}${groupMsg}`);
       // Se o aprovador marcou "Avisar o fornecedor", abre o modal de revisão com a
       // mensagem pronta (e a foto da solicitação) pra ele conferir e clicar Enviar.
       if (data.notify) setWhatsappTarget(data.notify);
@@ -915,12 +936,17 @@ export default function SolicitacoesPage() {
           created_by: actor,
         } as any);
         if (error) throw error;
-        // FATURADO com prazo → já cria os títulos no Contas a Pagar (um por
-        // parcela, vencimento = data + dias). Falha aqui é não-fatal: a compra
-        // já foi salva.
+        // Toda compra nova é lançada automaticamente no Contas a Pagar — exceto
+        // cartão (crédito/débito), cuja fatura entra como um boleto à parte.
+        // FATURADO parcelado vira um título por parcela (vencimento = data +
+        // dias); o resto vence na data da compra. Falha aqui é não-fatal: a
+        // compra já foi salva.
         const newId = (createdPurchase as unknown as { id?: string } | null)?.id;
-        const nParcelas = data.payment_terms?.length || (data.payment_term_days ? 1 : 0);
-        if (newId && data.payment_method === "FATURADO" && nParcelas > 0) {
+        const isCard = data.payment_method === "CARTÃO DE CRÉDITO" || data.payment_method === "CARTÃO DE DÉBITO";
+        if (newId && !isCard) {
+          const nParcelas = data.payment_method === "FATURADO"
+            ? data.payment_terms?.length || (data.payment_term_days ? 1 : 0)
+            : 0;
           try {
             const r = await fetch("/api/financeiro/contas/from-compras", {
               method: "POST",
@@ -931,7 +957,9 @@ export default function SolicitacoesPage() {
               setSaveOk(
                 nParcelas > 1
                   ? `💳 Compra faturada lançada no Contas a Pagar em ${nParcelas} parcelas com os vencimentos calculados.`
-                  : "💳 Compra faturada lançada no Contas a Pagar com o vencimento calculado.",
+                  : nParcelas === 1
+                    ? "💳 Compra faturada lançada no Contas a Pagar com o vencimento calculado."
+                    : "🧾 Compra lançada no Contas a Pagar.",
               );
             } else setSaveError("Compra salva, mas falhou ao lançar no Contas a Pagar — puxe manual depois.");
           } catch {
@@ -955,8 +983,9 @@ export default function SolicitacoesPage() {
               category: stock.category, unit: stock.unit, team: stock.team, size: stock.size,
               code,
             });
-            setSaveOk(
-              `📦 ${r.created ? "Criado" : "Reposto"}: "${data.description}" (+${formatQty(r.quantity)}) em ${r.where}.`,
+            // Anexa ao toast anterior (ex.: o do lançamento no Contas a Pagar).
+            setSaveOk((prev) =>
+              `${prev ? `${prev} · ` : ""}📦 ${r.created ? "Criado" : "Reposto"}: "${data.description}" (+${formatQty(r.quantity)}) em ${r.where}.`,
             );
           } catch (stockErr: any) {
             setSaveError(`Compra salva, mas falhou ao lançar no Almoxarifado: ${stockErr?.message || String(stockErr)}`);

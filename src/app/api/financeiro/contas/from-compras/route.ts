@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { auth } from "@/lib/auth";
 import { requireFinance } from "@/lib/financeiro-api";
+import { hasPermission, canAccessFinanceiroBanco, COMPRAS_ROLES } from "@/lib/rbac";
+import type { Role } from "@/types/database";
 import { AUTO_APPROVE_SETTING_KEY, autoApproveReason } from "@/lib/services/payable-status";
 
 // Puxar do Controle de Compras (purchase_orders) para o Contas a Pagar.
@@ -46,9 +49,20 @@ export async function GET() {
 // Body: { purchase_ids: string[] }. Casa o FORNECEDOR (texto da compra) com um
 // fornecedor cadastrado pelo nome; não achando, guarda como favorecido.
 // created conta TÍTULOS (uma compra parcelada em 3 soma 3).
+// Diferente do GET (só Financeiro), o POST aceita também os papéis de Compras:
+// toda compra salva no Controle de Compras é lançada automaticamente aqui, e
+// quem registra (ex.: Gestor/RH) nem sempre acessa o módulo bancário.
 export async function POST(request: NextRequest) {
-  const guard = await requireFinance("create");
-  if (guard.error) return guard.error;
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const role = session.user.role as Role;
+  const isFinance = canAccessFinanceiroBanco(role) && hasPermission(role, "FINANCEIRO_MOD", "create");
+  if (!isFinance && !COMPRAS_ROLES.includes(role)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  const userName = session.user.name || session.user.email || "?";
 
   const body = await request.json().catch(() => null);
   const ids: string[] = Array.isArray(body?.purchase_ids)
@@ -76,6 +90,12 @@ export async function POST(request: NextRequest) {
     });
     // Já virou título ou sumiu — ignora (idempotente).
     if (!po || po.payable_invoices.length > 0) {
+      skipped++;
+      continue;
+    }
+    // Cartão (crédito/débito) nunca vira título individual — a fatura do cartão
+    // é lançada como um boleto à parte (senão o gasto contaria duas vezes).
+    if (po.payment_method === "CARTÃO DE CRÉDITO" || po.payment_method === "CARTÃO DE DÉBITO") {
       skipped++;
       continue;
     }
@@ -142,7 +162,7 @@ export async function POST(request: NextRequest) {
           status: autoReason ? "APROVADO" : "AGUARDANDO_APROVACAO",
           approved_by: autoReason,
           approved_at: autoReason ? new Date() : null,
-          created_by: guard.userName,
+          created_by: userName,
         },
       });
       created++;
