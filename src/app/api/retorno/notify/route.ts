@@ -69,9 +69,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ status: "skipped", sent: 0, warning: "Nenhum item quebrado pra enviar." }, { status: 200 });
   }
 
-  // Card "Retorno de material" em Mensagens: liga/desliga o aviso e escolhe um
-  // grupo OPCIONAL (útil pra testes). Quando ligado, o aviso vai sempre por DM
-  // pro pessoal do setor ADMINISTRATIVO — sem grupo escolhido, vai só as DMs.
+  // Card "Retorno de material" em Mensagens: liga/desliga o aviso, o GRUPO é o
+  // destino principal e a caixinha "dmAdmin" opcionalmente manda também por DM
+  // pro pessoal do setor ADMINISTRATIVO.
   const { retornoMaterial: cfg } = await readNotifyConfig();
   if (!cfg.enabled) {
     return NextResponse.json({
@@ -81,6 +81,13 @@ export async function POST(request: NextRequest) {
     }, { status: 200 });
   }
   const targetGroups = cfg.groups;
+  if (targetGroups.length === 0 && !cfg.dmAdmin) {
+    return NextResponse.json({
+      status: "skipped",
+      sent: 0,
+      warning: "Nenhum grupo configurado — escolha um em Mensagens › Avisos, card \"Retorno de material\".",
+    }, { status: 200 });
+  }
 
   const message = buildMessage(body);
   const groupResults: { name: string; ok: boolean; error?: string }[] = [];
@@ -112,14 +119,16 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // DM sempre pro pessoal ATIVO do setor ADMINISTRATIVO — é quem cuida da
-  // reposição. Não-fatal por pessoa (sem telefone entra como falha no resumo).
-  const admins = (
-    await prisma.employee.findMany({
-      where: { sector: "ADMINISTRATIVO" },
-      select: { id: true, name: true, phone: true, status: true },
-    })
-  ).filter((e) => e.status !== "INATIVO");
+  // DM pro pessoal ATIVO do setor ADMINISTRATIVO só com a caixinha ligada no
+  // card. Não-fatal por pessoa (sem telefone entra como falha no resumo).
+  const admins = cfg.dmAdmin
+    ? (
+        await prisma.employee.findMany({
+          where: { sector: "ADMINISTRATIVO" },
+          select: { id: true, name: true, phone: true, status: true },
+        })
+      ).filter((e) => e.status !== "INATIVO")
+    : [];
 
   const dmResults: { target: string; ok: boolean; error?: string }[] = [];
   for (const emp of admins) {

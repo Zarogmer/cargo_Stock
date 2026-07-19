@@ -164,7 +164,7 @@ const PRODUCT_CATEGORIES = [
 // escolhido — é a ponte entre Compras/Solicitações e o Almoxarifado inteiro.
 // Substitui o antigo "Departamento" (que era só rótulo e não batia com as abas
 // do Almoxarifado). "OUTROS" = só registra a compra, sem mexer no estoque.
-type WarehouseDest = "ESTOQUE" | "RANCHO" | "EPI" | "UNIFORME" | "MAQUINARIO" | "FERRAMENTA" | "ELETRICA" | "ESCRITORIO" | "OUTROS" | "NENHUM";
+type WarehouseDest = "ESTOQUE" | "RANCHO" | "EPI" | "UNIFORME" | "MAQUINARIO" | "FERRAMENTA" | "ELETRICA" | "FLUIDOS" | "ESCRITORIO" | "OUTROS" | "NENHUM";
 
 const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
   { value: "ESTOQUE", label: "📦 Utensílios" },
@@ -174,6 +174,7 @@ const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
   { value: "MAQUINARIO", label: "⚙️ Maquinário" },
   { value: "FERRAMENTA", label: "🔧 Ferramenta" },
   { value: "ELETRICA", label: "⚡ Elétrica" },
+  { value: "FLUIDOS", label: "🛢️ Fluídos" },
   { value: "ESCRITORIO", label: "🏢 Escritório (só registra a compra)" },
   { value: "OUTROS", label: "— Outros (não lançar no estoque)" },
 ];
@@ -190,7 +191,7 @@ function destStocks(dest: WarehouseDest): boolean {
 // Rótulo curto pro badge na tabela de Controle de Compras.
 const DEST_SHORT_LABEL: Record<string, string> = {
   ESTOQUE: "Utensílios", RANCHO: "Rancho", EPI: "EPI",
-  UNIFORME: "Uniforme", MAQUINARIO: "Maquinário", FERRAMENTA: "Ferramenta", ELETRICA: "Elétrica", ESCRITORIO: "Escritório", OUTROS: "Outros", NENHUM: "Sem destino",
+  UNIFORME: "Uniforme", MAQUINARIO: "Maquinário", FERRAMENTA: "Ferramenta", ELETRICA: "Elétrica", FLUIDOS: "Fluídos", ESCRITORIO: "Escritório", OUTROS: "Outros", NENHUM: "Sem destino",
 };
 function departmentLabel(dep: string | null): string {
   if (!dep) return "";
@@ -259,6 +260,7 @@ const DEPARTMENT_BADGE: Record<string, string> = {
   UNIFORME: "bg-purple-100 text-purple-700",
   MAQUINARIO: "bg-orange-100 text-orange-700",
   FERRAMENTA: "bg-slate-100 text-slate-700",
+  FLUIDOS: "bg-cyan-100 text-cyan-700",
   ELETRICA: "bg-yellow-100 text-yellow-700",
   ESCRITORIO: "bg-purple-100 text-purple-700",
   OUTROS: "bg-gray-100 text-gray-700",
@@ -709,7 +711,7 @@ export default function SolicitacoesPage() {
     const name = (opts.name || "").trim();
     const qty = opts.quantity > 0 ? opts.quantity : 1;
     const category = (opts.category || "").trim() || "Outros";
-    // Sentinela do inventário: GALPAO (Estoque) por padrão, ou FERRAMENTA/ELETRICA.
+    // Sentinela do inventário: GALPAO (Estoque) por padrão, ou FERRAMENTA/ELETRICA/FLUIDOS.
     const team = opts.team || STOCK_TEAM;
     if (!name) throw new Error("Nome do material vazio");
 
@@ -864,12 +866,13 @@ export default function SolicitacoesPage() {
       return { created, where: dest === "EPI" ? "EPI" : "Uniforme", quantity: addQty };
     }
 
-    // Ferramenta / Elétrica — inventário com quantidade (stock_items com o team
-    // sentinela do setor). Mesma ponte do Estoque: casa por código/nome e soma a
-    // quantidade (reposição) em vez de criar uma linha por unidade.
-    if (dest === "FERRAMENTA" || dest === "ELETRICA") {
+    // Ferramenta / Elétrica / Fluídos — inventário com quantidade (stock_items
+    // com o team sentinela do setor). Mesma ponte do Estoque: casa por
+    // código/nome e soma a quantidade (reposição) em vez de criar uma linha por
+    // unidade.
+    if (dest === "FERRAMENTA" || dest === "ELETRICA" || dest === "FLUIDOS") {
       const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code, team: dest });
-      const label = dest === "FERRAMENTA" ? "Ferramenta" : "Elétrica";
+      const label = dest === "FERRAMENTA" ? "Ferramenta" : dest === "ELETRICA" ? "Elétrica" : "Fluídos";
       return { created: r.created, where: `${label}${r.category && r.category !== "Outros" ? ` · ${r.category}` : ""}`, quantity: r.quantity };
     }
 
@@ -2187,7 +2190,7 @@ function numToInput(n: number | null | undefined): string {
 // nome — buildCodeMap). Maquinário (cada unidade é um registro próprio), Rancho
 // (card #46: só registra a compra, sem mexer no estoque), Escritório e Outros não
 // têm código, então o campo não aparece pra eles.
-const CODED_DESTS: WarehouseDest[] = ["ESTOQUE", "EPI", "UNIFORME", "FERRAMENTA", "ELETRICA", "MAQUINARIO"];
+const CODED_DESTS: WarehouseDest[] = ["ESTOQUE", "EPI", "UNIFORME", "FERRAMENTA", "ELETRICA", "FLUIDOS", "MAQUINARIO"];
 
 // Item cru do setor de destino (id + nome, + tamanho/estoque pro autocomplete).
 // Base tanto do autocomplete de código quanto da geração automática (codeForName).
@@ -2208,7 +2211,7 @@ async function loadWarehouseItems(dest: WarehouseDest): Promise<WarehouseItem[]>
     const { data } = await db.from("stock_items").select("id, name, quantity").eq("team", STOCK_TEAM);
     return ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, size: null, qty: i.quantity }));
   }
-  if (dest === "FERRAMENTA" || dest === "ELETRICA") {
+  if (dest === "FERRAMENTA" || dest === "ELETRICA" || dest === "FLUIDOS") {
     const { data } = await db.from("stock_items").select("id, name, quantity").eq("team", dest);
     return ((data as any[]) || []).map((i) => ({ id: i.id, name: i.name, size: null, qty: i.quantity }));
   }

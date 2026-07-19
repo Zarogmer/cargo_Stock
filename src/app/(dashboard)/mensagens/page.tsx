@@ -33,7 +33,7 @@ type Mode = "colaboradores" | "manual" | "grupo";
 // pra não importar o módulo de servidor (que puxa o Prisma) no bundle do client.
 interface NotifyGroup { jid: string; label: string | null }
 interface NotifyTarget { groups: NotifyGroup[]; functions: string[] }
-interface RetornoNotifyTarget extends NotifyTarget { enabled: boolean }
+interface RetornoNotifyTarget extends NotifyTarget { enabled: boolean; dmAdmin: boolean }
 interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget; retornoMaterial: RetornoNotifyTarget; embarqueLista: RetornoNotifyTarget }
 interface FunctionLite { id: number; name: string; active?: boolean }
 interface EmployeeRoleLite { id: number; name: string; phone: string | null; role: string | null; status: string | null; sector: string | null }
@@ -1242,7 +1242,7 @@ export default function MensagensPage() {
                   checked={notifyCfg.embarqueLista?.enabled !== false}
                   onChange={(e) => setNotifyCfg((c) => {
                     if (!c) return c;
-                    const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true };
+                    const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
                     return { ...c, embarqueLista: { ...prev, enabled: e.target.checked } };
                   })}
                   disabled={savingCfg}
@@ -1260,7 +1260,7 @@ export default function MensagensPage() {
                     const g = groups.find((x) => x.remote_jid === jid);
                     setNotifyCfg((c) => {
                       if (!c) return c;
-                      const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true };
+                      const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
                       return {
                         ...c,
                         embarqueLista: { ...prev, groups: jid ? [{ jid, label: g?.push_name || null }] : [] },
@@ -1281,6 +1281,45 @@ export default function MensagensPage() {
                   Sem grupo escolhido o botão avisa e não envia — escolha o grupo de teste primeiro, depois o oficial.
                 </p>
               </div>
+
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={notifyCfg.embarqueLista?.dmAdmin === true}
+                  onChange={(e) => setNotifyCfg((c) => {
+                    if (!c) return c;
+                    const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                    return { ...c, embarqueLista: { ...prev, dmAdmin: e.target.checked } };
+                  })}
+                  disabled={savingCfg || notifyCfg.embarqueLista?.enabled === false}
+                  className="w-4 h-4"
+                />
+                <span>Mandar também pro <strong>Administrativo</strong> (WhatsApp de cada um)</span>
+              </label>
+              {notifyCfg.embarqueLista?.dmAdmin === true && (
+                <div className="bg-gray-50 border border-border rounded-lg px-3 py-2">
+                  <p className="text-[11px] font-medium text-text-light mb-1">Quem recebe (setor Administrativo, ativos):</p>
+                  {adminStaff.length === 0 ? (
+                    <p className="text-xs text-amber-700">Ninguém ativo no setor Administrativo.</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {adminStaff.map((m) => {
+                        const hasPhone = !!m.phone && m.phone.trim().length >= 10;
+                        return (
+                          <div key={m.id} className="flex items-center gap-2 text-xs">
+                            <span className="flex-1">{m.name}</span>
+                            {hasPhone ? (
+                              <span className="font-mono text-text-light">{formatPhone(m.phone || "")}</span>
+                            ) : (
+                              <span className="text-amber-700">sem telefone</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="border border-border rounded-xl p-4 space-y-3">
@@ -1297,7 +1336,7 @@ export default function MensagensPage() {
                   checked={notifyCfg.retornoMaterial?.enabled !== false}
                   onChange={(e) => setNotifyCfg((c) => {
                     if (!c) return c;
-                    const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true };
+                    const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
                     return { ...c, retornoMaterial: { ...prev, enabled: e.target.checked } };
                   })}
                   disabled={savingCfg}
@@ -1306,33 +1345,8 @@ export default function MensagensPage() {
                 <span>Enviar o aviso de quebrados</span>
               </label>
 
-              <div className="bg-gray-50 border border-border rounded-lg px-3 py-2">
-                <p className="text-[11px] font-medium text-text-light mb-1">
-                  Quando ligado, avisa sempre o setor <strong>Administrativo</strong> no WhatsApp de cada um:
-                </p>
-                {adminStaff.length === 0 ? (
-                  <p className="text-xs text-amber-700">Ninguém ativo no setor Administrativo.</p>
-                ) : (
-                  <div className="space-y-1">
-                    {adminStaff.map((m) => {
-                      const hasPhone = !!m.phone && m.phone.trim().length >= 10;
-                      return (
-                        <div key={m.id} className="flex items-center gap-2 text-xs">
-                          <span className="flex-1">{m.name}</span>
-                          {hasPhone ? (
-                            <span className="font-mono text-text-light">{formatPhone(m.phone || "")}</span>
-                          ) : (
-                            <span className="text-amber-700">sem telefone</span>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
               <div>
-                <label className="block text-xs font-medium mb-1 text-text-light">Grupo (opcional)</label>
+                <label className="block text-xs font-medium mb-1 text-text-light">Grupo de destino</label>
                 <select
                   value={notifyCfg.retornoMaterial?.groups[0]?.jid || ""}
                   onChange={(e) => {
@@ -1340,7 +1354,7 @@ export default function MensagensPage() {
                     const g = groups.find((x) => x.remote_jid === jid);
                     setNotifyCfg((c) => {
                       if (!c) return c;
-                      const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true };
+                      const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
                       return {
                         ...c,
                         retornoMaterial: { ...prev, groups: jid ? [{ jid, label: g?.push_name || null }] : [] },
@@ -1358,9 +1372,48 @@ export default function MensagensPage() {
                   ))}
                 </select>
                 <p className="text-[11px] text-text-light mt-1">
-                  Se escolher um grupo, o aviso também é postado nele — útil pra testar antes de valer.
+                  O aviso vai pro grupo escolhido — sem grupo (e sem a caixinha abaixo) o botão avisa e não envia.
                 </p>
               </div>
+
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={notifyCfg.retornoMaterial?.dmAdmin === true}
+                  onChange={(e) => setNotifyCfg((c) => {
+                    if (!c) return c;
+                    const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                    return { ...c, retornoMaterial: { ...prev, dmAdmin: e.target.checked } };
+                  })}
+                  disabled={savingCfg || notifyCfg.retornoMaterial?.enabled === false}
+                  className="w-4 h-4"
+                />
+                <span>Mandar também pro <strong>Administrativo</strong> (WhatsApp de cada um)</span>
+              </label>
+              {notifyCfg.retornoMaterial?.dmAdmin === true && (
+                <div className="bg-gray-50 border border-border rounded-lg px-3 py-2">
+                  <p className="text-[11px] font-medium text-text-light mb-1">Quem recebe (setor Administrativo, ativos):</p>
+                  {adminStaff.length === 0 ? (
+                    <p className="text-xs text-amber-700">Ninguém ativo no setor Administrativo.</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {adminStaff.map((m) => {
+                        const hasPhone = !!m.phone && m.phone.trim().length >= 10;
+                        return (
+                          <div key={m.id} className="flex items-center gap-2 text-xs">
+                            <span className="flex-1">{m.name}</span>
+                            {hasPhone ? (
+                              <span className="font-mono text-text-light">{formatPhone(m.phone || "")}</span>
+                            ) : (
+                              <span className="text-amber-700">sem telefone</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

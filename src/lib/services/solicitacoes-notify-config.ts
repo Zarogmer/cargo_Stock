@@ -26,11 +26,13 @@ export interface NotifyTarget {
   functions: string[];
 }
 
-// Destino do aviso de Retorno de material: tem um liga/desliga próprio e um
-// grupo opcional (útil pra testes). Quando ligado, o aviso vai SEMPRE por DM
-// pro pessoal do setor ADMINISTRATIVO — não se escolhe função aqui.
+// Destino dos avisos de Embarque/Retorno: liga/desliga próprio, o GRUPO como
+// destino principal e uma caixinha opcional que também manda por DM pro
+// pessoal ATIVO do setor ADMINISTRATIVO (não se escolhe função aqui).
 export interface RetornoNotifyTarget extends NotifyTarget {
   enabled: boolean;
+  // true = além do grupo, manda DM pra cada um do setor Administrativo.
+  dmAdmin: boolean;
 }
 
 export interface NotifyConfig {
@@ -52,8 +54,8 @@ export function defaultNotifyConfig(): NotifyConfig {
   return {
     novaSolicitacao: { groups: [], functions: ["SUPERVISOR"] },
     compraConcluida: { groups: [], functions: [] },
-    retornoMaterial: { groups: [], functions: [], enabled: true },
-    embarqueLista: { groups: [], functions: [], enabled: true },
+    retornoMaterial: { groups: [], functions: [], enabled: true, dmAdmin: false },
+    embarqueLista: { groups: [], functions: [], enabled: true, dmAdmin: false },
   };
 }
 
@@ -124,16 +126,22 @@ export function sanitizeNotifyConfig(raw: unknown): NotifyConfig {
   // enabled: só o false explícito desliga — ausente/inválido fica ligado.
   const enabledOf = (raw: unknown) =>
     !(raw && typeof raw === "object" && (raw as Record<string, unknown>).enabled === false);
+  // dmAdmin: só o true explícito liga a DM pro Administrativo (o destino
+  // principal é o grupo; a DM é a caixinha opcional).
+  const dmAdminOf = (raw: unknown) =>
+    !!(raw && typeof raw === "object" && (raw as Record<string, unknown>).dmAdmin === true);
   return {
     novaSolicitacao: sanitizeTarget(r.novaSolicitacao, def.novaSolicitacao),
     compraConcluida: sanitizeTarget(r.compraConcluida, def.compraConcluida),
     retornoMaterial: {
       ...sanitizeTarget(r.retornoMaterial, def.retornoMaterial),
       enabled: enabledOf(r.retornoMaterial),
+      dmAdmin: dmAdminOf(r.retornoMaterial),
     },
     embarqueLista: {
       ...sanitizeTarget(r.embarqueLista, def.embarqueLista),
       enabled: enabledOf(r.embarqueLista),
+      dmAdmin: dmAdminOf(r.embarqueLista),
     },
   };
 }

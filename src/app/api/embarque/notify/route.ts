@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import {
   isEvolutionConfigured,
   sendWhatsappTextToGroup,
+  sendWhatsappText,
   extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { readNotifyConfig } from "@/lib/services/solicitacoes-notify-config";
@@ -76,7 +77,7 @@ export async function POST(request: NextRequest) {
       skipped: "Envio da lista desativado — ligue em Mensagens › Avisos, card \"Lista de embarque\".",
     }, { status: 200 });
   }
-  if (cfg.groups.length === 0) {
+  if (cfg.groups.length === 0 && !cfg.dmAdmin) {
     return NextResponse.json({
       status: "skipped",
       sent: 0,
@@ -114,13 +115,43 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Caixinha do card ligada → também manda a lista por DM pro pessoal ATIVO do
+  // setor ADMINISTRATIVO (mesma regra do Retorno de material). Não-fatal por
+  // pessoa (sem telefone entra como falha no resumo).
+  const admins = cfg.dmAdmin
+    ? (
+        await prisma.employee.findMany({
+          where: { sector: "ADMINISTRATIVO" },
+          select: { id: true, name: true, phone: true, status: true },
+        })
+      ).filter((e) => e.status !== "INATIVO")
+    : [];
+  const dmResults: { target: string; ok: boolean; error?: string }[] = [];
+  for (const emp of admins) {
+    if (!emp.phone || emp.phone.trim().length < 10) {
+      dmResults.push({ target: `dm:${emp.name}`, ok: false, error: "sem telefone válido" });
+      continue;
+    }
+    try {
+      await sendWhatsappText(emp.phone, message);
+      dmResults.push({ target: `dm:${emp.name}`, ok: true });
+    } catch (err) {
+      dmResults.push({ target: `dm:${emp.name}`, ok: false, error: (err as Error).message });
+    }
+  }
+  const dmSent = dmResults.filter((r) => r.ok).length;
+
   const sent = groupResults.filter((r) => r.ok).length;
-  if (sent === 0) {
+  if (sent === 0 && dmSent === 0) {
     return NextResponse.json({
       status: "error",
       sent: 0,
-      warning: `Falha ao enviar pro(s) grupo(s): ${groupResults.map((g) => `${g.name} (${g.error})`).join("; ")}`,
+      dmSent: 0,
+      warning: groupResults.length
+        ? `Falha ao enviar pro(s) grupo(s): ${groupResults.map((g) => `${g.name} (${g.error})`).join("; ")}`
+        : "Ninguém recebeu a lista — confira o grupo e os telefones do Administrativo em Mensagens.",
       results: groupResults,
+      dmResults,
     }, { status: 200 });
   }
   return NextResponse.json({
@@ -128,5 +159,7 @@ export async function POST(request: NextRequest) {
     sent,
     group: groupResults.filter((r) => r.ok).map((r) => r.name).join(", "),
     results: groupResults,
+    dmSent,
+    dmResults,
   }, { status: 200 });
 }
