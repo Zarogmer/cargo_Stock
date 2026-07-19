@@ -11,7 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatPhone, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, type NrCode } from "@/lib/utils";
+import { formatPhone, formatDateTime, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, MOVEMENT_TYPE_LABELS, type NrCode } from "@/lib/utils";
 import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
 import type { Employee, JobFunction } from "@/types/database";
 import { DocumentosTab } from "./documentos-tab";
@@ -66,6 +66,11 @@ export default function ColaboradoresPage() {
   // --- EMPLOYEE DETAIL ---
   const [selectedEmp, setSelectedEmp] = useState<Employee | null>(null);
   const [empItems, setEmpItems] = useState<{ name: string; qty: number; source: string }[]>([]);
+  // Histórico completo de movimentações de EPI/Uniforme deste colaborador
+  // (entregas e devoluções), pra ver direto na ficha sem ir ao Almoxarifado.
+  const [empHistory, setEmpHistory] = useState<{
+    id: string; source: "EPI" | "Uniforme"; item_name: string; movement_type: string; quantity: number; created_at: string; notes: string | null;
+  }[]>([]);
   const [loadingEmpItems, setLoadingEmpItems] = useState(false);
 
   // --- ESCALAÇÃO STATUS (active allocation kind per employee) ---
@@ -162,6 +167,19 @@ export default function ColaboradoresPage() {
       uniMap.forEach((qty, name) => { if (qty > 0) items.push({ name, qty, source: "Uniforme" }); });
 
       setEmpItems(items);
+
+      // Histórico: todas as movimentações (não só o saldo), mais recente no topo.
+      const history: typeof empHistory = [];
+      (epiRes.data || []).forEach((m: any) => history.push({
+        id: `epi-${m.id}`, source: "EPI", item_name: m.epis?.name || "—",
+        movement_type: m.movement_type, quantity: m.quantity, created_at: m.created_at, notes: m.notes || null,
+      }));
+      (uniRes.data || []).forEach((m: any) => history.push({
+        id: `uni-${m.id}`, source: "Uniforme", item_name: m.uniforms?.name || "—",
+        movement_type: m.movement_type, quantity: m.quantity, created_at: m.created_at, notes: m.notes || null,
+      }));
+      history.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      setEmpHistory(history);
     } catch (err) {
       console.error("Error loading employee items:", err);
     } finally {
@@ -746,6 +764,51 @@ export default function ColaboradoresPage() {
                       <span className="text-sm font-bold text-text">x{item.qty}</span>
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+
+            {/* Histórico de movimentações (EPI + Uniforme) deste colaborador —
+                entregas e devoluções, direto na ficha (sem ir ao Almoxarifado). */}
+            <div className="border-t border-border pt-4">
+              <h3 className="text-sm font-semibold text-text mb-3">📦 Histórico de EPI e Uniforme</h3>
+              {loadingEmpItems ? (
+                <p className="text-sm text-text-light text-center py-4">Carregando...</p>
+              ) : empHistory.length === 0 ? (
+                <p className="text-sm text-text-light text-center py-4">Nenhuma movimentação registrada para este colaborador</p>
+              ) : (
+                <div className="overflow-x-auto border border-border rounded-lg">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-border">
+                      <tr className="text-left text-xs text-text-light">
+                        <th className="px-3 py-2 font-medium">Item</th>
+                        <th className="px-3 py-2 font-medium">Tipo</th>
+                        <th className="px-3 py-2 font-medium">Mov.</th>
+                        <th className="px-3 py-2 font-medium text-center">Qtd</th>
+                        <th className="px-3 py-2 font-medium">Data</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {empHistory.map((h) => (
+                        <tr key={h.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 font-medium">
+                            {h.item_name}
+                            {h.notes && <span className="block text-[11px] text-text-light font-normal">{h.notes}</span>}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${h.source === "EPI" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}>{h.source}</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={h.movement_type === "DEVOLUCAO" ? "text-amber-700" : "text-emerald-700"}>
+                              {MOVEMENT_TYPE_LABELS[h.movement_type] || h.movement_type}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-center">{h.quantity}</td>
+                          <td className="px-3 py-2 text-xs text-text-light whitespace-nowrap">{formatDateTime(h.created_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
