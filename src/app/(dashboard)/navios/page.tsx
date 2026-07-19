@@ -985,10 +985,17 @@ export default function NaviosPage() {
         return;
       }
       const [allocRes, adjRes] = await Promise.all([
-        db.from("job_allocations").select("id, employee_id, function_id, kind, status").in("job_id", jobIds).eq("status", "ATIVO"),
+        db.from("job_allocations").select("id, employee_id, function_id, kind, status, removal_reason").in("job_id", jobIds).in("status", ["ATIVO", "REMOVIDO"]),
         db.from("job_adjustments").select("id, job_id, type, category, description, amount").in("job_id", jobIds).order("created_at", { ascending: false }),
       ]);
-      setShipAllocs((allocRes.data as any[]) || []);
+      // Escalados do navio (Embarque e Costado): os ATIVOS + os REMOVIDOS pela
+      // liberação automática de navio finalizado — a escala segue aparecendo
+      // como histórico depois que o navio sai (mesma regra da Folha de Ponto).
+      // Remoção manual/substituição fica de fora.
+      const allocs = (((allocRes.data as any[]) || []) as Array<{ status: string; removal_reason?: string | null }>).filter(
+        (a) => a.status === "ATIVO" || (a.removal_reason || "").startsWith("Navio finalizado"),
+      );
+      setShipAllocs(allocs as any[]);
       setShipExpenses((adjRes.data as ShipExpense[]) || []);
     } catch (err) {
       console.error("loadShipFinance error:", err);
