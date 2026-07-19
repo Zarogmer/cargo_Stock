@@ -7,8 +7,7 @@ import {
   sendWhatsappText,
   extractSentMessageId,
 } from "@/lib/services/evolution-api";
-import { getComprasGroupJid, comprasGroupName } from "@/lib/services/compras-group";
-import { readNotifyConfig, normalizeFunctionName } from "@/lib/services/solicitacoes-notify-config";
+import { readNotifyConfig } from "@/lib/services/solicitacoes-notify-config";
 
 interface BrokenItem { name: string; qty: number; note?: string | null }
 interface NotifyBody {
@@ -24,7 +23,7 @@ const TEAM_LABEL: Record<string, string> = {
 };
 
 // Mensagem do retorno: lista o material que voltou QUEBRADO, pra manutenção /
-// compras reporem. Mesmo grupo dos avisos de solicitação/compra.
+// compras reporem. Vai por DM pro Administrativo e, se escolhido, pro grupo.
 function buildMessage(b: NotifyBody): string {
   const team = b.team ? ` · ${TEAM_LABEL[b.team] || b.team}` : "";
   const lines = b.brokenItems.map((it) => {
@@ -42,8 +41,9 @@ function buildMessage(b: NotifyBody): string {
   );
 }
 
-// POST /api/retorno/notify — manda a lista de quebrados pro grupo de Compras
-// (o mesmo dos avisos de solicitação). Best-effort: sempre 200, nunca fatal.
+// POST /api/retorno/notify — manda a lista de quebrados por DM pro pessoal do
+// setor ADMINISTRATIVO e, se configurado em Mensagens, também pro grupo
+// escolhido. Best-effort: sempre 200, nunca fatal.
 export async function POST(request: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -66,25 +66,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ status: "skipped", sent: 0, warning: "Nenhum item quebrado pra enviar." }, { status: 200 });
   }
 
-  // Alvo próprio (card "Retorno de material" em Mensagens); sem config, cai nos
-  // grupos da Compra concluída e por fim no resolvedor por nome ("Compras") —
-  // preserva o comportamento antigo de quem nunca configurou nada.
-  const notifyCfg = await readNotifyConfig();
-  const cfg = notifyCfg.retornoMaterial;
-  let targetGroups = cfg.groups;
-  if (targetGroups.length === 0) targetGroups = notifyCfg.compraConcluida.groups;
-  if (targetGroups.length === 0) {
-    const fallbackJid = await getComprasGroupJid();
-    if (fallbackJid) targetGroups = [{ jid: fallbackJid, label: comprasGroupName() }];
-  }
-  if (targetGroups.length === 0) {
-    const name = comprasGroupName();
+  // Card "Retorno de material" em Mensagens: liga/desliga o aviso e escolhe um
+  // grupo OPCIONAL (útil pra testes). Quando ligado, o aviso vai sempre por DM
+  // pro pessoal do setor ADMINISTRATIVO — sem grupo escolhido, vai só as DMs.
+  const { retornoMaterial: cfg } = await readNotifyConfig();
+  if (!cfg.enabled) {
     return NextResponse.json({
       status: "skipped",
       sent: 0,
-      warning: `Nenhum grupo configurado. Escolha um em Mensagens › Avisos, card "Retorno de material", ou crie o grupo "${name}" no WhatsApp e rode "Sincronizar grupos".`,
+      skipped: "Aviso de retorno desativado — ligue em Mensagens › Avisos, card \"Retorno de material\".",
     }, { status: 200 });
   }
+  const targetGroups = cfg.groups;
 
   const message = buildMessage(body);
   const groupResults: { name: string; ok: boolean; error?: string }[] = [];
@@ -116,39 +109,47 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Opcional: DM pros colaboradores das funções configuradas no card "Retorno
-  // de material" (mesmo padrão do notify-compras). Não-fatal.
-  const wantedFns = new Set(cfg.functions.map(normalizeFunctionName));
-  const dmResults: { target: string; ok: boolean; error?: string }[] = [];
-  if (wantedFns.size > 0) {
-    const employees = (
-      await prisma.employee.findMany({
-        where: { role: { not: null } },
-        select: { id: true, name: true, phone: true, role: true, status: true },
-      })
-    ).filter((e) => e.status !== "INATIVO" && wantedFns.has(normalizeFunctionName(e.role || "")));
+  // DM sempre pro pessoal ATIVO do setor ADMINISTRATIVO — é quem cuida da
+  // reposição. Não-fatal por pessoa (sem telefone entra como falha no resumo).
+  const admins = (
+    await prisma.employee.findMany({
+      where: { sector: "ADMINISTRATIVO" },
+      select: { id: true, name: true, phone: true, status: true },
+    })
+  ).filter((e) => e.status !== "INATIVO");
 
-    for (const emp of employees) {
-      if (!emp.phone || emp.phone.trim().length < 10) {
-        dmResults.push({ target: `dm:${emp.name}`, ok: false, error: "sem telefone válido" });
-        continue;
-      }
-      try {
-        await sendWhatsappText(emp.phone, message);
-        dmResults.push({ target: `dm:${emp.name}`, ok: true });
-      } catch (err) {
-        dmResults.push({ target: `dm:${emp.name}`, ok: false, error: (err as Error).message });
-      }
+  const dmResults: { target: string; ok: boolean; error?: string }[] = [];
+  for (const emp of admins) {
+    if (!emp.phone || emp.phone.trim().length < 10) {
+      dmResults.push({ target: `dm:${emp.name}`, ok: false, error: "sem telefone válido" });
+      continue;
+    }
+    try {
+      await sendWhatsappText(emp.phone, message);
+      dmResults.push({ target: `dm:${emp.name}`, ok: true });
+    } catch (err) {
+      dmResults.push({ target: `dm:${emp.name}`, ok: false, error: (err as Error).message });
     }
   }
 
   const dmSent = dmResults.filter((r) => r.ok).length;
   const sent = groupResults.filter((r) => r.ok).length;
+  if (sent === 0 && dmSent === 0) {
+    return NextResponse.json({
+      status: "error",
+      sent: 0,
+      dmSent: 0,
+      warning: "Ninguém recebeu o aviso — escolha um grupo em Mensagens › \"Retorno de material\" ou confira os telefones do pessoal do Administrativo.",
+      results: groupResults,
+      dmResults,
+    }, { status: 200 });
+  }
   return NextResponse.json({
-    status: sent > 0 ? "ok" : "error",
+    status: "ok",
     sent,
     group: groupResults.filter((r) => r.ok).map((r) => r.name).join(", "),
     results: groupResults,
-    ...(dmResults.length ? { dmSent, dmResults } : {}),
+    dmSent,
+    dmResults,
   }, { status: 200 });
 }

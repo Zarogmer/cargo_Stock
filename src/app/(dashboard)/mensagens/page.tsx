@@ -33,9 +33,10 @@ type Mode = "colaboradores" | "manual" | "grupo";
 // pra não importar o módulo de servidor (que puxa o Prisma) no bundle do client.
 interface NotifyGroup { jid: string; label: string | null }
 interface NotifyTarget { groups: NotifyGroup[]; functions: string[] }
-interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget; retornoMaterial: NotifyTarget }
+interface RetornoNotifyTarget extends NotifyTarget { enabled: boolean }
+interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget; retornoMaterial: RetornoNotifyTarget }
 interface FunctionLite { id: number; name: string; active?: boolean }
-interface EmployeeRoleLite { id: number; name: string; phone: string | null; role: string | null; status: string | null }
+interface EmployeeRoleLite { id: number; name: string; phone: string | null; role: string | null; status: string | null; sector: string | null }
 interface MemberLite { id: number; name: string; phone: string | null }
 
 // Normaliza nome de função pra comparar com Employee.role (trim + maiúsculas).
@@ -432,7 +433,7 @@ export default function MensagensPage() {
     try {
       const [fnRes, empRes] = await Promise.all([
         db.from("job_functions").select("id, name, active").order("name"),
-        db.from("employees").select("id, name, phone, role, status").order("name"),
+        db.from("employees").select("id, name, phone, role, status, sector").order("name"),
       ]);
       const fns = ((fnRes.data || []) as FunctionLite[]).filter((f) => f.active !== false);
       setCfgFunctions(fns);
@@ -499,6 +500,15 @@ export default function MensagensPage() {
   const selectedGroup = useMemo(
     () => groups.find((g) => g.remote_jid === selectedGroupJid) || null,
     [groups, selectedGroupJid],
+  );
+
+  // Pessoal ATIVO do setor Administrativo — quem sempre recebe o aviso de
+  // retorno de material por DM (card "Retorno de material").
+  const adminStaff = useMemo(
+    () => cfgEmployees.filter(
+      (e) => e.status !== "INATIVO" && (e.sector || "").trim().toUpperCase() === "ADMINISTRATIVO",
+    ),
+    [cfgEmployees],
   );
 
   // Mapa função (normalizada) → colaboradores ativos. Alimenta o "ver quem está".
@@ -1222,19 +1232,77 @@ export default function MensagensPage() {
                   Disparado pelo botão &ldquo;Enviar quebrados pro WhatsApp&rdquo; da tela Controle › Embarque/Retorno.
                 </p>
               </div>
-              <NotifyTargetEditor
-                target={notifyCfg.retornoMaterial ?? { groups: [], functions: [] }}
-                onChange={(t) => setNotifyCfg((c) => (c ? { ...c, retornoMaterial: t } : c))}
-                functions={cfgFunctions}
-                membersByFn={membersByFn}
-                groups={groups}
-                groupFirst={true}
-                groupLabel="Grupo de destino"
-                groupHint="Sem grupo escolhido, cai no grupo da Compra concluída (ou no grupo “Compras” padrão)."
-                funcLabel="Funções que também recebem (opcional)"
-                funcHint="Além do grupo, cada pessoa dessas funções recebe no WhatsApp dela."
-                disabled={savingCfg}
-              />
+
+              <label className="flex items-center gap-2 text-sm font-medium cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={notifyCfg.retornoMaterial?.enabled !== false}
+                  onChange={(e) => setNotifyCfg((c) => {
+                    if (!c) return c;
+                    const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true };
+                    return { ...c, retornoMaterial: { ...prev, enabled: e.target.checked } };
+                  })}
+                  disabled={savingCfg}
+                  className="w-4 h-4"
+                />
+                <span>Enviar o aviso de quebrados</span>
+              </label>
+
+              <div className="bg-gray-50 border border-border rounded-lg px-3 py-2">
+                <p className="text-[11px] font-medium text-text-light mb-1">
+                  Quando ligado, avisa sempre o setor <strong>Administrativo</strong> no WhatsApp de cada um:
+                </p>
+                {adminStaff.length === 0 ? (
+                  <p className="text-xs text-amber-700">Ninguém ativo no setor Administrativo.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {adminStaff.map((m) => {
+                      const hasPhone = !!m.phone && m.phone.trim().length >= 10;
+                      return (
+                        <div key={m.id} className="flex items-center gap-2 text-xs">
+                          <span className="flex-1">{m.name}</span>
+                          {hasPhone ? (
+                            <span className="font-mono text-text-light">{formatPhone(m.phone || "")}</span>
+                          ) : (
+                            <span className="text-amber-700">sem telefone</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium mb-1 text-text-light">Grupo (opcional)</label>
+                <select
+                  value={notifyCfg.retornoMaterial?.groups[0]?.jid || ""}
+                  onChange={(e) => {
+                    const jid = e.target.value;
+                    const g = groups.find((x) => x.remote_jid === jid);
+                    setNotifyCfg((c) => {
+                      if (!c) return c;
+                      const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true };
+                      return {
+                        ...c,
+                        retornoMaterial: { ...prev, groups: jid ? [{ jid, label: g?.push_name || null }] : [] },
+                      };
+                    });
+                  }}
+                  disabled={savingCfg || notifyCfg.retornoMaterial?.enabled === false}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+                >
+                  <option value="">Nenhum grupo</option>
+                  {groups.map((g) => (
+                    <option key={g.remote_jid} value={g.remote_jid}>
+                      {g.push_name || g.remote_jid.replace("@g.us", "")}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-text-light mt-1">
+                  Se escolher um grupo, o aviso também é postado nele — útil pra testar antes de valer.
+                </p>
+              </div>
             </div>
           </div>
         )}

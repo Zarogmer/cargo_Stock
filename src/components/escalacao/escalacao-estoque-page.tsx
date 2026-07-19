@@ -317,8 +317,13 @@ export function EscalacaoEstoquePage() {
         }),
       });
       const data = await res.json().catch(() => null);
-      if (data?.sent) {
-        setReturnMsg(`📨 Enviado pro WhatsApp (${data.group || "grupo de compras"}). A mensagem fica no histórico da aba Conversas.`);
+      const groupsSent = Number(data?.sent || 0);
+      const dmSent = Number(data?.dmSent || 0);
+      if (groupsSent > 0 || dmSent > 0) {
+        const parts: string[] = [];
+        if (groupsSent > 0 && data.group) parts.push(`grupo ${data.group}`);
+        if (dmSent > 0) parts.push(`${dmSent} pessoa${dmSent === 1 ? "" : "s"} do Administrativo`);
+        setReturnMsg(`📨 Enviado pro WhatsApp (${parts.join(" + ")}). A mensagem fica no histórico da aba Conversas.`);
       } else if (data?.warning) {
         setReturnMsg(`⚠️ ${data.warning}`);
       } else if (data?.skipped) {

@@ -26,15 +26,21 @@ export interface NotifyTarget {
   functions: string[];
 }
 
+// Destino do aviso de Retorno de material: tem um liga/desliga próprio e um
+// grupo opcional (útil pra testes). Quando ligado, o aviso vai SEMPRE por DM
+// pro pessoal do setor ADMINISTRATIVO — não se escolhe função aqui.
+export interface RetornoNotifyTarget extends NotifyTarget {
+  enabled: boolean;
+}
+
 export interface NotifyConfig {
   // Disparado quando uma nova solicitação é criada (/api/solicitacoes/notify).
   novaSolicitacao: NotifyTarget;
   // Disparado quando uma compra é concluída/aprovada (/api/solicitacoes/notify-compras).
   compraConcluida: NotifyTarget;
   // Disparado pelo "Enviar quebrados pro WhatsApp" do Embarque/Retorno
-  // (/api/retorno/notify). Sem grupo configurado, cai nos grupos da Compra
-  // concluída (comportamento antigo: mesmo alvo dos avisos de compras).
-  retornoMaterial: NotifyTarget;
+  // (/api/retorno/notify).
+  retornoMaterial: RetornoNotifyTarget;
 }
 
 // Defaults = comportamento legado. Nova solicitação avisa os SUPERVISOR por DM;
@@ -43,7 +49,7 @@ export function defaultNotifyConfig(): NotifyConfig {
   return {
     novaSolicitacao: { groups: [], functions: ["SUPERVISOR"] },
     compraConcluida: { groups: [], functions: [] },
-    retornoMaterial: { groups: [], functions: [] },
+    retornoMaterial: { groups: [], functions: [], enabled: true },
   };
 }
 
@@ -111,10 +117,17 @@ function sanitizeTarget(raw: unknown, fallback: NotifyTarget): NotifyTarget {
 export function sanitizeNotifyConfig(raw: unknown): NotifyConfig {
   const def = defaultNotifyConfig();
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  // enabled: só o false explícito desliga — ausente/inválido fica ligado.
+  const retRaw = (r.retornoMaterial && typeof r.retornoMaterial === "object"
+    ? r.retornoMaterial
+    : {}) as Record<string, unknown>;
   return {
     novaSolicitacao: sanitizeTarget(r.novaSolicitacao, def.novaSolicitacao),
     compraConcluida: sanitizeTarget(r.compraConcluida, def.compraConcluida),
-    retornoMaterial: sanitizeTarget(r.retornoMaterial, def.retornoMaterial),
+    retornoMaterial: {
+      ...sanitizeTarget(r.retornoMaterial, def.retornoMaterial),
+      enabled: retRaw.enabled !== false,
+    },
   };
 }
 
