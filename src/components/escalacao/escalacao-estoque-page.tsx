@@ -275,11 +275,34 @@ export function EscalacaoEstoquePage() {
     const actor = profile?.full_name || "Sistema";
     const today = new Date().toISOString().split("T")[0];
     try {
-      // Quanto cada material já tinha creditado no retorno salvo — ao editar,
-      // o Estoque é ajustado só pela DIFERENÇA (não credita duas vezes).
+      // Quanto cada material já tinha creditado/quebrado no retorno salvo — ao
+      // editar, o Estoque é ajustado só pela DIFERENÇA (não conta duas vezes).
       const oldReturned = new Map<number, number>();
+      const oldBroken = new Map<number, number>();
       for (const it of existingReturn?.material_return_items || []) {
-        if (it.stock_item_id != null) oldReturned.set(it.stock_item_id, it.returned_qty);
+        if (it.stock_item_id == null) continue;
+        oldReturned.set(it.stock_item_id, it.returned_qty);
+        oldBroken.set(it.stock_item_id, it.broken_qty);
+      }
+
+      // Itens cuja baixa de embarque deste navio/equipe JÁ aconteceu: a quebra
+      // deles já está fora do Estoque (o Embarcar baixa tudo; o Retorno credita
+      // só o que voltou bom), então vira apenas um movimento informativo
+      // (AJUSTE) no histórico. Item sem baixa de embarque (navio que não passou
+      // pelo "Embarcar") tem a quebra BAIXADA do Estoque aqui.
+      const embarkTag = `${currentShip.name} (${selectedTeam})`;
+      const allIds = [...new Set([
+        ...buildReturnRows().map((r) => r.k.stock_item_id),
+        ...oldReturned.keys(),
+      ])];
+      const embarkedIds = new Set<number>();
+      if (allIds.length > 0) {
+        const movRes: any = await db.from("stock_movements").select("stock_item_id, notes").in("stock_item_id", allIds);
+        for (const m of (movRes.data as Array<{ stock_item_id: number; notes: string | null }>) || []) {
+          if ((m.notes || "").startsWith("Embarque") && (m.notes || "").includes(embarkTag)) {
+            embarkedIds.add(m.stock_item_id);
+          }
+        }
       }
 
       let returnId: number;
@@ -314,40 +337,83 @@ export function EscalacaoEstoquePage() {
           broken_qty: r.broken,
           note: r.note || null,
         });
+        const itemId = r.k.stock_item_id;
+        const returnedDelta = r.returned - (oldReturned.get(itemId) || 0);
+        const brokenDelta = r.broken - (oldBroken.get(itemId) || 0);
+        oldReturned.delete(itemId);
+        oldBroken.delete(itemId);
+        const embarked = embarkedIds.has(itemId);
+
         // O que voltou em bom estado credita o Estoque pela diferença contra o
-        // salvo (ENTRADA se aumentou, BAIXA se diminuiu); quebrado não credita.
-        const delta = r.returned - (oldReturned.get(r.k.stock_item_id) || 0);
-        oldReturned.delete(r.k.stock_item_id);
-        if (delta !== 0) {
+        // salvo (ENTRADA se aumentou, BAIXA se diminuiu).
+        if (returnedDelta !== 0) {
           await db.from("stock_movements").insert({
-            stock_item_id: r.k.stock_item_id,
-            movement_type: delta > 0 ? "ENTRADA" : "BAIXA",
-            quantity: Math.abs(delta),
+            stock_item_id: itemId,
+            movement_type: returnedDelta > 0 ? "ENTRADA" : "BAIXA",
+            quantity: Math.abs(returnedDelta),
             movement_date: today,
-            notes: `Retorno${existingReturn ? " (ajuste)" : ""}: ${currentShip.name} (${selectedTeam})`,
+            notes: `Retorno${existingReturn ? " (ajuste)" : ""}: ${currentShip.name} (${selectedTeam}) — voltou em bom estado`,
             created_by: actor,
           } as any);
+        }
+
+        // Quebra: sai do Estoque. Com baixa de embarque, a perda já foi
+        // descontada lá — entra só o registro (AJUSTE) pro histórico contar a
+        // história; sem embarque, baixa aqui de verdade.
+        if (brokenDelta !== 0) {
+          if (embarked) {
+            if (brokenDelta > 0) {
+              await db.from("stock_movements").insert({
+                stock_item_id: itemId,
+                movement_type: "AJUSTE",
+                quantity: brokenDelta,
+                movement_date: today,
+                notes: `Quebra: ${currentShip.name} (${selectedTeam}) — quebrou no navio (a baixa já foi no embarque)`,
+                created_by: actor,
+              } as any);
+            }
+          } else {
+            await db.from("stock_movements").insert({
+              stock_item_id: itemId,
+              movement_type: brokenDelta > 0 ? "BAIXA" : "ENTRADA",
+              quantity: Math.abs(brokenDelta),
+              movement_date: today,
+              notes: `Quebra${existingReturn ? " (ajuste)" : ""}: ${currentShip.name} (${selectedTeam}) — quebrou no navio`,
+              created_by: actor,
+            } as any);
+          }
+        }
+
+        // Efeito líquido no estoque: crédito do que voltou bom − baixa da
+        // quebra (quando o embarque ainda não tinha descontado).
+        const stockDelta = returnedDelta - (embarked ? 0 : brokenDelta);
+        if (stockDelta !== 0) {
           await db.from("stock_items").update({
-            quantity: Math.max(0, r.k.emEstoque + delta),
+            quantity: Math.max(0, r.k.emEstoque + stockDelta),
             updated_by: actor,
-          } as any).eq("id", r.k.stock_item_id);
+          } as any).eq("id", itemId);
         }
       }
 
-      // Itens que saíram da edição (zerados): estorna o crédito que tinham.
-      for (const [stockItemId, qty] of oldReturned) {
-        if (qty <= 0) continue;
+      // Itens que saíram da edição (zerados): estorna o crédito do "voltou" e a
+      // baixa da quebra (esta só quando tinha sido baixada aqui, sem embarque).
+      const leftoverIds = new Set([...oldReturned.keys(), ...oldBroken.keys()]);
+      for (const stockItemId of leftoverIds) {
+        const retQty = oldReturned.get(stockItemId) || 0;
+        const brokeQty = embarkedIds.has(stockItemId) ? 0 : (oldBroken.get(stockItemId) || 0);
+        const delta = brokeQty - retQty; // devolve a quebra, tira o crédito
+        if (delta === 0) continue;
         const current = stockItems.find((i) => i.id === stockItemId)?.quantity ?? 0;
         await db.from("stock_movements").insert({
           stock_item_id: stockItemId,
-          movement_type: "BAIXA",
-          quantity: qty,
+          movement_type: delta > 0 ? "ENTRADA" : "BAIXA",
+          quantity: Math.abs(delta),
           movement_date: today,
-          notes: `Retorno (ajuste): ${currentShip.name} (${selectedTeam})`,
+          notes: `Retorno (ajuste): ${currentShip.name} (${selectedTeam}) — item removido da conferência`,
           created_by: actor,
         } as any);
         await db.from("stock_items").update({
-          quantity: Math.max(0, current - qty),
+          quantity: Math.max(0, current + delta),
           updated_by: actor,
         } as any).eq("id", stockItemId);
       }

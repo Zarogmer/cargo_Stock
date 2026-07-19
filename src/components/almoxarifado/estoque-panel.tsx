@@ -251,10 +251,38 @@ export function EstoquePanel() {
     const actor = profile?.full_name || "Sistema";
     const payload = { ...formData, updated_by: actor, team: activeTeam } as Record<string, unknown>;
 
+    const today = new Date().toISOString().split("T")[0];
+    const newQty = Number(formData.quantity);
     if (editItem) {
       await db.from("stock_items").update(payload).eq("id", editItem.id);
+      // Mudou a quantidade na edição → registra no histórico (ajuste manual),
+      // pra toda movimentação de estoque contar a história.
+      if (Number.isFinite(newQty)) {
+        const diff = newQty - editItem.quantity;
+        if (diff !== 0) {
+          await db.from("stock_movements").insert({
+            stock_item_id: editItem.id,
+            movement_type: "AJUSTE",
+            quantity: Math.abs(diff),
+            movement_date: today,
+            notes: `Ajuste manual no Almoxarifado: ${diff > 0 ? "+" : "-"}${Math.abs(diff)} (edição do item)`,
+            created_by: actor,
+          } as Record<string, unknown>);
+        }
+      }
     } else {
-      await db.from("stock_items").insert(payload);
+      const insRes = (await db.from("stock_items").insert(payload)) as { data: { id?: number } | { id?: number }[] | null };
+      const created = Array.isArray(insRes.data) ? insRes.data[0] : insRes.data;
+      if (created?.id && Number.isFinite(newQty) && newQty > 0) {
+        await db.from("stock_movements").insert({
+          stock_item_id: created.id,
+          movement_type: "ENTRADA",
+          quantity: newQty,
+          movement_date: today,
+          notes: "Cadastro do item no Almoxarifado",
+          created_by: actor,
+        } as Record<string, unknown>);
+      }
     }
 
     setSaving(false);
