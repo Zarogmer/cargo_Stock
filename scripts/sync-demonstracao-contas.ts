@@ -16,6 +16,12 @@
  * Pagar (descrição/valor) deixa de casar e o reimport criaria um duplicado —
  * nesse caso apague o duplicado lá.
  *
+ * A planilha traz as contas recorrentes já preenchidas nos MESES FUTUROS
+ * (aluguel, CPFL... de dezembro, por exemplo). Data futura NÃO é pagamento:
+ * o título nasce APROVADO e em aberto, vencendo na data; só data passada (ou
+ * hoje) entra como PAGO. Um passo de correção também desmarca o pagamento de
+ * títulos DEMONSTRACAO futuros que tenham ficado pagos por engano.
+ *
  * Escreve em PRODUÇÃO (DATABASE_URL aponta pro Postgres do Railway).
  */
 import { PrismaClient } from "@prisma/client";
@@ -48,6 +54,36 @@ function fingerprint(section: string, month: string, description: string, value:
 
 async function main() {
   console.log(`🔁 Sync Demonstração → Contas a Pagar${YEAR ? ` (ano ${YEAR})` : ""}${COMMIT ? "" : "   (dry-run — nada é gravado)"}\n`);
+
+  // Hoje à meia-noite UTC — as colunas são DATE puro. Vencendo depois de hoje
+  // = conta futura (recorrente pré-lançada na planilha), não pagamento.
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+
+  // Correção: títulos DEMONSTRACAO com vencimento futuro que estejam marcados
+  // como pagos voltam pra aberto (APROVADO) — a planilha pré-lança o ano
+  // inteiro, mas pagamento só existe no passado.
+  const futureFix = await prisma.payableInvoice.findMany({
+    where: { origin: "DEMONSTRACAO", due_date: { gt: today }, payment_date: { not: null } },
+    select: { id: true },
+  });
+  if (futureFix.length > 0) {
+    console.log(`🧹 ${futureFix.length} título(s) futuros marcados como pagos → voltam pra aberto (APROVADO).`);
+    if (COMMIT) {
+      await prisma.payableInvoice.updateMany({
+        where: { id: { in: futureFix.map((f) => f.id) } },
+        data: {
+          status: "APROVADO",
+          payment_date: null,
+          paid_amount: null,
+          paid_by: null,
+          paid_at: null,
+          approved_by: "sync-demonstracao-contas",
+          approved_at: new Date(),
+        },
+      });
+    }
+  }
 
   const entries = await prisma.financialStatementEntry.findMany({
     where: YEAR ? { year: YEAR } : undefined,
@@ -125,24 +161,31 @@ async function main() {
     return;
   }
 
-  // PAGO com pagamento na data do lançamento: a planilha registra o que já foi
-  // pago no mês — o título nasce quitado, só pra histórico/relatório.
+  // Data passada/hoje = pagamento registrado na planilha → título nasce PAGO.
+  // Data futura = conta recorrente pré-lançada → nasce APROVADO, em aberto,
+  // vencendo na data (aparece no "Falta pagar" do mês certo).
   await prisma.payableInvoice.createMany({
-    data: toCreate.map((c) => ({
-      description: c.description,
-      amount: c.amount,
-      due_date: c.due_date,
-      payment_date: c.payment_date,
-      paid_amount: c.paid_amount,
-      statement_section: c.statement_section,
-      status: "PAGO" as const,
-      origin: "DEMONSTRACAO" as const,
-      paid_by: "sync-demonstracao-contas",
-      paid_at: new Date(),
-      created_by: "sync-demonstracao-contas",
-    })),
+    data: toCreate.map((c) => {
+      const isPast = c.due_date.getTime() <= today.getTime();
+      return {
+        description: c.description,
+        amount: c.amount,
+        due_date: c.due_date,
+        payment_date: isPast ? c.payment_date : null,
+        paid_amount: isPast ? c.paid_amount : null,
+        statement_section: c.statement_section,
+        status: (isPast ? "PAGO" : "APROVADO") as "PAGO" | "APROVADO",
+        origin: "DEMONSTRACAO" as const,
+        paid_by: isPast ? "sync-demonstracao-contas" : null,
+        paid_at: isPast ? new Date() : null,
+        approved_by: isPast ? null : "sync-demonstracao-contas",
+        approved_at: isPast ? null : new Date(),
+        created_by: "sync-demonstracao-contas",
+      };
+    }),
   });
-  console.log(`✅ ${toCreate.length} título(s) criado(s) no Contas a Pagar.`);
+  const futureCount = toCreate.filter((c) => c.due_date.getTime() > today.getTime()).length;
+  console.log(`✅ ${toCreate.length} título(s) criado(s) no Contas a Pagar (${toCreate.length - futureCount} pagos, ${futureCount} em aberto/futuros).`);
 }
 
 main()
