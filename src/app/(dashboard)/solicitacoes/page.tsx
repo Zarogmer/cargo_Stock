@@ -2302,13 +2302,12 @@ function CodeField({ dest, team, value, name = "", onChange, onResolveName, open
 // Controlado (o pai guarda o DestSpec). Compartilhado por Nova Compra, Aprovar
 // e Armazenar. `stocking=false` (ex.: edição de compra) mostra só o seletor,
 // sem campos nem lançamento, pra não contar a quantidade duas vezes.
-function WarehouseDestinationFields({ value, onChange, quantity, stocking = true, allowNoDest = false }: {
+function WarehouseDestinationFields({ value, onChange, quantity, stocking = true }: {
   value: DestSpec; onChange: (v: DestSpec) => void; quantity?: number; stocking?: boolean;
-  // allowNoDest: mostra "— Sem destino" (NENHUM) e deixa o campo opcional (usado no
-  // Controle de Compras, onde nem toda compra vira item de estoque).
-  allowNoDest?: boolean;
 }) {
-  const known = WAREHOUSE_DESTINATIONS.some((d) => d.value === value.dest) || value.dest === "NENHUM";
+  // "NENHUM" saiu do seletor (ambíguo com "Outros") — compras antigas sem destino
+  // caem no fallback de legado abaixo.
+  const known = WAREHOUSE_DESTINATIONS.some((d) => d.value === value.dest);
   // Trocar de destino reseta os campos específicos pra não vazar valor de um
   // setor pro outro (ex.: "Elétrica" do Estoque indo parar na categoria do Rancho).
   const setDest = (dest: WarehouseDest) =>
@@ -2318,22 +2317,12 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
   return (
     <div className="space-y-3">
       <div>
-        <label className="block text-sm font-medium mb-1">
-          Destino no Almoxarifado{" "}
-          {allowNoDest && <span className="font-normal text-text-light">(opcional)</span>}
-        </label>
+        <label className="block text-sm font-medium mb-1">Destino no Almoxarifado</label>
         <select value={value.dest} onChange={(e) => setDest(e.target.value as WarehouseDest)} className={selCls}>
-          {allowNoDest && <option value="NENHUM">— Sem destino no Almoxarifado</option>}
-          {!known && value.dest && <option value={value.dest}>{value.dest} (legado)</option>}
+          {!known && value.dest && <option value={value.dest}>{DEST_SHORT_LABEL[value.dest] || value.dest} (legado)</option>}
           {WAREHOUSE_DESTINATIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
         </select>
       </div>
-
-      {stocking && value.dest === "NENHUM" && (
-        <p className="text-xs text-text-light bg-gray-50 border border-border rounded-lg p-3">
-          Sem destino — a compra é só registrada nesta aba, não entra no Almoxarifado.
-        </p>
-      )}
 
       {/* Rancho (card #46): só registra o gasto na aba de Compras — não lança no
           Almoxarifado nem usa código, então não mostramos Equipe/Categoria/Unidade. */}
@@ -2428,7 +2417,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       setDescription(item.description || "");
       setLink(item.product_url || "");
       // Edição: o destino salvo vira só rótulo (pode ser um valor legado da planilha).
-      setDestSpec({ ...DEFAULT_DEST_SPEC, dest: (item.department as WarehouseDest) || "NENHUM" });
+      // Compra antiga sem destino cai em "Outros" (o "Sem destino" saiu do seletor).
+      setDestSpec({ ...DEFAULT_DEST_SPEC, dest: (item.department as WarehouseDest) || "OUTROS" });
       setSupplier(item.supplier || "");
       setPurchaseDate((item.purchase_date || "").slice(0, 10) || todayISO);
       setUnitValue(numToInput(item.unit_value));
@@ -2450,7 +2440,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     } else if (fromRequest) {
       setDescription(fromRequest.tool_name || "");
       setLink(fromRequest.product_url || "");
-      setDestSpec({ ...DEFAULT_DEST_SPEC, dest: (fromRequest.department as WarehouseDest) || "NENHUM" });
+      setDestSpec({ ...DEFAULT_DEST_SPEC, dest: (fromRequest.department as WarehouseDest) || "OUTROS" });
       setSupplier(fromRequest.supplier || "");
       setPurchaseDate(todayISO);
       setUnitValue(numToInput(parseDecimalBR(fromRequest.estimated_value)));
@@ -2462,7 +2452,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       setShipId("");
       setPaymentTerms([""]); setCardId("");
     } else {
-      setDescription(""); setLink(""); setDestSpec({ ...DEFAULT_DEST_SPEC, dest: "NENHUM" }); setSupplier(""); setPurchaseDate(todayISO);
+      setDescription(""); setLink(""); setDestSpec({ ...DEFAULT_DEST_SPEC, dest: "OUTROS" }); setSupplier(""); setPurchaseDate(todayISO);
       setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setImageUrl(null); setCode(""); setShipId("");
       setPaymentTerms([""]); setCardId("");
     }
@@ -2573,7 +2563,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     // Destino é opcional; mas se um destino de estoque foi escolhido (só em compra
     // nova, que é quando lançamos no Almoxarifado), o código passa a ser obrigatório.
     if (!item && CODED_DESTS.includes(destSpec.dest) && !code.trim()) {
-      alert("Escolha o código no Almoxarifado para o destino selecionado (ou deixe o destino como “Sem destino”).");
+      alert("Escolha o código no Almoxarifado para o destino selecionado (ou troque o destino pra “Outros”).");
       return;
     }
     // Navio: resolve o nome pelo id escolhido. Se o navio foi apagado (edição de
@@ -2836,7 +2826,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
         <div className="pt-3 border-t border-border">
           <p className="text-[11px] font-semibold text-text-light uppercase tracking-wide">Opcional</p>
         </div>
-        <WarehouseDestinationFields value={destSpec} onChange={(v) => { if (v.dest !== destSpec.dest) setCode(""); setDestSpec(v); }} quantity={qty} stocking={!item} allowNoDest />
+        <WarehouseDestinationFields value={destSpec} onChange={(v) => { if (v.dest !== destSpec.dest) setCode(""); setDestSpec(v); }} quantity={qty} stocking={!item} />
         {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} name={description} onChange={setCode} onResolveName={setDescription} open={open} required={CODED_DESTS.includes(destSpec.dest)} />}
         <div>
           <label className="block text-sm font-medium mb-1">
