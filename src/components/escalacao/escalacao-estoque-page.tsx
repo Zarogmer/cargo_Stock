@@ -200,6 +200,27 @@ export function EscalacaoEstoquePage() {
 
   // Retornos já registrados deste navio (histórico, mais recente primeiro).
   const shipReturns = returns.filter((r) => r.ship_id === selectedShip);
+  // Um retorno só por navio/equipe: confirmar de novo EDITA este (o mais
+  // recente cobre navios legados que chegaram a ter mais de um).
+  const existingReturn = shipReturns.find((r) => r.team === selectedTeam) || null;
+
+  // Carrega o retorno salvo pro rascunho — a tela sempre mostra/edita o que
+  // está confirmado. Sem retorno salvo, começa em branco.
+  useEffect(() => {
+    if (!existingReturn) { setReturnDraft({}); setReturnNotes(""); return; }
+    const draft: Record<number, ReturnDraft> = {};
+    for (const it of existingReturn.material_return_items || []) {
+      if (it.stock_item_id == null) continue;
+      draft[it.stock_item_id] = {
+        returned: it.returned_qty > 0 ? String(it.returned_qty) : "",
+        broken: it.broken_qty > 0 ? String(it.broken_qty) : "",
+        note: it.note || "",
+      };
+    }
+    setReturnDraft(draft);
+    setReturnNotes(existingReturn.notes || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingReturn?.id, returns, selectedShip, selectedTeam]);
 
   function setDraft(stockItemId: number, patch: Partial<ReturnDraft>) {
     setReturnDraft((prev) => {
@@ -225,23 +246,43 @@ export function EscalacaoEstoquePage() {
   async function handleSaveReturn() {
     if (!currentShip || !selectedTeam) return;
     const rows = buildReturnRows();
-    if (rows.length === 0) {
+    if (rows.length === 0 && !existingReturn) {
       setReturnMsg("Preencha quanto voltou ou quebrou em pelo menos um item.");
       return;
     }
     setSavingReturn(true);
     setReturnMsg(null);
     const actor = profile?.full_name || "Sistema";
+    const today = new Date().toISOString().split("T")[0];
     try {
-      const insRes: any = await db.from("material_returns").insert({
-        ship_id: selectedShip,
-        team: selectedTeam,
-        notes: returnNotes.trim() || null,
-        created_by: actor,
-      });
-      const created = insRes.data;
-      const returnId = Array.isArray(created) ? created[0]?.id : created?.id;
-      if (!returnId) throw new Error("Falha ao criar o retorno.");
+      // Quanto cada material já tinha creditado no retorno salvo — ao editar,
+      // o Estoque é ajustado só pela DIFERENÇA (não credita duas vezes).
+      const oldReturned = new Map<number, number>();
+      for (const it of existingReturn?.material_return_items || []) {
+        if (it.stock_item_id != null) oldReturned.set(it.stock_item_id, it.returned_qty);
+      }
+
+      let returnId: number;
+      if (existingReturn) {
+        // Edita o retorno único: atualiza cabeçalho e regrava os itens.
+        const upRes: any = await db.from("material_returns")
+          .update({ notes: returnNotes.trim() || null, created_by: actor })
+          .eq("id", existingReturn.id);
+        if (upRes?.error) throw new Error(upRes.error.message);
+        const delRes: any = await db.from("material_return_items").delete().eq("return_id", existingReturn.id);
+        if (delRes?.error) throw new Error(delRes.error.message);
+        returnId = existingReturn.id;
+      } else {
+        const insRes: any = await db.from("material_returns").insert({
+          ship_id: selectedShip,
+          team: selectedTeam,
+          notes: returnNotes.trim() || null,
+          created_by: actor,
+        });
+        const created = insRes.data;
+        returnId = Array.isArray(created) ? created[0]?.id : created?.id;
+        if (!returnId) throw new Error("Falha ao criar o retorno.");
+      }
 
       for (const r of rows) {
         await db.from("material_return_items").insert({
@@ -253,26 +294,47 @@ export function EscalacaoEstoquePage() {
           broken_qty: r.broken,
           note: r.note || null,
         });
-        // O que voltou em bom estado credita o Estoque de volta (ENTRADA); o
-        // quebrado não volta pro estoque.
-        if (r.returned > 0) {
+        // O que voltou em bom estado credita o Estoque pela diferença contra o
+        // salvo (ENTRADA se aumentou, BAIXA se diminuiu); quebrado não credita.
+        const delta = r.returned - (oldReturned.get(r.k.stock_item_id) || 0);
+        oldReturned.delete(r.k.stock_item_id);
+        if (delta !== 0) {
           await db.from("stock_movements").insert({
             stock_item_id: r.k.stock_item_id,
-            movement_type: "ENTRADA",
-            quantity: r.returned,
-            movement_date: new Date().toISOString().split("T")[0],
-            notes: `Retorno: ${currentShip.name} (${selectedTeam})`,
+            movement_type: delta > 0 ? "ENTRADA" : "BAIXA",
+            quantity: Math.abs(delta),
+            movement_date: today,
+            notes: `Retorno${existingReturn ? " (ajuste)" : ""}: ${currentShip.name} (${selectedTeam})`,
             created_by: actor,
           } as any);
           await db.from("stock_items").update({
-            quantity: r.k.emEstoque + r.returned,
+            quantity: Math.max(0, r.k.emEstoque + delta),
             updated_by: actor,
           } as any).eq("id", r.k.stock_item_id);
         }
       }
-      setReturnDraft({});
-      setReturnNotes("");
-      setReturnMsg("✅ Retorno registrado. O que voltou bom foi creditado no Estoque.");
+
+      // Itens que saíram da edição (zerados): estorna o crédito que tinham.
+      for (const [stockItemId, qty] of oldReturned) {
+        if (qty <= 0) continue;
+        const current = stockItems.find((i) => i.id === stockItemId)?.quantity ?? 0;
+        await db.from("stock_movements").insert({
+          stock_item_id: stockItemId,
+          movement_type: "BAIXA",
+          quantity: qty,
+          movement_date: today,
+          notes: `Retorno (ajuste): ${currentShip.name} (${selectedTeam})`,
+          created_by: actor,
+        } as any);
+        await db.from("stock_items").update({
+          quantity: Math.max(0, current - qty),
+          updated_by: actor,
+        } as any).eq("id", stockItemId);
+      }
+
+      setReturnMsg(existingReturn
+        ? "✅ Retorno atualizado. O Estoque foi ajustado pela diferença."
+        : "✅ Retorno confirmado. O que voltou bom foi creditado no Estoque.");
       loadData();
     } catch (err) {
       setReturnMsg(`Erro ao salvar retorno: ${(err as Error).message}`);
@@ -427,7 +489,8 @@ export function EscalacaoEstoquePage() {
           sending={sendingWhats}
           canEdit={canEmbarcar}
           message={returnMsg}
-          history={shipReturns}
+          history={existingReturn ? [existingReturn] : []}
+          editing={!!existingReturn}
         />
       )}
 
@@ -562,7 +625,7 @@ export function EscalacaoEstoquePage() {
 // ir pro grupo do WhatsApp das solicitações.
 function RetornoSection({
   shipName, team, teamKit, draft, setDraft, notes, setNotes,
-  onSave, onSend, saving, sending, canEdit, message, history,
+  onSave, onSend, saving, sending, canEdit, message, history, editing,
 }: {
   shipName: string;
   team: string;
@@ -578,6 +641,7 @@ function RetornoSection({
   canEdit: boolean;
   message: string | null;
   history: MaterialReturn[];
+  editing: boolean;
 }) {
   const numCls = "w-16 px-2 py-1 border border-border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40";
 
@@ -588,6 +652,13 @@ function RetornoSection({
           <h2 className="text-sm font-bold text-text uppercase tracking-wider">🛠️ Retorno de material — {TEAM_LABELS[team] || team}</h2>
           <span className="text-xs text-text-light">Bom volta pro estoque; quebrado é anotado e enviado.</span>
         </div>
+
+        {editing && (
+          <p className="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+            ✏️ Este navio já tem um retorno confirmado — os campos mostram o que foi salvo.
+            Ajuste o que precisar e confirme de novo: o Estoque é corrigido pela diferença.
+          </p>
+        )}
 
         <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
           <div className="overflow-x-auto">
@@ -656,16 +727,16 @@ function RetornoSection({
               {sending ? "Enviando..." : "📨 Enviar quebrados pro WhatsApp"}
             </Button>
             <Button size="sm" onClick={onSave} disabled={saving || sending}>
-              {saving ? "Salvando..." : "💾 Salvar retorno"}
+              {saving ? "Confirmando..." : "✅ Confirmar Retorno"}
             </Button>
           </div>
         )}
       </section>
 
-      {/* Histórico de retornos deste navio */}
+      {/* Retorno confirmado deste navio/equipe (um só — editável acima) */}
       {history.length > 0 && (
         <section className="space-y-2">
-          <h2 className="text-sm font-bold text-text uppercase tracking-wider">📋 Retornos anteriores — {shipName}</h2>
+          <h2 className="text-sm font-bold text-text uppercase tracking-wider">📋 Retorno confirmado — {shipName}</h2>
           <div className="space-y-2">
             {history.map((r) => {
               const broken = (r.material_return_items || []).filter((it) => it.broken_qty > 0 || (it.note && it.returned_qty === 0));
