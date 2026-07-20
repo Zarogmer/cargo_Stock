@@ -522,8 +522,10 @@ export function ContasAPagarPage() {
       amount: formatAmountBR(String(Number(inv.amount))),
       due_date: inv.due_date?.slice(0, 10) || "",
       supplier_id: inv.suppliers ? String(inv.suppliers.id) : "",
-      payee_name: inv.payee_name || "",
-      payee_document: inv.payee_document || "",
+      // Título com fornecedor vinculado mas favorecido/CNPJ vazios (ex.: veio do
+      // Controle de Compras) já abre com os dados do cadastro preenchidos.
+      payee_name: inv.payee_name || inv.suppliers?.name || "",
+      payee_document: inv.payee_document || inv.suppliers?.cnpj || "",
       digitable_line: inv.digitable_line || "",
       bank: inv.bank || "",
       expense_type: inv.expense_type || "",
@@ -564,7 +566,12 @@ export function ContasAPagarPage() {
           a.name.localeCompare(b.name, "pt-BR")
         )
       );
-      setForm((f) => ({ ...f, supplier_id: String(created.id) }));
+      setForm((f) => ({
+        ...f,
+        supplier_id: String(created.id),
+        payee_name: created.name,
+        payee_document: created.cnpj || f.payee_document,
+      }));
       resetNewSupplier();
     } finally {
       setCreatingSupplier(false);
@@ -987,7 +994,7 @@ export function ContasAPagarPage() {
               <tr className="border-b border-border text-left text-xs text-text-light">
                 <th className="px-3 py-3 font-medium">Vencimento</th>
                 <th className="px-3 py-3 font-medium">Pagto</th>
-                <th className="px-3 py-3 font-medium">Fornecedor / Descrição</th>
+                <th className="px-3 py-3 font-medium">Descrição / Fornecedor</th>
                 <th className="px-3 py-3 font-medium text-right">Valor</th>
                 <th className="px-3 py-3 font-medium text-right">Pago</th>
                 <th className="px-3 py-3 font-medium">Banco</th>
@@ -1012,11 +1019,21 @@ export function ContasAPagarPage() {
                       {overdue && " ⚠"}
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap text-text-light">{fmtDateOnly(inv.payment_date)}</td>
-                    <td className="px-3 py-3 text-text max-w-[300px] truncate">
-                      {(inv.recurring_bill_id != null || inv.recurrence === "MENSAL") && (
-                        <span title={inv.recurring_bill_id != null ? "Conta mensal (gerada automaticamente)" : "Marcada como conta mensal"}>🔁 </span>
-                      )}
-                      {inv.suppliers?.name || inv.payee_name || inv.description}
+                    <td className="px-3 py-3 text-text max-w-[300px]">
+                      <span className="block truncate">
+                        {(inv.recurring_bill_id != null || inv.recurrence === "MENSAL") && (
+                          <span title={inv.recurring_bill_id != null ? "Conta mensal (gerada automaticamente)" : "Marcada como conta mensal"}>🔁 </span>
+                        )}
+                        {inv.description}
+                      </span>
+                      {(() => {
+                        // Fornecedor embaixo da descrição — some só quando repetiria
+                        // o mesmo texto (título antigo criado com descrição = fornecedor).
+                        const sup = inv.suppliers?.name || inv.payee_name;
+                        return sup && sup.trim().toLowerCase() !== inv.description.trim().toLowerCase() ? (
+                          <span className="block truncate text-xs text-text-light">{sup}</span>
+                        ) : null;
+                      })()}
                     </td>
                     <td className="px-3 py-3 text-right font-medium text-text whitespace-nowrap">
                       {formatCurrency(Number(inv.amount))}
@@ -1215,7 +1232,19 @@ export function ContasAPagarPage() {
               </div>
               <select
                 value={form.supplier_id}
-                onChange={(e) => setForm({ ...form, supplier_id: e.target.value })}
+                onChange={(e) => {
+                  const sid = e.target.value;
+                  const sup = suppliers.find((s) => String(s.id) === sid);
+                  // Escolheu fornecedor do cadastro → favorecido e CNPJ vêm de lá
+                  // na hora (CNPJ só se o cadastro tiver; senão preserva o digitado).
+                  setForm((f) => ({
+                    ...f,
+                    supplier_id: sid,
+                    ...(sup
+                      ? { payee_name: sup.name, payee_document: sup.cnpj || f.payee_document }
+                      : {}),
+                  }));
+                }}
                 className={inputCls}
               >
                 <option value="">— sem vínculo —</option>
