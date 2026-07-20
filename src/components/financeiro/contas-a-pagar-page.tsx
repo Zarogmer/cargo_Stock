@@ -111,20 +111,6 @@ function nextMonthKey(): string {
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
 }
 
-// Compra do Controle de Compras (purchase_orders) disponível pra puxar — só os
-// campos que o seletor mostra. Vem de /api/financeiro/contas/from-compras.
-interface PurchaseOption {
-  id: string;
-  description: string;
-  supplier: string | null;
-  department: string | null;
-  purchase_date: string | null;
-  total_value: number;
-  payment_method: string | null;
-  ship_name: string | null;
-  notes: string | null;
-}
-
 // ── Helpers de data (due_date é DATE puro — não passar por timezone) ────────
 
 function fmtDateOnly(iso: string | null): string {
@@ -293,17 +279,34 @@ export function ContasAPagarPage() {
   const [newSupplierCnpj, setNewSupplierCnpj] = useState("");
   const [creatingSupplier, setCreatingSupplier] = useState(false);
 
-  // Picker "Puxar do Controle de Compras".
-  const [comprasOpen, setComprasOpen] = useState(false);
-  const [compras, setCompras] = useState<PurchaseOption[]>([]);
-  const [comprasLoading, setComprasLoading] = useState(false);
-  const [comprasSearch, setComprasSearch] = useState("");
-  const [selectedCompras, setSelectedCompras] = useState<Set<string>>(new Set());
-  const [importingCompras, setImportingCompras] = useState(false);
+  // Lança sozinho, ao abrir a tela, toda compra do Controle de Compras que
+  // ainda não virou título. O lançamento na hora da compra é best-effort (uma
+  // falha de rede não desfaz a compra), então sem isto uma compra podia ficar
+  // órfã pra sempre — foi o que aconteceu com uma de R$ 10.298. Idempotente: o
+  // endpoint ignora quem já tem título, e cartão nunca entra (a fatura vira um
+  // boleto à parte). Silencioso: é manutenção, não ação do usuário.
+  const reconcileCompras = useCallback(async () => {
+    try {
+      const res = await fetch("/api/financeiro/contas/from-compras");
+      if (!res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      const ids = ((data.purchases as Array<{ id: string }>) || []).map((p) => p.id);
+      if (ids.length === 0) return;
+      await fetch("/api/financeiro/contas/from-compras", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ purchase_ids: ids }),
+      });
+    } catch {
+      /* silencioso — a tela carrega igual, só não reconcilia desta vez */
+    }
+  }, []);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
+      // Antes de listar, para os títulos novos já aparecerem nesta carga.
+      await reconcileCompras();
       const [invRes, supRes, secRes] = await Promise.all([
         fetch("/api/financeiro/contas").then((r) => r.json()),
         db.from("suppliers").select("id, name, cnpj").order("name"),
@@ -317,7 +320,7 @@ export function ContasAPagarPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [reconcileCompras]);
 
   useEffect(() => {
     if (canView) loadAll();
@@ -789,76 +792,6 @@ export function ContasAPagarPage() {
     }
   }
 
-  // ── Puxar do Controle de Compras ──────────────────────────────────────────
-
-  async function openCompras() {
-    setComprasOpen(true);
-    setSelectedCompras(new Set());
-    setComprasSearch("");
-    setComprasLoading(true);
-    try {
-      const res = await fetch("/api/financeiro/contas/from-compras");
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        alert(data.error || "Erro ao carregar as compras");
-        setCompras([]);
-        return;
-      }
-      setCompras((data.purchases as PurchaseOption[]) || []);
-    } finally {
-      setComprasLoading(false);
-    }
-  }
-
-  function toggleCompra(id: string) {
-    setSelectedCompras((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  async function handleImportCompras() {
-    if (selectedCompras.size === 0) return;
-    setImportingCompras(true);
-    try {
-      const res = await fetch("/api/financeiro/contas/from-compras", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ purchase_ids: [...selectedCompras] }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        alert(data.error || "Erro ao puxar as compras");
-        return;
-      }
-      alert(
-        `${data.created} título(s) criado(s)` +
-          (data.skipped ? `\n${data.skipped} já existia(m) e foi(ram) ignorada(s).` : "")
-      );
-      setComprasOpen(false);
-      await loadAll();
-    } finally {
-      setImportingCompras(false);
-    }
-  }
-
-  const comprasFiltered = useMemo(() => {
-    if (!comprasSearch.trim()) return compras;
-    return compras.filter((c) =>
-      matchSearch(
-        [c.description, c.supplier, c.department, c.ship_name].filter(Boolean).join(" "),
-        comprasSearch
-      )
-    );
-  }, [compras, comprasSearch]);
-
-  const comprasSelectedTotal = useMemo(
-    () => compras.filter((c) => selectedCompras.has(c.id)).reduce((s, c) => s + (Number(c.total_value) || 0), 0),
-    [compras, selectedCompras]
-  );
-
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (!canView) {
@@ -887,9 +820,6 @@ export function ContasAPagarPage() {
         </div>
         {canEdit && (
           <div className="flex gap-2 flex-wrap">
-            <Button variant="secondary" onClick={openCompras}>
-              Puxar do Controle de Compras
-            </Button>
             <label className={`inline-flex items-center ${importingPdf ? "opacity-50" : "cursor-pointer"}`}>
               <span className="bg-primary hover:bg-primary-dark text-white text-sm font-medium px-4 py-2.5 rounded-lg transition">
                 {importingPdf ? "Importando..." : "Import NF (PDF)"}
@@ -1568,92 +1498,6 @@ export function ContasAPagarPage() {
                 {togglingPaid ? "..." : "Reabrir (não pago)"}
               </Button>
             )}
-          </div>
-        </div>
-      </Modal>
-
-      {/* Puxar do Controle de Compras */}
-      <Modal
-        open={comprasOpen}
-        onClose={() => setComprasOpen(false)}
-        title="Puxar do Controle de Compras"
-        maxWidth="max-w-3xl"
-      >
-        <div className="space-y-3">
-          <p className="text-sm text-text-light">
-            Selecione as compras já registradas para criar títulos em Contas a Pagar. Compras já
-            puxadas não aparecem aqui.
-          </p>
-          <input
-            value={comprasSearch}
-            onChange={(e) => setComprasSearch(e.target.value)}
-            placeholder="Buscar por descrição, fornecedor, setor, navio..."
-            className={inputCls}
-          />
-
-          {comprasLoading ? (
-            <p className="p-6 text-center text-text-light text-sm">Carregando...</p>
-          ) : comprasFiltered.length === 0 ? (
-            <p className="p-6 text-center text-text-light text-sm">
-              {compras.length === 0
-                ? "Nenhuma compra disponível para puxar."
-                : "Nenhuma compra bate com a busca."}
-            </p>
-          ) : (
-            <div className="max-h-[420px] overflow-y-auto border border-border rounded-lg divide-y divide-border">
-              {comprasFiltered.map((c) => {
-                const checked = selectedCompras.has(c.id);
-                return (
-                  <label
-                    key={c.id}
-                    className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-gray-50"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleCompra(c.id)}
-                      className="shrink-0"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-text truncate">{c.description}</p>
-                      <p className="text-xs text-text-light truncate">
-                        {[
-                          c.supplier || "(sem fornecedor)",
-                          c.department,
-                          c.ship_name,
-                          fmtDateOnly(c.purchase_date),
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </p>
-                    </div>
-                    <span className="shrink-0 text-sm font-medium text-text whitespace-nowrap">
-                      {formatCurrency(Number(c.total_value) || 0)}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-          )}
-
-          <div className="flex items-center justify-between gap-2 flex-wrap border-t border-border pt-3">
-            <p className="text-sm text-text-light">
-              {selectedCompras.size} selecionada(s)
-              {selectedCompras.size > 0 && (
-                <span className="text-text font-medium"> · {formatCurrency(comprasSelectedTotal)}</span>
-              )}
-            </p>
-            <div className="flex gap-2">
-              <Button variant="secondary" onClick={() => setComprasOpen(false)}>
-                Fechar
-              </Button>
-              <Button
-                onClick={handleImportCompras}
-                disabled={importingCompras || selectedCompras.size === 0}
-              >
-                {importingCompras ? "Puxando..." : `Criar ${selectedCompras.size || ""} título(s)`}
-              </Button>
-            </div>
           </div>
         </div>
       </Modal>
