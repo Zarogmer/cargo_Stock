@@ -68,9 +68,14 @@ export async function GET(request: NextRequest) {
     job.port || job.ships?.port || "",
   ].filter(Boolean).join(" - ");
   rows.push([shipHeader]);
+  // Supervisor = quem está na equipe do navio com a função SUPERVISOR; o campo
+  // salvo no job é só fallback de legado.
+  const supervisorName = job.allocations.find(
+    (a) => (a.job_functions?.name || "").trim().toUpperCase() === "SUPERVISOR" && a.employees?.name,
+  )?.employees?.name || job.supervisor;
   rows.push([
     job.client ? `CLIENTE: ${job.client}` : "",
-    job.supervisor ? `SUPERVISOR: ${job.supervisor}` : "",
+    supervisorName ? `SUPERVISOR: ${supervisorName}` : "",
   ]);
   rows.push([]);
   rows.push(["VALOR COBRADO R$", Number(job.contract_value || 0)]);

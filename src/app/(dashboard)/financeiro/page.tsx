@@ -2665,6 +2665,7 @@ function TrabalhosTab({
         item={editJob}
         ships={ships}
         profileName={profileName}
+        rosterSupervisor={supervisorFromAllocations(allocations, editJob?.id)}
         onClose={() => { setShowJobForm(false); setEditJob(null); }}
         onSaved={() => { setShowJobForm(false); setEditJob(null); onChange(); }}
       />
@@ -2715,13 +2716,30 @@ function TrabalhosTab({
 
 // ─── Job Form Modal ─────────────────────────────────────────────────────────
 
+// Supervisor do navio = quem está escalado na equipe com a função SUPERVISOR
+// (todo navio vai com um). A escala (job_allocations) é a fonte — não o
+// usuário logado que criou/editou o pagamento.
+function supervisorFromAllocations(allocs: JobAllocation[], jobId: string | null | undefined): string | null {
+  if (!jobId) return null;
+  const a = allocs.find((a) =>
+    a.job_id === jobId &&
+    a.status === "ATIVO" &&
+    (a.job_functions?.name || "").trim().toUpperCase() === "SUPERVISOR" &&
+    a.employees?.name,
+  );
+  return a?.employees?.name || null;
+}
+
 function JobFormModal({
-  open, item, ships, profileName, onClose, onSaved,
+  open, item, ships, profileName, rosterSupervisor, onClose, onSaved,
 }: {
   open: boolean;
   item: Job | null;
   ships: Ship[];
   profileName: string;
+  // Supervisor vindo da escala do navio (função SUPERVISOR) — null se ainda
+  // não tem ninguém escalado nessa função.
+  rosterSupervisor: string | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -2764,8 +2782,8 @@ function JobFormModal({
     e.preventDefault();
     if (!shipId || !startDate) return;
     setSaving(true);
-    // Nome do pagamento sempre derivado do navio escolhido. Supervisor é
-    // gravado automaticamente como quem está logado.
+    // Nome do pagamento sempre derivado do navio escolhido. Supervisor é o da
+    // escala do navio (função SUPERVISOR) — não quem está logado.
     const ship = ships.find((s) => s.id === shipId);
     const payload = {
       name: ship?.name?.trim() || "Pagamento",
@@ -2776,7 +2794,7 @@ function JobFormModal({
       contract_value: contractValue.trim() ? parseBrlNumber(contractValue) : null,
       notes: notes.trim() || null,
       client: client.trim() || null,
-      supervisor: profileName || null,
+      supervisor: rosterSupervisor,
       cargo_type: cargoType.trim() || null,
       holds_count: holdsCount ? parseInt(holdsCount) : null,
       port: port.trim() || null,
@@ -2816,7 +2834,11 @@ function JobFormModal({
             )}
           </div>
           <div className="mt-3 p-2 bg-gray-50 border border-border rounded-lg text-xs text-text-light">
-            <span className="font-medium text-text">Supervisor:</span> {profileName} <span className="text-[10px]">(usuário logado)</span>
+            <span className="font-medium text-text">Supervisor:</span>{" "}
+            {rosterSupervisor || "—"}{" "}
+            <span className="text-[10px]">
+              {rosterSupervisor ? "(função SUPERVISOR na equipe do navio)" : "(escale alguém com a função SUPERVISOR na equipe do navio)"}
+            </span>
           </div>
         </div>
 
@@ -3122,6 +3144,10 @@ function JobDetailModal({
   }, [open, job?.id, adminAllocations.length, kindFilter, canEdit]);
 
   if (!job) return null;
+
+  // Supervisor exibido/exportado: sempre o da escala do navio (função
+  // SUPERVISOR); o campo salvo no job é só fallback de legado.
+  const supervisorName = supervisorFromAllocations(allocations, job.id) || job.supervisor;
 
   const cost = calcJobCost(job, allocations.map((a) => ({ ...a, job_id: job.id })), adjustments.map((a) => ({ ...a, job_id: job.id })));
   // Administrativo: pessoal de escritório com valor fixo por operação. Entra no
@@ -3813,7 +3839,7 @@ function JobDetailModal({
       const set2 = mkSet(ws2);
       const titleRow2 = LOGO_ROWS + 1; // 7
       set2(`B${titleRow2}`, shipLabel, styleTitle);
-      set2(`B${titleRow2 + 1}`, `CLIENTE: ${job!.client || "—"}${job!.supervisor ? ` - SUPERVISOR: ${job!.supervisor}` : ""}`, styleInfo);
+      set2(`B${titleRow2 + 1}`, `CLIENTE: ${job!.client || "—"}${supervisorName ? ` - SUPERVISOR: ${supervisorName}` : ""}`, styleInfo);
       set2(`B${titleRow2 + 2}`, "VALOR COBRADO R$", styleInfo);
       set2(`D${titleRow2 + 2}`, Number(job!.contract_value || 0), styleMoney, "n");
 
@@ -3957,10 +3983,10 @@ function JobDetailModal({
             -mx-6/-mt-4 cancelam o padding do corpo do Modal pra grudar no topo. */}
         <div className="sticky top-0 z-10 -mx-6 -mt-4 px-6 pt-4 pb-3 bg-white border-b border-border space-y-3">
         {/* Header com cliente/supervisor/cargo/porões */}
-        {(job.client || job.supervisor || job.cargo_type || job.holds_count) && (
+        {(job.client || supervisorName || job.cargo_type || job.holds_count) && (
           <div className="bg-gray-50 rounded-lg p-3 flex flex-wrap gap-3 text-xs">
             {job.client && <span><span className="text-text-light">Cliente:</span> <span className="font-semibold">{job.client}</span></span>}
-            {job.supervisor && <span><span className="text-text-light">Supervisor:</span> <span className="font-semibold">{job.supervisor}</span></span>}
+            {supervisorName && <span><span className="text-text-light">Supervisor:</span> <span className="font-semibold">{supervisorName}</span></span>}
             {job.cargo_type && <span><span className="text-text-light">Carga:</span> <span className="font-semibold">{job.cargo_type}</span></span>}
             {job.holds_count != null && <span><span className="text-text-light">Porões:</span> <span className="font-semibold">{job.holds_count}</span></span>}
             {job.port && <span><span className="text-text-light">Porto:</span> <span className="font-semibold">{job.port}</span></span>}
