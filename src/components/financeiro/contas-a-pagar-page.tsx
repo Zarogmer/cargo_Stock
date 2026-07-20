@@ -188,6 +188,18 @@ function monthCountInclusive(a: string, b: string): number {
   return by * 12 + bm - (ay * 12 + am) + 1;
 }
 
+// Vencimento do reagendamento: mês SEGUINTE ao atual, mantendo o dia do
+// vencimento original (clampado no fim do mês — 31/01 vira 28/02).
+function nextMonthDue(originalDue: string | null): string {
+  const now = new Date();
+  const day = originalDue ? Number(originalDue.slice(8, 10)) : now.getDate();
+  const y = now.getFullYear();
+  const m = now.getMonth() + 1; // mês seguinte (0-based + 1)
+  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  const target = new Date(Date.UTC(y, m, Math.min(day, lastDay)));
+  return target.toISOString().slice(0, 10);
+}
+
 // ── Formulário (criar/editar) ───────────────────────────────────────────────
 
 interface FormState {
@@ -281,6 +293,10 @@ export function ContasAPagarPage() {
   const [deleteRow, setDeleteRow] = useState<Invoice | null>(null);
   // Confirmação de pagamento direto da linha (✅), sem abrir o modal.
   const [payRow, setPayRow] = useState<Invoice | null>(null);
+  // Pagamento parcial → "Reagendar restante": paga o informado e cria um
+  // título novo no mês seguinte com a diferença e os mesmos dados.
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [rescheduling, setRescheduling] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [uploadingExtra, setUploadingExtra] = useState(false);
 
@@ -782,6 +798,71 @@ export function ContasAPagarPage() {
   async function handleConfirmPay(inv: Invoice) {
     await setPaid(inv, true);
     setPayRow(null);
+  }
+
+  // Pagou só uma parte: este título fica Pago com o valor informado, e o
+  // RESTANTE vira um título novo no mês seguinte com os mesmos dados (sem a
+  // linha digitável — o boleto antigo não vale pro novo vencimento).
+  async function handleReschedule() {
+    if (!editing) return;
+    const amountNum = parseDecimalBR(form.amount);
+    const paidNum = parseDecimalBR(form.paid_amount);
+    const rest = Math.round((amountNum - paidNum) * 100) / 100;
+    if (!(paidNum > 0) || rest <= 0) return;
+    setRescheduling(true);
+    try {
+      const origDue = form.due_date || editing.due_date?.slice(0, 10) || null;
+      const newDue = nextMonthDue(origDue);
+      const payDate = form.payment_date || todayStr();
+
+      const createRes = await fetch("/api/financeiro/contas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          description: form.description,
+          amount: rest,
+          due_date: newDue,
+          supplier_id: form.supplier_id ? Number(form.supplier_id) : null,
+          payee_name: form.payee_name || null,
+          payee_document: form.payee_document || null,
+          bank: form.bank || null,
+          expense_type: form.expense_type || null,
+          payment_method: form.payment_method || null,
+          recurrence: "UNICA",
+          statement_section: form.statement_section || null,
+          notes: `Reagendado do vencimento ${fmtDateOnly(origDue)} — pago parcial ${formatCurrency(paidNum)} em ${fmtDateOnly(payDate)}.${form.notes ? `\n${form.notes}` : ""}`,
+        }),
+      });
+      const created = await createRes.json().catch(() => ({}));
+      if (!createRes.ok) {
+        alert(created.error || "Erro ao criar o título reagendado");
+        return;
+      }
+
+      const patchRes = await fetch(`/api/financeiro/contas/${editing.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          description: form.description,
+          amount: amountNum,
+          paid_amount: paidNum,
+          payment_date: payDate,
+          notes: `${form.notes ? `${form.notes}\n` : ""}Restante de ${formatCurrency(rest)} reagendado para ${fmtDateOnly(newDue)}.`,
+        }),
+      });
+      const patched = await patchRes.json().catch(() => ({}));
+      if (!patchRes.ok) {
+        alert(patched.error || "Título novo criado, mas falhou ao marcar este como pago — confira.");
+      }
+
+      if (created.invoice) upsertInvoice(created.invoice as Invoice);
+      if (patched.invoice) upsertInvoice(patched.invoice as Invoice);
+      setRescheduleOpen(false);
+      setModalOpen(false);
+      setEditing(null);
+    } finally {
+      setRescheduling(false);
+    }
   }
 
   // Exclui o título de vez (não é o mesmo que "Cancelar"). Some da lista.
@@ -1573,6 +1654,19 @@ export function ContasAPagarPage() {
                 {saving ? "Salvando..." : editing ? "Salvar alterações" : billKind === "MENSAL" ? "Criar conta mensal" : "Adicionar"}
               </Button>
             )}
+            {/* Pagou menos que o valor? Aparece o Reagendar: paga o parcial e
+                joga o restante pro mês seguinte num título novo. */}
+            {canEdit && editing && !isPaid(editing) && (() => {
+              const amountNum = parseDecimalBR(form.amount);
+              const paidNum = parseDecimalBR(form.paid_amount);
+              const rest = Math.round((amountNum - paidNum) * 100) / 100;
+              if (!(paidNum > 0 && rest > 0)) return null;
+              return (
+                <Button variant="warning" disabled={rescheduling} onClick={() => setRescheduleOpen(true)}>
+                  📅 Reagendar restante ({formatCurrency(rest)})
+                </Button>
+              );
+            })()}
             {canEdit && editing && !isPaid(editing) && (
               <Button variant="success" disabled={togglingPaid} onClick={() => setPaid(editing, true)}>
                 {togglingPaid ? "..." : "Marcar como pago"}
@@ -1659,6 +1753,24 @@ export function ContasAPagarPage() {
         }
         confirmLabel="Apagar"
         variant="danger"
+      />
+
+      {/* Confirmação do REAGENDAMENTO do restante (pagamento parcial) */}
+      <ConfirmDialog
+        open={rescheduleOpen && !!editing}
+        onClose={() => setRescheduleOpen(false)}
+        onConfirm={handleReschedule}
+        title="Reagendar restante"
+        message={(() => {
+          if (!editing) return "";
+          const paidNum = parseDecimalBR(form.paid_amount);
+          const rest = Math.round((parseDecimalBR(form.amount) - paidNum) * 100) / 100;
+          const newDue = nextMonthDue(form.due_date || editing.due_date?.slice(0, 10) || null);
+          return `Marcar "${form.description}" como pago com ${formatCurrency(paidNum)} e criar um título novo de ${formatCurrency(rest)} vencendo em ${fmtDateOnly(newDue)}, com os mesmos dados?`;
+        })()}
+        confirmLabel="Reagendar"
+        variant="warning"
+        loading={rescheduling}
       />
 
       {/* Confirmação de PAGAMENTO pelo ✅ da linha (sem abrir o modal) */}
