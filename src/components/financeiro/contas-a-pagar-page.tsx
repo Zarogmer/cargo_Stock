@@ -253,7 +253,7 @@ export function ContasAPagarPage() {
   // Seções fixas (planilha) + personalizadas (banco) — pro seletor e os rótulos.
   const merged = useMemo(() => mergeSections(customSections), [customSections]);
 
-  const [statusFilter, setStatusFilter] = useState<"ABERTAS" | "PAGO" | "TODAS">("ABERTAS");
+  const [statusFilter, setStatusFilter] = useState<"ABERTAS" | "VENCIDO" | "PAGO" | "TODAS">("ABERTAS");
   const [search, setSearch] = useState("");
 
   // Modal único (detalhe + edição na mesma tela).
@@ -420,6 +420,8 @@ export function ContasAPagarPage() {
       if (monthFilter !== "ALL" && refMonthOf(inv) !== monthFilter) return false;
       if (statusFilter === "ABERTAS" && isPaid(inv)) return false;
       if (statusFilter === "PAGO" && !isPaid(inv)) return false;
+      // Vencido = em aberto com o vencimento no passado (mesma regra do badge).
+      if (statusFilter === "VENCIDO" && (isPaid(inv) || !inv.due_date || inv.due_date.slice(0, 10) >= todayStr())) return false;
       if (supplierFilter !== "ALL" && supplierNameOf(inv) !== supplierFilter) return false;
       if (bankFilter !== "ALL" && inv.bank !== bankFilter) return false;
       if (sectionFilter === "NONE" && inv.statement_section) return false;
@@ -762,6 +764,9 @@ export function ContasAPagarPage() {
         }
       }
       upsertInvoice(inv);
+      // Salvou já com data de pagamento e valor pago menor que o valor →
+      // restante reagendado automaticamente (mesma regra dos outros caminhos).
+      await maybeRescheduleRemainder(inv);
       setModalOpen(false);
     } finally {
       setSaving(false);
@@ -789,9 +794,62 @@ export function ContasAPagarPage() {
         return;
       }
       upsertInvoice(data.invoice as Invoice);
+      // Pagou menos que o valor → o restante é reagendado automaticamente.
+      if (paid) await maybeRescheduleRemainder(data.invoice as Invoice);
     } finally {
       setTogglingPaid(false);
     }
+  }
+
+  // Pagou parcial (valor pago < valor)? O RESTANTE vira sozinho um título novo
+  // no mês seguinte, com os mesmos dados. Roda em TODO caminho que confirma
+  // pagamento (✅ da linha, "Marcar como pago", salvar com data de pagamento).
+  // O marcador "reagendado para" nas observações do título pago evita duplicar
+  // (ex.: reabrir e marcar pago de novo).
+  async function maybeRescheduleRemainder(inv: Invoice) {
+    if (!isPaid(inv)) return;
+    const amountN = Number(inv.amount);
+    const paidN = inv.paid_amount != null ? Number(inv.paid_amount) : amountN;
+    const rest = Math.round((amountN - paidN) * 100) / 100;
+    if (rest <= 0) return;
+    if ((inv.notes || "").toLowerCase().includes("reagendado para")) return;
+    const origDue = inv.due_date?.slice(0, 10) || null;
+    const newDue = nextMonthDue(origDue);
+    const payDate = inv.payment_date?.slice(0, 10) || todayStr();
+    const createRes = await fetch("/api/financeiro/contas", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        description: inv.description,
+        amount: rest,
+        due_date: newDue,
+        supplier_id: inv.suppliers?.id ?? null,
+        payee_name: inv.payee_name,
+        payee_document: inv.payee_document,
+        bank: inv.bank,
+        expense_type: inv.expense_type,
+        payment_method: inv.payment_method,
+        recurrence: "UNICA",
+        statement_section: inv.statement_section,
+        notes: `Reagendado do vencimento ${fmtDateOnly(origDue)} — pago parcial ${formatCurrency(paidN)} em ${fmtDateOnly(payDate)}.`,
+      }),
+    });
+    const created = await createRes.json().catch(() => ({}));
+    if (!createRes.ok) {
+      alert(created.error || "Pagamento salvo, mas não consegui criar o título do restante — crie à mão.");
+      return;
+    }
+    if (created.invoice) upsertInvoice(created.invoice as Invoice);
+    // Marca no título pago pra onde o restante foi (e trava repetição).
+    const res2 = await fetch(`/api/financeiro/contas/${inv.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        notes: `${inv.notes ? `${inv.notes}\n` : ""}Restante de ${formatCurrency(rest)} reagendado para ${fmtDateOnly(newDue)}.`,
+      }),
+    });
+    const patched = await res2.json().catch(() => ({}));
+    if (patched.invoice) upsertInvoice(patched.invoice as Invoice);
   }
 
   // Pagamento confirmado pela linha: marca pago hoje e fecha o diálogo.
@@ -994,6 +1052,7 @@ export function ContasAPagarPage() {
           className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
         >
           <option value="ABERTAS">Em aberto</option>
+          <option value="VENCIDO">Vencido</option>
           <option value="PAGO">Pago</option>
           <option value="TODAS">Todas</option>
         </select>
@@ -1779,11 +1838,15 @@ export function ContasAPagarPage() {
         onClose={() => setPayRow(null)}
         onConfirm={() => payRow && handleConfirmPay(payRow)}
         title="Confirmar pagamento"
-        message={
-          payRow
-            ? `Confirmar o pagamento de "${payRow.description}" — ${formatCurrency(Number(payRow.paid_amount ?? payRow.amount))}? O título fica como Pago com a data de hoje.`
-            : ""
-        }
+        message={(() => {
+          if (!payRow) return "";
+          const amountN = Number(payRow.amount);
+          const paidN = payRow.paid_amount != null ? Number(payRow.paid_amount) : amountN;
+          const rest = Math.round((amountN - paidN) * 100) / 100;
+          return `Confirmar o pagamento de "${payRow.description}" — ${formatCurrency(paidN)}? O título fica como Pago com a data de hoje.${
+            rest > 0 ? ` O restante de ${formatCurrency(rest)} será reagendado para o mês seguinte automaticamente.` : ""
+          }`;
+        })()}
         confirmLabel="Confirmar pagamento"
         variant="primary"
         loading={togglingPaid}
