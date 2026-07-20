@@ -188,16 +188,18 @@ function monthCountInclusive(a: string, b: string): number {
   return by * 12 + bm - (ay * 12 + am) + 1;
 }
 
-// Vencimento do reagendamento: mês SEGUINTE ao atual, mantendo o dia do
-// vencimento original (clampado no fim do mês — 31/01 vira 28/02).
+// Vencimento do reagendamento: mês SEGUINTE ao do VENCIMENTO ORIGINAL (30/05
+// vira 30/06, mesmo que já esteja no passado — o parcelamento acompanha o
+// calendário da conta, não o dia em que foi paga). Dia clampado no fim do mês
+// (31/01 vira 28/02). Sem vencimento original, cai no mês seguinte a hoje.
 function nextMonthDue(originalDue: string | null): string {
-  const now = new Date();
-  const day = originalDue ? Number(originalDue.slice(8, 10)) : now.getDate();
-  const y = now.getFullYear();
-  const m = now.getMonth() + 1; // mês seguinte (0-based + 1)
+  const baseISO = originalDue ? originalDue.slice(0, 10) : new Date().toISOString().slice(0, 10);
+  const base = new Date(`${baseISO}T00:00:00.000Z`);
+  const y = base.getUTCFullYear();
+  const m = base.getUTCMonth() + 1; // mês seguinte (Date.UTC rola o ano sozinho)
+  const day = base.getUTCDate();
   const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-  const target = new Date(Date.UTC(y, m, Math.min(day, lastDay)));
-  return target.toISOString().slice(0, 10);
+  return new Date(Date.UTC(y, m, Math.min(day, lastDay))).toISOString().slice(0, 10);
 }
 
 // ── Formulário (criar/editar) ───────────────────────────────────────────────
