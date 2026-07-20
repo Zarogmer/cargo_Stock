@@ -293,8 +293,11 @@ export function ContasAPagarPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   // Exclusão direto da linha da tabela, sem passar pelo modal de edição.
   const [deleteRow, setDeleteRow] = useState<Invoice | null>(null);
-  // Confirmação de pagamento direto da linha (✅), sem abrir o modal.
+  // Confirmação de pagamento direto da linha (✅), sem abrir o modal. O diálogo
+  // pergunta o valor pago (pré-preenchido com o total); menor que o valor →
+  // o restante é reagendado automaticamente.
   const [payRow, setPayRow] = useState<Invoice | null>(null);
+  const [payAmount, setPayAmount] = useState("");
   // Pagamento parcial → "Reagendar restante": paga o informado e cria um
   // título novo no mês seguinte com a diferença e os mesmos dados.
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
@@ -854,10 +857,33 @@ export function ContasAPagarPage() {
     if (patched.invoice) upsertInvoice(patched.invoice as Invoice);
   }
 
-  // Pagamento confirmado pela linha: marca pago hoje e fecha o diálogo.
-  async function handleConfirmPay(inv: Invoice) {
-    await setPaid(inv, true);
-    setPayRow(null);
+  // Pagamento confirmado pela linha: paga HOJE com o valor digitado no diálogo.
+  // Valor menor que o do título → maybeRescheduleRemainder cria o restante.
+  async function handleConfirmPay() {
+    if (!payRow) return;
+    const paidN = parseDecimalBR(payAmount);
+    if (!(paidN > 0)) {
+      alert("Informe o valor pago.");
+      return;
+    }
+    setTogglingPaid(true);
+    try {
+      const res = await fetch(`/api/financeiro/contas/${payRow.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payment_date: todayStr(), paid_amount: paidN }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Erro ao confirmar o pagamento");
+        return;
+      }
+      upsertInvoice(data.invoice as Invoice);
+      await maybeRescheduleRemainder(data.invoice as Invoice);
+      setPayRow(null);
+    } finally {
+      setTogglingPaid(false);
+    }
   }
 
   // Pagou só uma parte: este título fica Pago com o valor informado, e o
@@ -1221,7 +1247,13 @@ export function ContasAPagarPage() {
                           {!isPaid(inv) && (
                             <button
                               type="button"
-                              onClick={(e) => { e.stopPropagation(); setPayRow(inv); }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPayRow(inv);
+                                // Pré-preenche com o que já estava anotado como
+                                // pago, senão com o valor cheio do título.
+                                setPayAmount(formatAmountBR(String(Number(inv.paid_amount ?? inv.amount))));
+                              }}
                               className="p-1.5 hover:bg-emerald-50 rounded transition"
                               title="Confirmar pagamento (marca como pago hoje)"
                             >
@@ -1834,25 +1866,48 @@ export function ContasAPagarPage() {
         loading={rescheduling}
       />
 
-      {/* Confirmação de PAGAMENTO pelo ✅ da linha (sem abrir o modal) */}
-      <ConfirmDialog
-        open={!!payRow}
-        onClose={() => setPayRow(null)}
-        onConfirm={() => payRow && handleConfirmPay(payRow)}
-        title="Confirmar pagamento"
-        message={(() => {
-          if (!payRow) return "";
-          const amountN = Number(payRow.amount);
-          const paidN = payRow.paid_amount != null ? Number(payRow.paid_amount) : amountN;
-          const rest = Math.round((amountN - paidN) * 100) / 100;
-          return `Confirmar o pagamento de "${payRow.description}" — ${formatCurrency(paidN)}? O título fica como Pago com a data de hoje.${
-            rest > 0 ? ` O restante de ${formatCurrency(rest)} será reagendado para o mês seguinte automaticamente.` : ""
-          }`;
-        })()}
-        confirmLabel="Confirmar pagamento"
-        variant="primary"
-        loading={togglingPaid}
-      />
+      {/* Confirmação de PAGAMENTO pelo ✅ da linha (sem abrir o modal): pergunta
+          o valor pago; menor que o do título → restante reagendado sozinho. */}
+      <Modal open={!!payRow} onClose={() => setPayRow(null)} title="Confirmar pagamento" maxWidth="max-w-sm">
+        <div className="space-y-3">
+          <p className="text-sm text-text-light">
+            &quot;{payRow?.description}&quot; — valor do título{" "}
+            <strong className="text-text">{formatCurrency(Number(payRow?.amount || 0))}</strong>.
+          </p>
+          <div>
+            <label className="text-xs font-medium text-text-light">Quanto foi pago? (R$) *</label>
+            <input
+              value={payAmount}
+              onChange={(e) => setPayAmount(e.target.value)}
+              onBlur={(e) => setPayAmount(formatAmountBR(e.target.value))}
+              className={inputCls}
+              inputMode="decimal"
+              autoFocus
+              placeholder="0,00"
+            />
+            {(() => {
+              if (!payRow) return null;
+              const rest = Math.round((Number(payRow.amount) - parseDecimalBR(payAmount)) * 100) / 100;
+              return rest > 0 ? (
+                <p className="text-[11px] text-amber-700 mt-1">
+                  Pagamento parcial: o restante de <strong>{formatCurrency(rest)}</strong> será reagendado
+                  para o mês seguinte automaticamente.
+                </p>
+              ) : (
+                <p className="text-[11px] text-text-light mt-1">O título fica como Pago com a data de hoje.</p>
+              );
+            })()}
+          </div>
+          <div className="flex gap-3 justify-end pt-1">
+            <Button variant="secondary" onClick={() => setPayRow(null)} disabled={togglingPaid}>
+              Cancelar
+            </Button>
+            <Button variant="success" onClick={handleConfirmPay} disabled={togglingPaid}>
+              {togglingPaid ? "Aguarde..." : "Confirmar pagamento"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Confirmação de EXCLUSÃO pela lixeira da linha (sem abrir o modal) */}
       <ConfirmDialog
