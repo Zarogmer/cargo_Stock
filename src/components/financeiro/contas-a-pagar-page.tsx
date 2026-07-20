@@ -181,6 +181,13 @@ const BANK_OPTIONS = ["Itaú", "Santander", "Outro"];
 const inputCls =
   "w-full border border-border rounded-lg px-3 py-2 text-sm bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40";
 
+// Meses inclusivos entre duas chaves "YYYY-MM": 2026-09 a 2026-12 = 4.
+function monthCountInclusive(a: string, b: string): number {
+  const [ay, am] = a.split("-").map(Number);
+  const [by, bm] = b.split("-").map(Number);
+  return by * 12 + bm - (ay * 12 + am) + 1;
+}
+
 // ── Formulário (criar/editar) ───────────────────────────────────────────────
 
 interface FormState {
@@ -1213,7 +1220,21 @@ export function ContasAPagarPage() {
                     onChange={(e) => setRecEndMonth(e.target.value)}
                     className={inputCls}
                   />
-                  <p className="text-[11px] text-text-light mt-1">Em branco, a conta continua até você pausar.</p>
+                  {/* Com término preenchido, mostra na hora quantas parcelas dá. */}
+                  {(() => {
+                    if (!/^\d{4}-\d{2}$/.test(recEndMonth) || !/^\d{4}-\d{2}$/.test(recStartMonth)) {
+                      return <p className="text-[11px] text-text-light mt-1">Em branco, a conta continua até você pausar.</p>;
+                    }
+                    const n = monthCountInclusive(recStartMonth, recEndMonth);
+                    if (n < 1) return <p className="text-[11px] text-red-600 mt-1">O mês final vem antes do início.</p>;
+                    const val = parseDecimalBR(form.amount);
+                    return (
+                      <p className="text-[11px] font-semibold text-primary mt-1">
+                        → {n} parcela{n > 1 ? "s" : ""} ({fmtMonthKey(recStartMonth)} a {fmtMonthKey(recEndMonth)})
+                        {val > 0 ? ` · ${n} × ${formatCurrency(val)} = ${formatCurrency(n * val)}` : ""}
+                      </p>
+                    );
+                  })()}
                 </div>
               </div>
             )}
@@ -1351,21 +1372,20 @@ export function ContasAPagarPage() {
                   )}
                 </select>
               </div>
-              {/* Mensal x Única — etiqueta de filtro. Título vindo de "Conta
-                  mensal" já nasce marcado; aqui dá pra marcar qualquer um. */}
-              <div>
-                <label className="text-xs font-medium text-text-light">Recorrência</label>
-                <select
-                  value={form.recurrence}
-                  onChange={(e) => setForm({ ...form, recurrence: e.target.value as "MENSAL" | "UNICA" })}
-                  className={inputCls}
-                  disabled={!!editing?.recurring_bill_id}
-                  title={editing?.recurring_bill_id ? "Título gerado por uma conta mensal" : undefined}
-                >
-                  <option value="UNICA">Conta única</option>
-                  <option value="MENSAL">🔁 Conta mensal (repete)</option>
-                </select>
-              </div>
+              {/* Recorrência se decide na criação (abas no topo do "Nova conta")
+                  e não muda depois: a conta ou nasceu única ou nasceu mensal.
+                  Na edição fica só a etiqueta, sem select. */}
+              {editing && (
+                <div>
+                  <label className="text-xs font-medium text-text-light">Recorrência</label>
+                  <div
+                    className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-gray-50 text-text-light"
+                    title={editing.recurring_bill_id ? "Título gerado por uma conta mensal" : "Definida na criação da conta"}
+                  >
+                    {form.recurrence === "MENSAL" ? "🔁 Conta mensal (repete)" : "Conta única"}
+                  </div>
+                </div>
+              )}
             </div>
             {/* Seção da Demonstração Financeira: com seção, o título também
                 aparece na aba Demonstração, agrupado por seção. */}
