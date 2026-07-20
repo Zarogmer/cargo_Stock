@@ -907,7 +907,6 @@ export function ContasAPagarPage() {
                 }}
               />
             </label>
-            <Button variant="secondary" onClick={openBills}>🔁 Contas mensais</Button>
             <Button onClick={openCreate}>+ Nova conta</Button>
           </div>
         )}
@@ -1012,6 +1011,17 @@ export function ContasAPagarPage() {
           <option value="MENSAL">🔁 Só mensais</option>
           <option value="UNICA">Só únicas</option>
         </select>
+        {/* Gerenciar as RECORRÊNCIAS (pausar/apagar a regra que gera o título
+            todo mês) — coisa diferente de filtrar os títulos já gerados. Fica
+            aqui, colado no filtro de mensais, em vez de ocupar a barra de cima. */}
+        {recurrenceFilter === "MENSAL" && canEdit && (
+          <button
+            onClick={openBills}
+            className="text-sm text-primary hover:underline whitespace-nowrap"
+          >
+            gerenciar recorrências
+          </button>
+        )}
         {paymentOptions.length > 0 && (
           <select
             value={paymentFilter}
@@ -1167,7 +1177,7 @@ export function ContasAPagarPage() {
                 </div>
                 {billKind === "MENSAL" && (
                   <p className="text-[11px] text-text-light mt-1">
-                    Gera um título por mês automaticamente (mês atual e o próximo), até você pausar em “🔁 Contas mensais”.
+                    Gera um título por mês automaticamente (mês atual e o próximo), até você pausar em “gerenciar recorrências” (filtro “🔁 Só mensais”).
                   </p>
                 )}
               </div>
