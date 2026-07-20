@@ -132,6 +132,9 @@ interface Supplier {
   category: string | null;
   website: string | null;
   notes: string | null;
+  // Só dígitos; único no banco. É a chave que vincula o fornecedor no Contas a
+  // Pagar (boleto por e-mail e extrato casam por aqui).
+  cnpj: string | null;
   created_by: string;
   updated_at: string;
   updated_by: string;
@@ -1120,7 +1123,8 @@ export default function SolicitacoesPage() {
       setEditSupplier(null);
       loadAll();
     } catch (err: any) {
-      setSaveError(`Erro ao salvar fornecedor: ${err?.message || String(err)}`);
+      const dup = /unique|constraint|P2002/i.test(err?.message || "") || err?.code === "P2002";
+      setSaveError(dup ? "Já existe um fornecedor com esse CNPJ/CPF." : `Erro ao salvar fornecedor: ${err?.message || String(err)}`);
     } finally {
       setSaving(false);
     }
@@ -1144,7 +1148,8 @@ export default function SolicitacoesPage() {
   const filteredSuppliers = suppliers.filter((s) => {
     const q = supplierSearch.toLowerCase();
     if (!q) return true;
-    return (s.name?.toLowerCase().includes(q)) || (s.category?.toLowerCase().includes(q)) || (s.contact?.toLowerCase().includes(q));
+    const qDigits = q.replace(/\D/g, "");
+    return (s.name?.toLowerCase().includes(q)) || (s.category?.toLowerCase().includes(q)) || (s.contact?.toLowerCase().includes(q)) || (qDigits.length > 0 && (s.cnpj || "").includes(qDigits));
   });
 
   const pendingCount = requests.filter((r) => r.status === "PENDENTE").length;
@@ -1722,6 +1727,12 @@ export default function SolicitacoesPage() {
                             </button>
                           )}
                         </div>
+                        {s.cnpj && (
+                          <div className="flex items-center gap-2">
+                            <span className="shrink-0">🧾</span>
+                            <span>CNPJ/CPF: {s.cnpj}</span>
+                          </div>
+                        )}
                         {s.address && (
                           <div className="flex items-center gap-2">
                             <span className="shrink-0">📍</span>
@@ -1846,7 +1857,14 @@ export default function SolicitacoesPage() {
       />
 
       {/* Supplier Form Modal */}
-      <SupplierFormModal open={showSupplierForm} onClose={() => { setShowSupplierForm(false); setEditSupplier(null); }} onSave={handleSaveSupplier} item={editSupplier} saving={saving} />
+      <SupplierFormModal
+        open={showSupplierForm}
+        onClose={() => { setShowSupplierForm(false); setEditSupplier(null); }}
+        onSave={handleSaveSupplier}
+        item={editSupplier}
+        saving={saving}
+        categories={Array.from(new Set([...SUPPLIER_CATEGORIES, ...suppliers.map((s) => (s.category || "").trim().toUpperCase()).filter(Boolean)]))}
+      />
 
       {/* Delete Supplier Confirm */}
       <ConfirmDialog
@@ -3161,15 +3179,20 @@ const SUPPLIER_CATEGORIES = [
   "VEDACOES", "FITAS", "PISTOLAS", "MANGUEIRA E NIPLE", "RODAS MAQUINA", "OUTROS",
 ];
 
-function SupplierFormModal({ open, onClose, onSave, item, saving }: {
+function SupplierFormModal({ open, onClose, onSave, item, saving, categories }: {
   open: boolean; onClose: () => void;
   onSave: (data: Partial<Supplier>) => void;
   item: Supplier | null; saving: boolean;
+  // Fixas + as já usadas nos fornecedores (categoria criada continua aparecendo).
+  categories: string[];
 }) {
   const [name, setName] = useState("");
   const [contact, setContact] = useState("");
+  const [cnpj, setCnpj] = useState("");
   const [address, setAddress] = useState("");
   const [category, setCategory] = useState("");
+  // "➕ Criar nova categoria..." no select troca pro input de texto livre.
+  const [newCategory, setNewCategory] = useState(false);
   const [website, setWebsite] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -3177,16 +3200,19 @@ function SupplierFormModal({ open, onClose, onSave, item, saving }: {
     if (item) {
       setName(item.name); setContact(item.contact || ""); setAddress(item.address || "");
       setCategory(item.category || ""); setWebsite(item.website || ""); setNotes(item.notes || "");
+      setCnpj(item.cnpj || "");
     } else {
       setName(""); setContact(""); setAddress(""); setCategory(""); setWebsite(""); setNotes("");
+      setCnpj("");
     }
+    setNewCategory(false);
   }, [item, open]);
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
   return (
     <Modal open={open} onClose={onClose} title={item ? "Editar Fornecedor" : "Novo Fornecedor"}>
-      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, contact: contact || null, address: address || null, category: category || null, website: website || null, notes: notes || null }); }} className="space-y-4">
+      <form onSubmit={(e) => { e.preventDefault(); onSave({ name, contact: contact || null, address: address || null, category: category.trim().toUpperCase() || null, website: website || null, notes: notes || null, cnpj: cnpj.replace(/\D/g, "") || null }); }} className="space-y-4">
         <div>
           <label className="block text-sm font-medium mb-1">Nome do Fornecedor *</label>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} required placeholder="Ex: POTENCYA" className={inputCls} />
@@ -3197,12 +3223,35 @@ function SupplierFormModal({ open, onClose, onSave, item, saving }: {
             <input type="text" value={contact} onChange={(e) => setContact(e.target.value)} placeholder="13 3229-9350" className={inputCls} />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Categoria</label>
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className={inputCls}>
-              <option value="">Selecionar...</option>
-              {SUPPLIER_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <label className="block text-sm font-medium mb-1">CNPJ/CPF</label>
+            <input type="text" value={cnpj} onChange={(e) => setCnpj(e.target.value)} placeholder="só números" inputMode="numeric" className={inputCls} />
+            <p className="text-[10px] text-text-light mt-1">Vincula o fornecedor no Contas a Pagar (favorecido/boleto).</p>
           </div>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Categoria</label>
+          <select
+            value={newCategory ? "__nova__" : category}
+            onChange={(e) => {
+              if (e.target.value === "__nova__") { setNewCategory(true); setCategory(""); }
+              else { setNewCategory(false); setCategory(e.target.value); }
+            }}
+            className={inputCls}
+          >
+            <option value="">Selecionar...</option>
+            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+            <option value="__nova__">➕ Criar nova categoria...</option>
+          </select>
+          {newCategory && (
+            <input
+              autoFocus
+              type="text"
+              value={category}
+              onChange={(e) => setCategory(e.target.value.toUpperCase())}
+              placeholder="NOME DA NOVA CATEGORIA"
+              className={`${inputCls} mt-2`}
+            />
+          )}
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Endereço</label>
