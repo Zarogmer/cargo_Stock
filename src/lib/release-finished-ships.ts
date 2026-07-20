@@ -8,6 +8,15 @@ import { db } from "@/lib/db";
 // constante, nunca a string solta.
 export const AUTO_RELEASE_REASON = "Navio finalizado (data de saída no passado)";
 
+// A baixa automática já foi gravada com variações do texto no banco (ex.: a
+// correção de boundary de 30/06 usou "data de saida hoje/no passado", sem
+// acento). O que identifica o automático é o PREFIXO "Navio finalizado" —
+// comparar por igualdade exata deixava essas variações de fora e o navio
+// aparecia com 0 membros. Remoção manual é texto livre digitado pelo usuário.
+export function isAutoRelease(reason: string | null | undefined): boolean {
+  return !!reason && reason.startsWith("Navio finalizado");
+}
+
 /**
  * A alocação conta como trabalho realizado? ATIVA, ou baixada pelo automático
  * do navio finalizado. Uma remoção feita à mão (substituição, desistência) não
@@ -20,7 +29,7 @@ export const AUTO_RELEASE_REASON = "Navio finalizado (data de saída no passado)
  */
 export function countsAsWorked(alloc: { status?: string | null; removal_reason?: string | null }): boolean {
   if (alloc.status === "ATIVO") return true;
-  return alloc.status === "REMOVIDO" && alloc.removal_reason === AUTO_RELEASE_REASON;
+  return alloc.status === "REMOVIDO" && isAutoRelease(alloc.removal_reason);
 }
 
 // Marca como REMOVIDO todas as job_allocations ATIVAS de navios cuja

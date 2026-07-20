@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
-import { countsAsWorked } from "@/lib/release-finished-ships";
+import { countsAsWorked, isAutoRelease } from "@/lib/release-finished-ships";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EditIcon, TrashIcon } from "@/components/icons";
@@ -1210,16 +1210,22 @@ function EmbarqueHistoricoView({ allocations, shipName }: { allocations: JobAllo
                 <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Função no navio</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Status</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Adicionado</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Removido</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-text-light">Saída da escala</th>
               </tr>
             </thead>
             <tbody>
               {sorted.map((a, idx) => {
+                // Baixa automática do navio finalizado não é remoção de verdade:
+                // a pessoa trabalhou até o fim — o sistema só liberou pra novas
+                // escalas. Mostra "Navio finalizado" neutro, não REMOVIDO vermelho.
+                const autoReleased = a.status === "REMOVIDO" && isAutoRelease(a.removal_reason);
                 const statusCls = a.status === "ATIVO"
                   ? "bg-emerald-100 text-emerald-700"
-                  : a.status === "REMOVIDO"
-                    ? "bg-red-100 text-red-700"
-                    : "bg-amber-100 text-amber-700";
+                  : autoReleased
+                    ? "bg-slate-100 text-slate-600"
+                    : a.status === "REMOVIDO"
+                      ? "bg-red-100 text-red-700"
+                      : "bg-amber-100 text-amber-700";
                 return (
                   <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
                     <td className="px-3 py-2 text-text-light tabular-nums">{idx + 1}</td>
@@ -1230,8 +1236,8 @@ function EmbarqueHistoricoView({ allocations, shipName }: { allocations: JobAllo
                       </span>
                     </td>
                     <td className="px-3 py-2">
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${statusCls}`}>
-                        {a.status}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold whitespace-nowrap ${statusCls}`}>
+                        {autoReleased ? "✅ NAVIO FINALIZADO" : a.status}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-xs text-text-light">
@@ -1240,13 +1246,22 @@ function EmbarqueHistoricoView({ allocations, shipName }: { allocations: JobAllo
                     </td>
                     <td className="px-3 py-2 text-xs text-text-light">
                       {a.removed_at ? (
-                        <>
-                          <span className="block">{a.removed_by || "—"}</span>
-                          <span className="text-[10px]">{formatDateTime(a.removed_at)}</span>
-                          {a.removal_reason && (
-                            <span className="block text-[10px] italic">&quot;{a.removal_reason}&quot;</span>
-                          )}
-                        </>
+                        autoReleased ? (
+                          // Na baixa automática o removed_by é só quem carregou a
+                          // tela na hora — mostrar o nome confunde ("Camila removeu?").
+                          <>
+                            <span className="block">Automático — fim da operação</span>
+                            <span className="text-[10px]">{formatDateTime(a.removed_at)}</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="block">{a.removed_by || "—"}</span>
+                            <span className="text-[10px]">{formatDateTime(a.removed_at)}</span>
+                            {a.removal_reason && (
+                              <span className="block text-[10px] italic">&quot;{a.removal_reason}&quot;</span>
+                            )}
+                          </>
+                        )
                       ) : (
                         <span className="text-text-light/60">—</span>
                       )}
