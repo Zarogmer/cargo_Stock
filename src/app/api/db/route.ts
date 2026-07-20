@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { canViewStockValue } from "@/lib/rbac";
-import { canAccessTable } from "@/lib/table-acl";
+import { canAccessTable, filterValueColumns, isValueColumn } from "@/lib/table-acl";
 import type { Role } from "@/types/database";
 
 // Map snake_case table names to Prisma model accessors
@@ -225,20 +225,53 @@ function convertDates(tableName: string, data: Record<string, unknown>): Record<
   return result;
 }
 
-// Tabelas do Almoxarifado que guardam o valor unitário (R$) do item. Só os
-// papéis de STOCK_VALUE_ROLES podem ver/gravar esse número — como todo o CRUD do
-// almoxarifado passa por este gateway, esconder a coluna na tela não bastaria:
-// qualquer usuário logado poderia ler o preço com um POST direto.
-const UNIT_VALUE_TABLES = new Set(["stock_items", "epis", "uniforms"]);
+// Resolve o valor da alocação no servidor, com a MESMA regra que a Escalação e
+// a aba Navios aplicam no cliente: override por pessoa (employee_function_rates)
+// > default_rate da função.
+//
+// Por que isto existe: o cliente monta o `rate` lendo job_functions.default_rate
+// e employee_function_rates.rate e grava o número em job_allocations. Ao esconder
+// essas colunas de quem não é gestão (Gestor e RH, que são justamente quem
+// escala), a conta do cliente cairia no `?? 0` e as alocações seriam criadas com
+// rate 0 — zerando o Pagamento de Navios em silêncio. Então, para esses papéis,
+// o rate enviado é ignorado e recalculado aqui.
+async function resolveAllocationRate(data: Record<string, unknown>): Promise<number | null> {
+  const functionId = Number(data.function_id);
+  if (!Number.isFinite(functionId)) return null;
 
-// Remove `unit_value` das linhas devolvidas (aceita 1 registro ou uma lista).
-function stripUnitValue(data: unknown): unknown {
-  if (Array.isArray(data)) return data.map(stripUnitValue);
-  if (data && typeof data === "object" && "unit_value" in data) {
-    const { unit_value: _drop, ...rest } = data as Record<string, unknown>;
-    return rest;
+  const employeeId = Number(data.employee_id);
+  if (Number.isFinite(employeeId)) {
+    const override = await prisma.employeeFunctionRate.findUnique({
+      where: { employee_id_function_id: { employee_id: employeeId, function_id: functionId } },
+    });
+    if (override) return Number(override.rate);
   }
-  return data;
+
+  const fn = await prisma.jobFunction.findUnique({ where: { id: functionId } });
+  return fn ? Number(fn.default_rate) : null;
+}
+
+// Tira as colunas de dinheiro do payload de escrita de quem não pode vê-las —
+// silenciosamente, como o unit_value já fazia: no update a coluna fica com o
+// valor que já tinha, em vez de quebrar o save inteiro. A exceção é
+// job_allocations.rate, que é NOT NULL e portanto precisa de um valor no insert:
+// aí o servidor resolve (ver resolveAllocationRate).
+async function sanitizeWriteData(table: string, data: Record<string, unknown>): Promise<void> {
+  if (table === "job_allocations") {
+    // Só dá pra recalcular quando a função vem no payload. Ela vem em todos os
+    // caminhos que gravam rate hoje (escalação de embarque/costado e navios);
+    // um update que não mexe na função também não mexe no rate.
+    const resolved = data.function_id !== undefined ? await resolveAllocationRate(data) : null;
+    if (resolved !== null) data.rate = resolved;
+    else delete data.rate;
+    delete data.pluxee_value;
+    delete data.extra_value;
+    return;
+  }
+
+  for (const column of Object.keys(data)) {
+    if (isValueColumn(table, column)) delete data[column];
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -266,12 +299,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Valor do item: quem não é gestão não lê nem grava a coluna. `hideValue`
-    // vale só para as tabelas do almoxarifado (UNIT_VALUE_TABLES).
-    const hideValue = UNIT_VALUE_TABLES.has(spec.table) && !canViewStockValue(role);
-    // Silenciosamente descarta o campo em insert/update — assim um payload
-    // adulterado não grava preço, sem quebrar o resto do save.
-    if (hideValue && spec.data) delete spec.data.unit_value;
+    // Colunas de dinheiro (unit_value, default_rate, rate, pluxee_value...):
+    // quem não está em STOCK_VALUE_ROLES não lê nem grava. Vale na resposta e no
+    // payload — assim um POST adulterado também não passa.
+    const hideValues = !canViewStockValue(role);
+    if (hideValues && spec.data) await sanitizeWriteData(spec.table, spec.data);
 
     if (!model) {
       return NextResponse.json(
@@ -309,7 +341,7 @@ export async function POST(request: NextRequest) {
           data = await model.findMany(queryArgs);
         }
 
-        return NextResponse.json({ data: hideValue ? stripUnitValue(data) : data, error: null, count });
+        return NextResponse.json({ data: filterValueColumns(spec.table, data, role), error: null, count });
       }
 
       case "insert": {
@@ -323,7 +355,7 @@ export async function POST(request: NextRequest) {
         const insertData = convertDates(spec.table, spec.data);
 
         const data = await model.create({ data: insertData });
-        return NextResponse.json({ data: hideValue ? stripUnitValue(data) : data, error: null, count: null });
+        return NextResponse.json({ data: filterValueColumns(spec.table, data, role), error: null, count: null });
       }
 
       case "update": {

@@ -21,6 +21,7 @@
 
 import {
   hasPermission,
+  canViewStockValue,
   COMPRAS_ROLES,
   FINANCEIRO_BANCO_ROLES,
   type Module,
@@ -74,6 +75,54 @@ export const TABLE_ACL: Record<string, TablePolicy> = {
   // EMBARQUE não tem create/edit/delete — a permissão de escrita é "embarcar".
   costado_period_status: { read: { module: "EMBARQUE", permission: "view" }, write: { module: "EMBARQUE", permission: "embarcar" } },
 };
+
+// ─── Camada 2: colunas de valor ────────────────────────────────────────────
+//
+// Tabelas de uso amplo não dão pra barrar inteiras: employees, job_functions e
+// job_allocations são lidas legitimamente pelo Dashboard, Almoxarifado,
+// Escalação e Navios — e todos os 8 papéis têm o módulo EPI. O que é sensível
+// ali é a COLUNA de dinheiro. Quem lê: STOCK_VALUE_ROLES (canViewStockValue),
+// a mesma lista que já vê o valor do item no Almoxarifado.
+//
+// `unit_value` do almoxarifado entra aqui como mais um caso do mesmo mecanismo
+// (antes era a constante UNIT_VALUE_TABLES + stripUnitValue na rota).
+const VALUE_COLUMNS: Record<string, readonly string[]> = {
+  stock_items: ["unit_value"],
+  epis: ["unit_value"],
+  uniforms: ["unit_value"],
+  job_functions: ["default_rate"],
+  employee_function_rates: ["rate"],
+  // extra_value = valor de rateio; também é dinheiro do colaborador.
+  job_allocations: ["rate", "pluxee_value", "extra_value"],
+};
+
+export function isValueColumn(table: string, column: string): boolean {
+  return (VALUE_COLUMNS[table] ?? []).includes(column);
+}
+
+function strip(table: string, node: unknown): unknown {
+  if (Array.isArray(node)) return node.map((n) => strip(table, n));
+  if (!node || typeof node !== "object") return node;
+  const cols = VALUE_COLUMNS[table] ?? [];
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (cols.includes(key)) continue;
+    // Relação aninhada (`job_allocations(*, job_functions(...))`): o parseSelect
+    // usa o nome da tabela como nome do campo, então a chave que bate com uma
+    // tabela de VALUE_COLUMNS é uma relação e precisa ser filtrada também.
+    out[key] = key in VALUE_COLUMNS ? strip(key, value) : value;
+  }
+  return out;
+}
+
+/**
+ * Remove as colunas de dinheiro da resposta quando o papel não pode vê-las.
+ * Percorre relações aninhadas. Aceita 1 registro ou uma lista.
+ */
+export function filterValueColumns(table: string, data: unknown, role: Role): unknown {
+  if (canViewStockValue(role)) return data;
+  return strip(table, data);
+}
 
 function allows(access: Access, role: Role): boolean {
   if ("roles" in access) return access.roles.includes(role);
