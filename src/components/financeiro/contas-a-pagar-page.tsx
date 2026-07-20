@@ -270,6 +270,8 @@ export function ContasAPagarPage() {
   const [deleteBill, setDeleteBill] = useState<RecurringBillRow | null>(null);
   const [togglingPaid, setTogglingPaid] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Exclusão direto da linha da tabela, sem passar pelo modal de edição.
+  const [deleteRow, setDeleteRow] = useState<Invoice | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [uploadingExtra, setUploadingExtra] = useState(false);
 
@@ -772,6 +774,7 @@ export function ContasAPagarPage() {
       }
       setInvoices((prev) => prev.filter((i) => i.id !== inv.id));
       setDeleteOpen(false);
+      setDeleteRow(null);
       setModalOpen(false);
       setEditing(null);
     } finally {
@@ -991,6 +994,7 @@ export function ContasAPagarPage() {
                 <th className="px-3 py-3 font-medium">Tipo</th>
                 <th className="px-3 py-3 font-medium">Status</th>
                 <th className="px-3 py-3 font-medium text-center">PDF</th>
+                {canEdit && <th className="px-2 py-3 font-medium text-center w-10"></th>}
               </tr>
             </thead>
             <tbody>
@@ -1037,6 +1041,18 @@ export function ContasAPagarPage() {
                     <td className="px-3 py-3 text-center text-text-light">
                       {inv.attachments.length > 0 ? `📎 ${inv.attachments.length}` : "—"}
                     </td>
+                    {canEdit && (
+                      <td className="px-2 py-3 text-center">
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setDeleteRow(inv); }}
+                          className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition"
+                          title="Excluir título"
+                        >
+                          🗑️
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -1574,6 +1590,22 @@ export function ContasAPagarPage() {
         }
         confirmLabel="Apagar"
         variant="danger"
+      />
+
+      {/* Confirmação de EXCLUSÃO pela lixeira da linha (sem abrir o modal) */}
+      <ConfirmDialog
+        open={!!deleteRow}
+        onClose={() => setDeleteRow(null)}
+        onConfirm={() => deleteRow && handleDelete(deleteRow)}
+        title="Excluir título"
+        message={
+          deleteRow
+            ? `Excluir de vez "${deleteRow.description}"? Essa ação não pode ser desfeita e apaga também os anexos.`
+            : ""
+        }
+        confirmLabel="Excluir"
+        variant="danger"
+        loading={deleting}
       />
 
       {/* Confirmação de EXCLUSÃO */}
