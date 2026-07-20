@@ -1,5 +1,28 @@
 import { db } from "@/lib/db";
 
+// Motivo gravado quando a baixa foi AUTOMÁTICA (navio saiu), não uma remoção
+// de verdade feita por alguém. A diferença importa nas telas: quem foi baixado
+// assim trabalhou no navio e continua valendo no histórico e nas contagens —
+// o REMOVIDO aqui é só bookkeeping pra liberar a pessoa pra novas escalas.
+// Fonte única: quem grava (abaixo) e quem lê (allocationCounts) usam esta
+// constante, nunca a string solta.
+export const AUTO_RELEASE_REASON = "Navio finalizado (data de saída no passado)";
+
+/**
+ * A alocação conta como trabalho realizado? ATIVA, ou baixada pelo automático
+ * do navio finalizado. Uma remoção feita à mão (substituição, desistência) não
+ * conta — foi tirada da escala de propósito.
+ *
+ * Sem isto, toda tela que filtrava `status === "ATIVO"` zerava assim que o
+ * navio passava da data de saída: o Histórico da Escalação de Costado/Embarque
+ * mostrava "nenhuma escalação registrada" pra navio concluído. O Financeiro já
+ * tratava esse caso à parte (ver comentários em financeiro/page).
+ */
+export function countsAsWorked(alloc: { status?: string | null; removal_reason?: string | null }): boolean {
+  if (alloc.status === "ATIVO") return true;
+  return alloc.status === "REMOVIDO" && alloc.removal_reason === AUTO_RELEASE_REASON;
+}
+
 // Marca como REMOVIDO todas as job_allocations ATIVAS de navios cuja
 // departure_date já passou. Sem isso, um funcionário continua aparecendo como
 // "Embarcado" mesmo depois do navio sair — o RH precisa do controle correto
@@ -34,7 +57,7 @@ export async function releaseFinishedShipAllocations(actor: string): Promise<{ s
   for (const job of jobs) {
     const upd: any = await db
       .from("job_allocations")
-      .update({ status: "REMOVIDO", removed_at: now, removed_by: actor, removal_reason: "Navio finalizado (data de saída no passado)" })
+      .update({ status: "REMOVIDO", removed_at: now, removed_by: actor, removal_reason: AUTO_RELEASE_REASON })
       .eq("job_id", job.id)
       .eq("status", "ATIVO");
     if (!upd.error) touched++;

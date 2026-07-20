@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
+import { countsAsWorked } from "@/lib/release-finished-ships";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EditIcon, TrashIcon } from "@/components/icons";
@@ -369,7 +370,9 @@ function EscalacaoTab({
   const [removeAlloc, setRemoveAlloc] = useState<JobAllocation | null>(null);
   const [view, setView] = useState<"escalacao" | "historico">("escalacao");
 
-  const activeAllocs = allocations.filter((a) => a.status === "ATIVO");
+  // Inclui quem o automático baixou na saída do navio (countsAsWorked): navio
+  // concluído tem tudo como REMOVIDO, e sem isso a escala/histórico dele some.
+  const activeAllocs = allocations.filter(countsAsWorked);
 
   const byFunction = new Map<string, number>();
   for (const a of activeAllocs) {
