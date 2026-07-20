@@ -982,7 +982,13 @@ function RetornoSection({
                     <td className="px-4 py-2.5 text-center text-text-light">{k.need}</td>
                     <td className="px-4 py-2.5 text-center">
                       <input type="number" min={0} step={1} value={d.returned} disabled={!canEdit}
-                        onChange={(e) => setDraft(k.stock_item_id, { returned: e.target.value })}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          const ret = parseInt(v);
+                          // Quebrou = Foi − Voltou (dá pra ajustar na mão depois; a obs fica como está).
+                          const broken = v === "" || isNaN(ret) ? "" : String(Math.max(0, k.need - ret));
+                          setDraft(k.stock_item_id, { returned: v, broken });
+                        }}
                         className={numCls} placeholder="0" />
                     </td>
                     <td className="px-4 py-2.5 text-center">
