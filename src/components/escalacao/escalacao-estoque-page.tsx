@@ -18,6 +18,7 @@ interface Ship {
   port: string | null;
   status: string;
   assigned_team: string | null;
+  cargo_type: string | null; // produto/carga — sai no "Produto" do Check List
 }
 
 // Item do kit de embarque (embark_kit_items) + o material do Estoque ligado.
@@ -84,6 +85,8 @@ export function EscalacaoEstoquePage() {
   // Envio da lista de embarque pro grupo do WhatsApp (aba Embarque).
   const [sendingEmbarkList, setSendingEmbarkList] = useState(false);
   const [embarkMsg, setEmbarkMsg] = useState<string | null>(null);
+  // Download da lista (Check List) em PDF/Excel — compartilhado pelas duas abas.
+  const [downloading, setDownloading] = useState<"pdf" | "xlsx" | null>(null);
   // Listas recolhíveis da aba Embarque (Retorno tem as suas no RetornoSection).
   const [showMat, setShowMat] = useState(true);
   const [showRancho, setShowRancho] = useState(true);
@@ -169,6 +172,61 @@ export function EscalacaoEstoquePage() {
     unit: i.unit || null,
   }));
 
+  // Dados comuns da lista (navio + itens) usados no envio pro WhatsApp e na
+  // geração do Check List em PDF/Excel.
+  function buildListPayload() {
+    return {
+      shipName: currentShip?.name || "",
+      team: selectedTeam,
+      teamLabel: selectedTeam ? TEAM_LABELS[selectedTeam] : null,
+      port: currentShip?.port || null,
+      cargoType: currentShip?.cargo_type || null,
+      dateIso: new Date().toISOString().split("T")[0],
+      // A unidade (un/kg/...) vai junto pra sair na mensagem e no documento.
+      materials: teamKit.map((k) => ({ name: k.estName, qty: k.need, unit: k.unit })),
+      rancho: itemsWithStatus.map((i) => ({ name: i.name, qty: i.default_quantity, unit: i.unit || null })),
+    };
+  }
+
+  // Baixa a lista no layout do Check List: Embarque = preenchida (navio, porto,
+  // equipe, produto, data); Retorno = só a lista, cabeçalho em branco.
+  async function handleDownloadChecklist(mode: "embarque" | "retorno", format: "pdf" | "xlsx") {
+    if (!currentShip || !selectedTeam) return;
+    const setMsg = mode === "embarque" ? setEmbarkMsg : setReturnMsg;
+    setDownloading(format);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/embarque/checklist?format=${format}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...buildListPayload(), mode }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      // Nome do arquivo vem do Content-Disposition (filename*=UTF-8''...).
+      const cd = res.headers.get("Content-Disposition") || "";
+      const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      const plain = /filename="([^"]+)"/i.exec(cd);
+      const fallback = `Lista de Materiais - ${currentShip.name}.${format}`;
+      const filename = star ? decodeURIComponent(star[1]) : plain?.[1] || fallback;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setMsg(`Erro ao gerar o ${format === "pdf" ? "PDF" : "Excel"}: ${(err as Error).message}`);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
   async function handleEmbarcar() {
     if (!currentShip || !selectedTeam) return;
     setEmbarking(true);
@@ -215,6 +273,38 @@ export function EscalacaoEstoquePage() {
 
     setEmbarking(false);
     setConfirmEmbark(false);
+
+    // Aviso automático no grupo do WhatsApp (com a lista preenchida em PDF).
+    // Best-effort: o embarque já aconteceu — falha aqui só vira aviso na tela.
+    setEmbarkMsg("⚓ Embarque confirmado! Enviando aviso pro WhatsApp...");
+    try {
+      const res = await fetch("/api/embarque/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...buildListPayload(),
+          sentBy: actor,
+          event: "embarque",
+          attachPdf: true,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      const groupsSent = Number(data?.sent || 0);
+      const dmSent = Number(data?.dmSent || 0);
+      if (groupsSent > 0 || dmSent > 0) {
+        const parts: string[] = [];
+        if (groupsSent > 0 && data.group) parts.push(`grupo ${data.group}`);
+        if (dmSent > 0) parts.push(`${dmSent} pessoa${dmSent === 1 ? "" : "s"} do Administrativo`);
+        const pdfNote = data?.pdf === "sent" ? " com a lista em PDF" : data?.pdf === "failed" ? " (PDF não gerado — foi só o texto)" : "";
+        setEmbarkMsg(`⚓ Embarque confirmado! 📨 Aviso enviado pro WhatsApp (${parts.join(" + ")})${pdfNote}.`);
+      } else if (data?.skipped || data?.warning) {
+        setEmbarkMsg(`⚓ Embarque confirmado! ⚠️ ${data.skipped || data.warning}`);
+      } else {
+        setEmbarkMsg("⚓ Embarque confirmado! Não consegui avisar no WhatsApp.");
+      }
+    } catch (err) {
+      setEmbarkMsg(`⚓ Embarque confirmado! Erro ao avisar no WhatsApp: ${(err as Error).message}`);
+    }
     loadData();
   }
 
@@ -418,9 +508,42 @@ export function EscalacaoEstoquePage() {
         } as any).eq("id", stockItemId);
       }
 
-      setReturnMsg(existingReturn
+      const baseMsg = existingReturn
         ? "✅ Retorno atualizado. O Estoque foi ajustado pela diferença."
-        : "✅ Retorno confirmado. O que voltou bom foi creditado no Estoque.");
+        : "✅ Retorno confirmado. O que voltou bom foi creditado no Estoque.";
+
+      // Aviso automático no WhatsApp com o resumo do retorno (voltou + quebrou).
+      // Best-effort: o retorno já está salvo — falha aqui só vira nota na tela.
+      let autoNote = "";
+      try {
+        const res = await fetch("/api/retorno/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shipName: currentShip.name,
+            team: selectedTeam,
+            event: "resumo",
+            returnedItems: rows
+              .filter((r) => r.returned > 0)
+              .map((r) => ({ name: r.k.estName, qty: r.returned, unit: r.k.unit ?? null })),
+            brokenItems: rows
+              .filter((r) => r.broken > 0 || (r.note && r.returned === 0))
+              .map((r) => ({ name: r.k.estName, qty: r.broken, unit: r.k.unit ?? null, note: r.note || null })),
+            notes: returnNotes.trim() || null,
+            checkedBy: profile?.full_name || null,
+          }),
+        });
+        const data = await res.json().catch(() => null);
+        if (Number(data?.sent || 0) > 0 || Number(data?.dmSent || 0) > 0) {
+          autoNote = " 📨 Resumo enviado no WhatsApp.";
+        } else if (data?.skipped || data?.warning) {
+          autoNote = ` ⚠️ ${data.skipped || data.warning}`;
+        }
+      } catch {
+        autoNote = " ⚠️ Não consegui enviar o resumo no WhatsApp.";
+      }
+
+      setReturnMsg(baseMsg + autoNote);
       loadData();
     } catch (err) {
       setReturnMsg(`Erro ao salvar retorno: ${(err as Error).message}`);
@@ -493,7 +616,8 @@ export function EscalacaoEstoquePage() {
   }
 
   // Manda a lista de embarque (materiais + rancho, com as quantidades que a
-  // equipe leva) pro grupo configurado em Mensagens › "Lista de embarque".
+  // equipe leva) pro grupo configurado em Mensagens › "Lista de embarque" —
+  // texto + a lista preenchida em PDF (layout do Check List) anexada.
   async function handleSendEmbarkList() {
     if (!currentShip || !selectedTeam) return;
     setSendingEmbarkList(true);
@@ -503,12 +627,9 @@ export function EscalacaoEstoquePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          shipName: currentShip.name,
-          team: selectedTeam,
-          // A unidade (un/kg/...) vai junto pra sair na mensagem do WhatsApp.
-          materials: teamKit.map((k) => ({ name: k.estName, qty: k.need, unit: k.unit })),
-          rancho: itemsWithStatus.map((i) => ({ name: i.name, qty: i.default_quantity, unit: i.unit || null })),
+          ...buildListPayload(),
           sentBy: profile?.full_name || null,
+          attachPdf: true,
         }),
       });
       const data = await res.json().catch(() => null);
@@ -518,7 +639,8 @@ export function EscalacaoEstoquePage() {
         const parts: string[] = [];
         if (groupsSent > 0 && data.group) parts.push(`grupo ${data.group}`);
         if (dmSent > 0) parts.push(`${dmSent} pessoa${dmSent === 1 ? "" : "s"} do Administrativo`);
-        setEmbarkMsg(`📨 Lista enviada pro WhatsApp (${parts.join(" + ")}). Fica no histórico da aba Conversas.`);
+        const pdfNote = data?.pdf === "sent" ? " com PDF" : data?.pdf === "failed" ? " (PDF não gerado — foi só o texto)" : "";
+        setEmbarkMsg(`📨 Lista enviada pro WhatsApp (${parts.join(" + ")})${pdfNote}. Fica no histórico da aba Conversas.`);
       } else if (data?.warning) {
         setEmbarkMsg(`⚠️ ${data.warning}`);
       } else if (data?.skipped) {
@@ -602,7 +724,14 @@ export function EscalacaoEstoquePage() {
         )}
         {tab === "embarque" && canEmbarcar && selectedTeam && (teamItems.length > 0 || teamKit.length > 0) && (
           <div className="flex gap-2 flex-wrap">
-            <Button size="sm" variant="secondary" onClick={handleSendEmbarkList} disabled={sendingEmbarkList || embarking}>
+            {/* Check List preenchido (navio/porto/equipe/produto/data + quantidades) */}
+            <Button size="sm" variant="secondary" onClick={() => handleDownloadChecklist("embarque", "pdf")} disabled={downloading !== null || embarking} title="Baixar a lista preenchida em PDF (layout do Check List)">
+              {downloading === "pdf" ? "Gerando..." : "📄 PDF"}
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => handleDownloadChecklist("embarque", "xlsx")} disabled={downloading !== null || embarking} title="Baixar a lista preenchida em Excel pra editar">
+              {downloading === "xlsx" ? "Gerando..." : "📊 Excel"}
+            </Button>
+            <Button size="sm" variant="secondary" onClick={handleSendEmbarkList} disabled={sendingEmbarkList || embarking} title="Manda a lista no grupo do WhatsApp com o PDF anexado">
               {sendingEmbarkList ? "Enviando..." : "📨 Enviar lista pro WhatsApp"}
             </Button>
             <Button size="sm" variant="warning" onClick={() => setConfirmEmbark(true)}>
@@ -628,6 +757,8 @@ export function EscalacaoEstoquePage() {
           setNotes={setReturnNotes}
           onSave={handleSaveReturn}
           onSend={handleSendBroken}
+          onDownload={(format) => handleDownloadChecklist("retorno", format)}
+          downloading={downloading}
           saving={savingReturn}
           sending={sendingWhats}
           canEdit={canEmbarcar}
@@ -773,7 +904,7 @@ export function EscalacaoEstoquePage() {
         onClose={() => setConfirmEmbark(false)}
         onConfirm={handleEmbarcar}
         title="Confirmar Embarque"
-        message={`Embarcar ${selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"} no navio "${currentShip?.name}"? Os materiais do kit serão baixados do Estoque e a comida do Rancho desta equipe.`}
+        message={`Embarcar ${selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"} no navio "${currentShip?.name}"? Os materiais do kit serão baixados do Estoque e a comida do Rancho desta equipe. O aviso de embarque (com a lista em PDF) vai automático pro grupo do WhatsApp.`}
         confirmLabel="⚓ Confirmar Embarque"
         variant="warning"
         loading={embarking}
@@ -790,7 +921,7 @@ interface ReturnKitRow { id: number; stock_item_id: number; estName: string; nee
 
 function RetornoSection({
   shipName, team, teamKit, ranchoKit, draft, setDraft, notes, setNotes,
-  onSave, onSend, saving, sending, canEdit, message, history, editing,
+  onSave, onSend, onDownload, downloading, saving, sending, canEdit, message, history, editing,
 }: {
   shipName: string;
   team: string;
@@ -802,6 +933,8 @@ function RetornoSection({
   setNotes: (v: string) => void;
   onSave: () => void;
   onSend: () => void;
+  onDownload: (format: "pdf" | "xlsx") => void;
+  downloading: "pdf" | "xlsx" | null;
   saving: boolean;
   sending: boolean;
   canEdit: boolean;
@@ -935,6 +1068,13 @@ function RetornoSection({
 
         {canEdit && (teamKit.length > 0 || ranchoKit.length > 0) && (
           <div className="flex flex-wrap gap-2 justify-end">
+            {/* Lista em branco (layout do Check List) pra conferência à mão */}
+            <Button size="sm" variant="secondary" onClick={() => onDownload("pdf")} disabled={downloading !== null || saving} title="Baixar a lista de conferência em PDF (cabeçalho em branco)">
+              {downloading === "pdf" ? "Gerando..." : "📄 Lista PDF"}
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => onDownload("xlsx")} disabled={downloading !== null || saving} title="Baixar a lista de conferência em Excel pra editar">
+              {downloading === "xlsx" ? "Gerando..." : "📊 Lista Excel"}
+            </Button>
             <Button size="sm" variant="secondary" onClick={onSend} disabled={sending || saving}>
               {sending ? "Enviando..." : "📨 Enviar quebrados pro WhatsApp"}
             </Button>

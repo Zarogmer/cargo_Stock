@@ -189,16 +189,19 @@ export async function sendWhatsappTextToGroup(
   );
 }
 
-// Núcleo do envio de IMAGEM (endpoint /message/sendMedia do Evolution v2).
+// Núcleo do envio de MÍDIA (endpoint /message/sendMedia do Evolution v2).
 // `target` é o destino que vai no campo `number`: número normalizado (DM) ou
 // JID do grupo (…@g.us). Aceita data URL ("data:image/jpeg;base64,AAAA…"),
 // base64 puro ou URL pública — é o formato guardado em image_url (foto
-// comprimida inline, sem storage externo).
+// comprimida inline, sem storage externo). `mediatype` distingue imagem
+// (renderiza inline) de documento (PDF/arquivo anexado).
 async function sendMediaRaw(
   target: string,
   media0: string,
   caption: string,
   fileName: string,
+  mediatype: "image" | "document" = "image",
+  defaultMimetype = "image/jpeg",
 ): Promise<unknown> {
   const cfg = readConfig();
   const token = await getInstanceToken();
@@ -206,9 +209,9 @@ async function sendMediaRaw(
   // Separa o mimetype e o base64 cru. O Evolution espera o base64 SEM o prefixo
   // "data:…;base64," (ele faz Buffer.from(media, "base64") internamente). Se for
   // uma URL pública (http…), passa direto — o Evolution baixa.
-  let mimetype = "image/jpeg";
+  let mimetype = defaultMimetype;
   let media = (media0 || "").trim();
-  if (!media) throw new Error("Imagem vazia.");
+  if (!media) throw new Error(mediatype === "document" ? "Documento vazio." : "Imagem vazia.");
   const m = /^data:([^;]+);base64,([\s\S]*)$/.exec(media);
   if (m) {
     mimetype = m[1];
@@ -221,7 +224,7 @@ async function sendMediaRaw(
       method: "POST",
       body: JSON.stringify({
         number: target,
-        mediatype: "image",
+        mediatype,
         mimetype,
         caption,
         media,
@@ -254,6 +257,32 @@ export async function sendWhatsappMediaToNumber(
   const number = normalizeBRNumber(to);
   if (!number) throw new Error("Número inválido.");
   return sendMediaRaw(number, dataUrlOrBase64, caption, fileName);
+}
+
+// Envia um DOCUMENTO (PDF, planilha...) com legenda a um grupo. Base64 puro ou
+// data URL; o WhatsApp mostra como arquivo anexado com o nome `fileName`.
+export async function sendWhatsappDocumentToGroup(
+  groupJid: string,
+  dataUrlOrBase64: string,
+  caption: string,
+  fileName: string,
+  mimetype = "application/pdf",
+): Promise<unknown> {
+  if (!groupJid.endsWith("@g.us")) throw new Error("JID de grupo inválido.");
+  return sendMediaRaw(groupJid, dataUrlOrBase64, caption, fileName, "document", mimetype);
+}
+
+// Envia um DOCUMENTO com legenda numa conversa individual (DM).
+export async function sendWhatsappDocumentToNumber(
+  to: string,
+  dataUrlOrBase64: string,
+  caption: string,
+  fileName: string,
+  mimetype = "application/pdf",
+): Promise<unknown> {
+  const number = normalizeBRNumber(to);
+  if (!number) throw new Error("Número inválido.");
+  return sendMediaRaw(number, dataUrlOrBase64, caption, fileName, "document", mimetype);
 }
 
 // Extrai o id REAL da mensagem (key.id) da resposta de um envio do Evolution.

@@ -17,25 +17,48 @@ interface NotifyBody {
   brokenItems: BrokenItem[];
   notes?: string | null;
   checkedBy?: string | null;
+  // "quebrados" (padrão) = botão "Enviar quebrados"; "resumo" = aviso automático
+  // do ✅ Confirmar Retorno (inclui também o que voltou bom).
+  event?: "quebrados" | "resumo";
+  returnedItems?: BrokenItem[];
 }
 
 const TEAM_LABEL: Record<string, string> = {
   EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3",
 };
 
-// Mensagem do retorno: lista o material que voltou QUEBRADO, pra manutenção /
-// compras reporem. Vai por DM pro Administrativo e, se escolhido, pro grupo.
+// "— 2 un" / "— 5 kg"; sem unidade cadastrada sai só o número.
+function qtyLabel(it: BrokenItem): string {
+  const u = unitShort(it.unit);
+  return it.qty > 0 ? `${it.qty}${u ? ` ${u}` : ""}` : "";
+}
+
+// Mensagem do retorno. "quebrados": lista o material que voltou QUEBRADO, pra
+// manutenção/compras reporem. "resumo": retorno confirmado — o que voltou bom
+// (compacto) + os quebrados. Vai por DM pro Administrativo e/ou pro grupo.
 function buildMessage(b: NotifyBody): string {
   const team = b.team ? ` · ${TEAM_LABEL[b.team] || b.team}` : "";
   const lines = b.brokenItems.map((it) => {
-    // "— 2 un" / "— 5 kg"; sem unidade cadastrada sai só o número.
-    const u = unitShort(it.unit);
-    const qty = it.qty > 0 ? ` — ${it.qty}${u ? ` ${u}` : ""}` : "";
+    const qty = qtyLabel(it);
     const note = it.note?.trim() ? ` — ${it.note.trim()}` : "";
-    return `• *${it.name}*${qty}${note}`;
+    return `• *${it.name}*${qty ? ` — ${qty}` : ""}${note}`;
   });
   const extra = b.notes?.trim() ? `\n📝 ${b.notes.trim()}\n` : "";
   const by = b.checkedBy?.trim() ? `\n👤 Conferido por: ${b.checkedBy.trim()}` : "";
+
+  if (b.event === "resumo") {
+    const returned = (b.returnedItems || [])
+      .map((it) => `${it.name}${qtyLabel(it) ? ` (${qtyLabel(it)})` : ""}`)
+      .join(", ");
+    return (
+      `✅ *Retorno confirmado*\n\n` +
+      `🚢 Navio: *${b.shipName}*${team}\n\n` +
+      (returned ? `✔️ Voltou em bom estado: ${returned}\n` : "") +
+      (lines.length ? `\n🔧 *Quebrou/estragou (${lines.length})*\n${lines.join("\n")}\n` : "\n🔧 Nenhum item quebrado.\n") +
+      extra + by
+    );
+  }
+
   return (
     `🛠️ *Retorno de material — quebrados*\n\n` +
     `🚢 Navio: *${b.shipName}*${team}\n\n` +
@@ -65,7 +88,9 @@ export async function POST(request: NextRequest) {
   if (!body.shipName || !Array.isArray(body.brokenItems)) {
     return NextResponse.json({ error: "shipName e brokenItems são obrigatórios" }, { status: 400 });
   }
-  if (body.brokenItems.length === 0) {
+  // No resumo (auto do Confirmar Retorno) zero quebrado é notícia boa — envia
+  // mesmo assim. Só o fluxo manual de quebrados exige ao menos um item.
+  if (body.brokenItems.length === 0 && body.event !== "resumo") {
     return NextResponse.json({ status: "skipped", sent: 0, warning: "Nenhum item quebrado pra enviar." }, { status: 200 });
   }
 
