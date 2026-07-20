@@ -644,7 +644,7 @@ export default function FinanceiroPage() {
     const [fnRes, rtRes, jbRes, alRes, adRes, shRes, emRes, srRes] = await Promise.all([
       db.from("job_functions").select("*").order("name"),
       db.from("job_function_rates").select("*").order("valid_from", { ascending: false }),
-      db.from("jobs").select("*, ships(name, status)").order("start_date", { ascending: false }),
+      db.from("jobs").select("*, ships(name, status, holds_count)").order("start_date", { ascending: false }),
       db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)"),
       db.from("job_adjustments").select("*").order("created_at", { ascending: false }),
       db.from("ships").select("id, name, status, services").order("arrival_date", { ascending: false }).limit(50),
@@ -689,7 +689,16 @@ export default function FinanceiroPage() {
     }
     setFunctions(allFunctions);
     setRates((rtRes.data as JobFunctionRate[]) || []);
-    setJobs((jbRes.data as Job[]) || []);
+    // Porões: job criado pela escalação nasce sem holds_count — cai no valor do
+    // CADASTRO do navio (ships.holds_count). Enriquecer aqui conserta todos os
+    // consumidores de uma vez (custo do job, rateio, Controle de Funcionários,
+    // exportações). Editar porões no Pagamento continua mandando (grava no job).
+    const rawJobs = (jbRes.data as (Job & { ships?: { holds_count?: number | null } | null })[]) || [];
+    setJobs(rawJobs.map((j) =>
+      j.holds_count == null && j.ships?.holds_count != null
+        ? { ...j, holds_count: j.ships.holds_count }
+        : j,
+    ));
     const emps = (emRes.data as Employee[]) || [];
     setEmployees(emps);
     const srMap = new Map<string, number>();
@@ -6897,7 +6906,11 @@ function ControleTab({
         s.embarque.allocations += 1;
         s.history.push({
           jobId: a.job_id, jobName: job?.name || "—", shipName,
-          kind, date: job?.start_date || null, poroes: firstTime ? holds : 0,
+          // Porões REAIS do job em toda linha — com 2 funções no mesmo navio, a
+          // 2ª linha mostrava "—" e parecia bug. A soma deduplicada continua
+          // protegida pelo firstTime acima; o mapa poroesPorJob (total geral)
+          // grava o mesmo valor de novo, sem duplicar.
+          kind, date: job?.start_date || null, poroes: holds,
           quantity: 1, rate, earnings,
           functionName: fn?.name || null,
         });
