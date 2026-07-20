@@ -83,8 +83,6 @@ export function EstoquePanel() {
   const [activeTeam, setActiveTeam] = useState<RanchoTeam>("EQUIPE_3");
   const [editItem, setEditItem] = useState<StockItem | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [showBaixa, setShowBaixa] = useState(false);
-  const [baixaItem, setBaixaItem] = useState<StockItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<StockItem | null>(null);
   const [saving, setSaving] = useState(false);
   const [showPreparar, setShowPreparar] = useState(false);
@@ -300,29 +298,30 @@ export function EstoquePanel() {
     loadItems();
   }
 
-  async function handleBaixa(qty: number, notes: string) {
-    if (!baixaItem) return;
-    setSaving(true);
+  // Setinhas ↑/↓ da tabela: 1 unidade por clique, sem modal. ↓ registra BAIXA e
+  // ↑ registra AJUSTE no histórico. O rancho tem quantidade decimal (ex.: 0,5 kg),
+  // então a descida trava em 0 e registra só o que realmente saiu. Atualiza a
+  // lista localmente (sem reload) pra cliques seguidos partirem do valor novo.
+  async function handleQuickAdjust(item: StockItem, delta: 1 | -1) {
+    const newQty = Math.max(0, Math.round((item.quantity + delta) * 1000) / 1000);
+    const moved = Math.round(Math.abs(newQty - item.quantity) * 1000) / 1000;
+    if (moved === 0) return;
     const actor = profile?.full_name || "Sistema";
+    setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, quantity: newQty, updated_at: new Date().toISOString() } : it)));
 
     await db.from("stock_movements").insert({
-      stock_item_id: baixaItem.id,
-      movement_type: "BAIXA",
-      quantity: qty,
+      stock_item_id: item.id,
+      movement_type: delta > 0 ? "AJUSTE" : "BAIXA",
+      quantity: moved,
       movement_date: new Date().toISOString().split("T")[0],
-      notes,
+      notes: delta > 0 ? "Ajuste rápido no Rancho: +1 (seta)" : `Baixa rápida no Rancho: -${formatQty(moved)} (seta)`,
       created_by: actor,
     } as Record<string, unknown>);
 
     await db
       .from("stock_items")
-      .update({ quantity: Math.round((baixaItem.quantity - qty) * 1000) / 1000, updated_by: actor } as Record<string, unknown>)
-      .eq("id", baixaItem.id);
-
-    setSaving(false);
-    setShowBaixa(false);
-    setBaixaItem(null);
-    loadItems();
+      .update({ quantity: newQty, updated_by: actor } as Record<string, unknown>)
+      .eq("id", item.id);
   }
 
   // "Preparar": copia os itens do Total (lista-mãe, EQUIPE_3) para a equipe
@@ -445,11 +444,23 @@ export function EstoquePanel() {
       className: "w-24",
       render: (i: StockItem) => (
         <div className="flex items-center gap-1">
+          {canEdit && !isMaster && (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleQuickAdjust(i, 1); }}
+              className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded"
+              title="Aumentar 1"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+              </svg>
+            </button>
+          )}
           {canBaixar && !isMaster && (
             <button
-              onClick={(e) => { e.stopPropagation(); setBaixaItem(i); setShowBaixa(true); }}
-              className="p-1.5 text-amber-600 hover:bg-amber-50 rounded"
-              title="Baixar"
+              onClick={(e) => { e.stopPropagation(); handleQuickAdjust(i, -1); }}
+              disabled={i.quantity <= 0}
+              className="p-1.5 text-amber-600 hover:bg-amber-50 rounded disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              title="Baixar 1"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
@@ -549,14 +560,6 @@ export function EstoquePanel() {
         saving={saving}
         team={activeTeam}
         sourceItems={codeSourceItems}
-      />
-
-      <BaixaModal
-        open={showBaixa}
-        onClose={() => { setShowBaixa(false); setBaixaItem(null); }}
-        onConfirm={handleBaixa}
-        item={baixaItem}
-        saving={saving}
       />
 
       <PrepararModal
@@ -729,48 +732,6 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function BaixaModal({ open, onClose, onConfirm, item, saving }: {
-  open: boolean;
-  onClose: () => void;
-  onConfirm: (qty: number, notes: string) => void;
-  item: StockItem | null;
-  saving: boolean;
-}) {
-  const [qty, setQty] = useState("");
-  const [notes, setNotes] = useState("");
-
-  useEffect(() => { setQty(""); setNotes(""); }, [open]);
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    onConfirm(parseDecimalBR(qty), notes);
-  }
-
-  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
-
-  return (
-    <Modal open={open} onClose={onClose} title="Baixar Rancho">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <p className="text-sm text-text-light">
-          Item: <strong>{item?.name}</strong> (disponível: {formatQty(item?.quantity)})
-        </p>
-        <div>
-          <label className="block text-sm font-medium text-text mb-1">Quantidade *</label>
-          <input type="text" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="Ex: 1,5" required className={inputCls} />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-text mb-1">Observações</label>
-          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
-        </div>
-        <div className="flex gap-3 justify-end pt-2">
-          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button variant="warning" type="submit" disabled={saving}>{saving ? "Registrando..." : "Confirmar Baixa"}</Button>
         </div>
       </form>
     </Modal>

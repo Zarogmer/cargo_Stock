@@ -246,20 +246,22 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   }
 
   // Setinhas ↑/↓ da tabela: 1 unidade por clique, sem modal. ↓ registra BAIXA e
-  // ↑ registra AJUSTE no histórico. Atualiza a lista localmente (sem reload)
+  // ↑ registra AJUSTE no histórico. Quantidade decimal (ex.: 0,5) desce até 0 e
+  // registra só o que realmente saiu. Atualiza a lista localmente (sem reload)
   // pra cliques seguidos partirem do valor novo e somarem certo.
   async function handleQuickAdjust(item: StockItem, delta: 1 | -1) {
-    const newQty = Math.round((item.quantity + delta) * 1000) / 1000;
-    if (newQty < 0) return;
+    const newQty = Math.max(0, Math.round((item.quantity + delta) * 1000) / 1000);
+    const moved = Math.round(Math.abs(newQty - item.quantity) * 1000) / 1000;
+    if (moved === 0) return;
     const actor = profile?.full_name || "Sistema";
     setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, quantity: newQty, updated_at: new Date().toISOString() } : it)));
 
     await db.from("stock_movements").insert({
       stock_item_id: item.id,
       movement_type: delta > 0 ? "AJUSTE" : "BAIXA",
-      quantity: 1,
+      quantity: moved,
       movement_date: new Date().toISOString().split("T")[0],
-      notes: delta > 0 ? "Ajuste rápido no Almoxarifado: +1 (seta)" : "Baixa rápida no Almoxarifado: -1 (seta)",
+      notes: delta > 0 ? "Ajuste rápido no Almoxarifado: +1 (seta)" : `Baixa rápida no Almoxarifado: -${formatQty(moved)} (seta)`,
       created_by: actor,
     } as Record<string, unknown>);
 
