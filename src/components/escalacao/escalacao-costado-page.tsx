@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
+import { countsAsWorked } from "@/lib/release-finished-ships";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { TrashIcon } from "@/components/icons";
@@ -127,13 +128,16 @@ export function EscalacaoCostadoPage() {
 
   const [view, setView] = useState<"escalacao" | "historico">("escalacao");
 
-  // All ACTIVE Costado allocations for the selected ship (any date).
+  // Costado allocations válidas do navio selecionado (qualquer data). Inclui as
+  // que o automático baixou quando o navio saiu (countsAsWorked) — sem isso o
+  // Histórico de todo navio CONCLUÍDO ficava zerado, porque a baixa automática
+  // marca tudo como REMOVIDO.
   const shipCostadoAllocations = useMemo(() => {
     if (!shipJob) return [] as JobAllocation[];
     return allocations.filter(
       (a) => a.job_id === shipJob.id
         && (a.kind || "EMBARQUE") === "COSTADO"
-        && a.status === "ATIVO"
+        && countsAsWorked(a)
         && a.shift_date
         && a.shift_period,
     );
