@@ -543,6 +543,29 @@ export function EscalacaoEstoquePage() {
         autoNote = " ⚠️ Não consegui enviar o resumo no WhatsApp.";
       }
 
+      // O prejuízo dos quebrados vira despesa "Material danificado" no
+      // Pagamento de Navios. Calculado no servidor (unit_value é coluna
+      // sensível que o /api/db esconde de quem não é gestão). Best-effort:
+      // o retorno já está salvo; falha aqui só vira nota na tela.
+      try {
+        const res = await fetch("/api/retorno/despesa", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ship_id: selectedShip, team: selectedTeam }),
+        });
+        const data = await res.json().catch(() => null);
+        if (res.ok && Number(data?.amount) > 0) {
+          const brl = Number(data.amount).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+          autoNote += ` 🪙 Despesa "Material danificado" de ${brl} lançada no navio.`;
+        } else if (res.ok && data?.removed) {
+          autoNote += " 🪙 Despesa de material danificado do navio foi zerada.";
+        } else if (!res.ok) {
+          autoNote += " ⚠️ Não consegui lançar a despesa de material danificado no navio.";
+        }
+      } catch {
+        autoNote += " ⚠️ Não consegui lançar a despesa de material danificado no navio.";
+      }
+
       setReturnMsg(baseMsg + autoNote);
       loadData();
     } catch (err) {
