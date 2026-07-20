@@ -98,6 +98,44 @@ function arrecadacaoBarcode(digits: string): string {
   return bc;
 }
 
+// Converte o CÓDIGO DE BARRAS (44 dígitos, o que a câmera lê no ITF do boleto)
+// na linha digitável (47 bancário / 48 arrecadação), calculando os DVs de
+// campo. O caminho câmera → barra → linha → parseLinhaDigitavel reaproveita
+// toda a validação (mod10/mod11) que o import de PDF já usa.
+export function barcodeToLinhaDigitavel(barcode44: string): string | null {
+  const bc = (barcode44 || "").replace(/\D/g, "");
+  if (bc.length !== 44) return null;
+
+  // Arrecadação/convênio: 4 blocos de 11 dados + DV cada.
+  if (bc[0] === "8") {
+    const valorId = bc[2];
+    if (valorId !== "6" && valorId !== "7" && valorId !== "8" && valorId !== "9") return null;
+    const useMod10 = valorId === "6" || valorId === "7";
+    let linha = "";
+    for (let b = 0; b < 4; b++) {
+      const data = bc.substr(b * 11, 11);
+      linha += data + String(useMod10 ? mod10(data) : mod11Arrecadacao(data));
+    }
+    return linha;
+  }
+
+  // Bancário: barra = banco+moeda(4) DVgeral(1) fator+valor(14) campoLivre(25).
+  const bancoMoeda = bc.substring(0, 4);
+  const dvGeral = bc[4];
+  const fatorValor = bc.substring(5, 19);
+  const livre = bc.substring(19); // 25 dígitos
+  const c1 = bancoMoeda + livre.substring(0, 5);
+  const c2 = livre.substring(5, 15);
+  const c3 = livre.substring(15, 25);
+  return (
+    c1 + String(mod10(c1)) +
+    c2 + String(mod10(c2)) +
+    c3 + String(mod10(c3)) +
+    dvGeral +
+    fatorValor
+  );
+}
+
 export function parseLinhaDigitavel(input: string): BoletoParsed | null {
   const digits = (input || "").replace(/\D/g, "");
 

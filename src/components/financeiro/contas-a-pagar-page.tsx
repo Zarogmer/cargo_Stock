@@ -16,6 +16,8 @@ import { formatCurrency, parseDecimalBR, matchSearch } from "@/lib/utils";
 import { stripSectionNum } from "@/lib/demonstracao-financeira";
 import { PAYMENT_METHODS } from "@/lib/payment-methods";
 import { mergeSections, sectionShortLabel, type CustomSectionRow } from "@/lib/statement-sections";
+import { BoletoScannerModal } from "@/components/financeiro/boleto-scanner";
+import type { BoletoParsed } from "@/lib/services/boleto/linha-digitavel";
 import type { PayableStatus } from "@/types/financeiro";
 
 // ── Tipos das respostas da API ───────────────────────────────────────────────
@@ -178,6 +180,14 @@ function PaidBadge({ inv }: { inv: Invoice }) {
 // "itau" e mantém o filtro por banco consistente.
 const BANK_OPTIONS = ["Itaú", "Santander", "Outro"];
 
+// Nome do banco emissor pelo código dos 3 primeiros dígitos do boleto — só pra
+// descrição sugerida no scan (o seletor de banco continua nos BANK_OPTIONS).
+const BANK_NAMES: Record<string, string> = {
+  "001": "Banco do Brasil", "033": "Santander", "077": "Inter", "104": "Caixa",
+  "208": "BTG", "237": "Bradesco", "260": "Nubank", "336": "C6 Bank",
+  "341": "Itaú", "422": "Safra", "748": "Sicredi", "756": "Sicoob",
+};
+
 const inputCls =
   "w-full border border-border rounded-lg px-3 py-2 text-sm bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40";
 
@@ -302,6 +312,8 @@ export function ContasAPagarPage() {
   // título novo no mês seguinte com a diferença e os mesmos dados.
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [rescheduling, setRescheduling] = useState(false);
+  // Scanner de boleto pela câmera (código de barras → preenche o formulário).
+  const [scanOpen, setScanOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [uploadingExtra, setUploadingExtra] = useState(false);
 
@@ -804,6 +816,27 @@ export function ContasAPagarPage() {
     } finally {
       setTogglingPaid(false);
     }
+  }
+
+  // Boleto lido pela câmera/foto → preenche o formulário. O que o código de
+  // barras entrega: linha digitável, valor, vencimento e banco emissor. O
+  // fornecedor não vem no código — segue manual (ou casa depois na conciliação).
+  function applyScannedBoleto(b: BoletoParsed) {
+    const bankLabel = b.bankCode ? BANK_NAMES[b.bankCode] : undefined;
+    setForm((f) => ({
+      ...f,
+      digitable_line: b.digits,
+      amount: b.amount != null ? formatAmountBR(String(b.amount)) : f.amount,
+      due_date: b.dueDate ? b.dueDate.toISOString().slice(0, 10) : f.due_date,
+      bank: b.bankCode === "341" ? "Itaú" : b.bankCode === "033" ? "Santander" : f.bank,
+      payment_method: f.payment_method || "BOLETO",
+      description:
+        f.description ||
+        (b.tipo === "ARRECADACAO"
+          ? "Conta de consumo/arrecadação (boleto escaneado)"
+          : `Boleto${bankLabel ? ` ${bankLabel}` : ""} escaneado`),
+    }));
+    setScanOpen(false);
   }
 
   // Pagou parcial (valor pago < valor)? O RESTANTE vira sozinho um título novo
@@ -1649,25 +1682,36 @@ export function ContasAPagarPage() {
             </div>
             {!editing && billKind === "UNICA" && (
               <div>
-                <label className="text-xs font-medium text-text-light">Import NF (PDF)</label>
-                <label className={`mt-1 block ${analyzing ? "opacity-50" : "cursor-pointer"}`}>
-                  <span className="inline-block bg-gray-100 hover:bg-gray-200 text-text text-xs font-medium px-3 py-1.5 rounded-lg">
-                    {analyzing ? "Lendo..." : formFile ? `📎 ${formFile.name}` : "Escolher PDF e ler os dados"}
-                  </span>
-                  <input
-                    type="file"
-                    accept="application/pdf"
-                    className="hidden"
-                    disabled={analyzing}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) handleAnalyzePdf(f);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
+                <label className="text-xs font-medium text-text-light">Import NF (PDF) ou boleto pela câmera</label>
+                <div className="mt-1 flex items-center gap-2 flex-wrap">
+                  <label className={`${analyzing ? "opacity-50" : "cursor-pointer"}`}>
+                    <span className="inline-block bg-gray-100 hover:bg-gray-200 text-text text-xs font-medium px-3 py-1.5 rounded-lg">
+                      {analyzing ? "Lendo..." : formFile ? `📎 ${formFile.name}` : "Escolher PDF e ler os dados"}
+                    </span>
+                    <input
+                      type="file"
+                      accept="application/pdf"
+                      className="hidden"
+                      disabled={analyzing}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleAnalyzePdf(f);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setScanOpen(true)}
+                    className="inline-block bg-gray-100 hover:bg-gray-200 text-text text-xs font-medium px-3 py-1.5 rounded-lg"
+                    title="Aponte a câmera pro código de barras do boleto — valor, vencimento, banco e linha digitável entram sozinhos"
+                  >
+                    📷 Escanear boleto (câmera)
+                  </button>
+                </div>
                 <p className="text-[11px] text-text-light mt-1">
-                  Lê boleto ou nota fiscal (fornecedor, número, valor) e preenche os campos. Revise antes de criar.
+                  O PDF lê boleto ou nota fiscal (fornecedor, número, valor); a câmera lê o código de barras do
+                  boleto (valor, vencimento, banco, linha digitável) — ideal no celular. Revise antes de criar.
                 </p>
               </div>
             )}
@@ -1846,6 +1890,13 @@ export function ContasAPagarPage() {
         }
         confirmLabel="Apagar"
         variant="danger"
+      />
+
+      {/* Scanner de boleto (câmera/foto) — preenche o formulário da Nova conta */}
+      <BoletoScannerModal
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        onDetected={applyScannedBoleto}
       />
 
       {/* Confirmação do REAGENDAMENTO do restante (pagamento parcial) */}
