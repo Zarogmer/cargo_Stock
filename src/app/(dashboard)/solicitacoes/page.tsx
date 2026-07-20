@@ -616,9 +616,9 @@ export default function SolicitacoesPage() {
           });
           contasMsg = r.ok
             ? " 🧾 Lançada no Contas a Pagar."
-            : " ⚠️ Falhou ao lançar no Contas a Pagar — puxe manual depois.";
+            : " ⚠️ Falhou ao lançar no Contas a Pagar — será lançada sozinha ao abrir a tela.";
         } catch {
-          contasMsg = " ⚠️ Falhou ao lançar no Contas a Pagar — puxe manual depois.";
+          contasMsg = " ⚠️ Falhou ao lançar no Contas a Pagar — será lançada sozinha ao abrir a tela.";
         }
       }
 
@@ -951,9 +951,9 @@ export default function SolicitacoesPage() {
                     ? "💳 Compra faturada lançada no Contas a Pagar com o vencimento calculado."
                     : "🧾 Compra lançada no Contas a Pagar.",
               );
-            } else setSaveError("Compra salva, mas falhou ao lançar no Contas a Pagar — puxe manual depois.");
+            } else setSaveError("Compra salva, mas falhou ao lançar no Contas a Pagar — será lançada sozinha ao abrir a tela.");
           } catch {
-            setSaveError("Compra salva, mas falhou ao lançar no Contas a Pagar — puxe manual depois.");
+            setSaveError("Compra salva, mas falhou ao lançar no Contas a Pagar — será lançada sozinha ao abrir a tela.");
           }
         }
         // Compra originada de uma solicitação aprovada -> marca como Comprada.
