@@ -279,6 +279,8 @@ export function ContasAPagarPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   // Exclusão direto da linha da tabela, sem passar pelo modal de edição.
   const [deleteRow, setDeleteRow] = useState<Invoice | null>(null);
+  // Confirmação de pagamento direto da linha (✅), sem abrir o modal.
+  const [payRow, setPayRow] = useState<Invoice | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [uploadingExtra, setUploadingExtra] = useState(false);
 
@@ -776,6 +778,12 @@ export function ContasAPagarPage() {
     }
   }
 
+  // Pagamento confirmado pela linha: marca pago hoje e fecha o diálogo.
+  async function handleConfirmPay(inv: Invoice) {
+    await setPaid(inv, true);
+    setPayRow(null);
+  }
+
   // Exclui o título de vez (não é o mesmo que "Cancelar"). Some da lista.
   async function handleDelete(inv: Invoice) {
     setDeleting(true);
@@ -1008,7 +1016,7 @@ export function ContasAPagarPage() {
                 <th className="px-3 py-3 font-medium">Tipo</th>
                 <th className="px-3 py-3 font-medium">Status</th>
                 <th className="px-3 py-3 font-medium text-center">PDF</th>
-                {canEdit && <th className="px-2 py-3 font-medium text-center w-10"></th>}
+                {canEdit && <th className="px-2 py-3 font-medium text-center w-16"></th>}
               </tr>
             </thead>
             <tbody>
@@ -1066,15 +1074,27 @@ export function ContasAPagarPage() {
                       {inv.attachments.length > 0 ? `📎 ${inv.attachments.length}` : "—"}
                     </td>
                     {canEdit && (
-                      <td className="px-2 py-3 text-center">
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); setDeleteRow(inv); }}
-                          className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition"
-                          title="Excluir título"
-                        >
-                          🗑️
-                        </button>
+                      <td className="px-2 py-3">
+                        <div className="flex items-center justify-center gap-0.5">
+                          {!isPaid(inv) && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setPayRow(inv); }}
+                              className="p-1.5 hover:bg-emerald-50 rounded transition"
+                              title="Confirmar pagamento (marca como pago hoje)"
+                            >
+                              ✅
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setDeleteRow(inv); }}
+                            className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition"
+                            title="Excluir título"
+                          >
+                            🗑️
+                          </button>
+                        </div>
                       </td>
                     )}
                   </tr>
@@ -1639,6 +1659,22 @@ export function ContasAPagarPage() {
         }
         confirmLabel="Apagar"
         variant="danger"
+      />
+
+      {/* Confirmação de PAGAMENTO pelo ✅ da linha (sem abrir o modal) */}
+      <ConfirmDialog
+        open={!!payRow}
+        onClose={() => setPayRow(null)}
+        onConfirm={() => payRow && handleConfirmPay(payRow)}
+        title="Confirmar pagamento"
+        message={
+          payRow
+            ? `Confirmar o pagamento de "${payRow.description}" — ${formatCurrency(Number(payRow.paid_amount ?? payRow.amount))}? O título fica como Pago com a data de hoje.`
+            : ""
+        }
+        confirmLabel="Confirmar pagamento"
+        variant="primary"
+        loading={togglingPaid}
       />
 
       {/* Confirmação de EXCLUSÃO pela lixeira da linha (sem abrir o modal) */}
