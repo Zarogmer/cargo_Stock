@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { canViewStockValue } from "@/lib/rbac";
+import { canAccessTable } from "@/lib/table-acl";
 import type { Role } from "@/types/database";
 
 // Map snake_case table names to Prisma model accessors
@@ -253,12 +254,21 @@ export async function POST(request: NextRequest) {
 
     const spec: QuerySpec = await request.json();
     const model = getModel(spec.table);
+    const role = (session.user as { role?: Role }).role as Role;
+
+    // Autorização por tabela (src/lib/table-acl.ts). Sem isto o gateway aceita
+    // qualquer tabela do TABLE_MAP de qualquer papel — os gates de tela são só
+    // de UI e não protegem um POST direto.
+    if (!canAccessTable(role, spec.table, spec.action)) {
+      return NextResponse.json(
+        { data: null, error: { message: "Forbidden", code: "403" }, count: null },
+        { status: 403 }
+      );
+    }
 
     // Valor do item: quem não é gestão não lê nem grava a coluna. `hideValue`
     // vale só para as tabelas do almoxarifado (UNIT_VALUE_TABLES).
-    const hideValue =
-      UNIT_VALUE_TABLES.has(spec.table) &&
-      !canViewStockValue((session.user as { role?: Role }).role as Role);
+    const hideValue = UNIT_VALUE_TABLES.has(spec.table) && !canViewStockValue(role);
     // Silenciosamente descarta o campo em insert/update — assim um payload
     // adulterado não grava preço, sem quebrar o resto do save.
     if (hideValue && spec.data) delete spec.data.unit_value;

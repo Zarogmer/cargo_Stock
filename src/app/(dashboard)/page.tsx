@@ -135,6 +135,12 @@ export default function DashboardPage() {
       // card de Conversas conta as mensagens recebidas depois desse instante.
       const convLastSeen = typeof window !== "undefined" ? localStorage.getItem("conversas_last_seen") : null;
 
+      // O card de Compras só aparece pra COMPRAS_ROLES (canSeeCompras, abaixo) —
+      // a contagem agora também só é pedida por eles. /api/db passou a barrar
+      // purchase_orders fora desses papéis, então disparar a query pra Manutenção
+      // devolveria 403.
+      const podeVerCompras = COMPRAS_ROLES.includes(profile?.role || "RH");
+
       // "Estoque" = materiais do galpão (team=GALPAO). "Rancho" = comida por
       // equipe (EQUIPE_1/2/3). Ambos vivem em stock_items, separados pelo team.
       const FOOD_TEAMS = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_3"];
@@ -158,7 +164,9 @@ export default function DashboardPage() {
         // Uniformes: soma das quantidades em estoque (total de peças), não o nº de tipos.
         db.from("uniforms").select("stock_qty"),
         db.from("tool_requests").select("id", { count: "exact", head: true }).eq("status", "PENDENTE"),
-        db.from("purchase_orders").select("id", { count: "exact", head: true }).gte("purchase_date", monthStart).lt("purchase_date", monthEnd),
+        podeVerCompras
+          ? db.from("purchase_orders").select("id", { count: "exact", head: true }).gte("purchase_date", monthStart).lt("purchase_date", monthEnd)
+          : Promise.resolve({ count: 0 }),
         // Conversas: mensagens recebidas (from_me=false) ainda não vistas na aba
         // Conversas (created_at > último acesso). Sem acesso prévio → 0.
         convLastSeen
@@ -509,7 +517,9 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+    // profile?.role entra aqui porque a contagem de Compras depende do papel: no
+    // 1º render o profile ainda não resolveu, e sem a dep o card ficaria em 0.
+  }, [profile?.role]);
 
   // Fetch dollar quote
   const fetchDollar = useCallback(async () => {

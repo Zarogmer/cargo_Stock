@@ -440,13 +440,22 @@ export default function SolicitacoesPage() {
         db.from("tool_requests").select("*").order("created_at", { ascending: false }),
         db.from("product_links").select("*").order("category").order("name"),
         db.from("suppliers").select("*").order("name"),
-        db.from("purchase_orders").select("*").order("purchase_date", { ascending: false }).order("created_at", { ascending: false }),
+        // Compras/cartões/bancos são de quem gere compras (canManagePurchases).
+        // /api/db passou a barrar essas 3 tabelas fora de COMPRAS_ROLES, então a
+        // Manutenção — que só ABRE pedidos — nem dispara as queries.
+        canManagePurchases
+          ? db.from("purchase_orders").select("*").order("purchase_date", { ascending: false }).order("created_at", { ascending: false })
+          : Promise.resolve({ data: [], error: null }),
         // Navios pro seletor de "Navio" do Nova Compra (mais recentes primeiro).
         db.from("ships").select("id, name, status, port, arrival_date").order("created_at", { ascending: false }),
         // Cartões (com o banco) pro seletor "qual cartão" do Nova Compra.
-        db.from("cards").select("*, bank_accounts(bank, nickname)").order("last4"),
+        canManagePurchases
+          ? db.from("cards").select("*, bank_accounts(bank, nickname)").order("last4")
+          : Promise.resolve({ data: [], error: null }),
         // Contas bancárias pro "cadastrar novo cartão" (só id/apelido/banco).
-        db.from("bank_accounts").select("id, nickname, bank, active").order("nickname"),
+        canManagePurchases
+          ? db.from("bank_accounts").select("id, nickname, bank, active").order("nickname")
+          : Promise.resolve({ data: [], error: null }),
       ]);
 
       const errors: string[] = [];
@@ -476,7 +485,7 @@ export default function SolicitacoesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canManagePurchases]);
 
   useEffect(() => { loadAll(); }, [loadAll, pathname]);
 
