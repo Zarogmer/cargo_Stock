@@ -823,7 +823,7 @@ export function ContasAPagarPage() {
   // fornecedor não vem no código — segue manual (ou casa depois na conciliação).
   function applyScannedBoleto(b: BoletoParsed) {
     const bankLabel = b.bankCode ? BANK_NAMES[b.bankCode] : undefined;
-    setForm((f) => ({
+    const fill = (f: FormState): FormState => ({
       ...f,
       digitable_line: b.digits,
       amount: b.amount != null ? formatAmountBR(String(b.amount)) : f.amount,
@@ -835,7 +835,15 @@ export function ContasAPagarPage() {
         (b.tipo === "ARRECADACAO"
           ? "Conta de consumo/arrecadação (boleto escaneado)"
           : `Boleto${bankLabel ? ` ${bankLabel}` : ""} escaneado`),
-    }));
+    });
+    if (modalOpen) {
+      // Scan de dentro do formulário: completa o que estiver em branco.
+      setForm(fill);
+    } else {
+      // Scan pelo "📷 Escanear" do topo: abre a Nova conta zerada já preenchida.
+      openCreate();
+      setForm(fill(EMPTY_FORM));
+    }
     setScanOpen(false);
   }
 
@@ -1045,6 +1053,15 @@ export function ContasAPagarPage() {
         </div>
         {canEdit && (
           <div className="flex gap-2 flex-wrap">
+            {/* Atalho: escaneia o boleto e já abre a Nova conta preenchida. */}
+            <button
+              type="button"
+              onClick={() => setScanOpen(true)}
+              className="bg-primary hover:bg-primary-dark text-white text-sm font-medium px-4 py-2.5 rounded-lg transition"
+              title="Ler o código de barras do boleto com a câmera e criar a conta já preenchida"
+            >
+              📷 Escanear
+            </button>
             <label className={`inline-flex items-center ${importingPdf ? "opacity-50" : "cursor-pointer"}`}>
               <span className="bg-primary hover:bg-primary-dark text-white text-sm font-medium px-4 py-2.5 rounded-lg transition">
                 {importingPdf ? "Importando..." : "Import NF (PDF)"}
