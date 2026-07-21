@@ -154,6 +154,7 @@ const EXPENSE_CATEGORIES: { value: string; label: string }[] = [
   { value: "COMPRAS", label: "Compras" },
   { value: "QUIMICA", label: "Química" },
   { value: "MATERIAL_DANIFICADO", label: "Material danificado" },
+  { value: "MATERIAL_PERDIDO", label: "Material perdido" },
   { value: "AJUDA_DE_CUSTO", label: "Ajuda de custo" },
   { value: "ALIMENTACAO", label: "Alimentação" },
   { value: "RESTAURANTE", label: "Jantar/Restaurante" },

@@ -33,9 +33,13 @@ function qtyLabel(it: BrokenItem): string {
   return it.qty > 0 ? `${it.qty}${u ? ` ${u}` : ""}` : "";
 }
 
-// Mensagem do retorno. "quebrados": lista o material que voltou QUEBRADO, pra
+// Mensagem do retorno. "quebrados": lista as ocorrências do material, pra
 // manutenção/compras reporem. "resumo": retorno confirmado — o que voltou bom
-// (compacto) + os quebrados. Vai por DM pro Administrativo e/ou pro grupo.
+// (compacto) + as ocorrências. Vai por DM pro Administrativo e/ou pro grupo.
+//
+// Desde 2026-07-21 a ocorrência pode ser AVARIADO (voltou quebrado — a equipe
+// trouxe) ou PERDIDO (não voltou — vira custo do navio). A tela manda as duas
+// em `brokenItems`, etiquetadas na observação de cada linha.
 function buildMessage(b: NotifyBody): string {
   const team = b.team ? ` · ${TEAM_LABEL[b.team] || b.team}` : "";
   const lines = b.brokenItems.map((it) => {
@@ -54,15 +58,15 @@ function buildMessage(b: NotifyBody): string {
       `✅ *Retorno confirmado*\n\n` +
       `🚢 Navio: *${b.shipName}*${team}\n\n` +
       (returned ? `✔️ Voltou em bom estado: ${returned}\n` : "") +
-      (lines.length ? `\n🔧 *Quebrou/estragou (${lines.length})*\n${lines.join("\n")}\n` : "\n🔧 Nenhum item quebrado.\n") +
+      (lines.length ? `\n⚠️ *Avariado / perdido (${lines.length})*\n${lines.join("\n")}\n` : "\n✅ Nada avariado nem perdido.\n") +
       extra + by
     );
   }
 
   return (
-    `🛠️ *Retorno de material — quebrados*\n\n` +
+    `🛠️ *Retorno de material — avariado/perdido*\n\n` +
     `🚢 Navio: *${b.shipName}*${team}\n\n` +
-    (lines.length ? lines.join("\n") : "Nenhum item quebrado.") +
+    (lines.length ? lines.join("\n") : "Nada avariado nem perdido.") +
     "\n" + extra + by
   );
 }

@@ -225,6 +225,9 @@ const EXPENSE_CATEGORIES = [
   { value: "COMPRAS",            label: "Compras" },
   { value: "QUIMICA",            label: "Química" },
   { value: "MATERIAL_DANIFICADO", label: "Material danificado" },
+  // Material que NÃO voltou do navio (Embarque/Retorno › Perdido). Lançado
+  // sozinho pelo /api/retorno/despesa e dividido pela equipe (Desc. Geral).
+  { value: "MATERIAL_PERDIDO",   label: "Material perdido" },
   { value: "AJUDA_DE_CUSTO",     label: "Ajuda de custo" },
   { value: "ALIMENTACAO",        label: "Alimentação" },
   { value: "RESTAURANTE",        label: "Jantar/Restaurante" },
@@ -3185,6 +3188,26 @@ function JobDetailModal({
   // Valor que precisamos = TOTAL - VALOR DA FOLHA (Pluxee + ajustes/despesas)
   const liquidValue = custoTotal - folhaValue;
 
+  // ── Desconto Geral: material PERDIDO dividido pela equipe ────────────────
+  // O que não voltou do navio (Embarque/Retorno › Perdido) vira despesa
+  // MATERIAL_PERDIDO e o prejuízo é rateado entre quem trabalhou na operação.
+  // Legado: antes de 2026-07-21 essa despesa nascia como MATERIAL_DANIFICADO,
+  // então o marcador da descrição também conta.
+  const perdaTotal = adjustments
+    .filter(
+      (a) =>
+        a.category === "MATERIAL_PERDIDO" ||
+        (a.category === "MATERIAL_DANIFICADO" && a.description.startsWith("Retorno de material")),
+    )
+    .reduce((s, a) => s + Number(a.amount || 0), 0);
+  // Cabeças da equipe: cada colaborador conta UMA vez (no Costado a mesma
+  // pessoa aparece uma vez por turno). Administrativo não entra no rateio.
+  const crewHeadcount = new Set(
+    allocations.map((a) => a.employee_id).filter((id): id is number => id != null),
+  ).size;
+  const descGeralPerPerson =
+    perdaTotal > 0 && crewHeadcount > 0 ? +(perdaTotal / crewHeadcount).toFixed(2) : 0;
+
   // Nome da função de uma alocação (sempre em maiúsculas p/ agrupar).
   const allocFnName = (a: JobAllocation) =>
     (a.job_functions?.name || functions.find((f) => f.id === a.function_id)?.name || `#${a.function_id}`).toUpperCase();
@@ -3660,16 +3683,21 @@ function JobDetailModal({
       set("E7", "CONTA", styleHeader);
       set("F7", "ITAÚ/SANTANDER", styleHeader);
       set("G7", "PAGTO NA FOLHA", styleHeader);
+      // DESCONTO GERAL: material PERDIDO no navio dividido pela equipe. A antiga
+      // coluna "Perda de Material" saiu — a perda agora é rateada aqui (pedido
+      // do Guilherme, 2026-07-21).
       set("H7", "DESCONTO GERAL", styleHeader);
-      set("I7", "Perda de Material", styleHeader);
       // ADIANTAMENTO: vale que a pessoa já pegou e volta agora. Vem dos vales
       // descontados neste navio (Relatório de Vales) — não do valor do navio.
-      set("J7", "ADIANTAMENTO", styleHeader);
-      set("K7", `MV 1: ${shipLabel}`, styleHeader);
+      set("I7", "ADIANTAMENTO", styleHeader);
+      set("J7", `MV 1: ${shipLabel}`, styleHeader);
 
       // Funcionários começam na linha 9 (linha 8 fica em branco como no template)
       let row = 9;
-      let totalFolha = 0, totalNavio = 0, totalAdto = 0;
+      let totalFolha = 0, totalNavio = 0, totalAdto = 0, totalDescGeral = 0;
+      // Rateio da perda: cada colaborador paga a sua parte UMA vez (no Costado
+      // a mesma pessoa aparece em várias linhas).
+      const descGeralSeen = new Set<number>();
       allocations.forEach((a, idx) => {
         const e = a.employees;
         const total = allocTotalPerson(a);
@@ -3679,9 +3707,16 @@ function JobDetailModal({
         // Vale descontado neste navio. Sai do bolso da pessoa (ela já pegou o
         // dinheiro), então não entra em totalNavio — só na coluna ADIANTAMENTO.
         const adto = jobDiscountFor(job!.id, a.employee_id ?? null, advDiscounts);
+        // Parte da perda de material deste colaborador (uma vez só).
+        let descGeral = 0;
+        if (descGeralPerPerson > 0 && a.employee_id != null && !descGeralSeen.has(a.employee_id)) {
+          descGeralSeen.add(a.employee_id);
+          descGeral = descGeralPerPerson;
+        }
         totalFolha += folha;
         totalNavio += total;
         totalAdto += adto;
+        totalDescGeral += descGeral;
         // Sem conta bancária = pagamento em espécie ("TRAZER SALÁRIO"). É o valor
         // que a coluna ITAÚ/SANTANDER passa a mostrar, pra filtrar quem recebe fora
         // do banco. Com conta, mostra o banco (base do filtro Itaú/Santander).
@@ -3695,10 +3730,9 @@ function JobDetailModal({
         set(`E${row}`, e?.bank_account || "", styleCellCenter);
         set(`F${row}`, bankCell, styleCellCenter);
         set(`G${row}`, folha, styleCellMoney, "n");
-        set(`H${row}`, 0, styleCellMoney, "n");
-        set(`I${row}`, 0, styleCellMoney, "n");
-        set(`J${row}`, adto, styleCellMoney, "n");
-        set(`K${row}`, total, styleCellMoney, "n");
+        set(`H${row}`, descGeral, styleCellMoney, "n");
+        set(`I${row}`, adto, styleCellMoney, "n");
+        set(`J${row}`, total, styleCellMoney, "n");
         row++;
       });
       // Última linha de funcionário — base do AutoFilter (o filtro do banco).
@@ -3708,10 +3742,9 @@ function JobDetailModal({
       const totalRow = row;
       set(`F${totalRow}`, "TOTAL", styleTotalLabel);
       set(`G${totalRow}`, totalFolha, styleTotalMoney, "n");
-      set(`H${totalRow}`, 0, styleTotalMoney, "n");
-      set(`I${totalRow}`, 0, styleTotalMoney, "n");
-      set(`J${totalRow}`, totalAdto, styleTotalMoney, "n");
-      set(`K${totalRow}`, totalNavio, styleTotalMoney, "n");
+      set(`H${totalRow}`, totalDescGeral, styleTotalMoney, "n");
+      set(`I${totalRow}`, totalAdto, styleTotalMoney, "n");
+      set(`J${totalRow}`, totalNavio, styleTotalMoney, "n");
       row += 2;
 
       set(`C${row}`, "TOTAL PAGAMENTO DOS MVs s/ desconto:", styleSummaryTitle); row++;
@@ -3728,7 +3761,7 @@ function JobDetailModal({
       ws["!ref"] = `A1:M${row + 2}`;
       ws["!cols"] = [
         { wch: 3 }, { wch: 5 }, { wch: 38 }, { wch: 10 }, { wch: 16 },
-        { wch: 18 }, { wch: 15 }, { wch: 14 }, { wch: 16 }, { wch: 15 }, { wch: 70 },
+        { wch: 18 }, { wch: 15 }, { wch: 16 }, { wch: 15 }, { wch: 70 },
       ];
       ws["!rows"] = Array.from({ length: row + 2 }, (_, i) => (i === 6 ? { hpt: 38 } : { hpt: 18 }));
       ws["!merges"] = [
@@ -3738,7 +3771,7 @@ function JobDetailModal({
       // coluna ITAÚ/SANTANDER pra mandar a folha só do Itaú, só do Santander ou
       // "TRAZER SALÁRIO" (sem conta). Só faz sentido com pelo menos 1 funcionário.
       if (lastDataRow >= 9) {
-        ws["!autofilter"] = { ref: `C7:K${lastDataRow}` };
+        ws["!autofilter"] = { ref: `C7:J${lastDataRow}` };
       }
 
       const wb = XLSX.utils.book_new();
@@ -4729,6 +4762,7 @@ function JobDetailModal({
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light" title="Valor especial + rateio">Extra</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Total</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-purple-700 whitespace-nowrap" title="PAGTO NA FOLHA — líquido do Relatório de Líquidos. Sem import, igual ao Total.">Folha</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap" title="DESCONTO GERAL — material perdido no navio (Embarque/Retorno › Perdido) dividido pela equipe. Avariado que a equipe trouxe de volta não entra aqui.">Desc. Geral</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-amber-700 whitespace-nowrap" title="ADIANTAMENTO — vale que o colaborador já pegou e está sendo descontado neste navio. Não muda o custo do navio, só o que ele recebe agora.">Adiant.</th>
                     {canEdit && !isReadOnly && !peopleReadOnly && <th className="w-14"></th>}
                   </tr>
@@ -5011,6 +5045,21 @@ function JobDetailModal({
                             </button>
                           )}
                         </td>
+                        {/* Desc. Geral — rateio do material perdido no navio.
+                            Mesmo valor pra todo mundo da equipe; some sozinho
+                            quando o retorno é corrigido. */}
+                        <td className="px-2 py-2 text-right whitespace-nowrap">
+                          {descGeralPerPerson > 0 ? (
+                            <span
+                              className="text-red-700"
+                              title={`Material perdido: ${brl(perdaTotal)} dividido por ${crewHeadcount} da equipe`}
+                            >
+                              − {brl(descGeralPerPerson)}
+                            </span>
+                          ) : (
+                            <span className="text-text-light">—</span>
+                          )}
+                        </td>
                         {/* Adiant. — desconto de vale neste navio. Clicar abre o
                             seletor com os vales em aberto do colaborador. */}
                         <td className="px-2 py-2 text-right whitespace-nowrap">
@@ -5092,6 +5141,19 @@ function JobDetailModal({
                         </td>
                         <td className="px-2 py-2 text-right text-emerald-700 whitespace-nowrap">{brl(baseTotal + extraTotal)}</td>
                         <td className="px-2 py-2 text-right text-purple-700 whitespace-nowrap">{brl(baseTotal + extraTotal - pluxeeTotal)}</td>
+                        {(() => {
+                          // Desc. Geral somado entre as linhas visíveis (cada
+                          // colaborador uma vez, como no rateio).
+                          const heads = new Set(
+                            totalAllocs.map((a) => a.employee_id).filter((id): id is number => id != null),
+                          ).size;
+                          const t = +(descGeralPerPerson * heads).toFixed(2);
+                          return (
+                            <td className="px-2 py-2 text-right text-red-700 whitespace-nowrap">
+                              {t > 0 ? `− ${brl(t)}` : "—"}
+                            </td>
+                          );
+                        })()}
                         {(() => {
                           // Total descontado de vale neste navio, entre quem está
                           // na tabela. Conta cada colaborador UMA vez: o desconto é
@@ -5875,8 +5937,9 @@ type FaturamentoRow = {
   banco: string;
   pluxee: number;
   folha: number;
+  // DESCONTO GERAL. A coluna "Perda de Material" saiu em 2026-07-21: material
+  // perdido agora é rateado pela equipe e entra aqui.
   desconto: number;
-  perda: number;
   navio: number;
 };
 
@@ -6138,7 +6201,6 @@ function FaturamentoModal({
         pluxee,
         folha: 0, // será preenchido pelo PDF ou manualmente
         desconto: 0,
-        perda: 0,
         navio: subtotal,
       };
     });
@@ -6238,7 +6300,6 @@ function FaturamentoModal({
         "PAGTO PLUXEE",
         "PAGTO NA FOLHA",
         "DESCONTO GERAL",
-        "Perda de Material",
         `MV 1: ${job!.name}${
           job!.start_date || job!.end_date
             ? ` ${formatDateBR(job!.start_date)}${
@@ -6256,7 +6317,6 @@ function FaturamentoModal({
       let totalPluxee = 0,
         totalFolha = 0,
         totalDesconto = 0,
-        totalPerda = 0,
         totalNavio = 0;
 
       rows.forEach((r, idx) => {
@@ -6270,13 +6330,11 @@ function FaturamentoModal({
           r.pluxee || 0,
           r.folha || 0,
           r.desconto || 0,
-          r.perda || 0,
           r.navio || 0,
         ]);
         totalPluxee += r.pluxee || 0;
         totalFolha += r.folha || 0;
         totalDesconto += r.desconto || 0;
-        totalPerda += r.perda || 0;
         totalNavio += r.navio || 0;
       });
 
@@ -6292,7 +6350,6 @@ function FaturamentoModal({
         totalPluxee,
         totalFolha,
         totalDesconto,
-        totalPerda,
         totalNavio,
       ]);
 
@@ -6306,7 +6363,6 @@ function FaturamentoModal({
         { wch: 12 },
         { wch: 16 },
         { wch: 13 },
-        { wch: 14 },
         { wch: 14 },
         { wch: 16 },
         { wch: 38 },
@@ -6329,11 +6385,10 @@ function FaturamentoModal({
       acc.pluxee += r.pluxee || 0;
       acc.folha += r.folha || 0;
       acc.desconto += r.desconto || 0;
-      acc.perda += r.perda || 0;
       acc.navio += r.navio || 0;
       return acc;
     },
-    { pluxee: 0, folha: 0, desconto: 0, perda: 0, navio: 0 }
+    { pluxee: 0, folha: 0, desconto: 0, navio: 0 }
   );
 
   const titleStr = `🧾 Faturar — ${job.name}`;
@@ -6432,8 +6487,7 @@ function FaturamentoModal({
                 <th className="px-2 py-2 text-left font-semibold text-text-light">BANCO</th>
                 <th className="px-2 py-2 text-right font-semibold text-text-light">PAGTO PLUXEE</th>
                 <th className="px-2 py-2 text-right font-semibold text-text-light">PAGTO NA FOLHA</th>
-                <th className="px-2 py-2 text-right font-semibold text-text-light">DESCONTO</th>
-                <th className="px-2 py-2 text-right font-semibold text-text-light">PERDA MATERIAL</th>
+                <th className="px-2 py-2 text-right font-semibold text-text-light" title="DESCONTO GERAL — inclui o rateio do material perdido no navio">DESCONTO GERAL</th>
                 <th className="px-2 py-2 text-right font-semibold text-text-light">NAVIO ({job.client || "TOTAL"})</th>
               </tr>
             </thead>
@@ -6475,16 +6529,6 @@ function FaturamentoModal({
                       placeholder="0,00"
                     />
                   </td>
-                  <td className="px-1 py-1">
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={r.perda || ""}
-                      onChange={(e) => updateRow(idx, { perda: parseFloat(e.target.value) || 0 })}
-                      className={inputCls}
-                      placeholder="0,00"
-                    />
-                  </td>
                   <td className="px-2 py-1 text-right font-semibold text-emerald-700">{brl(r.navio)}</td>
                 </tr>
               ))}
@@ -6495,7 +6539,6 @@ function FaturamentoModal({
                 <td className="px-2 py-2 text-right text-amber-700">{brl(totals.pluxee)}</td>
                 <td className="px-2 py-2 text-right text-purple-700">{brl(totals.folha)}</td>
                 <td className="px-2 py-2 text-right text-red-700">{brl(totals.desconto)}</td>
-                <td className="px-2 py-2 text-right text-red-700">{brl(totals.perda)}</td>
                 <td className="px-2 py-2 text-right text-emerald-700">{brl(totals.navio)}</td>
               </tr>
             </tfoot>

@@ -534,8 +534,13 @@ model MaterialReturnItem {
   item_name       String // snapshot do nome, pra história não sumir se o item for apagado
   went_qty        Int    @default(0) // referência: quanto foi (kit da equipe)
   returned_qty    Int    @default(0) // voltou em bom estado (credita o Estoque)
-  broken_qty      Int    @default(0) // voltou quebrado (não credita; vai pro aviso)
-  note            String? // o que quebrou / observação da manutenção
+  // AVARIADO: voltou fisicamente, mas quebrado/estragado. Não credita o Estoque
+  // e NÃO custa nada ao navio — a equipe trouxe o item de volta.
+  broken_qty      Int    @default(0)
+  // PERDIDO: não voltou. Vira despesa do navio (Pagamento de Navios) e o valor
+  // é dividido pela equipe como Desconto Geral. Ver /api/retorno/despesa.
+  lost_qty        Int    @default(0)
+  note            String? // o que avariou/sumiu — observação da conferência
 
   @@index([return_id])
   @@map("material_return_items")

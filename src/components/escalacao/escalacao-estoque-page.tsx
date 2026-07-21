@@ -39,7 +39,10 @@ interface ReturnItemRow {
   item_name: string;
   went_qty: number;
   returned_qty: number;
+  // AVARIADO: voltou quebrado/estragado (a equipe trouxe) — não custa ao navio.
   broken_qty: number;
+  // PERDIDO: não voltou — vira despesa do navio, dividida pela equipe.
+  lost_qty: number;
   note: string | null;
 }
 interface MaterialReturn {
@@ -52,8 +55,8 @@ interface MaterialReturn {
   material_return_items: ReturnItemRow[];
 }
 
-// Rascunho por material na tela de Retorno (o que voltou / quebrou / obs).
-interface ReturnDraft { returned: string; broken: string; note: string }
+// Rascunho por material na tela de Retorno (voltou / avariado / perdido / obs).
+interface ReturnDraft { returned: string; broken: string; lost: string; note: string }
 
 // Ajuste da lista POR NAVIO (embark_list_overrides): muda quanto vai de um item
 // do kit/rancho só neste navio, ou adiciona um item extra do Estoque/Rancho.
@@ -124,7 +127,7 @@ export function EscalacaoEstoquePage() {
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
         db.from("stock_items").select("*").order("name"),
         db.from("embark_kit_items").select("*, stock_items(id, name, quantity, location, unit)"),
-        db.from("material_returns").select("*, material_return_items(id, return_id, stock_item_id, item_name, went_qty, returned_qty, broken_qty, note)").order("created_at", { ascending: false }),
+        db.from("material_returns").select("*, material_return_items(id, return_id, stock_item_id, item_name, went_qty, returned_qty, broken_qty, lost_qty, note)").order("created_at", { ascending: false }),
         db.from("embark_list_overrides").select("*"),
       ]);
       setShips((shipsRes.data as Ship[]) || []);
@@ -256,15 +259,24 @@ export function EscalacaoEstoquePage() {
   // Comida do Rancho também entra na conferência de retorno — mesma mecânica
   // dos materiais (rascunho por stock_item_id; Rancho e materiais são todos
   // stock_items, então os ids não colidem). O que volta bom credita o Rancho.
-  const ranchoReturnables = itemsWithStatus.map((i) => ({
-    id: i.id,
-    stock_item_id: i.id,
-    estName: i.name,
-    need: i.default_quantity,
-    emEstoque: i.quantity,
-    location: "Rancho",
-    unit: i.unit || null,
-  }));
+  //
+  // Aqui o Rancho vem COMPLETO (todo alimento cadastrado na equipe), não só o
+  // que a lista deste navio mandou levar: na volta a conferência precisa poder
+  // registrar qualquer item — inclusive o que foi parar a bordo sem estar na
+  // lista. "Foi" mostra o que a lista mandou (0 quando não estava nela).
+  const ranchoNeedById = new Map(itemsWithStatus.map((i) => [i.id, i.default_quantity]));
+  const ranchoReturnables = stockItems
+    .filter((i) => (i as any).team === selectedTeam)
+    .map((i) => ({
+      id: i.id,
+      stock_item_id: i.id,
+      estName: i.name,
+      need: ranchoNeedById.get(i.id) ?? 0,
+      emEstoque: i.quantity,
+      location: "Rancho",
+      unit: i.unit || null,
+    }))
+    .sort((a, b) => a.estName.localeCompare(b.estName, "pt-BR"));
 
   // Dados comuns da lista (navio + itens) usados no envio pro WhatsApp e na
   // geração do Check List em PDF/Excel. Item com leva 0 (zerado só neste
@@ -473,6 +485,7 @@ export function EscalacaoEstoquePage() {
       draft[it.stock_item_id] = {
         returned: it.returned_qty > 0 ? String(it.returned_qty) : "",
         broken: it.broken_qty > 0 ? String(it.broken_qty) : "",
+        lost: (it.lost_qty || 0) > 0 ? String(it.lost_qty) : "",
         note: it.note || "",
       };
     }
@@ -483,23 +496,46 @@ export function EscalacaoEstoquePage() {
 
   function setDraft(stockItemId: number, patch: Partial<ReturnDraft>) {
     setReturnDraft((prev) => {
-      const base: ReturnDraft = prev[stockItemId] ?? { returned: "", broken: "", note: "" };
+      const base: ReturnDraft = prev[stockItemId] ?? { returned: "", broken: "", lost: "", note: "" };
       return { ...prev, [stockItemId]: { ...base, ...patch } };
     });
   }
 
-  // Linhas do retorno preenchidas (algum voltou/quebrou/obs). Usadas pra salvar
-  // e pra montar o aviso de quebrados. Materiais do kit + comida do Rancho.
+  // Linhas do retorno preenchidas (voltou/avariado/perdido/obs). Usadas pra
+  // salvar e pros avisos. Materiais do kit + comida do Rancho.
   function buildReturnRows() {
     return [...teamKit, ...ranchoReturnables]
       .map((k) => {
-        const d = returnDraft[k.stock_item_id] || { returned: "", broken: "", note: "" };
+        const d = returnDraft[k.stock_item_id] || { returned: "", broken: "", lost: "", note: "" };
         const returned = Math.max(0, Math.floor(parseFloat(d.returned) || 0));
         const broken = Math.max(0, Math.floor(parseFloat(d.broken) || 0));
+        const lost = Math.max(0, Math.floor(parseFloat(d.lost) || 0));
         const note = d.note.trim();
-        return { k, returned, broken, note };
+        return { k, returned, broken, lost, note };
       })
-      .filter((r) => r.returned > 0 || r.broken > 0 || r.note);
+      .filter((r) => r.returned > 0 || r.broken > 0 || r.lost > 0 || r.note);
+  }
+
+  // Ocorrências do retorno (avariado + perdido) pro aviso no WhatsApp. A API
+  // recebe tudo em `brokenItems`; a etiqueta na observação separa os dois —
+  // avariado a equipe trouxe de volta, perdido virou custo do navio.
+  function buildIncidentItems(rows: ReturnType<typeof buildReturnRows>) {
+    const out: Array<{ name: string; qty: number; unit: string | null; note: string | null }> = [];
+    for (const r of rows) {
+      const unit = r.k.unit ?? null;
+      if (r.broken > 0) {
+        out.push({ name: r.k.estName, qty: r.broken, unit, note: r.note ? `avariado — ${r.note}` : "avariado" });
+      }
+      if (r.lost > 0) {
+        out.push({ name: r.k.estName, qty: r.lost, unit, note: r.note ? `PERDIDO — ${r.note}` : "PERDIDO" });
+      }
+      // Observação solta (sem avaria/perda e sem nada de volta) segue valendo
+      // como ocorrência — é o jeito de registrar um caso sem quantidade.
+      if (r.broken === 0 && r.lost === 0 && r.returned === 0 && r.note) {
+        out.push({ name: r.k.estName, qty: 0, unit, note: r.note });
+      }
+    }
+    return out;
   }
 
   async function handleSaveReturn() {
@@ -518,10 +554,12 @@ export function EscalacaoEstoquePage() {
       // editar, o Estoque é ajustado só pela DIFERENÇA (não conta duas vezes).
       const oldReturned = new Map<number, number>();
       const oldBroken = new Map<number, number>();
+      const oldLost = new Map<number, number>();
       for (const it of existingReturn?.material_return_items || []) {
         if (it.stock_item_id == null) continue;
         oldReturned.set(it.stock_item_id, it.returned_qty);
         oldBroken.set(it.stock_item_id, it.broken_qty);
+        oldLost.set(it.stock_item_id, it.lost_qty || 0);
       }
 
       // Itens cuja baixa de embarque deste navio/equipe JÁ aconteceu: a quebra
@@ -574,13 +612,16 @@ export function EscalacaoEstoquePage() {
           went_qty: r.k.need,
           returned_qty: r.returned,
           broken_qty: r.broken,
+          lost_qty: r.lost,
           note: r.note || null,
         });
         const itemId = r.k.stock_item_id;
         const returnedDelta = r.returned - (oldReturned.get(itemId) || 0);
         const brokenDelta = r.broken - (oldBroken.get(itemId) || 0);
+        const lostDelta = r.lost - (oldLost.get(itemId) || 0);
         oldReturned.delete(itemId);
         oldBroken.delete(itemId);
+        oldLost.delete(itemId);
         const embarked = embarkedIds.has(itemId);
 
         // O que voltou em bom estado credita o Estoque pela diferença contra o
@@ -596,36 +637,42 @@ export function EscalacaoEstoquePage() {
           } as any);
         }
 
-        // Quebra: sai do Estoque. Com baixa de embarque, a perda já foi
-        // descontada lá — entra só o registro (AJUSTE) pro histórico contar a
-        // história; sem embarque, baixa aqui de verdade.
-        if (brokenDelta !== 0) {
+        // Avariado e Perdido saem do Estoque do mesmo jeito — nenhum dos dois
+        // volta pra prateleira (o avariado voltou fisicamente, mas quebrado).
+        // Com baixa de embarque, a saída já aconteceu lá: fica só o registro
+        // (AJUSTE) pro histórico contar a história; sem embarque, baixa aqui.
+        // O que separa os dois é o dinheiro: só o PERDIDO vira despesa do
+        // navio (ver /api/retorno/despesa).
+        const registerLoss = async (delta: number, label: string) => {
+          if (delta === 0) return;
           if (embarked) {
-            if (brokenDelta > 0) {
+            if (delta > 0) {
               await db.from("stock_movements").insert({
                 stock_item_id: itemId,
                 movement_type: "AJUSTE",
-                quantity: brokenDelta,
+                quantity: delta,
                 movement_date: today,
-                notes: `Quebra: ${currentShip.name} (${selectedTeam}) — quebrou no navio (a baixa já foi no embarque)`,
+                notes: `${label}: ${currentShip.name} (${selectedTeam}) — a baixa já foi no embarque`,
                 created_by: actor,
               } as any);
             }
           } else {
             await db.from("stock_movements").insert({
               stock_item_id: itemId,
-              movement_type: brokenDelta > 0 ? "BAIXA" : "ENTRADA",
-              quantity: Math.abs(brokenDelta),
+              movement_type: delta > 0 ? "BAIXA" : "ENTRADA",
+              quantity: Math.abs(delta),
               movement_date: today,
-              notes: `Quebra${existingReturn ? " (ajuste)" : ""}: ${currentShip.name} (${selectedTeam}) — quebrou no navio`,
+              notes: `${label}${existingReturn ? " (ajuste)" : ""}: ${currentShip.name} (${selectedTeam})`,
               created_by: actor,
             } as any);
           }
-        }
+        };
+        await registerLoss(brokenDelta, "Avaria");
+        await registerLoss(lostDelta, "Perda");
 
-        // Efeito líquido no estoque: crédito do que voltou bom − baixa da
-        // quebra (quando o embarque ainda não tinha descontado).
-        const stockDelta = returnedDelta - (embarked ? 0 : brokenDelta);
+        // Efeito líquido no estoque: crédito do que voltou bom − o que avariou
+        // e o que sumiu (quando o embarque ainda não tinha descontado).
+        const stockDelta = returnedDelta - (embarked ? 0 : brokenDelta + lostDelta);
         if (stockDelta !== 0) {
           await db.from("stock_items").update({
             quantity: Math.max(0, r.k.emEstoque + stockDelta),
@@ -635,12 +682,14 @@ export function EscalacaoEstoquePage() {
       }
 
       // Itens que saíram da edição (zerados): estorna o crédito do "voltou" e a
-      // baixa da quebra (esta só quando tinha sido baixada aqui, sem embarque).
-      const leftoverIds = new Set([...oldReturned.keys(), ...oldBroken.keys()]);
+      // baixa de avaria/perda (esta só quando tinha sido baixada aqui, sem embarque).
+      const leftoverIds = new Set([...oldReturned.keys(), ...oldBroken.keys(), ...oldLost.keys()]);
       for (const stockItemId of leftoverIds) {
         const retQty = oldReturned.get(stockItemId) || 0;
-        const brokeQty = embarkedIds.has(stockItemId) ? 0 : (oldBroken.get(stockItemId) || 0);
-        const delta = brokeQty - retQty; // devolve a quebra, tira o crédito
+        const brokeQty = embarkedIds.has(stockItemId)
+          ? 0
+          : (oldBroken.get(stockItemId) || 0) + (oldLost.get(stockItemId) || 0);
+        const delta = brokeQty - retQty; // devolve avaria/perda, tira o crédito
         if (delta === 0) continue;
         const current = stockItems.find((i) => i.id === stockItemId)?.quantity ?? 0;
         await db.from("stock_movements").insert({
@@ -675,9 +724,7 @@ export function EscalacaoEstoquePage() {
             returnedItems: rows
               .filter((r) => r.returned > 0)
               .map((r) => ({ name: r.k.estName, qty: r.returned, unit: r.k.unit ?? null })),
-            brokenItems: rows
-              .filter((r) => r.broken > 0 || (r.note && r.returned === 0))
-              .map((r) => ({ name: r.k.estName, qty: r.broken, unit: r.k.unit ?? null, note: r.note || null })),
+            brokenItems: buildIncidentItems(rows),
             notes: returnNotes.trim() || null,
             checkedBy: profile?.full_name || null,
           }),
@@ -705,14 +752,17 @@ export function EscalacaoEstoquePage() {
         const data = await res.json().catch(() => null);
         if (res.ok && Number(data?.amount) > 0) {
           const brl = Number(data.amount).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-          autoNote += ` 🪙 Despesa "Material danificado" de ${brl} lançada no navio.`;
+          const perHead = Number(data?.perPerson) > 0
+            ? ` (${Number(data.perPerson).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} por pessoa da equipe)`
+            : "";
+          autoNote += ` 🪙 Despesa "Material perdido" de ${brl} lançada no navio${perHead}.`;
         } else if (res.ok && data?.removed) {
-          autoNote += " 🪙 Despesa de material danificado do navio foi zerada.";
+          autoNote += " 🪙 Despesa de material perdido do navio foi zerada.";
         } else if (!res.ok) {
-          autoNote += " ⚠️ Não consegui lançar a despesa de material danificado no navio.";
+          autoNote += " ⚠️ Não consegui lançar a despesa de material perdido no navio.";
         }
       } catch {
-        autoNote += " ⚠️ Não consegui lançar a despesa de material danificado no navio.";
+        autoNote += " ⚠️ Não consegui lançar a despesa de material perdido no navio.";
       }
 
       setReturnMsg(baseMsg + autoNote);
@@ -726,29 +776,36 @@ export function EscalacaoEstoquePage() {
 
   async function handleSendBroken() {
     if (!currentShip || !selectedTeam) return;
-    const rows = buildReturnRows().filter((r) => r.broken > 0 || (r.note && r.returned === 0));
-    let brokenItems = rows.map((r) => ({ name: r.k.estName, qty: r.broken, unit: r.k.unit ?? null, note: r.note || null }));
+    let brokenItems = buildIncidentItems(buildReturnRows());
     let notesToSend = returnNotes.trim() || null;
     // Tabela zerada (ex.: acabou de salvar o retorno, que limpa o rascunho):
-    // manda os quebrados do ÚLTIMO retorno salvo deste navio/equipe — é o fluxo
-    // natural de "salvar e depois enviar".
+    // manda as ocorrências do ÚLTIMO retorno salvo deste navio/equipe — é o
+    // fluxo natural de "salvar e depois enviar".
     if (brokenItems.length === 0) {
       const last = shipReturns.find((r) => r.team === selectedTeam);
-      const lastBroken = (last?.material_return_items || [])
-        .filter((it) => it.broken_qty > 0 || (it.note && it.returned_qty === 0));
-      if (lastBroken.length > 0) {
+      const lastRows = (last?.material_return_items || [])
+        .filter((it) => it.broken_qty > 0 || (it.lost_qty || 0) > 0 || (it.note && it.returned_qty === 0));
+      if (lastRows.length > 0) {
         // Unidade não fica gravada no retorno — busca no cadastro do material.
-        brokenItems = lastBroken.map((it) => ({
-          name: it.item_name,
-          qty: it.broken_qty,
-          unit: stockItems.find((s) => s.id === it.stock_item_id)?.unit || null,
-          note: it.note,
-        }));
+        const unitOf = (id: number | null) => stockItems.find((s) => s.id === id)?.unit || null;
+        brokenItems = lastRows.flatMap((it) => {
+          const out: Array<{ name: string; qty: number; unit: string | null; note: string | null }> = [];
+          if (it.broken_qty > 0) {
+            out.push({ name: it.item_name, qty: it.broken_qty, unit: unitOf(it.stock_item_id), note: it.note ? `avariado — ${it.note}` : "avariado" });
+          }
+          if ((it.lost_qty || 0) > 0) {
+            out.push({ name: it.item_name, qty: it.lost_qty, unit: unitOf(it.stock_item_id), note: it.note ? `PERDIDO — ${it.note}` : "PERDIDO" });
+          }
+          if (it.broken_qty === 0 && (it.lost_qty || 0) === 0 && it.note) {
+            out.push({ name: it.item_name, qty: 0, unit: unitOf(it.stock_item_id), note: it.note });
+          }
+          return out;
+        });
         notesToSend = last!.notes;
       }
     }
     if (brokenItems.length === 0) {
-      setReturnMsg("Nada de quebrado pra enviar — preencha a coluna Quebrou (ou uma observação), ou salve um retorno com quebrados.");
+      setReturnMsg("Nada de avariado ou perdido pra enviar — preencha as colunas Avariado/Perdido (ou uma observação), ou salve um retorno com ocorrências.");
       return;
     }
     setSendingWhats(true);
@@ -1224,7 +1281,11 @@ function RetornoSection({
   const [showRancho, setShowRancho] = useState(true);
 
   // Tabela de conferência (mesma mecânica pros materiais e pro rancho; muda só
-  // o rótulo da perda: material "Quebrou", comida "Estragou").
+  // o rótulo do avariado: material "Avariado", comida "Estragou").
+  //
+  // Três destinos possíveis pro que foi: VOLTOU (bom, credita o estoque),
+  // AVARIADO (voltou quebrado — a equipe trouxe, não custa ao navio) e PERDIDO
+  // (não voltou — vira despesa do navio, dividida pela equipe).
   const renderKitTable = (
     kit: ReturnKitRow[],
     labels: { item: string; broken: string; obsPlaceholder: string; empty: string; emptyIcon: string },
@@ -1236,22 +1297,23 @@ function RetornoSection({
             <tr>
               <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">{labels.item}</th>
               <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto a equipe leva (referência)">Foi</th>
-              <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Voltou</th>
-              <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">{labels.broken}</th>
+              <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Voltou em bom estado — credita o estoque de volta">Voltou</th>
+              <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Voltou, mas quebrado/estragado — a equipe trouxe de volta; não custa nada ao navio">{labels.broken}</th>
+              <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Não voltou — vira despesa do navio, dividida pela equipe no Pagamento de Navios">Perdido</th>
               <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Obs.</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             {kit.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-10 text-center text-text-light">
+                <td colSpan={6} className="px-4 py-10 text-center text-text-light">
                   <span className="text-3xl block mb-2">{labels.emptyIcon}</span>
                   {labels.empty}
                 </td>
               </tr>
             ) : (
               kit.map((k) => {
-                const d = draft[k.stock_item_id] || { returned: "", broken: "", note: "" };
+                const d = draft[k.stock_item_id] || { returned: "", broken: "", lost: "", note: "" };
                 return (
                   <tr key={k.id} className="hover:bg-gray-50">
                     <td className="px-4 py-2.5 font-medium">{k.estName}</td>
@@ -1261,16 +1323,31 @@ function RetornoSection({
                         onChange={(e) => {
                           const v = e.target.value;
                           const ret = parseInt(v);
-                          // Quebrou = Foi − Voltou (dá pra ajustar na mão depois; a obs fica como está).
-                          const broken = v === "" || isNaN(ret) ? "" : String(Math.max(0, k.need - ret));
-                          setDraft(k.stock_item_id, { returned: v, broken });
+                          // O que não voltou nem foi marcado como avariado cai
+                          // em PERDIDO (Foi − Voltou − Avariado) — é o que custa
+                          // ao navio. Dá pra corrigir na mão depois.
+                          const bro = parseInt(d.broken) || 0;
+                          const lost = v === "" || isNaN(ret) ? "" : String(Math.max(0, k.need - ret - bro));
+                          setDraft(k.stock_item_id, { returned: v, lost });
                         }}
                         className={numCls} placeholder="0" />
                     </td>
                     <td className="px-4 py-2.5 text-center">
                       <input type="number" min={0} step={1} value={d.broken} disabled={!canEdit}
-                        onChange={(e) => setDraft(k.stock_item_id, { broken: e.target.value })}
-                        className={`${numCls} ${(parseInt(d.broken) || 0) > 0 ? "border-red-300 text-red-700" : ""}`} placeholder="0" />
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          const bro = parseInt(v) || 0;
+                          const ret = parseInt(d.returned);
+                          // Marcar avariado tira do perdido (o item apareceu).
+                          const lost = d.returned === "" || isNaN(ret) ? d.lost : String(Math.max(0, k.need - ret - bro));
+                          setDraft(k.stock_item_id, { broken: v, lost });
+                        }}
+                        className={`${numCls} ${(parseInt(d.broken) || 0) > 0 ? "border-amber-300 text-amber-700" : ""}`} placeholder="0" />
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      <input type="number" min={0} step={1} value={d.lost} disabled={!canEdit}
+                        onChange={(e) => setDraft(k.stock_item_id, { lost: e.target.value })}
+                        className={`${numCls} ${(parseInt(d.lost) || 0) > 0 ? "border-red-300 text-red-700 font-semibold" : ""}`} placeholder="0" />
                     </td>
                     <td className="px-4 py-2.5">
                       <input type="text" value={d.note} disabled={!canEdit}
@@ -1293,7 +1370,10 @@ function RetornoSection({
       <section className="space-y-2">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="text-sm font-bold text-text uppercase tracking-wider">🛠️ Retorno de material — {TEAM_LABELS[team] || team}</h2>
-          <span className="text-xs text-text-light">Bom volta pro estoque; quebrado é anotado e enviado.</span>
+          <span className="text-xs text-text-light">
+            Bom volta pro estoque · <span className="text-amber-700">avariado</span> a equipe trouxe (não custa) ·{" "}
+            <span className="text-red-700">perdido</span> vira custo do navio, dividido pela equipe.
+          </span>
         </div>
 
         {editing && (
@@ -1316,7 +1396,7 @@ function RetornoSection({
           </button>
         </div>
         {showMat && renderKitTable(teamKit, {
-          item: "Material", broken: "Quebrou",
+          item: "Material", broken: "Avariado",
           obsPlaceholder: "Ex.: cabo partido, motor queimado...",
           empty: "Sem kit de materiais para esta equipe", emptyIcon: "🧰",
         })}
@@ -1336,7 +1416,7 @@ function RetornoSection({
         {showRancho && renderKitTable(ranchoKit, {
           item: "Item", broken: "Estragou",
           obsPlaceholder: "Ex.: estragou no calor, embalagem rasgada...",
-          empty: "Nenhum item com quantidade padrão no Rancho desta equipe", emptyIcon: "🛒",
+          empty: "Nenhum alimento cadastrado no Rancho desta equipe", emptyIcon: "🛒",
         })}
 
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} disabled={!canEdit} rows={2}
@@ -1358,7 +1438,7 @@ function RetornoSection({
               {downloading === "xlsx" ? "Gerando..." : "📊 Lista Excel"}
             </Button>
             <Button size="sm" variant="secondary" onClick={onSend} disabled={sending || saving}>
-              {sending ? "Enviando..." : "📨 Enviar quebrados pro WhatsApp"}
+              {sending ? "Enviando..." : "📨 Enviar ocorrências pro WhatsApp"}
             </Button>
             <Button size="sm" onClick={onSave} disabled={saving || sending}>
               {saving ? "Confirmando..." : "✅ Confirmar Retorno"}
@@ -1373,8 +1453,15 @@ function RetornoSection({
           <h2 className="text-sm font-bold text-text uppercase tracking-wider">📋 Retorno confirmado — {shipName}</h2>
           <div className="space-y-2">
             {history.map((r) => {
-              const broken = (r.material_return_items || []).filter((it) => it.broken_qty > 0 || (it.note && it.returned_qty === 0));
-              const returned = (r.material_return_items || []).filter((it) => it.returned_qty > 0);
+              const items = r.material_return_items || [];
+              const broken = items.filter((it) => it.broken_qty > 0);
+              const lost = items.filter((it) => (it.lost_qty || 0) > 0);
+              // Observação solta (nada voltou, nada avariou/sumiu) entra junto
+              // dos avariados pra não sumir do resumo.
+              const noteOnly = items.filter(
+                (it) => it.broken_qty === 0 && (it.lost_qty || 0) === 0 && it.returned_qty === 0 && it.note,
+              );
+              const returned = items.filter((it) => it.returned_qty > 0);
               return (
                 <div key={r.id} className="bg-card border border-border rounded-lg px-4 py-3 text-sm">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1388,11 +1475,25 @@ function RetornoSection({
                       ✓ Voltou: {returned.map((it) => `${it.item_name} (${it.returned_qty})`).join(", ")}
                     </p>
                   )}
-                  {broken.length > 0 && (
+                  {(broken.length > 0 || noteOnly.length > 0) && (
                     <ul className="mt-1 space-y-0.5">
                       {broken.map((it) => (
-                        <li key={it.id} className="text-xs text-red-700">
-                          🔧 {it.item_name}{it.broken_qty > 0 ? ` (${it.broken_qty})` : ""}{it.note ? ` — ${it.note}` : ""}
+                        <li key={`b${it.id}`} className="text-xs text-amber-700">
+                          🔧 Avariado: {it.item_name} ({it.broken_qty}){it.note ? ` — ${it.note}` : ""}
+                        </li>
+                      ))}
+                      {noteOnly.map((it) => (
+                        <li key={`n${it.id}`} className="text-xs text-text-light">
+                          📝 {it.item_name} — {it.note}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {lost.length > 0 && (
+                    <ul className="mt-1 space-y-0.5">
+                      {lost.map((it) => (
+                        <li key={`l${it.id}`} className="text-xs text-red-700 font-medium">
+                          ❌ Perdido: {it.item_name} ({it.lost_qty}){it.note ? ` — ${it.note}` : ""}
                         </li>
                       ))}
                     </ul>
