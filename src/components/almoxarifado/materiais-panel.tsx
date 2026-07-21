@@ -71,7 +71,17 @@ const XFER_TEAMS: { value: XferTeam; label: string; badgeCls: string }[] = [
   { value: "EQUIPE_2", label: "Equipe 2", badgeCls: "bg-purple-100 text-purple-700" },
   { value: "EQUIPE_4", label: "Equipe Turbo", badgeCls: "bg-orange-100 text-orange-700" },
 ];
-const XFER_LABEL: Record<string, string> = Object.fromEntries(XFER_TEAMS.map((t) => [t.value, t.label]));
+
+// Abas de visão (igual o Rancho): "Disponível" (no galpão) + uma por equipe. A
+// aba filtra o que a tabela mostra; não é mais a "casa" do item (assigned_team).
+type StockView = "DISPONIVEL" | XferTeam;
+const VIEW_TABS: { value: StockView; label: string; activeCls: string }[] = [
+  { value: "DISPONIVEL", label: "Disponível", activeCls: "bg-teal-600 text-white shadow-md" },
+  { value: "EQUIPE_1", label: "Equipe 1", activeCls: "bg-blue-600 text-white shadow-md" },
+  { value: "EQUIPE_2", label: "Equipe 2", activeCls: "bg-purple-600 text-white shadow-md" },
+  { value: "EQUIPE_4", label: "Equipe Turbo", activeCls: "bg-orange-600 text-white shadow-md" },
+];
+const VIEW_LABEL: Record<string, string> = Object.fromEntries(VIEW_TABS.map((t) => [t.value, t.label]));
 
 export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   const cfg = KIND_CONFIG[kind];
@@ -93,7 +103,10 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   const [saving, setSaving] = useState(false);
   // Alocações por equipe: quanto de cada material está separado pra cada equipe.
   const [allocs, setAllocs] = useState<MaterialTeamAllocation[]>([]);
-  // Item cujo botão "Transferir" foi clicado — abre o modal de alocação por equipe.
+  // Aba de visão (Disponível / Equipe 1 / 2 / Turbo) — filtra a tabela e vira a
+  // ORIGEM da transferência (o botão Transferir manda desta aba pra outra).
+  const [view, setView] = useState<StockView>("DISPONIVEL");
+  // Item cujo botão "Transferir" foi clicado — abre o modal de transferência.
   const [transferItem, setTransferItem] = useState<StockItem | null>(null);
 
   const role = profile?.role || "RH";
@@ -175,16 +188,6 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
     return (altNamesByCode.get(code) || []).filter((n) => normalize(n) !== normalize(editItem.name));
   }, [editItem, codeMap, altNamesByCode]);
 
-  const filteredItems = items.filter((i) =>
-    matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search),
-  );
-
-  // Total em R$ do que está listado (busca), pra bater com a tabela.
-  const totalValue = useMemo(
-    () => filteredItems.reduce((sum, i) => sum + (i.unit_value || 0) * i.quantity, 0),
-    [filteredItems],
-  );
-
   // Alocação por item: { EQUIPE_1: x, EQUIPE_2: y, EQUIPE_4: z } (só as > 0).
   const allocByItem = useMemo(() => {
     const map = new Map<number, Record<string, number>>();
@@ -197,6 +200,10 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
     return map;
   }, [allocs]);
 
+  const allocOf = useCallback(
+    (id: number, team: string) => allocByItem.get(id)?.[team] || 0,
+    [allocByItem],
+  );
   // Quanto de um item já está separado nas equipes (soma das alocações).
   const allocatedOf = useCallback(
     (id: number) => Object.values(allocByItem.get(id) || {}).reduce((s, n) => s + n, 0),
@@ -207,29 +214,60 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
     (item: StockItem) => Math.max(0, +(item.quantity - allocatedOf(item.id)).toFixed(3)),
     [allocatedOf],
   );
+  // Quanto o item tem NA VISÃO atual (Disponível ou a equipe da aba).
+  const inViewQty = useCallback(
+    (item: StockItem) => (view === "DISPONIVEL" ? disponivelOf(item) : allocOf(item.id, view)),
+    [view, disponivelOf, allocOf],
+  );
+
+  // Filtra pela busca e pela aba: Disponível mostra tudo; aba de equipe mostra só
+  // o que aquela equipe tem separado (> 0).
+  const filteredItems = items.filter((i) => {
+    if (!(matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search))) return false;
+    if (view === "DISPONIVEL") return true;
+    return allocOf(i.id, view) > 0;
+  });
+
+  // Total em R$ do que está listado (busca), pra bater com a tabela.
+  const totalValue = useMemo(
+    () => filteredItems.reduce((sum, i) => sum + (i.unit_value || 0) * i.quantity, 0),
+    [filteredItems],
+  );
 
   // Define a alocação de UMA equipe pra um item (valor absoluto). O total do item
-  // (stock_items.quantity) não muda — só muda a divisão entre Disponível e equipe.
-  // Trava: a soma das alocações nunca passa do total.
-  async function handleSetAllocation(item: StockItem, team: XferTeam, rawQty: number) {
-    const others = allocatedOf(item.id) - (allocByItem.get(item.id)?.[team] || 0);
-    const maxForTeam = Math.max(0, +(item.quantity - others).toFixed(3));
-    const qty = Math.min(Math.max(rawQty, 0), maxForTeam);
+  // não muda. `qty` já vem travado pelo chamador.
+  async function setAllocAbsolute(itemId: number, team: XferTeam, absQty: number, actor: string) {
+    const existing = allocs.find((a) => a.stock_item_id === itemId && a.team === team);
+    if (existing) {
+      await db.from("material_team_allocations")
+        .update({ quantity: Math.max(0, absQty), updated_by: actor } as Record<string, unknown>)
+        .eq("id", existing.id);
+    } else if (absQty > 0) {
+      await db.from("material_team_allocations")
+        .insert({ stock_item_id: itemId, team, quantity: absQty, updated_by: actor } as Record<string, unknown>);
+    }
+  }
+
+  // Transfere `qty` de uma origem pra um destino (cada um: "DISPONIVEL" ou equipe).
+  // O total do galpão não muda — só muda a divisão. Disponível é implícito (total
+  // − alocado), então mover pra/de Disponível é só ajustar a alocação da equipe.
+  async function handleTransfer(item: StockItem, from: StockView, to: StockView, rawQty: number) {
+    const avail = from === "DISPONIVEL" ? disponivelOf(item) : allocOf(item.id, from);
+    const qty = Math.min(Math.max(rawQty, 0), avail);
+    if (qty <= 0 || from === to) { setTransferItem(null); return; }
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
     try {
-      const existing = allocs.find((a) => a.stock_item_id === item.id && a.team === team);
-      if (existing) {
-        await db.from("material_team_allocations")
-          .update({ quantity: qty, updated_by: actor } as Record<string, unknown>)
-          .eq("id", existing.id);
-      } else if (qty > 0) {
-        await db.from("material_team_allocations")
-          .insert({ stock_item_id: item.id, team, quantity: qty, updated_by: actor } as Record<string, unknown>);
+      if (from !== "DISPONIVEL") {
+        await setAllocAbsolute(item.id, from, +(allocOf(item.id, from) - qty).toFixed(3), actor);
+      }
+      if (to !== "DISPONIVEL") {
+        await setAllocAbsolute(item.id, to, +(allocOf(item.id, to) + qty).toFixed(3), actor);
       }
       await loadItems();
     } finally {
       setSaving(false);
+      setTransferItem(null);
     }
   }
 
@@ -442,8 +480,9 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
           {canEdit && (
             <button
               onClick={(e) => { e.stopPropagation(); setTransferItem(i); }}
-              className="p-1.5 text-teal-600 hover:bg-teal-50 rounded"
-              title="Transferir pra uma equipe"
+              disabled={inViewQty(i) <= 0}
+              className="p-1.5 text-teal-600 hover:bg-teal-50 rounded disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              title={`Transferir de ${VIEW_LABEL[view]} pra outra equipe/Disponível`}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m4 6H4m0 0l4 4m-4-4l4-4" />
@@ -504,16 +543,32 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         </div>
       )}
 
-      {(canSeeValue && totalValue > 0) && (
-        <div className="flex justify-end">
+      {/* Abas de visão: Disponível / Equipe 1 / Equipe 2 / Turbo (igual o Rancho).
+          A aba filtra a tabela e é a ORIGEM do botão Transferir. */}
+      <div className="flex gap-2 flex-wrap items-center">
+        {VIEW_TABS.map((t) => {
+          const count = t.value === "DISPONIVEL"
+            ? items.filter((i) => disponivelOf(i) > 0).length
+            : items.filter((i) => allocOf(i.id, t.value) > 0).length;
+          return (
+            <button
+              key={t.value}
+              onClick={() => setView(t.value)}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${view === t.value ? t.activeCls : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+            >
+              {t.label}{count > 0 ? ` (${count})` : ""}
+            </button>
+          );
+        })}
+        {(canSeeValue && totalValue > 0) && (
           <span
-            className="px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-800"
+            className="ml-auto px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-800"
             title="Soma de quantidade × valor unitário dos itens listados"
           >
             Total em estoque: <strong className="font-semibold">{formatCurrency(totalValue)}</strong>
           </span>
-        </div>
-      )}
+        )}
+      </div>
 
       <DataTable
         columns={columns}
@@ -550,13 +605,14 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         saving={saving}
       />
 
-      <AllocationModal
+      <TransferModal
         item={transferItem}
+        source={view}
         code={transferItem ? codeMap.get(transferItem.id) || null : null}
         alloc={transferItem ? allocByItem.get(transferItem.id) || {} : {}}
         disponivel={transferItem ? disponivelOf(transferItem) : 0}
         onClose={() => setTransferItem(null)}
-        onSetAllocation={handleSetAllocation}
+        onTransfer={handleTransfer}
         saving={saving}
       />
 
@@ -575,42 +631,41 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   );
 }
 
-// Modal de transferência por equipe: o estoque fica no "Disponível" (galpão) e
-// aqui se separa uma quantidade pra uma equipe. Escolhe a equipe e digita quanto
-// ela deve ter (valor absoluto): aumentar tira do Disponível, diminuir devolve.
-// Trava no Disponível — não deixa separar mais do que existe.
-function AllocationModal({ item, code, alloc, disponivel, onClose, onSetAllocation, saving }: {
+// Modal de transferência: manda uma quantidade da ORIGEM (a aba atual) pra um
+// DESTINO (outra equipe ou o Disponível). Disponível → equipe separa material;
+// equipe → Disponível devolve; equipe → equipe passa direto entre elas.
+function TransferModal({ item, source, code, alloc, disponivel, onClose, onTransfer, saving }: {
   item: StockItem | null;
+  source: StockView;
   code: string | null;
   alloc: Record<string, number>;
   disponivel: number;
   onClose: () => void;
-  onSetAllocation: (item: StockItem, team: XferTeam, qty: number) => void;
+  onTransfer: (item: StockItem, from: StockView, to: StockView, qty: number) => void;
   saving: boolean;
 }) {
-  const [team, setTeam] = useState<XferTeam>("EQUIPE_1");
+  // Quanto há na origem, e os destinos possíveis (todos menos a origem).
+  const avail = source === "DISPONIVEL" ? disponivel : (alloc[source] || 0);
+  const destinos: StockView[] = VIEW_TABS.map((t) => t.value).filter((v) => v !== source);
+  const [dest, setDest] = useState<StockView>(destinos[0]);
   const [qty, setQty] = useState("");
 
-  // Ao abrir (ou trocar de equipe), mostra o que a equipe já tem separado.
+  // Ao (re)abrir, começa com o total disponível na origem e o 1º destino.
   useEffect(() => {
-    if (item) setQty(formatQty(alloc[team] || 0));
+    if (item) { setQty(formatQty(avail)); setDest(destinos[0]); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item, team]);
+  }, [item, source]);
 
   if (!item) return null;
-  const atual = alloc[team] || 0;
-  // Teto pra esta equipe = o que ela já tem + o que sobra no Disponível.
-  const maxForTeam = +(atual + disponivel).toFixed(3);
   const parsed = parseDecimalBR(qty);
-  const valid = parsed >= 0 && parsed <= maxForTeam + 1e-9;
-  const delta = valid ? +(parsed - atual).toFixed(3) : 0;
-  const dispDepois = valid ? +(disponivel - delta).toFixed(3) : disponivel;
+  const valid = parsed > 0 && parsed <= avail + 1e-9 && dest !== source;
+  const leftover = valid ? +(avail - parsed).toFixed(3) : avail;
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
 
   return (
-    <Modal open={!!item} onClose={onClose} title="Transferir pra equipe">
+    <Modal open={!!item} onClose={onClose} title={`Transferir de ${VIEW_LABEL[source]}`}>
       <form
-        onSubmit={(e) => { e.preventDefault(); if (valid && delta !== 0) onSetAllocation(item, team, parsed); }}
+        onSubmit={(e) => { e.preventDefault(); if (valid) onTransfer(item, source, dest, parsed); }}
         className="space-y-4"
       >
         <div className="rounded-lg border border-border bg-gray-50 px-3 py-2 text-sm">
@@ -619,30 +674,30 @@ function AllocationModal({ item, code, alloc, disponivel, onClose, onSetAllocati
             {code && <span className="ml-2 font-mono text-xs text-text-light">{code}</span>}
           </p>
           <p className="text-xs text-text-light mt-0.5">
-            Total <strong>{formatQty(item.quantity)}</strong> · Disponível no galpão <strong className="text-teal-700">{formatQty(disponivel)}</strong>
+            Em <strong>{VIEW_LABEL[source]}</strong>: <strong className="text-teal-700">{formatQty(avail)}</strong> · Total do item {formatQty(item.quantity)}
           </p>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-text mb-1">Equipe</label>
+          <label className="block text-sm font-medium text-text mb-1">Transferir para</label>
           <div className="flex gap-1 flex-wrap">
-            {XFER_TEAMS.map((t) => (
+            {destinos.map((d) => (
               <button
-                key={t.value}
+                key={d}
                 type="button"
-                onClick={() => setTeam(t.value)}
+                onClick={() => setDest(d)}
                 className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition ${
-                  team === t.value ? "bg-primary text-white border-primary" : "border-border text-text-light hover:bg-gray-50"
+                  dest === d ? "bg-primary text-white border-primary" : "border-border text-text-light hover:bg-gray-50"
                 }`}
               >
-                {t.label}{(alloc[t.value] || 0) > 0 ? ` (${formatQty(alloc[t.value])})` : ""}
+                {VIEW_LABEL[d]}{d !== "DISPONIVEL" && (alloc[d] || 0) > 0 ? ` (${formatQty(alloc[d])})` : ""}
               </button>
             ))}
           </div>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-text mb-1">Quantidade com a {XFER_LABEL[team]}</label>
+          <label className="block text-sm font-medium text-text mb-1">Quantidade</label>
           <input
             type="text"
             inputMode="decimal"
@@ -654,20 +709,16 @@ function AllocationModal({ item, code, alloc, disponivel, onClose, onSetAllocati
           <div className="mt-1.5 flex items-center justify-between gap-2 flex-wrap">
             <p className="text-[11px] text-text-light">
               {valid
-                ? delta === 0
-                  ? <>Sem mudança ({formatQty(atual)} com a {XFER_LABEL[team]}).</>
-                  : delta > 0
-                    ? <>Separa <strong>+{formatQty(delta)}</strong> · Disponível fica <strong>{formatQty(dispDepois)}</strong>.</>
-                    : <>Devolve <strong>{formatQty(-delta)}</strong> pro galpão · Disponível fica <strong>{formatQty(dispDepois)}</strong>.</>
-                : <span className="text-amber-700">Valor entre 0 e {formatQty(maxForTeam)}.</span>}
+                ? <>Ficam <strong>{formatQty(leftover)}</strong> em {VIEW_LABEL[source]}; vão <strong>{formatQty(parsed)}</strong> pra {VIEW_LABEL[dest]}.</>
+                : <span className="text-amber-700">Informe um valor entre 1 e {formatQty(avail)}.</span>}
             </p>
-            {disponivel > 0 && (
+            {avail > 0 && (
               <button
                 type="button"
-                onClick={() => setQty(formatQty(maxForTeam))}
+                onClick={() => setQty(formatQty(avail))}
                 className="text-[11px] font-medium text-primary hover:underline"
               >
-                Separar tudo ({formatQty(maxForTeam)})
+                Tudo ({formatQty(avail)})
               </button>
             )}
           </div>
@@ -675,8 +726,8 @@ function AllocationModal({ item, code, alloc, disponivel, onClose, onSetAllocati
 
         <div className="flex gap-3 justify-end pt-1">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={!valid || delta === 0 || saving}>
-            {saving ? "Salvando..." : "Confirmar"}
+          <Button type="submit" disabled={!valid || saving}>
+            {saving ? "Transferindo..." : "Transferir"}
           </Button>
         </div>
       </form>
