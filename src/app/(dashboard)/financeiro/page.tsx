@@ -2423,12 +2423,52 @@ function PagamentoNaviosTab({
   onChange: () => void;
   loading: boolean;
 }) {
-  const [tipo, setTipo] = useState<"EMBARQUE" | "COSTADO">(initialTipo);
+  const [tipo, setTipo] = useState<"TODOS" | "EMBARQUE" | "COSTADO">(initialTipo);
+
+  // Os dois painéis, montados uma vez só (mesmos dados) — reusados no "Todos"
+  // (empilhados) e nas visões individuais. Cada um mantém a sua renderização
+  // correta: Embarque é por porão, Costado por turno.
+  const trabalhosEl = (
+    <TrabalhosTab
+      jobs={jobs}
+      allocations={allocations}
+      adjustments={adjustments}
+      functions={functions}
+      ships={ships}
+      employees={employees}
+      specialRates={specialRates}
+      canEdit={canEdit}
+      canEditFunction={canEditFunction}
+      profileName={profileName}
+      filter={filter}
+      onChange={onChange}
+      loading={loading}
+    />
+  );
+  const costadoEl = (
+    <CostadoTab
+      jobs={jobs}
+      allocations={allocations}
+      adjustments={adjustments}
+      functions={functions}
+      ships={ships}
+      employees={employees}
+      specialRates={specialRates}
+      canEdit={canEdit}
+      profileName={profileName}
+      filter={filter}
+      onChange={onChange}
+      loading={loading}
+    />
+  );
+
   return (
     <div className="space-y-3">
-      {/* Alternador Embarque × Costado — mesma tela, duas visões */}
+      {/* Alternador Todos × Embarque × Costado — mesma tela, três visões. O
+          "Todos" empilha as duas seções (cada uma com seu filtro e cards). */}
       <div className="inline-flex rounded-lg border border-border bg-gray-50 p-0.5">
         {([
+          { key: "TODOS", label: "📋 Todos" },
           { key: "EMBARQUE", label: "🚢 Embarque" },
           { key: "COSTADO", label: "⚓ Costado" },
         ] as const).map((t) => (
@@ -2444,37 +2484,21 @@ function PagamentoNaviosTab({
         ))}
       </div>
 
-      {tipo === "EMBARQUE" ? (
-        <TrabalhosTab
-          jobs={jobs}
-          allocations={allocations}
-          adjustments={adjustments}
-          functions={functions}
-          ships={ships}
-          employees={employees}
-          specialRates={specialRates}
-          canEdit={canEdit}
-          canEditFunction={canEditFunction}
-          profileName={profileName}
-          filter={filter}
-          onChange={onChange}
-          loading={loading}
-        />
+      {tipo === "TODOS" ? (
+        <div className="space-y-6">
+          <section className="space-y-2">
+            <h3 className="text-sm font-bold text-text-light uppercase tracking-wider">🚢 Embarque</h3>
+            {trabalhosEl}
+          </section>
+          <section className="space-y-2">
+            <h3 className="text-sm font-bold text-text-light uppercase tracking-wider">⚓ Costado</h3>
+            {costadoEl}
+          </section>
+        </div>
+      ) : tipo === "EMBARQUE" ? (
+        trabalhosEl
       ) : (
-        <CostadoTab
-          jobs={jobs}
-          allocations={allocations}
-          adjustments={adjustments}
-          functions={functions}
-          ships={ships}
-          employees={employees}
-          specialRates={specialRates}
-          canEdit={canEdit}
-          profileName={profileName}
-          filter={filter}
-          onChange={onChange}
-          loading={loading}
-        />
+        costadoEl
       )}
     </div>
   );
