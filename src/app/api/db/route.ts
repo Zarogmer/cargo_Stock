@@ -12,6 +12,7 @@ const TABLE_MAP: Record<string, string> = {
   stock_movements: "stockMovement",
   embark_kit_items: "embarkKitItem",
   embark_list_overrides: "embarkListOverride",
+  material_team_allocations: "materialTeamAllocation",
   employees: "employee",
   epis: "epi",
   epi_movements: "epiMovement",

@@ -92,6 +92,9 @@ export function EscalacaoEstoquePage() {
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [kitItems, setKitItems] = useState<KitItem[]>([]);
   const [overrides, setOverrides] = useState<ListOverride[]>([]);
+  // Material separado por equipe (material_team_allocations). O "em estoque" de um
+  // material pra equipe do navio = o que está alocado PRA ela (não o total do galpão).
+  const [allocs, setAllocs] = useState<{ id: number; stock_item_id: number; team: string; quantity: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmEmbark, setConfirmEmbark] = useState(false);
   const [embarking, setEmbarking] = useState(false);
@@ -123,18 +126,20 @@ export function EscalacaoEstoquePage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [shipsRes, stockRes, kitRes, retRes, ovrRes] = await Promise.all([
+      const [shipsRes, stockRes, kitRes, retRes, ovrRes, allocRes] = await Promise.all([
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
         db.from("stock_items").select("*").order("name"),
         db.from("embark_kit_items").select("*, stock_items(id, name, quantity, location, unit)"),
         db.from("material_returns").select("*, material_return_items(id, return_id, stock_item_id, item_name, went_qty, returned_qty, broken_qty, lost_qty, note)").order("created_at", { ascending: false }),
         db.from("embark_list_overrides").select("*"),
+        db.from("material_team_allocations").select("*"),
       ]);
       setShips((shipsRes.data as Ship[]) || []);
       setStockItems(stockRes.data || []);
       setKitItems((kitRes.data as KitItem[]) || []);
       setReturns((retRes.data as MaterialReturn[]) || []);
       setOverrides((ovrRes.data as ListOverride[]) || []);
+      setAllocs((allocRes.data as { id: number; stock_item_id: number; team: string; quantity: number }[]) || []);
     } catch (err) {
       console.error("Load error:", err);
     } finally {
@@ -200,13 +205,18 @@ export function EscalacaoEstoquePage() {
 
   // Materiais do kit de embarque desta equipe (deduzidos do Estoque/GALPAO),
   // com o "Leva" ajustado por navio + itens extras puxados do Estoque.
+  // Quanto do material está separado PRA a equipe deste navio (o "em estoque"
+  // que conta pro embarque — o total do galpão fica no Almoxarifado).
+  const teamAllocFor = (stockItemId: number) =>
+    allocs.find((a) => a.stock_item_id === stockItemId && a.team === selectedTeam)?.quantity ?? 0;
+
   const kitStockIds = new Set(kitItems.filter((k) => k.team === selectedTeam).map((k) => k.stock_item_id));
   const kitRows = kitItems
     .filter((k) => k.team === selectedTeam)
     .map((k) => {
       const ovr = overrideByItem.get(k.stock_item_id);
       const estName = k.stock_items?.name || `#${k.stock_item_id}`;
-      const emEstoque = k.stock_items?.quantity ?? 0;
+      const emEstoque = teamAllocFor(k.stock_item_id);
       const need = ovr ? ovr.quantity : k.quantity;
       return {
         id: k.id,
@@ -229,17 +239,18 @@ export function EscalacaoEstoquePage() {
     .map((o) => {
       const si = stockItems.find((s) => s.id === o.stock_item_id);
       if (!si) return null;
+      const emEstoque = teamAllocFor(o.stock_item_id);
       return {
         id: -o.id, // id negativo: não colide com id de kit (React key)
         stock_item_id: o.stock_item_id,
         estName: si.name,
-        emEstoque: si.quantity,
+        emEstoque,
         need: o.quantity,
         baseNeed: 0,
         overridden: false,
         added: true,
-        ready: si.quantity >= o.quantity,
-        falta: Math.max(0, o.quantity - si.quantity),
+        ready: emEstoque >= o.quantity,
+        falta: Math.max(0, o.quantity - emEstoque),
         location: si.location || MATERIAL_TEAM_LABEL[(si as any).team] || "—",
         unit: si.unit || null,
       };
@@ -411,8 +422,8 @@ export function EscalacaoEstoquePage() {
     if (hasMissing) {
       setConfirmEmbark(false);
       setEmbarkMsg(
-        `🚫 Não dá pra embarcar: ${missingNames.length} item(ns) sem quantidade no Estoque — ${missingSummary}. ` +
-          `Reponha o Estoque ou ajuste o "Leva" deste navio antes de embarcar.`,
+        `🚫 Não dá pra embarcar: ${missingNames.length} item(ns) sem quantidade pra equipe — ${missingSummary}. ` +
+          `Transfira o material pra equipe no Almoxarifado (ou reponha o Rancho), ou ajuste o "Leva" deste navio antes de embarcar.`,
       );
       return;
     }
@@ -437,7 +448,10 @@ export function EscalacaoEstoquePage() {
       } as any).eq("id", item.id);
     }
 
-    // Materiais (kit) -> baixa do Estoque de materiais (GALPAO).
+    // Materiais (kit) -> o material separado PRA a equipe é consumido: baixa a
+    // alocação da equipe E o total do galpão (o material vai pro navio, sai da
+    // empresa). O "Disponível" (total − alocado) não muda — os dois caem junto.
+    const today = new Date().toISOString().split("T")[0];
     for (const k of teamKit) {
       if (k.need <= 0 || k.emEstoque <= 0) continue;
       const toConsume = Math.min(k.emEstoque, k.need);
@@ -445,14 +459,26 @@ export function EscalacaoEstoquePage() {
         stock_item_id: k.stock_item_id,
         movement_type: "BAIXA",
         quantity: toConsume,
-        movement_date: new Date().toISOString().split("T")[0],
+        movement_date: today,
         notes: `Embarque (materiais): ${currentShip.name} (${selectedTeam})`,
         created_by: actor,
       } as any);
-      await db.from("stock_items").update({
-        quantity: k.emEstoque - toConsume,
-        updated_by: actor,
-      } as any).eq("id", k.stock_item_id);
+      // Baixa a alocação da equipe.
+      const alloc = allocs.find((a) => a.stock_item_id === k.stock_item_id && a.team === selectedTeam);
+      if (alloc) {
+        await db.from("material_team_allocations").update({
+          quantity: Math.max(0, +(alloc.quantity - toConsume).toFixed(3)),
+          updated_by: actor,
+        } as any).eq("id", alloc.id);
+      }
+      // Baixa o total do galpão.
+      const si = stockItems.find((s) => s.id === k.stock_item_id);
+      if (si) {
+        await db.from("stock_items").update({
+          quantity: Math.max(0, +(si.quantity - toConsume).toFixed(3)),
+          updated_by: actor,
+        } as any).eq("id", k.stock_item_id);
+      }
     }
 
     if (currentShip.status === "AGENDADO") {
@@ -1017,10 +1043,10 @@ export function EscalacaoEstoquePage() {
           travado e o que fazer, sem obrigar a caçar as linhas vermelhas. */}
       {tab === "embarque" && canEmbarcar && selectedTeam && hasMissing && (
         <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-800">
-          <p className="font-semibold">🚫 Embarque bloqueado — {missingNames.length} item(ns) sem quantidade no Estoque</p>
+          <p className="font-semibold">🚫 Embarque bloqueado — {missingNames.length} item(ns) sem quantidade pra equipe</p>
           <p className="mt-1 text-xs">{missingSummary}</p>
           <p className="mt-1.5 text-xs text-red-700">
-            Reponha o Estoque ou ajuste o <strong>Leva</strong> deste navio (pode zerar o que não vai) para liberar o embarque.
+            <strong>Transfira</strong> o material pra equipe no Almoxarifado (ou reponha o Rancho), ou ajuste o <strong>Leva</strong> deste navio (pode zerar o que não vai) para liberar o embarque.
           </p>
         </div>
       )}
@@ -1081,7 +1107,7 @@ export function EscalacaoEstoquePage() {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Item</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Categoria</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto vai neste navio — editável, sem mexer no kit padrão da equipe">Leva</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Em Estoque</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto deste material está separado pra esta equipe (transferido no Almoxarifado)">Separado</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Status</th>
                 </tr>
               </thead>

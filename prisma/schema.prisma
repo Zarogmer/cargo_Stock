@@ -115,9 +115,29 @@ model StockItem {
   stock_movements  StockMovement[]
   embark_kit_items EmbarkKitItem[]
   embark_list_overrides EmbarkListOverride[]
+  team_allocations MaterialTeamAllocation[]
 
   @@index([category])
   @@map("stock_items")
+}
+
+// Quanto de um material (stock_item de setor: GALPAO/FERRAMENTA/ELETRICA/FLUIDOS/
+// MAQUINARIO) está separado PARA cada equipe. `stock_items.quantity` continua o
+// TOTAL que a empresa tem; o "Disponível" (no almoxarifado) = total − soma das
+// alocações. Transferir do Disponível pra equipe cria/soma uma linha aqui; o
+// total não muda. Ao embarcar, a equipe consome a alocação dela (e o total baixa).
+model MaterialTeamAllocation {
+  id            Int       @id @default(autoincrement())
+  stock_item_id Int
+  team          String // EQUIPE_1 | EQUIPE_2 | EQUIPE_4
+  quantity      Float     @default(0)
+  updated_at    DateTime  @default(now()) @updatedAt @db.Timestamptz()
+  updated_by    String
+  stock_items   StockItem @relation(fields: [stock_item_id], references: [id], onDelete: Cascade)
+
+  @@unique([stock_item_id, team])
+  @@index([stock_item_id])
+  @@map("material_team_allocations")
 }
 
 // Kit de embarque por equipe: quanto de cada material (stock_item do galpão,

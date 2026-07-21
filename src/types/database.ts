@@ -60,6 +60,17 @@ export interface StockMovement {
   stock_item?: StockItem;
 }
 
+// Quanto de um material está separado PARA cada equipe. O total fica em
+// stock_items.quantity; o "Disponível" = total − soma das alocações.
+export interface MaterialTeamAllocation {
+  id: number;
+  stock_item_id: number;
+  team: string; // EQUIPE_1 | EQUIPE_2 | EQUIPE_4
+  quantity: number;
+  updated_at: string;
+  updated_by: string;
+}
+
 // EQUIPE_4 = "Equipe Turbo" (equipe maior; no Rancho, EQUIPE_3 é a aba
 // "Disponível" — ex-"Total", a lista-mãe do estoque geral).
 export type TeamType = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "EQUIPE_4" | "COSTADO" | null;
