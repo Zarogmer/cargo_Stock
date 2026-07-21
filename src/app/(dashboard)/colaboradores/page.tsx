@@ -345,8 +345,8 @@ export default function ColaboradoresPage() {
   }
 
   // --- COLUMNS ---
-  const teamLabels: Record<string, string> = { EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3", COSTADO: "Costado" };
-  const teamColors: Record<string, string> = { EQUIPE_1: "bg-blue-100 text-blue-700", EQUIPE_2: "bg-purple-100 text-purple-700", EQUIPE_3: "bg-teal-100 text-teal-700", COSTADO: "bg-amber-100 text-amber-700" };
+  const teamLabels: Record<string, string> = { EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3", EQUIPE_4: "Equipe Turbo", COSTADO: "Costado" };
+  const teamColors: Record<string, string> = { EQUIPE_1: "bg-blue-100 text-blue-700", EQUIPE_2: "bg-purple-100 text-purple-700", EQUIPE_3: "bg-teal-100 text-teal-700", EQUIPE_4: "bg-orange-100 text-orange-700", COSTADO: "bg-amber-100 text-amber-700" };
   const empColumns = [
     { key: "name", label: "Nome", render: (e: Employee) => {
       const k = escalaStatus.get(e.id);
@@ -427,6 +427,7 @@ export default function ColaboradoresPage() {
             empTeamFilter === "Equipe 1" ? e.team === "EQUIPE_1" :
             empTeamFilter === "Equipe 2" ? e.team === "EQUIPE_2" :
             empTeamFilter === "Equipe 3" ? e.team === "EQUIPE_3" :
+            empTeamFilter === "Equipe Turbo" ? e.team === "EQUIPE_4" :
             empTeamFilter === "Costado" ? e.team === "COSTADO" :
             empTeamFilter === "Sem equipe" ? !e.team : true;
           const k = escalaStatus.get(e.id);
@@ -511,7 +512,7 @@ export default function ColaboradoresPage() {
                 </div>
                 <div className="flex gap-2 flex-wrap items-center">
                   <span className="text-xs text-text-light font-semibold uppercase tracking-wider w-20 shrink-0">Equipe:</span>
-                  {["Todos", "Equipe 1", "Equipe 2", "Equipe 3", "Costado", "Sem equipe"].map((t) => (
+                  {["Todos", "Equipe 1", "Equipe 2", "Equipe 3", "Equipe Turbo", "Costado", "Sem equipe"].map((t) => (
                     <button key={t} onClick={() => setEmpTeamFilter(t)}
                       className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${empTeamFilter === t ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}>
                       {t}
@@ -1055,6 +1056,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
                 <option value="EQUIPE_1">Equipe 1</option>
                 <option value="EQUIPE_2">Equipe 2</option>
                 <option value="EQUIPE_3">Equipe 3</option>
+                <option value="EQUIPE_4">Equipe Turbo</option>
                 <option value="COSTADO">Costado</option>
               </select>
             </div>

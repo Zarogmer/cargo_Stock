@@ -26,6 +26,7 @@ const SERVICE_LABELS: Record<string, string> = {
 const TEAM_LABELS: Record<string, string> = {
   EQUIPE_1: "Equipe 1",
   EQUIPE_2: "Equipe 2",
+  EQUIPE_4: "Equipe Turbo",
 };
 
 // "2026-05-26T13:00:00.000Z" → "26/05 às 13h00". Usa horário local de São Paulo
@@ -187,14 +188,14 @@ async function broadcastEmbarqueToTeams(args: {
   if (!ship) return NextResponse.json({ error: "Navio não encontrado" }, { status: 404 });
 
   // Sem equipe designada não tem pra onde mandar. Não é erro fatal — DMs
-  // continuam saindo, só não há broadcast em grupo.
-  const team = ship.assigned_team === "EQUIPE_1" || ship.assigned_team === "EQUIPE_2"
-    ? (ship.assigned_team as "EQUIPE_1" | "EQUIPE_2")
+  // continuam saindo, só não há broadcast em grupo. EQUIPE_4 = Equipe Turbo.
+  const team = ship.assigned_team && TEAM_LABELS[ship.assigned_team]
+    ? (ship.assigned_team as "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4")
     : null;
   if (!team) {
     return NextResponse.json({
       status: "partial",
-      warning: "Equipe designada não informada no navio — defina Equipe 1 ou Equipe 2 pra enviar aviso ao grupo.",
+      warning: "Equipe designada não informada no navio — defina Equipe 1, Equipe 2 ou Equipe Turbo pra enviar aviso ao grupo.",
     });
   }
 
@@ -207,7 +208,7 @@ async function broadcastEmbarqueToTeams(args: {
   if (!jid) {
     return NextResponse.json({
       status: "partial",
-      warning: `Grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"} não encontrado. Crie um grupo no WhatsApp começando com '${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}' e rode Sincronizar grupos.`,
+      warning: `Grupo da ${TEAM_LABELS[team]} não encontrado. Crie um grupo no WhatsApp começando com '${TEAM_LABELS[team]}' e rode Sincronizar grupos.`,
     });
   }
 
@@ -291,11 +292,11 @@ async function broadcastEmbarqueToTeams(args: {
               return matched ? `${matched.name} (${f.reason})` : `${f.id} (${f.reason})`;
             })
             .join("; ");
-          addParticipantsWarning = `Não consegui adicionar ${failures.length} pessoa(s) no grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}: ${summary}. Eles continuam recebendo DM, mas precisam entrar no grupo manualmente (peça invite link ao admin).`;
+          addParticipantsWarning = `Não consegui adicionar ${failures.length} pessoa(s) no grupo da ${TEAM_LABELS[team]}: ${summary}. Eles continuam recebendo DM, mas precisam entrar no grupo manualmente (peça invite link ao admin).`;
           console.warn("[groups] embarque add failures:", JSON.stringify(failures));
         }
       } catch (addErr) {
-        addParticipantsWarning = `Falha ao chamar Evolution pra adicionar ${phones.length} colaborador(es) no grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}: ${(addErr as Error).message}`;
+        addParticipantsWarning = `Falha ao chamar Evolution pra adicionar ${phones.length} colaborador(es) no grupo da ${TEAM_LABELS[team]}: ${(addErr as Error).message}`;
         console.warn("[groups] add participants exception:", (addErr as Error).message);
       }
     } else {
@@ -315,7 +316,7 @@ async function broadcastEmbarqueToTeams(args: {
           instance_name: instance,
           remote_jid: jid,
           from_me: true,
-          push_name: team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2",
+          push_name: TEAM_LABELS[team],
           message_type: "conversation",
           text: message,
           timestamp_ms: BigInt(Date.now()),
@@ -336,7 +337,7 @@ async function broadcastEmbarqueToTeams(args: {
   } catch (err) {
     return NextResponse.json({
       status: "partial",
-      warning: `Falha ao enviar pro grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}: ${(err as Error).message}`,
+      warning: `Falha ao enviar pro grupo da ${TEAM_LABELS[team]}: ${(err as Error).message}`,
       target: { team, jid, ok: false, error: (err as Error).message },
     });
   }

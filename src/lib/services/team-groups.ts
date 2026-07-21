@@ -1,28 +1,31 @@
-// Resolve os JIDs dos grupos fixos "Equipe 1" e "Equipe 2" no WhatsApp.
-// EMBARQUE manda as mensagens da operação pra esses 2 grupos (em vez de
-// criar um grupo novo por navio). Costado continua criando grupo do navio.
+// Resolve os JIDs dos grupos fixos "Equipe 1", "Equipe 2" e "Equipe Turbo" no
+// WhatsApp. EMBARQUE manda as mensagens da operação pra esses grupos (em vez
+// de criar um grupo novo por navio). Costado continua criando grupo do navio.
 //
 // Estratégia de resolução:
-//   1. Env vars (`WHATSAPP_EQUIPE_1_JID` / `WHATSAPP_EQUIPE_2_JID`) — override
-//      explícito, útil pra ambientes onde o nome do grupo no WhatsApp é
-//      diferente.
+//   1. Env vars (`WHATSAPP_EQUIPE_1_JID` / `WHATSAPP_EQUIPE_2_JID` /
+//      `WHATSAPP_EQUIPE_4_JID`) — override explícito, útil pra ambientes onde
+//      o nome do grupo no WhatsApp é diferente.
 //   2. Lookup no banco — busca stubs de grupo (systemNotice) cujo push_name
-//      comece com "Equipe 1"/"Equipe1" (ou 2), de forma flexível: aceita
-//      espaço opcional, case insensitive, e sufixos arbitrários (ex.:
-//      "Equipe1 / teste", "Equipe 1 - principal"). Stubs são gerados em
-//      /groups (criação) e /groups/sync (sincronização), então qualquer
-//      grupo já visto pelo app é encontrado aqui.
+//      comece com "Equipe 1"/"Equipe1" (ou 2, ou "Equipe Turbo"), de forma
+//      flexível: aceita espaço opcional, case insensitive, e sufixos
+//      arbitrários (ex.: "Equipe1 / teste", "Equipe 1 - principal"). Stubs são
+//      gerados em /groups (criação) e /groups/sync (sincronização), então
+//      qualquer grupo já visto pelo app é encontrado aqui.
 //
 // Resolve "preguiçoso" — só chama o DB se o env var não tiver o JID. Cache
 // em memória pra não bater no DB toda vez.
 
 import { prisma } from "@/lib/prisma";
 
-export type TeamKey = "EQUIPE_1" | "EQUIPE_2";
+// EQUIPE_4 = "Equipe Turbo" (mesma chave do Rancho; EQUIPE_3 é a aba "Total"
+// da comida, não uma equipe real — nunca entra aqui).
+export type TeamKey = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4";
 
 const TEAM_ENV_VARS: Record<TeamKey, string> = {
   EQUIPE_1: "WHATSAPP_EQUIPE_1_JID",
   EQUIPE_2: "WHATSAPP_EQUIPE_2_JID",
+  EQUIPE_4: "WHATSAPP_EQUIPE_4_JID",
 };
 
 // Cache em memória — JID de grupo não muda no WhatsApp (mesmo trocando o
@@ -37,10 +40,12 @@ function readEnvJid(team: TeamKey): string | null {
   return v;
 }
 
-// Regex pra reconhecer o nome do grupo da equipe N. Aceita variações:
-//   "Equipe 1", "Equipe1", "equipe 1 / teste", "EQUIPE1 - principal"
+// Regex pra reconhecer o nome do grupo da equipe. Aceita variações:
+//   "Equipe 1", "Equipe1", "equipe 1 / teste", "EQUIPE1 - principal",
+//   "Equipe Turbo", "EquipeTurbo - oficial"
 // O (?!\d) evita falso positivo em "Equipe 10" virando EQUIPE_1.
 function teamSubjectRegex(team: TeamKey): RegExp {
+  if (team === "EQUIPE_4") return /^\s*equipe\s*turbo/i;
   const num = team === "EQUIPE_1" ? "1" : "2";
   return new RegExp(`^\\s*equipe\\s*${num}(?!\\d)`, "i");
 }
@@ -83,14 +88,15 @@ export async function getTeamGroupJid(team: TeamKey): Promise<string | null> {
   return null;
 }
 
-// Devolve os 2 JIDs em paralelo. `null` em qualquer chave significa que o
-// grupo ainda não foi encontrado — caller decide se aborta ou tolera.
+// Devolve os JIDs das equipes em paralelo. `null` em qualquer chave significa
+// que o grupo ainda não foi encontrado — caller decide se aborta ou tolera.
 export async function getTeamGroupJids(): Promise<Record<TeamKey, string | null>> {
-  const [e1, e2] = await Promise.all([
+  const [e1, e2, e4] = await Promise.all([
     getTeamGroupJid("EQUIPE_1"),
     getTeamGroupJid("EQUIPE_2"),
+    getTeamGroupJid("EQUIPE_4"),
   ]);
-  return { EQUIPE_1: e1, EQUIPE_2: e2 };
+  return { EQUIPE_1: e1, EQUIPE_2: e2, EQUIPE_4: e4 };
 }
 
 // Permite forçar refresh do cache (ex.: usuário acabou de criar/renomear o

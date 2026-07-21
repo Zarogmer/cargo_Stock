@@ -114,6 +114,7 @@ model StockItem {
   updated_by       String
   stock_movements  StockMovement[]
   embark_kit_items EmbarkKitItem[]
+  embark_list_overrides EmbarkListOverride[]
 
   @@index([category])
   @@map("stock_items")
@@ -135,6 +136,29 @@ model EmbarkKitItem {
   @@unique([team, stock_item_id])
   @@index([team])
   @@map("embark_kit_items")
+}
+
+// Ajuste da lista de embarque POR NAVIO (aba Embarque/Retorno): muda quanto a
+// equipe leva de um item do kit/rancho SÓ naquele navio (em caso de falta, ou
+// pra levar mais), ou adiciona um item do Estoque/Rancho que não está na lista
+// padrão. O kit oficial (embark_kit_items) e o padrão do Rancho ficam intactos.
+model EmbarkListOverride {
+  id            Int       @id @default(autoincrement())
+  ship_id       String    @db.Uuid
+  ships         Ship      @relation(fields: [ship_id], references: [id], onDelete: Cascade)
+  // Equipe do navio quando o ajuste foi feito — trocando a equipe do navio, os
+  // ajustes da equipe antiga ficam dormentes (a tela filtra por team).
+  team          String
+  kind          String // MATERIAL (kit do Estoque/GALPAO) | RANCHO (comida da equipe)
+  stock_item_id Int
+  stock_items   StockItem @relation(fields: [stock_item_id], references: [id], onDelete: Cascade)
+  quantity      Float     @default(0)
+  created_at    DateTime  @default(now()) @db.Timestamptz()
+  updated_at    DateTime  @default(now()) @updatedAt @db.Timestamptz()
+
+  @@unique([ship_id, stock_item_id])
+  @@index([ship_id])
+  @@map("embark_list_overrides")
 }
 
 model StockMovement {
@@ -475,6 +499,7 @@ model Ship {
   externalShip   ExternalShip? @relation(fields: [externalShipId], references: [id])
   jobs           Job[]
   material_returns MaterialReturn[]
+  embark_list_overrides EmbarkListOverride[]
 
   @@map("ships")
 }

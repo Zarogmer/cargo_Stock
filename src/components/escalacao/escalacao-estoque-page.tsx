@@ -6,8 +6,9 @@ import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
+import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { formatDate } from "@/lib/utils";
+import { formatDate, matchSearch, formatQty, unitSuffix } from "@/lib/utils";
 import type { StockItem } from "@/types/database";
 
 interface Ship {
@@ -54,8 +55,27 @@ interface MaterialReturn {
 // Rascunho por material na tela de Retorno (o que voltou / quebrou / obs).
 interface ReturnDraft { returned: string; broken: string; note: string }
 
+// Ajuste da lista POR NAVIO (embark_list_overrides): muda quanto vai de um item
+// do kit/rancho só neste navio, ou adiciona um item extra do Estoque/Rancho.
+interface ListOverride {
+  id: number;
+  ship_id: string;
+  team: string;
+  kind: "MATERIAL" | "RANCHO";
+  stock_item_id: number;
+  quantity: number;
+}
+
+// EQUIPE_4 = "Equipe Turbo" (mesma chave do Rancho; EQUIPE_3 segue como legado).
 const TEAM_LABELS: Record<string, string> = {
-  EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3",
+  EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3", EQUIPE_4: "Equipe Turbo",
+};
+
+// Setores do inventário que contam como "material" (tudo que não é Rancho).
+// Sentinelas de stock_items.team — ver materiais-panel.tsx.
+const MATERIAL_TEAMS = new Set(["GALPAO", "FERRAMENTA", "ELETRICA", "FLUIDOS", "MAQUINARIO"]);
+const MATERIAL_TEAM_LABEL: Record<string, string> = {
+  GALPAO: "Estoque", FERRAMENTA: "Ferramenta", ELETRICA: "Elétrica", FLUIDOS: "Fluídos", MAQUINARIO: "Maquinário",
 };
 
 export function EscalacaoEstoquePage() {
@@ -68,9 +88,15 @@ export function EscalacaoEstoquePage() {
   const [selectedShip, setSelectedShip] = useState<string>("");
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [kitItems, setKitItems] = useState<KitItem[]>([]);
+  const [overrides, setOverrides] = useState<ListOverride[]>([]);
   const [loading, setLoading] = useState(true);
   const [confirmEmbark, setConfirmEmbark] = useState(false);
   const [embarking, setEmbarking] = useState(false);
+
+  // Edição do "Leva"/"Padrão" por navio: rascunho do input por stock_item_id
+  // (grava no blur) e modal de "Adicionar item" (materiais ou rancho).
+  const [qtyDraft, setQtyDraft] = useState<Record<number, string>>({});
+  const [addKind, setAddKind] = useState<"MATERIAL" | "RANCHO" | null>(null);
 
   // Aba Embarque (preparar/baixar) x Retorno (conferir o que voltou).
   const [tab, setTab] = useState<"embarque" | "retorno">("embarque");
@@ -94,16 +120,18 @@ export function EscalacaoEstoquePage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [shipsRes, stockRes, kitRes, retRes] = await Promise.all([
+      const [shipsRes, stockRes, kitRes, retRes, ovrRes] = await Promise.all([
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
         db.from("stock_items").select("*").order("name"),
         db.from("embark_kit_items").select("*, stock_items(id, name, quantity, location, unit)"),
         db.from("material_returns").select("*, material_return_items(id, return_id, stock_item_id, item_name, went_qty, returned_qty, broken_qty, note)").order("created_at", { ascending: false }),
+        db.from("embark_list_overrides").select("*"),
       ]);
       setShips((shipsRes.data as Ship[]) || []);
       setStockItems(stockRes.data || []);
       setKitItems((kitRes.data as KitItem[]) || []);
       setReturns((retRes.data as MaterialReturn[]) || []);
+      setOverrides((ovrRes.data as ListOverride[]) || []);
     } catch (err) {
       console.error("Load error:", err);
     } finally {
@@ -124,40 +152,106 @@ export function EscalacaoEstoquePage() {
   // Navio sem equipe (ex.: Costado) mostra aviso e não lista kit nenhum.
   const selectedTeam = (currentShip?.assigned_team && TEAM_LABELS[currentShip.assigned_team]
     ? currentShip.assigned_team
-    : null) as "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | null;
+    : null) as "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "EQUIPE_4" | null;
 
-  const teamItems = stockItems
+  // Ajustes deste navio (e desta equipe — trocando a equipe do navio, os
+  // ajustes antigos ficam dormentes). Chave: stock_item_id.
+  const overrideByItem = new Map(
+    overrides
+      .filter((o) => o.ship_id === selectedShip && o.team === selectedTeam)
+      .map((o) => [o.stock_item_id, o]),
+  );
+
+  // Comida do Rancho da equipe: padrão do cadastro, com ajuste por navio e
+  // itens extras adicionados na tela (padrão 0 + ajuste > 0). Ajuste igual ao
+  // padrão nem chega a existir (saveOverride remove), então `overridden` de
+  // fato significa "diferente do padrão".
+  const itemsWithStatus = stockItems
     .filter((i) => (i as any).team === selectedTeam)
-    .filter((i) => (i as any).default_quantity > 0);
+    .map((item) => {
+      const ovr = overrideByItem.get(item.id);
+      const baseDef = (item as any).default_quantity || 0;
+      const def = ovr ? ovr.quantity : baseDef;
+      const current = item.quantity;
+      return {
+        ...item,
+        default_quantity: def,
+        base_default: baseDef,
+        overridden: !!ovr && baseDef > 0,
+        added: !!ovr && baseDef <= 0,
+        falta: Math.max(0, def - current),
+        ready: current >= def,
+      };
+    })
+    .filter((i) => i.default_quantity > 0 || i.overridden || i.added);
 
-  const totalDefault = teamItems.reduce((s, i) => s + ((i as any).default_quantity || 0), 0);
-  const totalCurrent = teamItems.reduce((s, i) => s + Math.min(i.quantity, (i as any).default_quantity || 0), 0);
+  const totalDefault = itemsWithStatus.reduce((s, i) => s + i.default_quantity, 0);
+  const totalCurrent = itemsWithStatus.reduce((s, i) => s + Math.min(i.quantity, i.default_quantity), 0);
   const pct = totalDefault > 0 ? Math.round((totalCurrent / totalDefault) * 100) : 0;
   const allReady = totalCurrent >= totalDefault && totalDefault > 0;
-
-  const itemsWithStatus = teamItems.map((item) => {
-    const def = (item as any).default_quantity || 0;
-    const current = item.quantity;
-    const falta = Math.max(0, def - current);
-    const ready = current >= def;
-    return { ...item, default_quantity: def, falta, ready };
-  });
 
   const readyCount = itemsWithStatus.filter((i) => i.ready).length;
   const missingCount = itemsWithStatus.filter((i) => !i.ready).length;
 
-  // Materiais do kit de embarque desta equipe (deduzidos do Estoque/GALPAO).
-  const teamKit = kitItems
+  // Materiais do kit de embarque desta equipe (deduzidos do Estoque/GALPAO),
+  // com o "Leva" ajustado por navio + itens extras puxados do Estoque.
+  const kitStockIds = new Set(kitItems.filter((k) => k.team === selectedTeam).map((k) => k.stock_item_id));
+  const kitRows = kitItems
     .filter((k) => k.team === selectedTeam)
     .map((k) => {
+      const ovr = overrideByItem.get(k.stock_item_id);
       const estName = k.stock_items?.name || `#${k.stock_item_id}`;
       const emEstoque = k.stock_items?.quantity ?? 0;
-      const ready = emEstoque >= k.quantity;
-      return { ...k, estName, emEstoque, need: k.quantity, ready, falta: Math.max(0, k.quantity - emEstoque), location: k.stock_items?.location || "—", unit: k.stock_items?.unit || null };
+      const need = ovr ? ovr.quantity : k.quantity;
+      return {
+        id: k.id,
+        stock_item_id: k.stock_item_id,
+        estName,
+        emEstoque,
+        need,
+        baseNeed: k.quantity,
+        overridden: !!ovr,
+        added: false,
+        ready: emEstoque >= need,
+        falta: Math.max(0, need - emEstoque),
+        location: k.stock_items?.location || "—",
+        unit: k.stock_items?.unit || null,
+      };
+    });
+  // Extras: ajustes MATERIAL de itens fora do kit — o item vem do Estoque.
+  const extraRows = [...overrideByItem.values()]
+    .filter((o) => o.kind === "MATERIAL" && !kitStockIds.has(o.stock_item_id))
+    .map((o) => {
+      const si = stockItems.find((s) => s.id === o.stock_item_id);
+      if (!si) return null;
+      return {
+        id: -o.id, // id negativo: não colide com id de kit (React key)
+        stock_item_id: o.stock_item_id,
+        estName: si.name,
+        emEstoque: si.quantity,
+        need: o.quantity,
+        baseNeed: 0,
+        overridden: false,
+        added: true,
+        ready: si.quantity >= o.quantity,
+        falta: Math.max(0, o.quantity - si.quantity),
+        location: si.location || MATERIAL_TEAM_LABEL[(si as any).team] || "—",
+        unit: si.unit || null,
+      };
     })
-    .sort((a, b) => a.estName.localeCompare(b.estName, "pt-BR"));
+    .filter((r): r is NonNullable<typeof r> => r !== null);
+  const teamKit = [...kitRows, ...extraRows].sort((a, b) => a.estName.localeCompare(b.estName, "pt-BR"));
   const matReady = teamKit.filter((k) => k.ready).length;
   const matMissing = teamKit.length - matReady;
+
+  // Candidatos do modal "Adicionar item": tudo que está no Estoque (materiais)
+  // ou no Rancho da equipe e ainda não aparece na lista deste navio.
+  const listedIds = new Set([...teamKit.map((k) => k.stock_item_id), ...itemsWithStatus.map((i) => i.id)]);
+  const addCandidates = addKind === "MATERIAL"
+    ? stockItems.filter((i) => MATERIAL_TEAMS.has(String((i as any).team)) && !listedIds.has(i.id))
+    : addKind === "RANCHO"
+      ? stockItems.filter((i) => (i as any).team === selectedTeam && !listedIds.has(i.id))
+      : [];
 
   // Comida do Rancho também entra na conferência de retorno — mesma mecânica
   // dos materiais (rascunho por stock_item_id; Rancho e materiais são todos
@@ -173,7 +267,8 @@ export function EscalacaoEstoquePage() {
   }));
 
   // Dados comuns da lista (navio + itens) usados no envio pro WhatsApp e na
-  // geração do Check List em PDF/Excel.
+  // geração do Check List em PDF/Excel. Item com leva 0 (zerado só neste
+  // navio) fica fora do documento/mensagem.
   function buildListPayload() {
     return {
       shipName: currentShip?.name || "",
@@ -183,9 +278,62 @@ export function EscalacaoEstoquePage() {
       cargoType: currentShip?.cargo_type || null,
       dateIso: new Date().toISOString().split("T")[0],
       // A unidade (un/kg/...) vai junto pra sair na mensagem e no documento.
-      materials: teamKit.map((k) => ({ name: k.estName, qty: k.need, unit: k.unit })),
-      rancho: itemsWithStatus.map((i) => ({ name: i.name, qty: i.default_quantity, unit: i.unit || null })),
+      materials: teamKit.filter((k) => k.need > 0).map((k) => ({ name: k.estName, qty: k.need, unit: k.unit })),
+      rancho: itemsWithStatus.filter((i) => i.default_quantity > 0).map((i) => ({ name: i.name, qty: i.default_quantity, unit: i.unit || null })),
     };
+  }
+
+  // ── Ajuste da lista por navio ─────────────────────────────────────────────
+  // Grava o "leva" de um item SÓ neste navio (embark_list_overrides). Igual ao
+  // padrão → remove o ajuste (volta ao kit oficial); item extra zerado some da
+  // lista. Atualiza o estado local direto, sem recarregar a tela toda.
+  async function saveOverride(kind: "MATERIAL" | "RANCHO", stockItemId: number, qty: number, baseQty: number) {
+    if (!currentShip || !selectedTeam) return;
+    // O único ajuste possível pro par navio+item (unique no banco) — pode ser
+    // de outra equipe (navio trocou de equipe): aí é atualizado e "adotado".
+    const existing = overrides.find((o) => o.ship_id === selectedShip && o.stock_item_id === stockItemId);
+    try {
+      if (qty === baseQty) {
+        if (!existing) return;
+        const res = await db.from("embark_list_overrides").delete().eq("id", existing.id);
+        if (res.error) throw new Error(res.error.message);
+        setOverrides((prev) => prev.filter((o) => o.id !== existing.id));
+      } else if (existing) {
+        if (existing.quantity === qty && existing.team === selectedTeam && existing.kind === kind) return;
+        const res = await db.from("embark_list_overrides").update({ quantity: qty, team: selectedTeam, kind }).eq("id", existing.id);
+        if (res.error) throw new Error(res.error.message);
+        setOverrides((prev) => prev.map((o) => (o.id === existing.id ? { ...o, quantity: qty, team: selectedTeam, kind } : o)));
+      } else {
+        const res: any = await db.from("embark_list_overrides").insert({
+          ship_id: selectedShip,
+          team: selectedTeam,
+          kind,
+          stock_item_id: stockItemId,
+          quantity: qty,
+        });
+        if (res.error) throw new Error(res.error.message);
+        const created = Array.isArray(res.data) ? res.data[0] : res.data;
+        if (created?.id) setOverrides((prev) => [...prev, created as ListOverride]);
+        else loadData();
+      }
+    } catch (err) {
+      setEmbarkMsg(`Erro ao salvar o ajuste da lista: ${(err as Error).message}`);
+    }
+  }
+
+  // Blur do input "Leva"/"Padrão": aplica o rascunho digitado. Valor inválido
+  // ou vazio só descarta o rascunho (o input volta pro valor atual).
+  function commitQty(kind: "MATERIAL" | "RANCHO", stockItemId: number, baseQty: number) {
+    const raw = qtyDraft[stockItemId];
+    if (raw == null) return;
+    setQtyDraft((d) => {
+      const nd = { ...d };
+      delete nd[stockItemId];
+      return nd;
+    });
+    const parsed = parseFloat(raw.replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed < 0) return;
+    void saveOverride(kind, stockItemId, parsed, baseQty);
   }
 
   // Baixa a lista no layout do Check List: Embarque = preenchida (navio, porto,
@@ -235,6 +383,7 @@ export function EscalacaoEstoquePage() {
     for (const item of itemsWithStatus) {
       if (item.quantity <= 0) continue;
       const toConsume = Math.min(item.quantity, item.default_quantity);
+      if (toConsume <= 0) continue; // leva zerada só neste navio
       await db.from("stock_movements").insert({
         stock_item_id: item.id,
         movement_type: "BAIXA",
@@ -745,7 +894,7 @@ export function EscalacaoEstoquePage() {
             ⚠️ Este navio não tem equipe definida — edite o navio na aba <strong>Navios</strong> e escolha a equipe.
           </p>
         )}
-        {tab === "embarque" && canEmbarcar && selectedTeam && (teamItems.length > 0 || teamKit.length > 0) && (
+        {tab === "embarque" && canEmbarcar && selectedTeam && (itemsWithStatus.length > 0 || teamKit.length > 0) && (
           <div className="flex gap-2 flex-wrap">
             {/* Check List preenchido (navio/porto/equipe/produto/data + quantidades) */}
             <Button size="sm" variant="secondary" onClick={() => handleDownloadChecklist("embarque", "pdf")} disabled={downloading !== null || embarking} title="Baixar a lista preenchida em PDF (layout do Check List)">
@@ -792,7 +941,9 @@ export function EscalacaoEstoquePage() {
       )}
 
       {tab === "embarque" && selectedTeam && (<>
-      {/* Materiais — baixados do Estoque (GALPAO) ao embarcar */}
+      {/* Materiais — baixados do Estoque (GALPAO) ao embarcar. O "Leva" é
+          editável POR NAVIO (não mexe no kit oficial da equipe) e dá pra puxar
+          itens extras do Estoque em caso de falta. */}
       <section className="space-y-2">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <button
@@ -804,7 +955,14 @@ export function EscalacaoEstoquePage() {
             <span className={`inline-block transition-transform ${showMat ? "rotate-90" : ""}`}>▸</span>
             🧰 Materiais (do Estoque)
           </button>
-          <span className="text-xs text-text-light">{matReady} ok · {matMissing} com falta · {teamKit.length} itens</span>
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-xs text-text-light">{matReady} ok · {matMissing} com falta · {teamKit.length} itens</span>
+            {canEmbarcar && (
+              <Button size="sm" variant="secondary" onClick={() => setAddKind("MATERIAL")} title="Adicionar um item do Estoque só na lista deste navio">
+                ➕ Adicionar item
+              </Button>
+            )}
+          </div>
         </div>
         {showMat && (
         <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
@@ -814,7 +972,7 @@ export function EscalacaoEstoquePage() {
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Item</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Categoria</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Leva</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto vai neste navio — editável, sem mexer no kit padrão da equipe">Leva</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Em Estoque</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Status</th>
                 </tr>
@@ -825,16 +983,54 @@ export function EscalacaoEstoquePage() {
                     <td colSpan={5} className="px-4 py-10 text-center text-text-light">
                       <span className="text-3xl block mb-2">🧰</span>
                       Sem kit de materiais para esta equipe
+                      {canEmbarcar && <span className="block text-xs mt-1">Use o ➕ Adicionar item pra montar a lista deste navio.</span>}
                     </td>
                   </tr>
                 ) : (
                   teamKit.map((k) => (
                     <tr key={k.id} className={`hover:bg-gray-50 ${!k.ready ? "bg-red-50/40" : ""}`}>
-                      <td className="px-4 py-3 font-medium">{k.estName}</td>
+                      <td className="px-4 py-3 font-medium">
+                        {k.estName}
+                        {k.added && (
+                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold uppercase" title="Item extra — só na lista deste navio">extra</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-center">
                         <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">{k.location}</span>
                       </td>
-                      <td className="px-4 py-3 text-center text-text-light">{k.need}</td>
+                      <td className="px-4 py-3 text-center text-text-light">
+                        {canEmbarcar ? (
+                          <span className="inline-flex items-center gap-1">
+                            <input
+                              type="number" min={0} step="any"
+                              value={qtyDraft[k.stock_item_id] ?? String(k.need)}
+                              onChange={(e) => setQtyDraft((d) => ({ ...d, [k.stock_item_id]: e.target.value }))}
+                              onBlur={() => commitQty("MATERIAL", k.stock_item_id, k.baseNeed)}
+                              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                              title={k.added ? "Item extra deste navio" : `Padrão do kit: ${k.baseNeed} — o ajuste vale só pra este navio`}
+                              className={`w-16 px-2 py-1 border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 ${k.overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-800" : "border-border"}`}
+                            />
+                            {k.overridden && (
+                              <button
+                                type="button"
+                                onClick={() => saveOverride("MATERIAL", k.stock_item_id, k.baseNeed, k.baseNeed)}
+                                className="text-xs text-text-light hover:text-primary transition"
+                                title={`Voltar ao padrão do kit (${k.baseNeed})`}
+                              >↺</button>
+                            )}
+                            {k.added && (
+                              <button
+                                type="button"
+                                onClick={() => saveOverride("MATERIAL", k.stock_item_id, 0, 0)}
+                                className="text-xs text-text-light hover:text-danger transition"
+                                title="Tirar este item extra da lista do navio"
+                              >✕</button>
+                            )}
+                          </span>
+                        ) : (
+                          k.need
+                        )}
+                      </td>
                       <td className={`px-4 py-3 text-center font-bold ${!k.ready ? "text-danger" : "text-success"}`}>{k.emEstoque}</td>
                       <td className="px-4 py-3 text-center">
                         {k.ready ? (
@@ -853,7 +1049,9 @@ export function EscalacaoEstoquePage() {
         )}
       </section>
 
-      {/* Comida — baixada do Rancho (estoque por equipe) ao embarcar */}
+      {/* Comida — baixada do Rancho (estoque por equipe) ao embarcar. O
+          "Padrão" também é editável POR NAVIO, e dá pra puxar itens do Rancho
+          da equipe que não têm quantidade padrão. */}
       <section className="space-y-2">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <button
@@ -868,6 +1066,11 @@ export function EscalacaoEstoquePage() {
           <div className="flex items-center gap-3 flex-wrap">
             <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${allReady ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{pct}% pronto</span>
             <span className="text-xs text-text-light">{readyCount} prontos · {missingCount} com falta</span>
+            {canEmbarcar && (
+              <Button size="sm" variant="secondary" onClick={() => setAddKind("RANCHO")} title="Adicionar um item do Rancho da equipe só na lista deste navio">
+                ➕ Adicionar item
+              </Button>
+            )}
           </div>
         </div>
         {showRancho && (
@@ -878,7 +1081,7 @@ export function EscalacaoEstoquePage() {
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Item</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Categoria</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Padrão</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto vai neste navio — editável, sem mexer no padrão do Rancho">Padrão</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Em Rancho</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Status</th>
                 </tr>
@@ -889,18 +1092,56 @@ export function EscalacaoEstoquePage() {
                     <td colSpan={5} className="px-4 py-10 text-center text-text-light">
                       <span className="text-3xl block mb-2">🛒</span>
                       Nenhum item com quantidade padrão definida
+                      {canEmbarcar && <span className="block text-xs mt-1">Use o ➕ Adicionar item pra montar a lista deste navio.</span>}
                     </td>
                   </tr>
                 ) : (
                   itemsWithStatus.map((item) => (
                     <tr key={item.id} className={`hover:bg-gray-50 ${!item.ready ? "bg-red-50/40" : ""}`}>
-                      <td className="px-4 py-3 font-medium">{item.name}</td>
+                      <td className="px-4 py-3 font-medium">
+                        {item.name}
+                        {item.added && (
+                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold uppercase" title="Item extra — só na lista deste navio">extra</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-center">
                         <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
                           {item.category === "CARNE" ? "Carne" : item.category === "FEIRA" ? "Feira" : "Suprimentos"}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-center text-text-light">{item.default_quantity}</td>
+                      <td className="px-4 py-3 text-center text-text-light">
+                        {canEmbarcar ? (
+                          <span className="inline-flex items-center gap-1">
+                            <input
+                              type="number" min={0} step="any"
+                              value={qtyDraft[item.id] ?? String(item.default_quantity)}
+                              onChange={(e) => setQtyDraft((d) => ({ ...d, [item.id]: e.target.value }))}
+                              onBlur={() => commitQty("RANCHO", item.id, item.base_default)}
+                              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                              title={item.added ? "Item extra deste navio" : `Padrão do Rancho: ${item.base_default} — o ajuste vale só pra este navio`}
+                              className={`w-16 px-2 py-1 border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 ${item.overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-800" : "border-border"}`}
+                            />
+                            {item.overridden && (
+                              <button
+                                type="button"
+                                onClick={() => saveOverride("RANCHO", item.id, item.base_default, item.base_default)}
+                                className="text-xs text-text-light hover:text-primary transition"
+                                title={`Voltar ao padrão do Rancho (${item.base_default})`}
+                              >↺</button>
+                            )}
+                            {item.added && (
+                              <button
+                                type="button"
+                                onClick={() => saveOverride("RANCHO", item.id, 0, 0)}
+                                className="text-xs text-text-light hover:text-danger transition"
+                                title="Tirar este item extra da lista do navio"
+                              >✕</button>
+                            )}
+                          </span>
+                        ) : (
+                          item.default_quantity
+                        )}
+                      </td>
                       <td className={`px-4 py-3 text-center font-bold ${!item.ready ? "text-danger" : "text-success"}`}>
                         {item.quantity}
                       </td>
@@ -921,6 +1162,18 @@ export function EscalacaoEstoquePage() {
         )}
       </section>
       </>)}
+
+      {/* Modal "Adicionar item": itens do Estoque (materiais) ou do Rancho da
+          equipe que ainda não estão na lista deste navio. */}
+      {addKind && selectedTeam && (
+        <AddItemModal
+          kind={addKind}
+          candidates={addCandidates}
+          shipName={currentShip?.name || ""}
+          onAdd={(stockItemId, qty) => saveOverride(addKind, stockItemId, qty, 0)}
+          onClose={() => setAddKind(null)}
+        />
+      )}
 
       <ConfirmDialog
         open={confirmEmbark}
@@ -1301,5 +1554,113 @@ function ShipSelector({
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Adicionar item na lista do navio ───────────────────────────────────────
+// Busca em cima dos itens do Estoque (materiais) ou do Rancho da equipe que
+// ainda NÃO estão na lista, com quantidade por item. Adicionar vira um ajuste
+// (item extra) só deste navio — o kit oficial e o padrão do Rancho não mudam.
+// O modal fica aberto depois de adicionar, pra incluir vários de uma vez (o
+// item some da busca porque entrou na lista).
+function AddItemModal({
+  kind, candidates, shipName, onAdd, onClose,
+}: {
+  kind: "MATERIAL" | "RANCHO";
+  candidates: StockItem[];
+  shipName: string;
+  onAdd: (stockItemId: number, qty: number) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  // Quantidade digitada por item (padrão 1) e trava anti-duplo-clique.
+  const [qtyByItem, setQtyByItem] = useState<Record<number, string>>({});
+  const [addingId, setAddingId] = useState<number | null>(null);
+  const [addedCount, setAddedCount] = useState(0);
+
+  const filtered = candidates.filter((c) => matchSearch(c.name, search));
+
+  function badgeOf(c: StockItem): string {
+    if (kind === "RANCHO") {
+      return c.category === "CARNE" ? "Carne" : c.category === "FEIRA" ? "Feira" : "Suprimentos";
+    }
+    return c.location || MATERIAL_TEAM_LABEL[String((c as any).team)] || "—";
+  }
+
+  async function handleAdd(c: StockItem) {
+    const raw = qtyByItem[c.id] ?? "1";
+    const qty = parseFloat(raw.replace(",", "."));
+    if (!Number.isFinite(qty) || qty <= 0) return;
+    setAddingId(c.id);
+    try {
+      await onAdd(c.id, qty);
+      setAddedCount((n) => n + 1);
+    } finally {
+      setAddingId(null);
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={kind === "MATERIAL" ? "➕ Adicionar material do Estoque" : "➕ Adicionar item do Rancho"}
+      maxWidth="max-w-2xl"
+    >
+      <div className="space-y-3">
+        <p className="text-xs text-text-light">
+          O item entra como <strong>extra</strong> só na lista do navio <strong>{shipName}</strong> — o
+          {kind === "MATERIAL" ? " kit padrão da equipe" : " padrão do Rancho"} não muda.
+        </p>
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={kind === "MATERIAL" ? "🔍 Buscar item do Estoque..." : "🔍 Buscar item do Rancho da equipe..."}
+          autoFocus
+          className="w-full px-3 py-2 text-sm border border-border rounded-lg focus:ring-2 focus:ring-primary outline-none"
+        />
+        <div className="border border-border rounded-lg overflow-hidden">
+          <div className="max-h-80 overflow-y-auto divide-y divide-border">
+            {filtered.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-text-light">
+                {candidates.length === 0
+                  ? "Tudo que existe aqui já está na lista deste navio."
+                  : "Nenhum item encontrado com essa busca."}
+              </div>
+            ) : (
+              filtered.map((c) => (
+                <div key={c.id} className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{c.name}</p>
+                    <p className="text-[11px] text-text-light">
+                      <span className="px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium mr-1.5">{badgeOf(c)}</span>
+                      {kind === "MATERIAL" ? "em estoque" : "no rancho"}: {formatQty(c.quantity)} {unitSuffix(c.unit)}
+                    </p>
+                  </div>
+                  <input
+                    type="number" min={0} step="any"
+                    value={qtyByItem[c.id] ?? "1"}
+                    onChange={(e) => setQtyByItem((d) => ({ ...d, [c.id]: e.target.value }))}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleAdd(c); }}
+                    title="Quantidade que vai neste navio"
+                    className="w-16 px-2 py-1 border border-border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  />
+                  <Button size="sm" onClick={() => handleAdd(c)} disabled={addingId !== null}>
+                    {addingId === c.id ? "..." : "Adicionar"}
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-text-light">
+            {addedCount > 0 ? `✅ ${addedCount} item(ns) adicionado(s) à lista.` : ""}
+          </span>
+          <Button variant="secondary" onClick={onClose}>Fechar</Button>
+        </div>
+      </div>
+    </Modal>
   );
 }

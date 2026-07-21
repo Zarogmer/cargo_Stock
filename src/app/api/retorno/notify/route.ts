@@ -24,7 +24,7 @@ interface NotifyBody {
 }
 
 const TEAM_LABEL: Record<string, string> = {
-  EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3",
+  EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3", EQUIPE_4: "Equipe Turbo",
 };
 
 // "— 2 un" / "— 5 kg"; sem unidade cadastrada sai só o número.

@@ -220,7 +220,9 @@ export async function POST(request: NextRequest) {
       ? "Você foi escalado(a) na Equipe 1."
       : assignedTeam === "EQUIPE_2"
         ? "Você foi escalado(a) na Equipe 2."
-        : "Você foi escalado(a) para o embarque.";
+        : assignedTeam === "EQUIPE_4"
+          ? "Você foi escalado(a) na Equipe Turbo."
+          : "Você foi escalado(a) para o embarque.";
     return `Olá, ${emp.name}!\n\n${teamLine}\n\n${BOARDING_SAFETY_REMINDER}\n\n~Equipe Cargo Ships`;
   }
 
@@ -275,15 +277,18 @@ export async function POST(request: NextRequest) {
     } else {
       // EMBARQUE → manda só pro grupo da equipe designada do navio
       // (assigned_team). Sem equipe definida, pula o envio em grupo — DMs
-      // ainda saem normalmente.
-      const team = ship.assigned_team === "EQUIPE_1" || ship.assigned_team === "EQUIPE_2"
-        ? (ship.assigned_team as "EQUIPE_1" | "EQUIPE_2")
+      // ainda saem normalmente. EQUIPE_4 = Equipe Turbo.
+      const TEAM_LABELS: Record<string, string> = {
+        EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_4: "Equipe Turbo",
+      };
+      const team = ship.assigned_team && TEAM_LABELS[ship.assigned_team]
+        ? (ship.assigned_team as "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4")
         : null;
       if (!team) {
         results.push({
           target: "grupo-equipe",
           ok: false,
-          error: "Equipe designada não informada no navio — defina Equipe 1 ou Equipe 2 pra avisar o grupo.",
+          error: "Equipe designada não informada no navio — defina Equipe 1, Equipe 2 ou Equipe Turbo pra avisar o grupo.",
         });
       } else {
         const jid = await getTeamGroupJid(team);
@@ -291,7 +296,7 @@ export async function POST(request: NextRequest) {
           results.push({
             target: `grupo:${team}`,
             ok: false,
-            error: `Grupo da ${team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"} não encontrado (sincronize grupos ou configure WHATSAPP_${team}_JID).`,
+            error: `Grupo da ${TEAM_LABELS[team]} não encontrado (sincronize grupos ou configure WHATSAPP_${team}_JID).`,
           });
         } else {
           try {
@@ -305,7 +310,7 @@ export async function POST(request: NextRequest) {
                   instance_name: process.env.EVOLUTION_INSTANCE || "default",
                   remote_jid: jid,
                   from_me: true,
-                  push_name: team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2",
+                  push_name: TEAM_LABELS[team],
                   message_type: "conversation",
                   text: groupMessage,
                   timestamp_ms: BigInt(Date.now()),

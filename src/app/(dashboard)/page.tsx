@@ -136,8 +136,9 @@ export default function DashboardPage() {
       const convLastSeen = typeof window !== "undefined" ? localStorage.getItem("conversas_last_seen") : null;
 
       // "Estoque" = materiais do galpão (team=GALPAO). "Rancho" = comida por
-      // equipe (EQUIPE_1/2/3). Ambos vivem em stock_items, separados pelo team.
-      const FOOD_TEAMS = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_3"];
+      // equipe (EQUIPE_1/2/3/4 — 3 é a lista-mãe "Total", 4 a Equipe Turbo).
+      // Ambos vivem em stock_items, separados pelo team.
+      const FOOD_TEAMS = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_3", "EQUIPE_4"];
       // Controle de Compras: compras registradas no mês corrente. A aba abre já
       // filtrada por este mês, então o card bate com o que o gestor vê ao clicar.
       // purchase_date é DATE → comparo por string ISO [início do mês, próximo mês).
@@ -286,7 +287,7 @@ export default function DashboardPage() {
         });
       });
       (empMov.data || []).forEach((m: any) => {
-        const teamLabel = m.team === "EQUIPE_1" ? "Equipe 1" : m.team === "EQUIPE_2" ? "Equipe 2" : m.team === "EQUIPE_3" ? "Equipe 3" : m.team === "COSTADO" ? "Costado" : "Sem equipe";
+        const teamLabel = m.team === "EQUIPE_1" ? "Equipe 1" : m.team === "EQUIPE_2" ? "Equipe 2" : m.team === "EQUIPE_3" ? "Equipe 3" : m.team === "EQUIPE_4" ? "Equipe Turbo" : m.team === "COSTADO" ? "Costado" : "Sem equipe";
         combined.push({
           id: `emp-${m.id}`, type: "Colaborador", item_name: m.name || "—",
           movement_type: "CADASTRO", created_at: m.created_at, created_by: teamLabel,

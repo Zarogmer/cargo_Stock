@@ -85,6 +85,21 @@ const STATUS_COLORS: Record<ShipStatus, string> = {
   CANCELADO: "bg-red-100 text-red-700",
 };
 
+// Equipes designáveis de Embarque. EQUIPE_4 = "Equipe Turbo" (mesma chave da
+// aba do Rancho — equipe maior; EQUIPE_3 é a aba "Total" da comida, não entra).
+// Cores casam com o Rancho: Equipe 1 azul, Equipe 2 roxa, Turbo laranja.
+const TEAM_LABELS: Record<string, string> = {
+  EQUIPE_1: "Equipe 1",
+  EQUIPE_2: "Equipe 2",
+  EQUIPE_4: "Equipe Turbo",
+};
+
+const TEAM_COLORS: Record<string, string> = {
+  EQUIPE_1: "bg-blue-100 text-blue-700",
+  EQUIPE_2: "bg-purple-100 text-purple-700",
+  EQUIPE_4: "bg-orange-100 text-orange-700",
+};
+
 const EMPTY_FORM = {
   name: "",
   arrival_date: "",
@@ -519,14 +534,14 @@ export default function NaviosPage() {
     setShowModal(true);
   }
 
-  // Ao escolher Equipe 1 / Equipe 2 no formulário, já marca os colaboradores
-  // daquela equipe pra escalar e preenche a função de cada um pelo cargo. Pula
-  // quem está preso em outra operação ativa. Trocar de equipe (ou voltar pra
-  // "Sem equipe") limpa os membros de equipe antes, pra seleção refletir só a
-  // equipe atual. Não faz nada na edição — lá não se escala ninguém.
+  // Ao escolher Equipe 1 / Equipe 2 / Equipe Turbo no formulário, já marca os
+  // colaboradores daquela equipe pra escalar e preenche a função de cada um
+  // pelo cargo. Pula quem está preso em outra operação ativa. Trocar de equipe
+  // (ou voltar pra "Sem equipe") limpa os membros de equipe antes, pra seleção
+  // refletir só a equipe atual. Não faz nada na edição — lá não se escala ninguém.
   function selectTeamMembersForForm(team: string) {
     if (editingShip) return;
-    const validTeam = team === "EQUIPE_1" || team === "EQUIPE_2";
+    const validTeam = !!TEAM_LABELS[team];
     // Elegíveis pra Embarque: Operacional ATIVO/PENDENCIA com telefone, da
     // equipe escolhida e livres (não presos em outra operação).
     const teamAvailable = validTeam
@@ -546,7 +561,7 @@ export default function NaviosPage() {
     setGroupParticipants((prev) => {
       const next = new Set(prev);
       for (const e of employees) {
-        if (e.team === "EQUIPE_1" || e.team === "EQUIPE_2") next.delete(e.id);
+        if (TEAM_LABELS[e.team || ""]) next.delete(e.id);
       }
       for (const e of teamAvailable) next.add(e.id);
       return next;
@@ -554,7 +569,7 @@ export default function NaviosPage() {
     setGroupPerEmpFn((m) => {
       const nm = new Map(m);
       for (const e of employees) {
-        if (e.team === "EQUIPE_1" || e.team === "EQUIPE_2") nm.delete(e.id);
+        if (TEAM_LABELS[e.team || ""]) nm.delete(e.id);
       }
       for (const e of teamAvailable) {
         const role = (e.role || "").trim().toUpperCase();
@@ -566,7 +581,7 @@ export default function NaviosPage() {
     setGroupPerEmpFn2((m) => {
       const nm = new Map(m);
       for (const e of employees) {
-        if (e.team === "EQUIPE_1" || e.team === "EQUIPE_2") nm.delete(e.id);
+        if (TEAM_LABELS[e.team || ""]) nm.delete(e.id);
       }
       return nm;
     });
@@ -1358,9 +1373,9 @@ export default function NaviosPage() {
                       </div>
                       {ship.assigned_team && (
                         <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${
-                          ship.assigned_team === "EQUIPE_1" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"
+                          TEAM_COLORS[ship.assigned_team] || "bg-purple-100 text-purple-700"
                         }`}>
-                          {ship.assigned_team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"}
+                          {TEAM_LABELS[ship.assigned_team] || ship.assigned_team}
                         </span>
                       )}
                       {ship.port && (
@@ -1613,7 +1628,7 @@ export default function NaviosPage() {
                   return (
                     <div>
                       <p className="text-xs text-text-light mb-2">
-                        {selectedShip.assigned_team === "EQUIPE_1" ? "Equipe 1" : "Equipe 2"} · {members.length} colaborador{members.length > 1 ? "es" : ""} <span className="italic">(não escalados)</span>
+                        {TEAM_LABELS[selectedShip.assigned_team || ""] || selectedShip.assigned_team} · {members.length} colaborador{members.length > 1 ? "es" : ""} <span className="italic">(não escalados)</span>
                       </p>
                       <ul className="space-y-1.5">
                         {members.map((m) => (
@@ -1986,8 +2001,8 @@ export default function NaviosPage() {
               </div>
 
               {/* Equipe Designada só faz sentido pra Embarque — define qual
-                  grupo fixo (Equipe 1 / Equipe 2) receberá a mensagem. Em
-                  Costado um grupo novo é criado por navio. */}
+                  grupo fixo (Equipe 1 / Equipe 2 / Equipe Turbo) receberá a
+                  mensagem. Em Costado um grupo novo é criado por navio. */}
               {form.operation_type === "EMBARQUE" && (
                 <div>
                   <label className="block text-sm font-medium text-text mb-1">Equipe Designada</label>
@@ -2003,6 +2018,7 @@ export default function NaviosPage() {
                     <option value="">Sem equipe</option>
                     <option value="EQUIPE_1">Equipe 1</option>
                     <option value="EQUIPE_2">Equipe 2</option>
+                    <option value="EQUIPE_4">Equipe Turbo</option>
                   </select>
                 </div>
               )}
@@ -2285,6 +2301,10 @@ export default function NaviosPage() {
                           ) : form.assigned_team === "EQUIPE_2" ? (
                             <div className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-purple-100 text-purple-700 border border-purple-200">
                               🎯 Equipe 2 será notificada
+                            </div>
+                          ) : form.assigned_team === "EQUIPE_4" ? (
+                            <div className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-orange-100 text-orange-700 border border-orange-200">
+                              🎯 Equipe Turbo será notificada
                             </div>
                           ) : (
                             <div className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-amber-100 text-amber-800 border border-amber-300">

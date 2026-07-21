@@ -33,7 +33,7 @@ interface NotifyBody {
 }
 
 const TEAM_LABEL: Record<string, string> = {
-  EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3",
+  EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3", EQUIPE_4: "Equipe Turbo",
 };
 
 // Lista de embarque da equipe: materiais do kit + comida do Rancho, com as

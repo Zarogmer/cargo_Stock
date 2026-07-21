@@ -44,10 +44,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
   }
 
-  const team = body.team === "EQUIPE_1" || body.team === "EQUIPE_2" ? body.team : null;
+  const team = body.team === "EQUIPE_1" || body.team === "EQUIPE_2" || body.team === "EQUIPE_4" ? body.team : null;
   const phoneRaw = (body.phone || "").trim();
   if (!team || !phoneRaw) {
-    return NextResponse.json({ error: "Campos obrigatórios: team (EQUIPE_1|EQUIPE_2) e phone" }, { status: 400 });
+    return NextResponse.json({ error: "Campos obrigatórios: team (EQUIPE_1|EQUIPE_2|EQUIPE_4) e phone" }, { status: 400 });
   }
 
   const phoneNorm = normalizeBRNumber(phoneRaw);

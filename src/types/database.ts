@@ -60,7 +60,8 @@ export interface StockMovement {
   stock_item?: StockItem;
 }
 
-export type TeamType = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "COSTADO" | null;
+// EQUIPE_4 = "Equipe Turbo" (equipe maior; no Rancho, EQUIPE_3 é a aba "Total").
+export type TeamType = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "EQUIPE_4" | "COSTADO" | null;
 
 export interface Employee {
   id: number;

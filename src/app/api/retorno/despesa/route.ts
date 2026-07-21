@@ -6,7 +6,7 @@ import { hasPermission } from "@/lib/rbac";
 import type { Role } from "@/types/database";
 
 const TEAM_LABEL: Record<string, string> = {
-  EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3",
+  EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3", EQUIPE_4: "Equipe Turbo",
 };
 
 // POST /api/retorno/despesa — sincroniza a despesa "Material danificado" do
