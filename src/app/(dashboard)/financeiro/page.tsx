@@ -91,6 +91,19 @@ const UNIT_LABELS: Record<JobUnit, string> = {
   TURNO: "Turno (Costado)",
 };
 
+// Serviços de Embarque do navio (ships.services), pra mostrar num relance quais
+// navios tiveram Raspagem/Pintura — os extras que rendem 200/porão a mais. O
+// COSTADO fica de fora aqui (tem aba própria).
+const EMBARQUE_SERVICE_LABELS: Record<string, string> = {
+  LAVAGEM_PORAO: "Lavagem",
+  RASPAGEM: "Raspagem",
+  PINTURA: "Pintura",
+};
+// Raspagem e Pintura são os "extras" — realçados em âmbar; a lavagem é o padrão.
+function isServiceExtra(s: string): boolean {
+  return s === "RASPAGEM" || s === "PINTURA";
+}
+
 // Fluxo simplificado: tudo que não foi pago aparece como "Em Aberto" (cobre
 // também os legados ABERTO e VERIFICADO). FECHADO = "Pago".
 const STATUS_LABELS: Record<JobStatus, string> = {
@@ -1539,6 +1552,134 @@ function FuncoesTab({
     onChange();
   }
 
+  // Seção de cada função na aba Valores, derivada da UNIDADE (não do nome, pra
+  // funcionar com funções novas sem manutenção): Embarque = pago por porão
+  // (ajudante, wap, raspagem, pintura, administrativo...); Serviços = Costado
+  // (por turno); Mensalista = salário fixo (Analista RH, Auxiliar Operacional).
+  function sectionOf(f: JobFunction): "EMBARQUE" | "SERVICOS" | "MENSALISTA" {
+    const u = (f.unit || "").toUpperCase();
+    if (u === "TURNO") return "SERVICOS";
+    if (u === "MENSALISTA" || u === "POR_DIA" || u === "POR_HORA") return "MENSALISTA";
+    return "EMBARQUE"; // PORAO, POR_NAVIO, POR_OPERACAO
+  }
+  const SECTIONS = [
+    { key: "EMBARQUE", title: "🚢 Embarque", hint: "Pago por porão — inclui os extras Raspagem e Pintura" },
+    { key: "SERVICOS", title: "⚓ Serviços", hint: "Costado — pago por turno" },
+    { key: "MENSALISTA", title: "🗓️ Mensalista", hint: "Salário fixo mensal" },
+  ] as const;
+  const fnsBySection = (key: string) =>
+    filtered
+      .filter((f) => sectionOf(f) === key)
+      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+
+  // Linha da tabela de uma função (reusada nas 3 seções).
+  const renderFnRow = (f: JobFunction) => (
+    <tr key={f.id} className="border-b border-border last:border-0 hover:bg-gray-50">
+      <td className="px-4 py-2.5 font-medium">{f.name}</td>
+      <td className="px-4 py-2.5">
+        <InlineRateEditor
+          value={Number(f.default_rate)}
+          canEdit={canEdit}
+          onSave={(v) => saveRateInline(f, v)}
+        />
+      </td>
+      <td className="px-4 py-2.5 text-text-light text-xs">{f.name.trim().toUpperCase() === "ADMINISTRATIVO" ? "Por Navio" : UNIT_LABELS[f.unit]}</td>
+      <td className="px-4 py-2.5 text-text-light text-xs">
+        {(() => {
+          // Administrativo agrupa pelo SETOR (não pela role) — o pessoal
+          // de escritório tem cargos variados (Analista RH, etc.).
+          const isAdmin = f.name.trim().toUpperCase() === "ADMINISTRATIVO";
+          if (isAdmin) {
+            const adminPeople = employees.filter((e) => e.sector === "ADMINISTRATIVO" && (e.status ?? "ATIVO") !== "INATIVO");
+            if (adminPeople.length === 0) return <span className="text-text-light/60">— ninguém no setor</span>;
+            return (
+              <button
+                type="button"
+                onClick={() => setViewEmpsFn(f)}
+                className="inline-flex items-center gap-1 px-2 py-1 -mx-2 -my-1 rounded hover:bg-blue-50 hover:text-primary transition cursor-pointer"
+                title="Ver pessoal do administrativo"
+              >
+                <span>🏢</span>
+                <strong className="text-text">{adminPeople.length}</strong>
+                <span>do administrativo</span>
+                <span className="text-[10px] opacity-60">▸</span>
+              </button>
+            );
+          }
+          // Costado é uma atividade, não uma role — qualquer
+          // colaborador operacional pode ser escalado. Mostra
+          // total de ativos em vez do match por role (que daria 0).
+          const isCostado = f.name.trim().toUpperCase() === "COSTADO";
+          if (isCostado) {
+            const totalActive = employees.filter((e) => (e.status ?? "ATIVO") === "ATIVO").length;
+            return (
+              <span className="inline-flex items-center gap-1 text-indigo-700">
+                <span>🌍 Qualquer um — </span>
+                <strong className="text-text">{totalActive}</strong>
+                <span>ativos no sistema</span>
+              </span>
+            );
+          }
+          const n = employeeCount(f.name);
+          if (n === 0) return <span className="text-text-light/60">— nenhum cadastrado</span>;
+          return (
+            <button
+              type="button"
+              onClick={() => setViewEmpsFn(f)}
+              className="inline-flex items-center gap-1 px-2 py-1 -mx-2 -my-1 rounded hover:bg-blue-50 hover:text-primary transition cursor-pointer"
+              title="Ver lista de colaboradores"
+            >
+              <strong className="text-text">{n}</strong>
+              <span>{n === 1 ? "colaborador" : "colaboradores"}</span>
+              <span className="text-[10px] opacity-60">▸</span>
+            </button>
+          );
+        })()}
+      </td>
+      <td className="px-4 py-2.5 text-right">
+        <div className="flex gap-1 justify-end">
+          {/* Valores especiais por funcionário NÃO se aplicam a
+              COSTADO — Costado é valor fixo único, igual pra todos.
+              Só funções de Embarque podem ter override por pessoa. */}
+          {f.name.trim().toUpperCase() !== "COSTADO" && (
+            <button onClick={() => setRatesFn(f)} className="p-1.5 text-amber-700 hover:bg-amber-50 rounded" title="Valores especiais por funcionário">
+              <span className="text-base leading-none">👤</span>
+            </button>
+          )}
+          {canEdit && (
+            <>
+              <button onClick={() => { setEditFn(f); setShowFnForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded" title="Editar tudo">
+                <EditIcon />
+              </button>
+              {f.active ? (
+                <button onClick={() => setDeleteFn(f)} className="p-1.5 text-danger hover:bg-red-50 rounded" title="Excluir ou desativar">
+                  <TrashIcon />
+                </button>
+              ) : (
+                <button onClick={() => setDeleteFn(f)} className="px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 rounded font-medium" title="Reativar">
+                  ↻ Reativar
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+
+  // Cabeçalho de coluna, repetido no topo de cada seção.
+  const tableHead = (
+    <thead className="border-b border-border bg-gray-50">
+      <tr>
+        <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Função</th>
+        <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Valor Padrão</th>
+        <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Unidade</th>
+        <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Colaboradores</th>
+        <th className="px-4 py-2.5 text-right text-xs font-semibold text-text-light uppercase tracking-wider">Ações</th>
+      </tr>
+    </thead>
+  );
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2 items-center justify-between">
@@ -1569,113 +1710,29 @@ function FuncoesTab({
           <p className="text-sm text-text-light">Nenhuma função encontrada</p>
         </div>
       ) : (
-        <div className="bg-card rounded-xl border border-border overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="border-b border-border bg-gray-50">
-              <tr>
-                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Função</th>
-                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Valor Padrão</th>
-                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Unidade</th>
-                <th className="px-4 py-2.5 text-left text-xs font-semibold text-text-light uppercase tracking-wider">Colaboradores</th>
-                <th className="px-4 py-2.5 text-right text-xs font-semibold text-text-light uppercase tracking-wider">Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((f) => (
-                <tr key={f.id} className="border-b border-border last:border-0 hover:bg-gray-50">
-                  <td className="px-4 py-2.5 font-medium">{f.name}</td>
-                  <td className="px-4 py-2.5">
-                    <InlineRateEditor
-                      value={Number(f.default_rate)}
-                      canEdit={canEdit}
-                      onSave={(v) => saveRateInline(f, v)}
-                    />
-                  </td>
-                  <td className="px-4 py-2.5 text-text-light text-xs">{f.name.trim().toUpperCase() === "ADMINISTRATIVO" ? "Por Navio" : UNIT_LABELS[f.unit]}</td>
-                  <td className="px-4 py-2.5 text-text-light text-xs">
-                    {(() => {
-                      // Administrativo agrupa pelo SETOR (não pela role) — o pessoal
-                      // de escritório tem cargos variados (Analista RH, etc.).
-                      const isAdmin = f.name.trim().toUpperCase() === "ADMINISTRATIVO";
-                      if (isAdmin) {
-                        const adminPeople = employees.filter((e) => e.sector === "ADMINISTRATIVO" && (e.status ?? "ATIVO") !== "INATIVO");
-                        if (adminPeople.length === 0) return <span className="text-text-light/60">— ninguém no setor</span>;
-                        return (
-                          <button
-                            type="button"
-                            onClick={() => setViewEmpsFn(f)}
-                            className="inline-flex items-center gap-1 px-2 py-1 -mx-2 -my-1 rounded hover:bg-blue-50 hover:text-primary transition cursor-pointer"
-                            title="Ver pessoal do administrativo"
-                          >
-                            <span>🏢</span>
-                            <strong className="text-text">{adminPeople.length}</strong>
-                            <span>do administrativo</span>
-                            <span className="text-[10px] opacity-60">▸</span>
-                          </button>
-                        );
-                      }
-                      // Costado é uma atividade, não uma role — qualquer
-                      // colaborador operacional pode ser escalado. Mostra
-                      // total de ativos em vez do match por role (que daria 0).
-                      const isCostado = f.name.trim().toUpperCase() === "COSTADO";
-                      if (isCostado) {
-                        const totalActive = employees.filter((e) => (e.status ?? "ATIVO") === "ATIVO").length;
-                        return (
-                          <span className="inline-flex items-center gap-1 text-indigo-700">
-                            <span>🌍 Qualquer um — </span>
-                            <strong className="text-text">{totalActive}</strong>
-                            <span>ativos no sistema</span>
-                          </span>
-                        );
-                      }
-                      const n = employeeCount(f.name);
-                      if (n === 0) return <span className="text-text-light/60">— nenhum cadastrado</span>;
-                      return (
-                        <button
-                          type="button"
-                          onClick={() => setViewEmpsFn(f)}
-                          className="inline-flex items-center gap-1 px-2 py-1 -mx-2 -my-1 rounded hover:bg-blue-50 hover:text-primary transition cursor-pointer"
-                          title="Ver lista de colaboradores"
-                        >
-                          <strong className="text-text">{n}</strong>
-                          <span>{n === 1 ? "colaborador" : "colaboradores"}</span>
-                          <span className="text-[10px] opacity-60">▸</span>
-                        </button>
-                      );
-                    })()}
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    <div className="flex gap-1 justify-end">
-                      {/* Valores especiais por funcionário NÃO se aplicam a
-                          COSTADO — Costado é valor fixo único, igual pra todos.
-                          Só funções de Embarque podem ter override por pessoa. */}
-                      {f.name.trim().toUpperCase() !== "COSTADO" && (
-                        <button onClick={() => setRatesFn(f)} className="p-1.5 text-amber-700 hover:bg-amber-50 rounded" title="Valores especiais por funcionário">
-                          <span className="text-base leading-none">👤</span>
-                        </button>
-                      )}
-                      {canEdit && (
-                        <>
-                          <button onClick={() => { setEditFn(f); setShowFnForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded" title="Editar tudo">
-                            <EditIcon />
-                          </button>
-                          {f.active ? (
-                            <button onClick={() => setDeleteFn(f)} className="p-1.5 text-danger hover:bg-red-50 rounded" title="Excluir ou desativar">
-                              <TrashIcon />
-                            </button>
-                          ) : (
-                            <button onClick={() => setDeleteFn(f)} className="px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 rounded font-medium" title="Reativar">
-                              ↻ Reativar
-                            </button>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        // Uma tabela por seção (Embarque / Serviços / Mensalista). Seção sem
+        // função (ex.: busca filtrou tudo) não aparece.
+        <div className="space-y-5">
+          {SECTIONS.map((sec) => {
+            const list = fnsBySection(sec.key);
+            if (list.length === 0) return null;
+            return (
+              <div key={sec.key} className="space-y-1.5">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <h3 className="text-sm font-bold text-text">{sec.title}</h3>
+                  <span className="text-xs text-text-light">{sec.hint}</span>
+                </div>
+                <div className="bg-card rounded-xl border border-border overflow-x-auto">
+                  <table className="w-full text-sm">
+                    {tableHead}
+                    <tbody>
+                      {list.map(renderFnRow)}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -2651,6 +2708,27 @@ function TrabalhosTab({
                     <p className="text-xs text-text-light mt-1">
                       {formatJobDate(j.start_date)} {j.end_date ? `→ ${formatJobDate(j.end_date)}` : "→ em aberto"}
                     </p>
+                    {/* Serviços do navio (Lavagem/Raspagem/Pintura) — Raspagem e
+                        Pintura em destaque, que são os extras pagos por porão. */}
+                    {(() => {
+                      const svc = (ships.find((s) => s.id === j.ship_id)?.services || [])
+                        .filter((s) => s !== "COSTADO");
+                      if (svc.length === 0) return null;
+                      return (
+                        <div className="flex items-center gap-1 flex-wrap mt-1">
+                          {svc.map((s) => (
+                            <span
+                              key={s}
+                              className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                                isServiceExtra(s) ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-700"
+                              }`}
+                            >
+                              {isServiceExtra(s) ? "✚ " : ""}{EMBARQUE_SERVICE_LABELS[s] || s}
+                            </span>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div className="flex gap-3 items-center text-xs flex-wrap">
                     <div>
