@@ -95,8 +95,11 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   const [deleteItem, setDeleteItem] = useState<StockItem | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // Sub-aba "onde está": Disponível / Equipe 1 / Equipe 2.
+  // Sub-aba "onde está": Disponível / Equipe 1 / Equipe 2 / Turbo.
   const [activeAssign, setActiveAssign] = useState<AssignTeam>("DISPONIVEL");
+  // Transferência com quantidade: ao mandar um item pra outra "casa", abre um
+  // modal pra escolher QUANTO vai (o resto fica onde estava). null = fechado.
+  const [transfer, setTransfer] = useState<{ item: StockItem; target: AssignTeam } | null>(null);
 
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, cfg.module, "create");
@@ -177,11 +180,100 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
     [filteredItems],
   );
 
-  // Move o item entre Disponível / Equipe 1 / Equipe 2 (o item inteiro vai junto).
-  async function handleAssign(item: StockItem, target: AssignTeam) {
+  // Clicou numa "casa" diferente no seletor da linha. Item com quantidade abre o
+  // modal pra escolher quanto vai; item zerado só troca de lugar (nada a dividir).
+  function requestAssign(item: StockItem, target: AssignTeam) {
+    if (target === assignOf(item)) return;
+    if (item.quantity > 0) {
+      setTransfer({ item, target });
+    } else {
+      void relocateWhole(item, target);
+    }
+  }
+
+  // Move a LINHA inteira de lugar (sem dividir) — usado pra item zerado. Se já
+  // existe a mesma "casa" com esse produto, some com a duplicata mesclando nela.
+  async function relocateWhole(item: StockItem, target: AssignTeam) {
     const actor = profile?.full_name || "Sistema";
-    await db.from("stock_items").update({ assigned_team: target, updated_by: actor } as Record<string, unknown>).eq("id", item.id);
+    const twin = items.find(
+      (i) => i.id !== item.id && assignOf(i) === target && normalize(i.name) === normalize(item.name),
+    );
+    if (twin) {
+      // Mescla no destino (soma as quantidades) e zera a origem — nunca apaga a
+      // linha (o delete cascatearia o histórico de movimentações).
+      await db.from("stock_items").update({ quantity: twin.quantity + item.quantity, updated_by: actor } as Record<string, unknown>).eq("id", twin.id);
+      await db.from("stock_items").update({ quantity: 0, updated_by: actor } as Record<string, unknown>).eq("id", item.id);
+    } else {
+      await db.from("stock_items").update({ assigned_team: target, updated_by: actor } as Record<string, unknown>).eq("id", item.id);
+    }
     loadItems();
+  }
+
+  // Transfere QTY unidades de uma casa pra outra. A origem diminui (a 0 se for
+  // tudo); o destino é a linha do mesmo produto naquela casa (mescla) ou uma
+  // linha nova. Registra ENTRADA/BAIXA nas duas pontas pro histórico. Nenhuma
+  // linha é apagada — o onDelete=Cascade levaria junto o histórico.
+  async function handleTransfer(item: StockItem, target: AssignTeam, rawQty: number) {
+    const max = item.quantity;
+    const qty = Math.min(Math.max(rawQty, 0), max);
+    if (qty <= 0 || target === assignOf(item)) { setTransfer(null); return; }
+    setSaving(true);
+    const actor = profile?.full_name || "Sistema";
+    const today = new Date().toISOString().split("T")[0];
+    const srcLabel = ASSIGN_TABS.find((a) => a.value === assignOf(item))?.label ?? assignOf(item);
+    const tgtLabel = ASSIGN_TABS.find((a) => a.value === target)?.label ?? target;
+    const note = `Transferência: ${srcLabel} → ${tgtLabel}`;
+    const movingAll = qty >= max;
+
+    try {
+      const twin = items.find(
+        (i) => i.id !== item.id && assignOf(i) === target && normalize(i.name) === normalize(item.name),
+      );
+
+      // Sem linha no destino e mandando TUDO → só realoca a própria linha (não
+      // cria linha nova nem deixa origem zerada à toa).
+      if (!twin && movingAll) {
+        await db.from("stock_items").update({ assigned_team: target, updated_by: actor } as Record<string, unknown>).eq("id", item.id);
+        setTransfer(null);
+        loadItems();
+        return;
+      }
+
+      // Destino: mescla na linha existente ou cria uma nova.
+      if (twin) {
+        await db.from("stock_items").update({ quantity: twin.quantity + qty, updated_by: actor } as Record<string, unknown>).eq("id", twin.id);
+        await db.from("stock_movements").insert({ stock_item_id: twin.id, movement_type: "ENTRADA", quantity: qty, movement_date: today, notes: note, created_by: actor } as Record<string, unknown>);
+      } else {
+        const payload: Record<string, unknown> = {
+          name: item.name,
+          category: item.category,
+          unit: item.unit,
+          quantity: qty,
+          team: TEAM,
+          assigned_team: target,
+          min_quantity: item.min_quantity ?? 0,
+          image_url: item.image_url ?? null,
+          notes: item.notes ?? null,
+          updated_by: actor,
+        };
+        if (canSeeValue) payload.unit_value = item.unit_value ?? 0;
+        const insRes: { data?: unknown } = await db.from("stock_items").insert(payload);
+        const created = insRes.data as { id?: number } | Array<{ id?: number }> | undefined;
+        const newId = Array.isArray(created) ? created[0]?.id : created?.id;
+        if (newId) {
+          await db.from("stock_movements").insert({ stock_item_id: newId, movement_type: "ENTRADA", quantity: qty, movement_date: today, notes: note, created_by: actor } as Record<string, unknown>);
+        }
+      }
+
+      // Origem: diminui a quantidade (a 0 se levou tudo). Nunca apaga a linha.
+      await db.from("stock_items").update({ quantity: max - qty, updated_by: actor } as Record<string, unknown>).eq("id", item.id);
+      await db.from("stock_movements").insert({ stock_item_id: item.id, movement_type: "BAIXA", quantity: qty, movement_date: today, notes: note, created_by: actor } as Record<string, unknown>);
+
+      setTransfer(null);
+      loadItems();
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleSave(formData: { name: string; quantity: number; min_quantity: number; unit_value: number; image_url: string | null; notes: string | null; assigned_team: string }) {
@@ -352,9 +444,9 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
           <select
             value={cur}
             onClick={(e) => e.stopPropagation()}
-            onChange={(e) => { e.stopPropagation(); handleAssign(i, e.target.value as AssignTeam); }}
+            onChange={(e) => { e.stopPropagation(); requestAssign(i, e.target.value as AssignTeam); }}
             className="text-xs px-2 py-1 border border-border rounded-lg bg-card focus:ring-2 focus:ring-primary outline-none"
-            title="Onde está o item — mover entre Disponível / Equipe 1 / Equipe 2"
+            title="Onde está o item — escolha a casa e quanto transferir"
           >
             {ASSIGN_TABS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
           </select>
@@ -497,6 +589,14 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         saving={saving}
       />
 
+      <TransferModal
+        transfer={transfer}
+        code={transfer ? codeMap.get(transfer.item.id) || null : null}
+        onClose={() => setTransfer(null)}
+        onConfirm={handleTransfer}
+        saving={saving}
+      />
+
       <ConfirmDialog
         open={!!deleteItem}
         onClose={() => setDeleteItem(null)}
@@ -509,6 +609,86 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
 
       <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />
     </div>
+  );
+}
+
+// Modal de transferência: escolhe QUANTAS unidades vão da casa atual pra outra.
+// Começa com o total (confirmar = leva tudo, como era antes); dá pra reduzir e
+// deixar o resto onde está.
+function TransferModal({ transfer, code, onClose, onConfirm, saving }: {
+  transfer: { item: StockItem; target: AssignTeam } | null;
+  code: string | null;
+  onClose: () => void;
+  onConfirm: (item: StockItem, target: AssignTeam, qty: number) => void;
+  saving: boolean;
+}) {
+  const [qty, setQty] = useState("");
+
+  // Reabre sempre com o total do item (o padrão é "levar tudo").
+  useEffect(() => {
+    if (transfer) setQty(formatQty(transfer.item.quantity));
+  }, [transfer]);
+
+  if (!transfer) return null;
+  const { item, target } = transfer;
+  const max = item.quantity;
+  const srcLabel = ASSIGN_TABS.find((a) => a.value === assignOf(item))?.label ?? assignOf(item);
+  const tgtLabel = ASSIGN_TABS.find((a) => a.value === target)?.label ?? target;
+  const parsed = parseDecimalBR(qty);
+  const valid = parsed > 0 && parsed <= max;
+  const leftover = valid ? max - parsed : max;
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
+
+  return (
+    <Modal open={!!transfer} onClose={onClose} title="Transferir item">
+      <form
+        onSubmit={(e) => { e.preventDefault(); if (valid) onConfirm(item, target, parsed); }}
+        className="space-y-4"
+      >
+        <div className="rounded-lg border border-border bg-gray-50 px-3 py-2 text-sm">
+          <p className="font-medium text-text">
+            {item.name}
+            {code && <span className="ml-2 font-mono text-xs text-text-light">{code}</span>}
+          </p>
+          <p className="text-xs text-text-light mt-0.5">
+            <span className="font-medium">{srcLabel}</span> → <span className="font-medium">{tgtLabel}</span> · {formatQty(max)} disponível{max === 1 ? "" : "s"} nesta casa
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Quantidade a transferir</label>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={qty}
+            onChange={(e) => setQty(e.target.value)}
+            autoFocus
+            className={inputCls}
+          />
+          <div className="mt-1.5 flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-[11px] text-text-light">
+              {valid
+                ? <>Ficam <strong>{formatQty(leftover)}</strong> em {srcLabel}.</>
+                : <span className="text-amber-700">Informe um valor entre 1 e {formatQty(max)}.</span>}
+            </p>
+            <button
+              type="button"
+              onClick={() => setQty(formatQty(max))}
+              className="text-[11px] font-medium text-primary hover:underline"
+            >
+              Levar tudo ({formatQty(max)})
+            </button>
+          </div>
+        </div>
+
+        <div className="flex gap-3 justify-end pt-1">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={!valid || saving}>
+            {saving ? "Transferindo..." : "Transferir"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

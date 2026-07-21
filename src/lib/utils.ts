@@ -102,19 +102,33 @@ export function codePrefix(name: string): string {
 // Gera um código por item (prefixo do nome + sequência de 2 dígitos entre itens
 // de mesmo prefixo, ordenados por id = ordem de cadastro). Ex.: dois itens com
 // prefixo "MF" → "MF01", "MF02". Derivado (não persiste); recalcula na lista.
+//
+// O código identifica o PRODUTO, não a linha: itens de mesmo nome compartilham
+// o código (o da 1ª ocorrência por id). Assim, quando um item é dividido entre
+// Disponível e uma equipe (duas linhas, mesmo nome), as duas mostram o mesmo
+// código — e o Rancho, que já tem uma linha por equipe do mesmo alimento, para
+// de gerar códigos diferentes pro que é o mesmo produto. Nomes únicos (o caso
+// comum) numeram exatamente como antes.
 export function buildCodeMap<T>(
   items: T[],
   getId: (item: T) => number,
   getName: (item: T) => string,
 ): Map<number, string> {
   const sorted = [...items].sort((a, b) => getId(a) - getId(b));
-  const counters = new Map<string, number>();
+  const counters = new Map<string, number>();       // prefixo → nº distintos já vistos
+  const codeByName = new Map<string, string>();      // nome normalizado → código
   const result = new Map<number, string>();
   for (const item of sorted) {
-    const prefix = codePrefix(getName(item));
-    const n = (counters.get(prefix) || 0) + 1;
-    counters.set(prefix, n);
-    result.set(getId(item), `${prefix}${String(n).padStart(2, "0")}`);
+    const nameKey = normalize(getName(item));
+    let code = codeByName.get(nameKey);
+    if (!code) {
+      const prefix = codePrefix(getName(item));
+      const n = (counters.get(prefix) || 0) + 1;
+      counters.set(prefix, n);
+      code = `${prefix}${String(n).padStart(2, "0")}`;
+      codeByName.set(nameKey, code);
+    }
+    result.set(getId(item), code);
   }
   return result;
 }
@@ -140,10 +154,14 @@ export function codeForName<T>(
     }
   }
   const prefix = codePrefix(name);
-  // buildCodeMap numera 01..N denso por prefixo, então o próximo = nº de itens
-  // do mesmo prefixo + 1.
-  const used = items.filter((i) => codePrefix(getName(i)) === prefix).length;
-  return `${prefix}${String(used + 1).padStart(2, "0")}`;
+  // buildCodeMap numera 01..N por NOME distinto de cada prefixo, então o próximo
+  // = nº de nomes distintos do mesmo prefixo + 1 (contar linhas erraria quando
+  // um produto tem mais de uma linha — ex.: item dividido entre Disponível e
+  // equipe).
+  const distinctNames = new Set(
+    items.filter((i) => codePrefix(getName(i)) === prefix).map((i) => normalize(getName(i))),
+  );
+  return `${prefix}${String(distinctNames.size + 1).padStart(2, "0")}`;
 }
 
 export function normalize(str: string): string {
