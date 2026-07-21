@@ -11,7 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ImagePicker, ImageLightbox } from "@/components/ui/image-picker";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDateTime, matchSearch, parseDecimalBR, formatQty, formatCurrency, buildCodeMap, normalize } from "@/lib/utils";
+import { formatDateTime, matchSearch, parseDecimalBR, formatQty, formatCurrency, buildCodeMap, codeForName, normalize } from "@/lib/utils";
 import type { StockItem } from "@/types/database";
 
 // Inventário genérico do Almoxarifado: itens com QUANTIDADE, mínimo, setinhas
@@ -63,12 +63,15 @@ const KIND_CONFIG: Record<InventoryKind, KindConfig> = {
 };
 
 // "Onde está" cada item (coluna assigned_team) — escolhido por item, estilo
-// Maquinário. DISPONIVEL = no almoxarifado; EQUIPE_1/2 = levado pela equipe.
-type AssignTeam = "DISPONIVEL" | "EQUIPE_1" | "EQUIPE_2";
+// Maquinário. DISPONIVEL = no almoxarifado; EQUIPE_1/2/4 = levado pela equipe.
+// EQUIPE_4 = "Equipe Turbo" (mesma chave do Rancho), incluída em 2026-07 pra
+// valer no Almoxarifado inteiro, não só na comida.
+type AssignTeam = "DISPONIVEL" | "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4";
 const ASSIGN_TABS: { value: AssignTeam; label: string; activeCls: string; badgeCls: string }[] = [
   { value: "DISPONIVEL", label: "Disponível", activeCls: "bg-teal-600 text-white shadow-md", badgeCls: "bg-teal-100 text-teal-700" },
   { value: "EQUIPE_1", label: "Equipe 1", activeCls: "bg-blue-600 text-white shadow-md", badgeCls: "bg-blue-100 text-blue-700" },
   { value: "EQUIPE_2", label: "Equipe 2", activeCls: "bg-purple-600 text-white shadow-md", badgeCls: "bg-purple-100 text-purple-700" },
+  { value: "EQUIPE_4", label: "Equipe Turbo", activeCls: "bg-orange-600 text-white shadow-md", badgeCls: "bg-orange-100 text-orange-700" },
 ];
 function assignOf(i: StockItem): AssignTeam {
   return (i.assigned_team as AssignTeam) || "DISPONIVEL";
@@ -483,6 +486,9 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         onSave={handleSave}
         item={editItem}
         itemCode={editItem ? codeMap.get(editItem.id) || null : null}
+        // Cadastro novo: mostra o código que VAI ser gerado a partir do nome
+        // digitado (mesma numeração da lista) e avisa se o nome já existe.
+        allItems={items}
         altNames={editItemAltNames}
         newTitle={cfg.newTitle}
         editTitle={cfg.editTitle}
@@ -506,12 +512,14 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   );
 }
 
-function MaterialFormModal({ open, onClose, onSave, item, itemCode, altNames = [], newTitle, editTitle, defaultAssign, showValue, saving }: {
+function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [], altNames = [], newTitle, editTitle, defaultAssign, showValue, saving }: {
   open: boolean;
   onClose: () => void;
   onSave: (data: { name: string; quantity: number; min_quantity: number; unit_value: number; image_url: string | null; notes: string | null; assigned_team: string }) => void;
   item: StockItem | null;
   itemCode?: string | null;
+  // Itens do setor — base do código previsto no cadastro novo.
+  allItems?: StockItem[];
   // Nomes com que este mesmo item (mesmo código) foi comprado no Controle de Compras.
   altNames?: string[];
   newTitle: string;
@@ -566,17 +574,51 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, altNames = [
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
 
+  // Código do item. Na edição é o que ele já tem; no cadastro novo é o que vai
+  // ser gerado a partir do nome digitado (mesma numeração da lista). Antes só
+  // aparecia na edição, em cinza minúsculo ao lado do rótulo — passava batido.
+  const trimmedName = name.trim();
+  const previewCode = !item && trimmedName ? codeForName(allItems, (i) => i.id, (i) => i.name, trimmedName) : null;
+  const shownCode = item ? itemCode : previewCode;
+  // Nome novo que já existe no setor: o código gerado seria o do item existente
+  // — provavelmente é cadastro duplicado.
+  const duplicate = !item && trimmedName
+    ? allItems.find((i) => normalize(i.name) === normalize(trimmedName)) || null
+    : null;
+
   return (
     <Modal open={open} onClose={onClose} title={item ? editTitle : newTitle}>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-text mb-1">
-            Nome *
-            {item && itemCode && (
-              <span className="ml-2 font-mono text-xs text-text-light" title="Código único no Almoxarifado">{itemCode}</span>
+          <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
+            <label className="block text-sm font-medium text-text">Nome *</label>
+            {shownCode && (
+              <span
+                className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1"
+                title={item ? "Código único deste item no Almoxarifado" : "Código que será gerado ao salvar"}
+              >
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-primary/70">
+                  {item ? "Código" : "Código novo"}
+                </span>
+                <span className="font-mono text-sm font-bold text-primary">{shownCode}</span>
+              </span>
             )}
-          </label>
+          </div>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} />
+          {!item && (
+            duplicate ? (
+              <p className="mt-1 text-[11px] text-amber-700">
+                ⚠️ Já existe <strong>{duplicate.name}</strong> neste setor com o código{" "}
+                <span className="font-mono">{shownCode}</span> — confira antes de cadastrar de novo.
+              </p>
+            ) : (
+              <p className="mt-1 text-[11px] text-text-light">
+                {trimmedName
+                  ? "O código sai do nome — muda se você mudar o nome."
+                  : "Digite o nome para ver o código que será gerado."}
+              </p>
+            )
+          )}
         </div>
         {item && altNames.length > 0 && (
           <div className="bg-blue-50/60 border border-blue-200 rounded-lg px-3 py-2">

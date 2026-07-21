@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDate, formatDateTime, matchSearch, parseDecimalBR, formatQty, buildCodeMap, unitSuffix } from "@/lib/utils";
+import { formatDate, formatDateTime, matchSearch, parseDecimalBR, formatQty, buildCodeMap, codeForName, normalize, unitSuffix } from "@/lib/utils";
 import type { StockItem } from "@/types/database";
 
 const STOCK_CATEGORIES = [
@@ -561,6 +561,8 @@ export function EstoquePanel() {
         saving={saving}
         team={activeTeam}
         sourceItems={codeSourceItems}
+        itemCode={editItem ? codeMap.get(editItem.id) || null : null}
+        allItems={items}
       />
 
       <PrepararModal
@@ -584,7 +586,7 @@ export function EstoquePanel() {
   );
 }
 
-function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems }: {
+function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems, itemCode, allItems = [] }: {
   open: boolean;
   onClose: () => void;
   onSave: (data: Partial<StockItem>) => void;
@@ -592,6 +594,10 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
   saving: boolean;
   team: RanchoTeam;
   sourceItems: CodeSourceItem[];
+  // Código do item em edição e a lista do setor (base do código previsto no
+  // cadastro novo) — mesmo destaque do Almoxarifado.
+  itemCode?: string | null;
+  allItems?: StockItem[];
 }) {
   const [name, setName] = useState("");
   const [category, setCategory] = useState("SUPRIMENTOS");
@@ -656,6 +662,15 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
 
+  // Código do item: na edição o que ele já tem; no cadastro novo o que vai ser
+  // gerado a partir do nome. Fica em destaque ao lado do campo Nome.
+  const trimmedName = name.trim();
+  const previewCode = !item && trimmedName ? codeForName(allItems, (i) => i.id, (i) => i.name, trimmedName) : null;
+  const shownCode = item ? itemCode : previewCode;
+  const duplicate = !item && trimmedName
+    ? allItems.find((i) => normalize(i.name) === normalize(trimmedName)) || null
+    : null;
+
   return (
     <Modal open={open} onClose={onClose} title={item ? "Editar Item" : "Novo Item"}>
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -686,8 +701,35 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
           </div>
         )}
         <div>
-          <label className="block text-sm font-medium text-text mb-1">Nome *</label>
+          <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
+            <label className="block text-sm font-medium text-text">Nome *</label>
+            {shownCode && (
+              <span
+                className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1"
+                title={item ? "Código único deste item" : "Código que será gerado ao salvar"}
+              >
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-primary/70">
+                  {item ? "Código" : "Código novo"}
+                </span>
+                <span className="font-mono text-sm font-bold text-primary">{shownCode}</span>
+              </span>
+            )}
+          </div>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} />
+          {!item && (
+            duplicate ? (
+              <p className="mt-1 text-[11px] text-amber-700">
+                ⚠️ Já existe <strong>{duplicate.name}</strong> aqui com o código{" "}
+                <span className="font-mono">{shownCode}</span> — confira antes de cadastrar de novo.
+              </p>
+            ) : (
+              <p className="mt-1 text-[11px] text-text-light">
+                {trimmedName
+                  ? "O código sai do nome — muda se você mudar o nome."
+                  : "Digite o nome para ver o código que será gerado."}
+              </p>
+            )
+          )}
         </div>
         <div>
           <label className="block text-sm font-medium text-text mb-1">Categoria</label>
