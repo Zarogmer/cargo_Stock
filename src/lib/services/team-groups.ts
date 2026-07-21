@@ -18,8 +18,8 @@
 
 import { prisma } from "@/lib/prisma";
 
-// EQUIPE_4 = "Equipe Turbo" (mesma chave do Rancho; EQUIPE_3 é a aba "Total"
-// da comida, não uma equipe real — nunca entra aqui).
+// EQUIPE_4 = "Equipe Turbo" (mesma chave do Rancho; EQUIPE_3 é a aba
+// "Disponível" da comida — ex-"Total" —, não uma equipe real; nunca entra aqui).
 export type TeamKey = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4";
 
 const TEAM_ENV_VARS: Record<TeamKey, string> = {

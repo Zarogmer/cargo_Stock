@@ -86,7 +86,7 @@ const STATUS_COLORS: Record<ShipStatus, string> = {
 };
 
 // Equipes designáveis de Embarque. EQUIPE_4 = "Equipe Turbo" (mesma chave da
-// aba do Rancho — equipe maior; EQUIPE_3 é a aba "Total" da comida, não entra).
+// aba do Rancho — equipe maior; EQUIPE_3 é a aba "Disponível" da comida, não entra).
 // Cores casam com o Rancho: Equipe 1 azul, Equipe 2 roxa, Turbo laranja.
 const TEAM_LABELS: Record<string, string> = {
   EQUIPE_1: "Equipe 1",

@@ -32,23 +32,24 @@ const STOCK_UNITS = [
   { value: "SACO", label: "Saco" },
 ];
 
-// Abas do Rancho. EQUIPE_3 = "Total" (lista-mãe: cadastra os alimentos e mostra
-// a SOMA das quantidades das equipes). EQUIPE_1/2/4 = equipes reais, cada uma com
-// suas próprias quantidades (cadastro livre). EQUIPE_4 = "Equipe Turbo" (equipe
-// maior, leva mais comida — mesmos alimentos).
+// Abas do Rancho. EQUIPE_3 = "Disponível" (ex-"Total"; lista-mãe: cadastra os
+// alimentos e mostra a SOMA das quantidades das equipes — renomeada pra casar
+// com o botão teal "Disponível" das outras abas do Almoxarifado). EQUIPE_1/2/4 =
+// equipes reais, cada uma com suas próprias quantidades (cadastro livre).
+// EQUIPE_4 = "Equipe Turbo" (equipe maior, leva mais comida — mesmos alimentos).
 type RanchoTeam = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "EQUIPE_4";
 const RANCHO_TEAM_TABS: { key: RanchoTeam; label: string; emoji: string; activeCls: string }[] = [
-  { key: "EQUIPE_3", label: "Total", emoji: "🧮", activeCls: "bg-teal-600 text-white shadow-md" },
+  { key: "EQUIPE_3", label: "Disponível", emoji: "🧮", activeCls: "bg-teal-600 text-white shadow-md" },
   { key: "EQUIPE_1", label: "Equipe 1", emoji: "🚢", activeCls: "bg-blue-600 text-white shadow-md" },
   { key: "EQUIPE_2", label: "Equipe 2", emoji: "🚢", activeCls: "bg-purple-600 text-white shadow-md" },
   { key: "EQUIPE_4", label: "Equipe Turbo", emoji: "🔥", activeCls: "bg-orange-600 text-white shadow-md" },
 ];
-// Só as equipes reais (sem o Total) — base da soma e do "Preparar".
+// Só as equipes reais (sem o Disponível) — base da soma e do "Preparar".
 const REAL_TEAMS: RanchoTeam[] = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_4"];
 function ranchoTeamLabel(t: string): string {
   return RANCHO_TEAM_TABS.find((x) => x.key === t)?.label || t;
 }
-// Cor do selo (claro) de equipe mostrado por alimento na aba Total.
+// Cor do selo (claro) de equipe mostrado por alimento na aba Disponível.
 const RANCHO_TEAM_BADGE: Record<string, string> = {
   EQUIPE_1: "bg-blue-100 text-blue-700",
   EQUIPE_2: "bg-purple-100 text-purple-700",
@@ -56,7 +57,7 @@ const RANCHO_TEAM_BADGE: Record<string, string> = {
 };
 
 // Item já cadastrado nas equipes, oferecido no seletor de código ao cadastrar no
-// Total (deduplicado por nome).
+// Disponível (deduplicado por nome).
 type CodeSourceItem = {
   id: number;
   name: string;
@@ -79,7 +80,7 @@ export function EstoquePanel() {
   const [dbError, setDbError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("TODOS");
-  // Total (EQUIPE_3) é a aba padrão — lista-mãe que mostra a soma das equipes.
+  // Disponível (EQUIPE_3) é a aba padrão — lista-mãe que mostra a soma das equipes.
   const [activeTeam, setActiveTeam] = useState<RanchoTeam>("EQUIPE_3");
   const [editItem, setEditItem] = useState<StockItem | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -123,7 +124,7 @@ export function EstoquePanel() {
   const codeMap = useMemo(() => buildCodeMap(items, (i) => i.id, (i) => i.name), [items]);
 
   // Itens já cadastrados nas Equipes 1/2, deduplicados por nome — fonte do
-  // seletor de código ao cadastrar um item no Total. O representante é a
+  // seletor de código ao cadastrar um item no Disponível. O representante é a
   // Equipe 1 quando existe, pra o código casar com o que aparece na aba dela.
   const codeSourceItems = useMemo<CodeSourceItem[]>(() => {
     const norm = (s: string) => (s || "").trim().toLowerCase();
@@ -164,7 +165,7 @@ export function EstoquePanel() {
   }, [items, codeMap]);
 
   // Soma das quantidades das equipes reais (1, 2 e Turbo) por nome — alimenta a
-  // coluna "Soma" da aba Total (a lista-mãe mostra quanto há somado nas equipes).
+  // coluna "Soma" da aba Disponível (a lista-mãe mostra quanto há somado nas equipes).
   const teamSumByName = useMemo(() => {
     const norm = (s: string) => (s || "").trim().toLowerCase();
     const m = new Map<string, number>();
@@ -176,7 +177,7 @@ export function EstoquePanel() {
   }, [items]);
 
   // Quais equipes têm cada alimento (por nome) — alimenta os selos "Equipe 1 / 2 /
-  // Turbo" na aba Total, conforme quem realmente tem o produto.
+  // Turbo" na aba Disponível, conforme quem realmente tem o produto.
   const teamsByName = useMemo(() => {
     const norm = (s: string) => (s || "").trim().toLowerCase();
     const m = new Map<string, Set<string>>();
@@ -189,11 +190,11 @@ export function EstoquePanel() {
     return m;
   }, [items]);
 
-  // Total (EQUIPE_3) é a lista-mãe: cadastro dos alimentos + soma das equipes.
+  // Disponível (EQUIPE_3) é a lista-mãe: cadastro dos alimentos + soma das equipes.
   // Aqui não há "qtd atual" própria nem baixa — a quantidade é o somatório.
   const isMaster = activeTeam === "EQUIPE_3";
 
-  // Linhas do Total: UNIÃO dos alimentos — os da lista-mãe (EQUIPE_3, editáveis)
+  // Linhas do Disponível: UNIÃO dos alimentos — os da lista-mãe (EQUIPE_3, editáveis)
   // + os que existem só nas equipes (representante = 1º item achado; só leitura
   // aqui, já que não estão na lista-mãe). Deduplicado por nome; a lista-mãe tem
   // prioridade como representante.
@@ -209,7 +210,7 @@ export function EstoquePanel() {
     return Array.from(byName.values());
   }, [items]);
 
-  // No Total uma linha é "só das equipes" quando não veio da lista-mãe (EQUIPE_3).
+  // No Disponível uma linha é "só das equipes" quando não veio da lista-mãe (EQUIPE_3).
   const isTeamOnly = (i: StockItem) => isMaster && i.team !== "EQUIPE_3";
 
   const baseItems = isMaster ? totalRows : items.filter((i) => i.team === activeTeam);
@@ -222,7 +223,7 @@ export function EstoquePanel() {
     return matchesSearch && matchesCategory;
   });
 
-  // Itens cadastrados no Total (lista-mãe, EQUIPE_3) — base do botão "Preparar".
+  // Itens cadastrados no Disponível (lista-mãe, EQUIPE_3) — base do botão "Preparar".
   const reservaCount = items.filter((i) => i.team === "EQUIPE_3").length;
 
   function getCategoryLabel(cat: string) {
@@ -324,7 +325,7 @@ export function EstoquePanel() {
       .eq("id", item.id);
   }
 
-  // "Preparar": copia os itens do Total (lista-mãe, EQUIPE_3) para a equipe
+  // "Preparar": copia os itens do Disponível (lista-mãe, EQUIPE_3) para a equipe
   // escolhida, usando a quantidade padrão de cada um. Casa por nome: item
   // existente na equipe é atualizado; o que falta é criado.
   async function handlePreparar(targetTeam: "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4") {
@@ -362,7 +363,7 @@ export function EstoquePanel() {
       key: "name",
       label: "Nome",
       render: (i: StockItem) => {
-        // Na aba Total, mostra um selo por equipe que TEM esse alimento.
+        // Na aba Disponível, mostra um selo por equipe que TEM esse alimento.
         const teams = isMaster ? teamsByName.get((i.name || "").trim().toLowerCase()) : null;
         return (
           <span className="font-medium">
@@ -405,7 +406,7 @@ export function EstoquePanel() {
       key: "quantity",
       label: isMaster ? "Soma equipes" : "Qtd",
       render: (i: StockItem) => {
-        // No Total, a quantidade é o somatório das equipes (por nome).
+        // No Disponível, a quantidade é o somatório das equipes (por nome).
         if (isMaster) {
           const sum = teamSumByName.get((i.name || "").trim().toLowerCase()) || 0;
           return (
@@ -498,7 +499,7 @@ export function EstoquePanel() {
         </div>
       )}
 
-      {/* Seletor de aba — Total primeiro (lista-mãe + soma das equipes). */}
+      {/* Seletor de aba — Disponível primeiro (lista-mãe + soma das equipes). */}
       <div className="flex gap-2 flex-wrap">
         {RANCHO_TEAM_TABS.map((t) => (
           <button
@@ -599,7 +600,7 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
   const [quantity, setQuantity] = useState("");
   const [defaultQuantity, setDefaultQuantity] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
-  // Item de origem escolhido no seletor de código (só no Total).
+  // Item de origem escolhido no seletor de código (só no Disponível).
   const [sourceId, setSourceId] = useState("");
 
   useEffect(() => {
@@ -621,10 +622,10 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
     setSourceId("");
   }, [item, open]);
 
-  // Total (EQUIPE_3) é a lista-mãe: sem "qtd atual" própria (a quantidade é a
+  // Disponível (EQUIPE_3) é a lista-mãe: sem "qtd atual" própria (a quantidade é a
   // soma das equipes). Cadastra-se só nome, categoria, unidade e qtd padrão.
   const isMaster = team === "EQUIPE_3";
-  // Ao cadastrar no Total, puxar um item já existente nas equipes pelo código
+  // Ao cadastrar no Disponível, puxar um item já existente nas equipes pelo código
   // preenche nome, categoria, unidade e qtd padrão automaticamente.
   const showCodePicker = !item && isMaster && sourceItems.length > 0;
   const selectedSource = sourceItems.find((s) => String(s.id) === sourceId) || null;
@@ -645,7 +646,7 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
       name,
       category: category as StockItem["category"],
       unit,
-      // No Total a quantidade própria não é usada (mostra a soma das equipes).
+      // No Disponível a quantidade própria não é usada (mostra a soma das equipes).
       quantity: isMaster ? 0 : parseDecimalBR(quantity),
       default_quantity: parseDecimalBR(defaultQuantity),
       expiry_date: expiryDate || null,
@@ -738,7 +739,7 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
   );
 }
 
-// Modal do botão "Preparar" do Total: escolhe a equipe destino e copia os itens
+// Modal do botão "Preparar" do Disponível: escolhe a equipe destino e copia os itens
 // da lista-mãe com a quantidade padrão.
 function PrepararModal({ open, onClose, onConfirm, count, saving }: {
   open: boolean;
@@ -754,10 +755,10 @@ function PrepararModal({ open, onClose, onConfirm, count, saving }: {
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
 
   return (
-    <Modal open={open} onClose={onClose} title="Preparar suprimentos do Total">
+    <Modal open={open} onClose={onClose} title="Preparar suprimentos do Disponível">
       <div className="space-y-4">
         <p className="text-sm text-text-light">
-          Copia os <strong>{count}</strong> {count === 1 ? "item" : "itens"} do Total para a equipe escolhida,
+          Copia os <strong>{count}</strong> {count === 1 ? "item" : "itens"} do Disponível para a equipe escolhida,
           usando a <strong>quantidade padrão</strong> de cada um. Itens com o mesmo nome na equipe são atualizados;
           os que faltam são criados.
         </p>

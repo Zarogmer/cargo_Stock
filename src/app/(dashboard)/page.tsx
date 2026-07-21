@@ -136,7 +136,7 @@ export default function DashboardPage() {
       const convLastSeen = typeof window !== "undefined" ? localStorage.getItem("conversas_last_seen") : null;
 
       // "Estoque" = materiais do galpão (team=GALPAO). "Rancho" = comida por
-      // equipe (EQUIPE_1/2/3/4 — 3 é a lista-mãe "Total", 4 a Equipe Turbo).
+      // equipe (EQUIPE_1/2/3/4 — 3 é a lista-mãe "Disponível", 4 a Equipe Turbo).
       // Ambos vivem em stock_items, separados pelo team.
       const FOOD_TEAMS = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_3", "EQUIPE_4"];
       // Controle de Compras: compras registradas no mês corrente. A aba abre já
