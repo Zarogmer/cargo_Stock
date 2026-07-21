@@ -48,17 +48,33 @@ export function BoletoScannerModal({ open, onClose, onDetected }: {
   const handledRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [decodingPhoto, setDecodingPhoto] = useState(false);
+  const [slowHint, setSlowHint] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     handledRef.current = false;
     setError(null);
+    setSlowHint(false);
+    // 8s sem ler nada = provavelmente longe/escuro/tremido — dá a dica em vez
+    // de deixar o usuário achando que travou.
+    const hintTimer = setTimeout(() => {
+      if (!handledRef.current) setSlowHint(true);
+    }, 8000);
     let cancelled = false;
     const reader = buildReader();
     (async () => {
       try {
         const controls = await reader.decodeFromConstraints(
-          { video: { facingMode: "environment" } },
+          // Sem width/height o iPhone/Android entrega 640x480 e o ITF de 44
+          // dígitos (~360 barras) fica com ~1,5px por barra — indecifrável.
+          // Full HD dá ~4,5px por barra e a leitura passa a funcionar.
+          {
+            video: {
+              facingMode: "environment",
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+          },
           videoRef.current!,
           (result) => {
             if (!result || handledRef.current) return;
@@ -80,6 +96,7 @@ export function BoletoScannerModal({ open, onClose, onDetected }: {
     })();
     return () => {
       cancelled = true;
+      clearTimeout(hintTimer);
       controlsRef.current?.stop();
       controlsRef.current = null;
     };
@@ -127,6 +144,13 @@ export function BoletoScannerModal({ open, onClose, onDetected }: {
 
         {error && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">{error}</div>
+        )}
+
+        {!error && slowHint && (
+          <div className="bg-sky-50 border border-sky-200 rounded-lg px-3 py-2 text-xs text-sky-800">
+            Ainda procurando… Aproxime até o código de barras preencher o quadro, segure firme
+            e garanta boa luz. Se não pegar, use <strong>Ler de uma foto</strong> aí embaixo.
+          </div>
         )}
 
         <div className="flex items-center justify-between gap-2 flex-wrap">

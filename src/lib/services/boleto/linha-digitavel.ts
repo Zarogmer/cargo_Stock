@@ -111,6 +111,11 @@ export function barcodeToLinhaDigitavel(barcode44: string): string | null {
     const valorId = bc[2];
     if (valorId !== "6" && valorId !== "7" && valorId !== "8" && valorId !== "9") return null;
     const useMod10 = valorId === "6" || valorId === "7";
+    // DV geral (posição 4) sobre os outros 43 dígitos, mesmo módulo dos blocos.
+    // A linha digitável abaixo nasce com DVs calculados por nós, então esta é a
+    // ÚNICA checagem que pega um ITF lido errado/truncado pela câmera.
+    const dvGeral = useMod10 ? mod10(bc.slice(0, 3) + bc.slice(4)) : mod11Arrecadacao(bc.slice(0, 3) + bc.slice(4));
+    if (dvGeral !== Number(bc[3])) return null;
     let linha = "";
     for (let b = 0; b < 4; b++) {
       const data = bc.substr(b * 11, 11);
