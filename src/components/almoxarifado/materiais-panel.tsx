@@ -12,7 +12,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ImagePicker, ImageLightbox } from "@/components/ui/image-picker";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatDateTime, matchSearch, parseDecimalBR, formatQty, formatCurrency, buildCodeMap, codeForName, normalize } from "@/lib/utils";
-import type { StockItem } from "@/types/database";
+import type { StockItem, MaterialTeamAllocation } from "@/types/database";
 
 // Inventário genérico do Almoxarifado: itens com QUANTIDADE, mínimo, setinhas
 // ↑/↓ (1 unidade por clique) e foto. Reaproveita a tabela `stock_items` usando o campo `team` como sentinela
@@ -62,20 +62,16 @@ const KIND_CONFIG: Record<InventoryKind, KindConfig> = {
   },
 };
 
-// "Onde está" cada item (coluna assigned_team) — escolhido por item, estilo
-// Maquinário. DISPONIVEL = no almoxarifado; EQUIPE_1/2/4 = levado pela equipe.
-// EQUIPE_4 = "Equipe Turbo" (mesma chave do Rancho), incluída em 2026-07 pra
-// valer no Almoxarifado inteiro, não só na comida.
-type AssignTeam = "DISPONIVEL" | "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4";
-const ASSIGN_TABS: { value: AssignTeam; label: string; activeCls: string; badgeCls: string }[] = [
-  { value: "DISPONIVEL", label: "Disponível", activeCls: "bg-teal-600 text-white shadow-md", badgeCls: "bg-teal-100 text-teal-700" },
-  { value: "EQUIPE_1", label: "Equipe 1", activeCls: "bg-blue-600 text-white shadow-md", badgeCls: "bg-blue-100 text-blue-700" },
-  { value: "EQUIPE_2", label: "Equipe 2", activeCls: "bg-purple-600 text-white shadow-md", badgeCls: "bg-purple-100 text-purple-700" },
-  { value: "EQUIPE_4", label: "Equipe Turbo", activeCls: "bg-orange-600 text-white shadow-md", badgeCls: "bg-orange-100 text-orange-700" },
+// Equipes pra onde se transfere material. O estoque fica todo no "Disponível"
+// (o total menos o que já foi alocado); o botão Transferir separa uma quantidade
+// pra uma equipe. EQUIPE_4 = "Equipe Turbo" (mesma chave do Rancho).
+type XferTeam = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4";
+const XFER_TEAMS: { value: XferTeam; label: string; badgeCls: string }[] = [
+  { value: "EQUIPE_1", label: "Equipe 1", badgeCls: "bg-blue-100 text-blue-700" },
+  { value: "EQUIPE_2", label: "Equipe 2", badgeCls: "bg-purple-100 text-purple-700" },
+  { value: "EQUIPE_4", label: "Equipe Turbo", badgeCls: "bg-orange-100 text-orange-700" },
 ];
-function assignOf(i: StockItem): AssignTeam {
-  return (i.assigned_team as AssignTeam) || "DISPONIVEL";
-}
+const XFER_LABEL: Record<string, string> = Object.fromEntries(XFER_TEAMS.map((t) => [t.value, t.label]));
 
 export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   const cfg = KIND_CONFIG[kind];
@@ -95,11 +91,10 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   const [deleteItem, setDeleteItem] = useState<StockItem | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // Sub-aba "onde está": Disponível / Equipe 1 / Equipe 2 / Turbo.
-  const [activeAssign, setActiveAssign] = useState<AssignTeam>("DISPONIVEL");
-  // Transferência com quantidade: ao mandar um item pra outra "casa", abre um
-  // modal pra escolher QUANTO vai (o resto fica onde estava). null = fechado.
-  const [transfer, setTransfer] = useState<{ item: StockItem; target: AssignTeam } | null>(null);
+  // Alocações por equipe: quanto de cada material está separado pra cada equipe.
+  const [allocs, setAllocs] = useState<MaterialTeamAllocation[]>([]);
+  // Item cujo botão "Transferir" foi clicado — abre o modal de alocação por equipe.
+  const [transferItem, setTransferItem] = useState<StockItem | null>(null);
 
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, cfg.module, "create");
@@ -124,6 +119,17 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         setDbError(`${error.code}: ${error.message} — ${error.hint || ""}`);
       }
       setItems(data || []);
+      // Alocações por equipe dos itens deste setor.
+      const ids = (data || []).map((i) => i.id);
+      if (ids.length > 0) {
+        const { data: al } = await db
+          .from("material_team_allocations")
+          .select("*")
+          .in("stock_item_id", ids);
+        setAllocs((al as MaterialTeamAllocation[]) || []);
+      } else {
+        setAllocs([]);
+      }
       // Best-effort: compras com código, pra cruzar os nomes alternativos.
       const { data: pos } = await db
         .from("purchase_orders")
@@ -170,113 +176,64 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   }, [editItem, codeMap, altNamesByCode]);
 
   const filteredItems = items.filter((i) =>
-    assignOf(i) === activeAssign &&
-    (matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search)),
+    matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search),
   );
 
-  // Total em R$ do que está listado (sub-aba + busca), pra bater com a tabela.
+  // Total em R$ do que está listado (busca), pra bater com a tabela.
   const totalValue = useMemo(
     () => filteredItems.reduce((sum, i) => sum + (i.unit_value || 0) * i.quantity, 0),
     [filteredItems],
   );
 
-  // Clicou numa "casa" diferente no seletor da linha. Item com quantidade abre o
-  // modal pra escolher quanto vai; item zerado só troca de lugar (nada a dividir).
-  function requestAssign(item: StockItem, target: AssignTeam) {
-    if (target === assignOf(item)) return;
-    if (item.quantity > 0) {
-      setTransfer({ item, target });
-    } else {
-      void relocateWhole(item, target);
+  // Alocação por item: { EQUIPE_1: x, EQUIPE_2: y, EQUIPE_4: z } (só as > 0).
+  const allocByItem = useMemo(() => {
+    const map = new Map<number, Record<string, number>>();
+    for (const a of allocs) {
+      if (a.quantity <= 0) continue;
+      const cur = map.get(a.stock_item_id) || {};
+      cur[a.team] = (cur[a.team] || 0) + a.quantity;
+      map.set(a.stock_item_id, cur);
     }
-  }
+    return map;
+  }, [allocs]);
 
-  // Move a LINHA inteira de lugar (sem dividir) — usado pra item zerado. Se já
-  // existe a mesma "casa" com esse produto, some com a duplicata mesclando nela.
-  async function relocateWhole(item: StockItem, target: AssignTeam) {
-    const actor = profile?.full_name || "Sistema";
-    const twin = items.find(
-      (i) => i.id !== item.id && assignOf(i) === target && normalize(i.name) === normalize(item.name),
-    );
-    if (twin) {
-      // Mescla no destino (soma as quantidades) e zera a origem — nunca apaga a
-      // linha (o delete cascatearia o histórico de movimentações).
-      await db.from("stock_items").update({ quantity: twin.quantity + item.quantity, updated_by: actor } as Record<string, unknown>).eq("id", twin.id);
-      await db.from("stock_items").update({ quantity: 0, updated_by: actor } as Record<string, unknown>).eq("id", item.id);
-    } else {
-      await db.from("stock_items").update({ assigned_team: target, updated_by: actor } as Record<string, unknown>).eq("id", item.id);
-    }
-    loadItems();
-  }
+  // Quanto de um item já está separado nas equipes (soma das alocações).
+  const allocatedOf = useCallback(
+    (id: number) => Object.values(allocByItem.get(id) || {}).reduce((s, n) => s + n, 0),
+    [allocByItem],
+  );
+  // "Disponível" = total no galpão − o que já está com as equipes.
+  const disponivelOf = useCallback(
+    (item: StockItem) => Math.max(0, +(item.quantity - allocatedOf(item.id)).toFixed(3)),
+    [allocatedOf],
+  );
 
-  // Transfere QTY unidades de uma casa pra outra. A origem diminui (a 0 se for
-  // tudo); o destino é a linha do mesmo produto naquela casa (mescla) ou uma
-  // linha nova. Registra ENTRADA/BAIXA nas duas pontas pro histórico. Nenhuma
-  // linha é apagada — o onDelete=Cascade levaria junto o histórico.
-  async function handleTransfer(item: StockItem, target: AssignTeam, rawQty: number) {
-    const max = item.quantity;
-    const qty = Math.min(Math.max(rawQty, 0), max);
-    if (qty <= 0 || target === assignOf(item)) { setTransfer(null); return; }
+  // Define a alocação de UMA equipe pra um item (valor absoluto). O total do item
+  // (stock_items.quantity) não muda — só muda a divisão entre Disponível e equipe.
+  // Trava: a soma das alocações nunca passa do total.
+  async function handleSetAllocation(item: StockItem, team: XferTeam, rawQty: number) {
+    const others = allocatedOf(item.id) - (allocByItem.get(item.id)?.[team] || 0);
+    const maxForTeam = Math.max(0, +(item.quantity - others).toFixed(3));
+    const qty = Math.min(Math.max(rawQty, 0), maxForTeam);
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
-    const today = new Date().toISOString().split("T")[0];
-    const srcLabel = ASSIGN_TABS.find((a) => a.value === assignOf(item))?.label ?? assignOf(item);
-    const tgtLabel = ASSIGN_TABS.find((a) => a.value === target)?.label ?? target;
-    const note = `Transferência: ${srcLabel} → ${tgtLabel}`;
-    const movingAll = qty >= max;
-
     try {
-      const twin = items.find(
-        (i) => i.id !== item.id && assignOf(i) === target && normalize(i.name) === normalize(item.name),
-      );
-
-      // Sem linha no destino e mandando TUDO → só realoca a própria linha (não
-      // cria linha nova nem deixa origem zerada à toa).
-      if (!twin && movingAll) {
-        await db.from("stock_items").update({ assigned_team: target, updated_by: actor } as Record<string, unknown>).eq("id", item.id);
-        setTransfer(null);
-        loadItems();
-        return;
+      const existing = allocs.find((a) => a.stock_item_id === item.id && a.team === team);
+      if (existing) {
+        await db.from("material_team_allocations")
+          .update({ quantity: qty, updated_by: actor } as Record<string, unknown>)
+          .eq("id", existing.id);
+      } else if (qty > 0) {
+        await db.from("material_team_allocations")
+          .insert({ stock_item_id: item.id, team, quantity: qty, updated_by: actor } as Record<string, unknown>);
       }
-
-      // Destino: mescla na linha existente ou cria uma nova.
-      if (twin) {
-        await db.from("stock_items").update({ quantity: twin.quantity + qty, updated_by: actor } as Record<string, unknown>).eq("id", twin.id);
-        await db.from("stock_movements").insert({ stock_item_id: twin.id, movement_type: "ENTRADA", quantity: qty, movement_date: today, notes: note, created_by: actor } as Record<string, unknown>);
-      } else {
-        const payload: Record<string, unknown> = {
-          name: item.name,
-          category: item.category,
-          unit: item.unit,
-          quantity: qty,
-          team: TEAM,
-          assigned_team: target,
-          min_quantity: item.min_quantity ?? 0,
-          image_url: item.image_url ?? null,
-          notes: item.notes ?? null,
-          updated_by: actor,
-        };
-        if (canSeeValue) payload.unit_value = item.unit_value ?? 0;
-        const insRes: { data?: unknown } = await db.from("stock_items").insert(payload);
-        const created = insRes.data as { id?: number } | Array<{ id?: number }> | undefined;
-        const newId = Array.isArray(created) ? created[0]?.id : created?.id;
-        if (newId) {
-          await db.from("stock_movements").insert({ stock_item_id: newId, movement_type: "ENTRADA", quantity: qty, movement_date: today, notes: note, created_by: actor } as Record<string, unknown>);
-        }
-      }
-
-      // Origem: diminui a quantidade (a 0 se levou tudo). Nunca apaga a linha.
-      await db.from("stock_items").update({ quantity: max - qty, updated_by: actor } as Record<string, unknown>).eq("id", item.id);
-      await db.from("stock_movements").insert({ stock_item_id: item.id, movement_type: "BAIXA", quantity: qty, movement_date: today, notes: note, created_by: actor } as Record<string, unknown>);
-
-      setTransfer(null);
-      loadItems();
+      await loadItems();
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleSave(formData: { name: string; quantity: number; min_quantity: number; unit_value: number; image_url: string | null; notes: string | null; assigned_team: string }) {
+  async function handleSave(formData: { name: string; quantity: number; min_quantity: number; unit_value: number; image_url: string | null; notes: string | null }) {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
     const payload = {
@@ -284,7 +241,6 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
       quantity: formData.quantity,
       category: "OUTROS",
       team: TEAM,
-      assigned_team: formData.assigned_team,
       min_quantity: formData.min_quantity,
       image_url: formData.image_url,
       notes: formData.notes,
@@ -394,13 +350,43 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
     },
     {
       key: "quantity",
-      label: "Qtd",
+      label: "Total",
       render: (i: StockItem) => {
         const belowMin = i.min_quantity > 0 && i.quantity < i.min_quantity;
         const isEmpty = i.quantity <= 0;
         return (
           <span className={`font-semibold ${isEmpty || belowMin ? "text-danger" : ""}`} title={belowMin ? `Abaixo do mínimo (${formatQty(i.min_quantity)})` : undefined}>
             {formatQty(i.quantity)}
+          </span>
+        );
+      },
+    },
+    {
+      key: "disponivel",
+      label: "Disponível",
+      render: (i: StockItem) => {
+        const disp = disponivelOf(i);
+        return (
+          <span className={`font-semibold ${disp <= 0 ? "text-text-light" : "text-teal-700"}`} title="No almoxarifado (total − o que está com as equipes)">
+            {formatQty(disp)}
+          </span>
+        );
+      },
+    },
+    {
+      key: "por_equipe",
+      label: "Com as equipes",
+      render: (i: StockItem) => {
+        const a = allocByItem.get(i.id) || {};
+        const parts = XFER_TEAMS.filter((t) => (a[t.value] || 0) > 0);
+        if (parts.length === 0) return <span className="text-text-light">—</span>;
+        return (
+          <span className="flex flex-wrap gap-1">
+            {parts.map((t) => (
+              <span key={t.value} className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-medium ${t.badgeCls}`} title={t.label}>
+                {t.label.replace("Equipe ", "").replace("Equipe", "")}: {formatQty(a[t.value])}
+              </span>
+            ))}
           </span>
         );
       },
@@ -432,28 +418,6 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
       },
     ] : []),
     {
-      key: "assigned_team",
-      label: "Equipe",
-      render: (i: StockItem) => {
-        const cur = assignOf(i);
-        const acfg = ASSIGN_TABS.find((a) => a.value === cur);
-        if (!canEdit) {
-          return <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${acfg?.badgeCls || ""}`}>{acfg?.label || cur}</span>;
-        }
-        return (
-          <select
-            value={cur}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => { e.stopPropagation(); requestAssign(i, e.target.value as AssignTeam); }}
-            className="text-xs px-2 py-1 border border-border rounded-lg bg-card focus:ring-2 focus:ring-primary outline-none"
-            title="Onde está o item — escolha a casa e quanto transferir"
-          >
-            {ASSIGN_TABS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
-          </select>
-        );
-      },
-    },
-    {
       key: "notes",
       label: "Obs",
       hideOnMobile: true,
@@ -472,9 +436,20 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
     {
       key: "actions",
       label: "",
-      className: "w-24",
+      className: "w-32",
       render: (i: StockItem) => (
         <div className="flex items-center gap-1">
+          {canEdit && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setTransferItem(i); }}
+              className="p-1.5 text-teal-600 hover:bg-teal-50 rounded"
+              title="Transferir pra uma equipe"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m4 6H4m0 0l4 4m-4-4l4-4" />
+              </svg>
+            </button>
+          )}
           {canEdit && (
             <button
               onClick={(e) => { e.stopPropagation(); handleQuickAdjust(i, 1); }}
@@ -529,29 +504,16 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         </div>
       )}
 
-      {/* Sub-abas: onde está o item — Disponível / Equipe 1 / Equipe 2. */}
-      <div className="flex gap-2 flex-wrap items-center">
-        {ASSIGN_TABS.map((a) => {
-          const count = items.filter((i) => assignOf(i) === a.value).length;
-          return (
-            <button
-              key={a.value}
-              onClick={() => setActiveAssign(a.value)}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeAssign === a.value ? a.activeCls : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-            >
-              {a.label}{count > 0 ? ` (${count})` : ""}
-            </button>
-          );
-        })}
-        {canSeeValue && totalValue > 0 && (
+      {(canSeeValue && totalValue > 0) && (
+        <div className="flex justify-end">
           <span
-            className="ml-auto px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-800"
+            className="px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-sm text-emerald-800"
             title="Soma de quantidade × valor unitário dos itens listados"
           >
             Total em estoque: <strong className="font-semibold">{formatCurrency(totalValue)}</strong>
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
       <DataTable
         columns={columns}
@@ -584,16 +546,17 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         altNames={editItemAltNames}
         newTitle={cfg.newTitle}
         editTitle={cfg.editTitle}
-        defaultAssign={activeAssign}
         showValue={canSeeValue}
         saving={saving}
       />
 
-      <TransferModal
-        transfer={transfer}
-        code={transfer ? codeMap.get(transfer.item.id) || null : null}
-        onClose={() => setTransfer(null)}
-        onConfirm={handleTransfer}
+      <AllocationModal
+        item={transferItem}
+        code={transferItem ? codeMap.get(transferItem.id) || null : null}
+        alloc={transferItem ? allocByItem.get(transferItem.id) || {} : {}}
+        disponivel={transferItem ? disponivelOf(transferItem) : 0}
+        onClose={() => setTransferItem(null)}
+        onSetAllocation={handleSetAllocation}
         saving={saving}
       />
 
@@ -612,37 +575,42 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   );
 }
 
-// Modal de transferência: escolhe QUANTAS unidades vão da casa atual pra outra.
-// Começa com o total (confirmar = leva tudo, como era antes); dá pra reduzir e
-// deixar o resto onde está.
-function TransferModal({ transfer, code, onClose, onConfirm, saving }: {
-  transfer: { item: StockItem; target: AssignTeam } | null;
+// Modal de transferência por equipe: o estoque fica no "Disponível" (galpão) e
+// aqui se separa uma quantidade pra uma equipe. Escolhe a equipe e digita quanto
+// ela deve ter (valor absoluto): aumentar tira do Disponível, diminuir devolve.
+// Trava no Disponível — não deixa separar mais do que existe.
+function AllocationModal({ item, code, alloc, disponivel, onClose, onSetAllocation, saving }: {
+  item: StockItem | null;
   code: string | null;
+  alloc: Record<string, number>;
+  disponivel: number;
   onClose: () => void;
-  onConfirm: (item: StockItem, target: AssignTeam, qty: number) => void;
+  onSetAllocation: (item: StockItem, team: XferTeam, qty: number) => void;
   saving: boolean;
 }) {
+  const [team, setTeam] = useState<XferTeam>("EQUIPE_1");
   const [qty, setQty] = useState("");
 
-  // Reabre sempre com o total do item (o padrão é "levar tudo").
+  // Ao abrir (ou trocar de equipe), mostra o que a equipe já tem separado.
   useEffect(() => {
-    if (transfer) setQty(formatQty(transfer.item.quantity));
-  }, [transfer]);
+    if (item) setQty(formatQty(alloc[team] || 0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item, team]);
 
-  if (!transfer) return null;
-  const { item, target } = transfer;
-  const max = item.quantity;
-  const srcLabel = ASSIGN_TABS.find((a) => a.value === assignOf(item))?.label ?? assignOf(item);
-  const tgtLabel = ASSIGN_TABS.find((a) => a.value === target)?.label ?? target;
+  if (!item) return null;
+  const atual = alloc[team] || 0;
+  // Teto pra esta equipe = o que ela já tem + o que sobra no Disponível.
+  const maxForTeam = +(atual + disponivel).toFixed(3);
   const parsed = parseDecimalBR(qty);
-  const valid = parsed > 0 && parsed <= max;
-  const leftover = valid ? max - parsed : max;
+  const valid = parsed >= 0 && parsed <= maxForTeam + 1e-9;
+  const delta = valid ? +(parsed - atual).toFixed(3) : 0;
+  const dispDepois = valid ? +(disponivel - delta).toFixed(3) : disponivel;
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
 
   return (
-    <Modal open={!!transfer} onClose={onClose} title="Transferir item">
+    <Modal open={!!item} onClose={onClose} title="Transferir pra equipe">
       <form
-        onSubmit={(e) => { e.preventDefault(); if (valid) onConfirm(item, target, parsed); }}
+        onSubmit={(e) => { e.preventDefault(); if (valid && delta !== 0) onSetAllocation(item, team, parsed); }}
         className="space-y-4"
       >
         <div className="rounded-lg border border-border bg-gray-50 px-3 py-2 text-sm">
@@ -651,12 +619,30 @@ function TransferModal({ transfer, code, onClose, onConfirm, saving }: {
             {code && <span className="ml-2 font-mono text-xs text-text-light">{code}</span>}
           </p>
           <p className="text-xs text-text-light mt-0.5">
-            <span className="font-medium">{srcLabel}</span> → <span className="font-medium">{tgtLabel}</span> · {formatQty(max)} disponível{max === 1 ? "" : "s"} nesta casa
+            Total <strong>{formatQty(item.quantity)}</strong> · Disponível no galpão <strong className="text-teal-700">{formatQty(disponivel)}</strong>
           </p>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-text mb-1">Quantidade a transferir</label>
+          <label className="block text-sm font-medium text-text mb-1">Equipe</label>
+          <div className="flex gap-1 flex-wrap">
+            {XFER_TEAMS.map((t) => (
+              <button
+                key={t.value}
+                type="button"
+                onClick={() => setTeam(t.value)}
+                className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition ${
+                  team === t.value ? "bg-primary text-white border-primary" : "border-border text-text-light hover:bg-gray-50"
+                }`}
+              >
+                {t.label}{(alloc[t.value] || 0) > 0 ? ` (${formatQty(alloc[t.value])})` : ""}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Quantidade com a {XFER_LABEL[team]}</label>
           <input
             type="text"
             inputMode="decimal"
@@ -668,23 +654,29 @@ function TransferModal({ transfer, code, onClose, onConfirm, saving }: {
           <div className="mt-1.5 flex items-center justify-between gap-2 flex-wrap">
             <p className="text-[11px] text-text-light">
               {valid
-                ? <>Ficam <strong>{formatQty(leftover)}</strong> em {srcLabel}.</>
-                : <span className="text-amber-700">Informe um valor entre 1 e {formatQty(max)}.</span>}
+                ? delta === 0
+                  ? <>Sem mudança ({formatQty(atual)} com a {XFER_LABEL[team]}).</>
+                  : delta > 0
+                    ? <>Separa <strong>+{formatQty(delta)}</strong> · Disponível fica <strong>{formatQty(dispDepois)}</strong>.</>
+                    : <>Devolve <strong>{formatQty(-delta)}</strong> pro galpão · Disponível fica <strong>{formatQty(dispDepois)}</strong>.</>
+                : <span className="text-amber-700">Valor entre 0 e {formatQty(maxForTeam)}.</span>}
             </p>
-            <button
-              type="button"
-              onClick={() => setQty(formatQty(max))}
-              className="text-[11px] font-medium text-primary hover:underline"
-            >
-              Levar tudo ({formatQty(max)})
-            </button>
+            {disponivel > 0 && (
+              <button
+                type="button"
+                onClick={() => setQty(formatQty(maxForTeam))}
+                className="text-[11px] font-medium text-primary hover:underline"
+              >
+                Separar tudo ({formatQty(maxForTeam)})
+              </button>
+            )}
           </div>
         </div>
 
         <div className="flex gap-3 justify-end pt-1">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={!valid || saving}>
-            {saving ? "Transferindo..." : "Transferir"}
+          <Button type="submit" disabled={!valid || delta === 0 || saving}>
+            {saving ? "Salvando..." : "Confirmar"}
           </Button>
         </div>
       </form>
@@ -692,10 +684,10 @@ function TransferModal({ transfer, code, onClose, onConfirm, saving }: {
   );
 }
 
-function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [], altNames = [], newTitle, editTitle, defaultAssign, showValue, saving }: {
+function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [], altNames = [], newTitle, editTitle, showValue, saving }: {
   open: boolean;
   onClose: () => void;
-  onSave: (data: { name: string; quantity: number; min_quantity: number; unit_value: number; image_url: string | null; notes: string | null; assigned_team: string }) => void;
+  onSave: (data: { name: string; quantity: number; min_quantity: number; unit_value: number; image_url: string | null; notes: string | null }) => void;
   item: StockItem | null;
   itemCode?: string | null;
   // Itens do setor — base do código previsto no cadastro novo.
@@ -704,13 +696,11 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [
   altNames?: string[];
   newTitle: string;
   editTitle: string;
-  defaultAssign: AssignTeam;
   // Só gestão edita o valor unitário (canViewStockValue).
   showValue: boolean;
   saving: boolean;
 }) {
   const [name, setName] = useState("");
-  const [assignTeam, setAssignTeam] = useState<AssignTeam>("DISPONIVEL");
   // Strings para aceitar vírgula (ex.: "1,5"); convertidas no submit.
   const [quantity, setQuantity] = useState("");
   const [minQuantity, setMinQuantity] = useState("");
@@ -726,7 +716,6 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [
       setUnitValue(item.unit_value ? formatQty(item.unit_value) : "");
       setImageUrl(item.image_url || null);
       setNotes(item.notes || "");
-      setAssignTeam((item.assigned_team as AssignTeam) || "DISPONIVEL");
     } else {
       setName("");
       setQuantity("");
@@ -734,9 +723,8 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [
       setUnitValue("");
       setImageUrl(null);
       setNotes("");
-      setAssignTeam(defaultAssign);
     }
-  }, [item, open, defaultAssign]);
+  }, [item, open]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -748,7 +736,6 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [
       unit_value: parseDecimalBR(unitValue),
       image_url: imageUrl,
       notes: notes.trim() || null,
-      assigned_team: assignTeam,
     });
   }
 
@@ -836,12 +823,6 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [
             )}
           </div>
         )}
-        <div>
-          <label className="block text-sm font-medium text-text mb-1">Onde está</label>
-          <select value={assignTeam} onChange={(e) => setAssignTeam(e.target.value as AssignTeam)} className={inputCls}>
-            {ASSIGN_TABS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
-          </select>
-        </div>
         <div>
           <label className="block text-sm font-medium text-text mb-1">Observações <span className="text-text-light font-normal">(opcional)</span></label>
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Ex: specs técnicas, localização..." className={`${inputCls} resize-none`} />
