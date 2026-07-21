@@ -80,6 +80,9 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   MANUTENCAO: {
     DASHBOARD: ["view"],
     ALMOXARIFADO: ["view"],
+    // 2026-07: Manutenção opera o Embarque/Retorno (Controle). Só "embarcar",
+    // SEM "view" — com "view" o menu Escalação (Costado/Embarque) apareceria.
+    EMBARQUE: ["embarcar"],
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "baixar"],
@@ -223,6 +226,12 @@ export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNO
 // também (acesso completo ao Controle).
 export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "ESTAGIO", "EXECUTIVO", "COMERCIAL", "FINANCEIRO", "RH"];
 
+// Papéis que enxergam "Fornecedores" (cadastro de fornecedores do Controle).
+// Manutenção fica de fora (pedido de 2026-07): solicita material e opera o
+// Embarque/Retorno, mas não gerencia o cadastro de fornecedores/produtos.
+// Fonte única: o menu (rbac) e a página de Solicitações filtram por isto.
+export const FORNECEDORES_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO", "RH"];
+
 // Papéis que acessam o módulo bancário do Financeiro (Contas a Pagar,
 // Conciliação Bancária, Boletos por e-mail e o Painel financeiro). Dados de
 // banco/saldo/extrato são sensíveis — só Executivo, Financeiro e Tecnologia.
@@ -333,12 +342,13 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Solicitações", href: "/solicitacoes?tab=solicitacoes" },
       { label: "Controle de Compras", href: "/solicitacoes?tab=compras", roles: COMPRAS_ROLES },
       { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos", roles: PRODUTOS_ROLES },
-      { label: "Fornecedores", href: "/solicitacoes?tab=fornecedores" },
+      { label: "Fornecedores", href: "/solicitacoes?tab=fornecedores", roles: FORNECEDORES_ROLES },
       // "Embarque" (loadout: kit de embarque + rancho) veio da Escalação. Mantém
-      // a visibilidade de quem tinha EMBARQUE (Gestor/Manutenção não enxergavam)
-      // — sem isso, ao herdar SOLICITACOES eles passariam a ver a aba que baixa
-      // estoque. A rota segue /escalacao/estoque.
-      { label: "Embarque/Retorno", href: "/escalacao/estoque", roles: ["EXECUTIVO", "COMERCIAL", "FINANCEIRO", "RH", "TECNOLOGIA", "ESTAGIO"] },
+      // a visibilidade de quem tinha EMBARQUE (Gestor não enxergava) — sem isso,
+      // ao herdar SOLICITACOES ele passaria a ver a aba que baixa estoque. A
+      // rota segue /escalacao/estoque. Manutenção entrou em 2026-07 (ganhou
+      // "embarcar" no módulo EMBARQUE, sem "view").
+      { label: "Embarque/Retorno", href: "/escalacao/estoque", roles: ["EXECUTIVO", "COMERCIAL", "FINANCEIRO", "RH", "TECNOLOGIA", "ESTAGIO", "MANUTENCAO"] },
     ],
   },
   {

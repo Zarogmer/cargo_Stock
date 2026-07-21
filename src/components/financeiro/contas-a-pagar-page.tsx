@@ -1053,18 +1053,20 @@ export function ContasAPagarPage() {
         </div>
         {canEdit && (
           <div className="flex gap-2 flex-wrap">
-            {/* Atalho: escaneia o boleto e já abre a Nova conta preenchida. */}
+            {/* Atalho: escaneia o boleto e já abre a Nova conta preenchida.
+                Auxiliares em cinza (secondary), como no Controle de Compras —
+                só o "+ Nova conta" fica azul. */}
             <button
               type="button"
               onClick={() => setScanOpen(true)}
-              className="bg-primary hover:bg-primary-dark text-white text-sm font-medium px-4 py-2.5 rounded-lg transition"
+              className="bg-gray-100 hover:bg-gray-200 text-text text-sm font-medium px-4 py-2.5 rounded-lg transition"
               title="Ler o código de barras do boleto com a câmera e criar a conta já preenchida"
             >
               📷 Escanear
             </button>
             <label className={`inline-flex items-center ${importingPdf ? "opacity-50" : "cursor-pointer"}`}>
-              <span className="bg-primary hover:bg-primary-dark text-white text-sm font-medium px-4 py-2.5 rounded-lg transition">
-                {importingPdf ? "Importando..." : "Import NF (PDF)"}
+              <span className="bg-gray-100 hover:bg-gray-200 text-text text-sm font-medium px-4 py-2.5 rounded-lg transition">
+                {importingPdf ? "Importando..." : "📄 Importar NF (PDF)"}
               </span>
               <input
                 type="file"

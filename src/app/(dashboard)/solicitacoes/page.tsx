@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
-import { hasPermission, COMPRAS_ROLES, PRODUTOS_ROLES } from "@/lib/rbac";
+import { hasPermission, COMPRAS_ROLES, PRODUTOS_ROLES, FORNECEDORES_ROLES } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -1771,9 +1771,11 @@ export default function SolicitacoesPage() {
   ]
     .filter((t) => t.key !== "produtos" || PRODUTOS_ROLES.includes(role))
     // "Controle de Compras" só pros papéis de gestão (mesma regra do menu em
-    // rbac.ts). Manutenção/RH não veem a aba nem acessando ?tab=compras direto —
+    // rbac.ts). Manutenção não vê a aba nem acessando ?tab=compras direto —
     // o effectiveTab abaixo cai pra primeira aba disponível (Solicitações).
-    .filter((t) => t.key !== "compras" || COMPRAS_ROLES.includes(role));
+    .filter((t) => t.key !== "compras" || COMPRAS_ROLES.includes(role))
+    // "Fornecedores" segue a mesma regra do menu: Manutenção fica de fora.
+    .filter((t) => t.key !== "fornecedores" || FORNECEDORES_ROLES.includes(role));
 
   // If the URL points to a tab the current role can't see (e.g. someone with a
   // stale bookmark to ?tab=produtos), fall back to the first available tab.
