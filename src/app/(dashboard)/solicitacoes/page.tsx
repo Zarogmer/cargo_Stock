@@ -12,6 +12,18 @@ import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon, WhatsappIcon } from "@/components/icons";
 import { formatDateTime, formatCurrency, formatQty, parseDecimalBR, buildCodeMap, codeForName } from "@/lib/utils";
 import { ImagePicker } from "@/components/ui/image-picker";
+// Scanner de boleto pela câmera — o mesmo do Contas a Pagar. Aqui ele preenche
+// a Nova Compra (valor, forma de pagamento, vencimento na observação).
+// Carregado sob demanda: a lib de leitura de código de barras (zxing) pesa
+// ~127 kB e quase ninguém abre o Controle pra escanear. Com o import estático
+// a página saltava de 136 kB pra 263 kB.
+import dynamic from "next/dynamic";
+import type { BoletoParsed } from "@/lib/services/boleto/linha-digitavel";
+
+const BoletoScannerModal = dynamic(
+  () => import("@/components/financeiro/boleto-scanner").then((m) => m.BoletoScannerModal),
+  { ssr: false },
+);
 
 interface ToolRequest {
   id: string;
@@ -104,13 +116,20 @@ interface NewCardInput {
   label: string | null;
 }
 
-// Rótulo da forma de pagamento na listagem: FATURADO mostra os prazos das
-// parcelas ("FATURADO 28/35/42") pra enxergar o parcelamento sem abrir a compra.
+// Rótulo da forma de pagamento na listagem: FATURADO mostra os VENCIMENTOS das
+// parcelas ("FATURADO 12/11, 12/12") pra enxergar o parcelamento sem abrir a
+// compra. No banco fica gravado em dias; aqui vira data (compra + dias), que é
+// como a fatura da nota mostra. Sem data da compra, cai nos dias mesmo.
 function paymentLabel(p: PurchaseOrder): string | null {
   if (!p.payment_method) return null;
   if (p.payment_method === "FATURADO") {
     const terms = p.payment_terms?.length ? p.payment_terms : p.payment_term_days ? [p.payment_term_days] : [];
-    if (terms.length > 0) return `FATURADO ${terms.join("/")}`;
+    if (terms.length > 0) {
+      const base = (p.purchase_date || "").slice(0, 10);
+      if (!base) return `FATURADO ${terms.join("/")} dias`;
+      const dues = terms.map((d) => addDaysISO(base, d).slice(5).split("-").reverse().join("/"));
+      return `FATURADO ${dues.join(", ")}`;
+    }
   }
   return p.payment_method;
 }
@@ -398,6 +417,10 @@ export default function SolicitacoesPage() {
   const [purchaseFromRequest, setPurchaseFromRequest] = useState<ToolRequest | null>(null);
   // Abre o form já disparando o seletor de NF (botão "Importar NF" ao lado de Nova Compra).
   const [purchaseAutoNf, setPurchaseAutoNf] = useState(false);
+  // Scanner de boleto (câmera) do Controle de Compras. `purchaseScanned` leva o
+  // boleto lido pro formulário, que preenche os campos em branco.
+  const [scanOpen, setScanOpen] = useState(false);
+  const [purchaseScanned, setPurchaseScanned] = useState<BoletoParsed | null>(null);
   const [deletePurchase, setDeletePurchase] = useState<PurchaseOrder | null>(null);
   // "Armazenar no Estoque": lança uma solicitação já comprada no estoque do galpão.
   const [stockRequest, setStockRequest] = useState<ToolRequest | null>(null);
@@ -904,6 +927,21 @@ export default function SolicitacoesPage() {
     return card;
   }, [profile, bankAccounts]);
 
+  // Boleto lido pela câmera: abre a Nova Compra já preenchida (ou completa a
+  // que estiver aberta). Mesmo fluxo do "Escanear" do Contas a Pagar.
+  function applyScannedBoleto(boleto: BoletoParsed) {
+    setScanOpen(false);
+    if (!showPurchaseForm) {
+      setEditPurchase(null);
+      setPurchaseFromRequest(null);
+      setPurchaseAutoNf(false);
+      setShowPurchaseForm(true);
+    }
+    // Objeto novo a cada leitura — o formulário observa a identidade pra saber
+    // que chegou um boleto novo (escanear duas vezes seguidas tem que aplicar).
+    setPurchaseScanned({ ...boleto });
+  }
+
   async function handleSavePurchase(
     data: Partial<PurchaseOrder>,
     fromRequestId: string | null,
@@ -1380,9 +1418,19 @@ export default function SolicitacoesPage() {
           <div className="flex flex-wrap justify-between items-center gap-3">
             <p className="text-sm text-text-light">Registro das compras realizadas, por mês — inspirado na planilha oficial de compras</p>
             {canManagePurchases && (
-              <div className="flex items-center gap-2">
+              // Mesmos atalhos do Contas a Pagar: ler o boleto pela câmera ou a
+              // NF em PDF pra não redigitar valor/fornecedor.
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setScanOpen(true)}
+                  title="Ler o código de barras do boleto com a câmera e abrir a compra já preenchida"
+                >
+                  📷 Escanear
+                </Button>
                 <Button size="sm" variant="secondary" onClick={() => { setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(true); setShowPurchaseForm(true); }}>
-                  📄 Importar NF
+                  📄 Importar NF (PDF)
                 </Button>
                 <Button size="sm" onClick={() => { setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(false); setShowPurchaseForm(true); }}>
                   <PlusIcon className="w-4 h-4" />Nova Compra
@@ -1881,11 +1929,13 @@ export default function SolicitacoesPage() {
       {/* Purchase Form Modal */}
       <PurchaseFormModal
         open={showPurchaseForm}
-        onClose={() => { setShowPurchaseForm(false); setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(false); }}
+        onClose={() => { setShowPurchaseForm(false); setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(false); setPurchaseScanned(null); }}
         onSave={handleSavePurchase}
         item={editPurchase}
         fromRequest={purchaseFromRequest}
         autoOpenNf={purchaseAutoNf}
+        scanned={purchaseScanned}
+        onScanRequest={() => setScanOpen(true)}
         suppliers={suppliers}
         ships={ships}
         cards={cards}
@@ -1893,6 +1943,17 @@ export default function SolicitacoesPage() {
         onCreateCard={handleCreateCard}
         saving={saving}
       />
+
+      {/* Scanner de boleto (câmera/foto) — preenche a Nova Compra. Só é montado
+          quando abre: assim o chunk do leitor de código de barras só baixa pra
+          quem clica em "Escanear". O componente desliga a câmera ao desmontar. */}
+      {scanOpen && (
+        <BoletoScannerModal
+          open
+          onClose={() => setScanOpen(false)}
+          onDetected={applyScannedBoleto}
+        />
+      )}
 
       {/* Delete Purchase Confirm */}
       <ConfirmDialog
@@ -2400,12 +2461,42 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
   );
 }
 
-function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenNf, suppliers, ships, cards, bankAccounts, onCreateCard, saving }: {
+// ── Datas puras (sem fuso) das parcelas do FATURADO ─────────────────────────
+// A tela pede o VENCIMENTO (é o que vem na fatura da NF); o banco guarda DIAS.
+// Estas duas fazem a ponte. Tudo em UTC pra não escorregar um dia por fuso.
+
+// Data da compra + N dias → "YYYY-MM-DD".
+function addDaysISO(baseISO: string, days: number): string {
+  const [y, m, d] = baseISO.slice(0, 10).split("-").map(Number);
+  if (!y || !m || !d) return "";
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+// Quantos dias da compra até o vencimento (null quando alguma data é inválida).
+function daysBetweenISO(baseISO: string, targetISO: string): number | null {
+  const [by, bm, bd] = baseISO.slice(0, 10).split("-").map(Number);
+  const [ty, tm, td] = targetISO.slice(0, 10).split("-").map(Number);
+  if (!by || !bm || !bd || !ty || !tm || !td) return null;
+  const diff = (Date.UTC(ty, tm - 1, td) - Date.UTC(by, bm - 1, bd)) / 86_400_000;
+  return Number.isFinite(diff) ? Math.round(diff) : null;
+}
+
+// "YYYY-MM-DD" → "DD/MM/YYYY" (só pra mostrar).
+function fmtISODate(iso: string): string {
+  const [y, m, d] = iso.slice(0, 10).split("-");
+  return y && m && d ? `${d}/${m}/${y}` : "";
+}
+
+function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenNf, scanned, onScanRequest, suppliers, ships, cards, bankAccounts, onCreateCard, saving }: {
   open: boolean; onClose: () => void;
   onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null) => void;
   item: PurchaseOrder | null;
   fromRequest: ToolRequest | null;
   autoOpenNf?: boolean;
+  // Boleto lido pela câmera (botão "Escanear"): preenche os campos em branco.
+  scanned?: BoletoParsed | null;
+  // Abre o scanner de boleto (fica no nível da página, junto do da tela toda).
+  onScanRequest?: () => void;
   suppliers: Supplier[];
   ships: Ship[];
   cards: CardOption[];
@@ -2430,9 +2521,15 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   const [code, setCode] = useState("");
   // Navio vinculado (opcional) — guarda o id do navio escolhido na aba Navios.
   const [shipId, setShipId] = useState("");
-  // Parcelas do FATURADO (prazo em dias de cada uma) e cartão usado (só CARTÃO
-  // DE CRÉDITO). O faturado costuma dividir o total em 2-3 pagamentos (28/35/42).
-  const [paymentTerms, setPaymentTerms] = useState<string[]>([""]);
+  // Parcelas do FATURADO e cartão usado (só CARTÃO DE CRÉDITO). O faturado
+  // costuma dividir o total em 2-4 pagamentos.
+  //
+  // Aqui a parcela é a DATA DE VENCIMENTO (ISO "YYYY-MM-DD"), porque é isso que
+  // vem impresso na fatura da NF ("001 12/11/2025", "002 12/12/2025"...). No
+  // banco continua gravado em DIAS (payment_terms), convertido na hora de
+  // salvar — o Contas a Pagar segue montando o vencimento como
+  // data da compra + dias, sem mudar nada.
+  const [paymentDueDates, setPaymentDueDates] = useState<string[]>([""]);
   const [cardId, setCardId] = useState("");
   // Cadastrar cartão novo direto daqui (nem todo mundo acessa o Financeiro).
   const [showNewCard, setShowNewCard] = useState(false);
@@ -2466,13 +2563,16 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       setImageUrl(item.image_url || null);
       setCode(item.code || "");
       setShipId(item.ship_id || "");
-      // Parcelas salvas (novo) ou o prazo único legado como parcela 1.
-      setPaymentTerms(
-        item.payment_terms?.length
-          ? item.payment_terms.map(String)
-          : item.payment_term_days != null
-            ? [String(item.payment_term_days)]
-            : [""],
+      // Parcelas salvas (novo) ou o prazo único legado como parcela 1. O banco
+      // guarda dias — a tela mostra o vencimento (compra + dias).
+      const itemBase = (item.purchase_date || "").slice(0, 10) || todayISO;
+      const savedDays = item.payment_terms?.length
+        ? item.payment_terms
+        : item.payment_term_days != null
+          ? [item.payment_term_days]
+          : [];
+      setPaymentDueDates(
+        savedDays.length > 0 ? savedDays.map((d) => addDaysISO(itemBase, d)) : [""],
       );
       setCardId(item.card_id != null ? String(item.card_id) : "");
     } else if (fromRequest) {
@@ -2488,11 +2588,11 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       setImageUrl(fromRequest.image_url || null);
       setCode(fromRequest.code || "");
       setShipId("");
-      setPaymentTerms([""]); setCardId("");
+      setPaymentDueDates([""]); setCardId("");
     } else {
       setDescription(""); setLink(""); setDestSpec({ ...DEFAULT_DEST_SPEC, dest: "OUTROS" }); setSupplier(""); setPurchaseDate(todayISO);
       setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setImageUrl(null); setCode(""); setShipId("");
-      setPaymentTerms([""]); setCardId("");
+      setPaymentDueDates([""]); setCardId("");
     }
   }, [item, fromRequest, open]);
 
@@ -2501,6 +2601,40 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   useEffect(() => {
     if (open && autoOpenNf) nfInputRef.current?.click();
   }, [open, autoOpenNf]);
+
+  // Boleto lido pela câmera: preenche o que estiver EM BRANCO (mesma regra do
+  // Contas a Pagar — quem escaneia depois de digitar quer completar, não perder
+  // o que fez). Declarado depois do efeito que zera o formulário, então roda
+  // sobre os campos já limpos quando a leitura é que abriu a tela.
+  useEffect(() => {
+    if (!open || !scanned) return;
+    const b = scanned;
+    if (b.amount != null) {
+      const amount = b.amount;
+      setUnitValue((prev) => (prev.trim() ? prev : String(amount).replace(".", ",")));
+      setQuantity((q) => q || "1");
+    }
+    setPaymentMethod((prev) => prev || "BOLETO");
+    setDescription((prev) =>
+      prev.trim()
+        ? prev
+        : b.tipo === "ARRECADACAO"
+          ? "Conta de consumo/arrecadação (boleto escaneado)"
+          : "Boleto escaneado",
+    );
+    // Vencimento e linha digitável viram observação: a compra não tem campo de
+    // vencimento próprio (prazo em dias só existe no FATURADO).
+    const extra: string[] = [];
+    if (b.dueDate) {
+      const [y, m, d] = b.dueDate.toISOString().slice(0, 10).split("-");
+      extra.push(`Vencimento ${d}/${m}/${y}`);
+    }
+    if (b.digits) extra.push(`Linha digitável ${b.digits}`);
+    if (extra.length > 0) {
+      const line = extra.join(" · ");
+      setNotes((prev) => (prev.includes(line) ? prev : prev ? `${prev} · ${line}` : line));
+    }
+  }, [open, scanned]);
 
   // Lê uma NF em PDF e pré-preenche descrição, valor, fornecedor e observação
   // (mesmo leitor do Contas a Pagar). Não grava nada — só preenche o form.
@@ -2542,23 +2676,19 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   const qty = parseDecimalBR(quantity);
   const total = unit * qty;
 
-  // Parcelas válidas do FATURADO (dias preenchidos). O total é dividido em
-  // partes iguais por centavos; a última parcela absorve a sobra do arredondamento.
-  const validTerms = paymentTerms.map((t) => t.trim()).filter(Boolean).map(Number).filter((n) => Number.isFinite(n) && n >= 0);
+  // Parcelas válidas do FATURADO, convertidas pra DIAS (formato do banco) a
+  // partir do vencimento digitado. Vencimento em branco, inválido ou anterior à
+  // data da compra fica de fora. O total é dividido em partes iguais por
+  // centavos; a última parcela absorve a sobra do arredondamento.
+  const validTerms = paymentDueDates
+    .map((iso) => (iso.trim() && purchaseDate ? daysBetweenISO(purchaseDate, iso) : null))
+    .filter((n): n is number => n != null && n >= 0);
   const parcelValue = (index: number): number => {
     const n = validTerms.length;
     if (n === 0) return 0;
     const totalCents = Math.round(total * 100);
     const baseCents = Math.floor(totalCents / n);
     return (index === n - 1 ? totalCents - baseCents * (n - 1) : baseCents) / 100;
-  };
-  // "vence 16/08/2026" da parcela — data da compra + dias (datas puras, sem fuso).
-  const parcelDueLabel = (days: number): string | null => {
-    if (!purchaseDate) return null;
-    const [y, m, d] = purchaseDate.slice(0, 10).split("-").map(Number);
-    if (!y || !m || !d) return null;
-    const dt = new Date(Date.UTC(y, m - 1, d + days));
-    return `${String(dt.getUTCDate()).padStart(2, "0")}/${String(dt.getUTCMonth() + 1).padStart(2, "0")}/${dt.getUTCFullYear()}`;
   };
 
   // Aplica os dados puxados do link (igual à Nova Solicitação): preenche descrição,
@@ -2645,8 +2775,19 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
           </div>
         )}
         <ProductLinkField link={link} onLinkChange={setLink} onData={applyPreview} open={open} />
-        {/* Importar NF (PDF) — lê a nota e pré-preenche descrição/valor/fornecedor */}
+        {/* Atalhos de leitura: boleto pela câmera e NF em PDF — os dois só
+            preenchem os campos, quem salva é você. */}
         <div className="flex items-center gap-2 flex-wrap">
+          {onScanRequest && (
+            <button
+              type="button"
+              onClick={onScanRequest}
+              className="bg-gray-100 hover:bg-gray-200 text-text text-xs font-medium px-3 py-1.5 rounded-lg"
+              title="Ler o código de barras do boleto com a câmera"
+            >
+              📷 Escanear boleto
+            </button>
+          )}
           <label className={`inline-flex items-center ${readingNf ? "opacity-50" : "cursor-pointer"}`}>
             <span className="bg-gray-100 hover:bg-gray-200 text-text text-xs font-medium px-3 py-1.5 rounded-lg">
               {readingNf ? "Lendo NF..." : "📄 Importar NF (PDF)"}
@@ -2664,7 +2805,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
               }}
             />
           </label>
-          <span className="text-[11px] text-text-light">Lê a nota fiscal e preenche os campos. Revise antes de salvar.</span>
+          <span className="text-[11px] text-text-light">Preenche os campos sozinho. Revise antes de salvar.</span>
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Descrição *</label>
@@ -2689,35 +2830,43 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
           </div>
         </div>
 
-        {/* FATURADO: parcelas (prazo em dias de cada uma) → cada parcela vira um
-            título no Contas a Pagar, com o total dividido igualmente. */}
+        {/* FATURADO: parcelas pela DATA DE VENCIMENTO — é assim que vem na
+            fatura da NF ("001 12/11/2025, 002 12/12/2025..."). Cada parcela
+            vira um título no Contas a Pagar, com o total dividido igualmente. */}
         {paymentMethod === "FATURADO" && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
-            <label className="block text-sm font-medium">Parcelas — prazo em dias *</label>
-            {paymentTerms.map((t, i) => {
-              const n = Number(t.trim());
-              const valid = t.trim() !== "" && Number.isFinite(n) && n >= 0;
-              // Índice desta parcela entre as válidas (pra data/valor certos).
-              const validIdx = paymentTerms.slice(0, i).filter((x) => x.trim() !== "" && Number.isFinite(Number(x.trim())) && Number(x.trim()) >= 0).length;
-              const due = valid ? parcelDueLabel(n) : null;
+            <label className="block text-sm font-medium">Parcelas — vencimento *</label>
+            {paymentDueDates.map((iso, i) => {
+              const days = iso.trim() && purchaseDate ? daysBetweenISO(purchaseDate, iso) : null;
+              const valid = days != null && days >= 0;
+              // Índice desta parcela entre as válidas (pro valor certo).
+              const validIdx = paymentDueDates
+                .slice(0, i)
+                .filter((x) => {
+                  const d = x.trim() && purchaseDate ? daysBetweenISO(purchaseDate, x) : null;
+                  return d != null && d >= 0;
+                }).length;
               return (
                 <div key={i} className="flex items-center gap-2">
                   <span className="text-xs text-text-light w-16 shrink-0">Parcela {i + 1}</span>
                   <input
-                    type="number"
-                    min={0}
-                    value={t}
-                    onChange={(e) => setPaymentTerms((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
-                    placeholder={i === 0 ? "Ex.: 28" : i === 1 ? "Ex.: 35" : "Ex.: 42"}
-                    className={`${inputCls} !w-24`}
+                    type="date"
+                    value={iso}
+                    min={purchaseDate || undefined}
+                    onChange={(e) => setPaymentDueDates((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
+                    className={`${inputCls} !w-44`}
                   />
                   <span className="text-xs text-text-light flex-1 min-w-0 truncate">
-                    {valid ? `${due ? `vence ${due}` : "dias"} · ${formatCurrency(parcelValue(validIdx))}` : "dias"}
+                    {valid
+                      ? `${days} dia${days === 1 ? "" : "s"} · ${formatCurrency(parcelValue(validIdx))}`
+                      : iso.trim()
+                        ? "vencimento antes da data da compra"
+                        : "escolha a data"}
                   </span>
-                  {paymentTerms.length > 1 && (
+                  {paymentDueDates.length > 1 && (
                     <button
                       type="button"
-                      onClick={() => setPaymentTerms((prev) => prev.filter((_, j) => j !== i))}
+                      onClick={() => setPaymentDueDates((prev) => prev.filter((_, j) => j !== i))}
                       className="p-1 text-danger hover:bg-red-50 rounded shrink-0"
                       title="Remover parcela"
                     >
@@ -2729,13 +2878,24 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
             })}
             <button
               type="button"
-              onClick={() => setPaymentTerms((prev) => [...prev, ""])}
+              onClick={() =>
+                setPaymentDueDates((prev) => {
+                  // Parcela nova cai 30 dias depois da última preenchida — é o
+                  // ritmo das faturas (30/60/90/120). Sem nenhuma preenchida,
+                  // parte da data da compra.
+                  const last = [...prev].reverse().find((x) => x.trim());
+                  const base = last || purchaseDate;
+                  return [...prev, base ? addDaysISO(base, 30) : ""];
+                })
+              }
               className="text-xs font-medium text-primary hover:underline"
             >
               + Adicionar parcela
             </button>
             <p className="text-[11px] text-text-light">
-              Cada parcela vira um título no Contas a Pagar com vencimento = data da compra + dias. O valor total é dividido igualmente entre as parcelas.
+              Digite o vencimento de cada parcela (o mesmo que vem na fatura da nota). Cada uma vira um
+              título no Contas a Pagar nessa data, com o valor total dividido igualmente.
+              {purchaseDate ? ` Contado a partir da compra em ${fmtISODate(purchaseDate)}.` : ""}
             </p>
           </div>
         )}
