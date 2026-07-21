@@ -42,16 +42,18 @@ export function countsAsWorked(alloc: { status?: string | null; removal_reason?:
 // vinculado, mas só toca em allocations que ainda estão ATIVAS.
 export async function releaseFinishedShipAllocations(actor: string): Promise<{ ships: number; allocations: number }> {
   // ISO-8601 completo: o Prisma REJEITA "YYYY-MM-DD" puro em filtro de data
-  // (espera ISO DateTime). Usamos a meia-noite de hoje pra pegar quem saiu
-  // ANTES de hoje (data de saída estritamente no passado).
+  // (espera ISO DateTime). Usamos a meia-noite de hoje pra pegar quem já saiu
+  // HOJE ou antes (data de saída <= hoje). O navio sai NO dia da saída, então
+  // a tripulação tem que ser liberada já nesse dia — usar "< hoje" (estrito)
+  // segurava a galera presa o dia inteiro da saída e só soltava no dia seguinte.
   const todayStartISO = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
 
-  // Navios já com data de saída no passado. Pulamos os já CANCELADOS — o
+  // Navios com data de saída hoje ou no passado. Pulamos os já CANCELADOS — o
   // delete cascade do app já lida com esses.
   const shipsRes = await db
     .from("ships")
     .select("id, departure_date, status")
-    .lt("departure_date", todayStartISO);
+    .lte("departure_date", todayStartISO);
 
   const ships: Array<{ id: string; departure_date: string | null; status: string }> = shipsRes.data || [];
   if (ships.length === 0) return { ships: 0, allocations: 0 };
@@ -72,6 +74,29 @@ export async function releaseFinishedShipAllocations(actor: string): Promise<{ s
     if (!upd.error) touched++;
   }
   return { ships: ships.length, allocations: touched };
+}
+
+// Libera AGORA a tripulação de UM navio — usada pelos botões "Fechar" (aba
+// Navios e Financeiro) e pela edição que marca CONCLUIDO. Quem fecha o navio
+// está dizendo que a operação acabou; esperar a varredura por data de saída
+// (acima) deixava todo mundo "Embarcado" até o dia virar ou alguém relogar.
+// Mesmo bookkeeping do automático (REMOVIDO + AUTO_RELEASE_REASON), então
+// countsAsWorked segue contando o trabalho no histórico e no Financeiro.
+// Idempotente: só toca em allocations ainda ATIVAS.
+export async function releaseShipAllocationsNow(shipId: string, actor: string): Promise<number> {
+  const jobsRes = await db.from("jobs").select("id").eq("ship_id", shipId);
+  const jobs: Array<{ id: string }> = jobsRes.data || [];
+  const now = new Date().toISOString();
+  let touched = 0;
+  for (const job of jobs) {
+    const upd: any = await db
+      .from("job_allocations")
+      .update({ status: "REMOVIDO", removed_at: now, removed_by: actor, removal_reason: AUTO_RELEASE_REASON })
+      .eq("job_id", job.id)
+      .eq("status", "ATIVO");
+    if (!upd.error) touched++;
+  }
+  return touched;
 }
 
 // Promove a EM_OPERACAO os navios ainda AGENDADOS cuja data de embarque

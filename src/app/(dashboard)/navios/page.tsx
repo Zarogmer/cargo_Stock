@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { hasPermission } from "@/lib/rbac";
 import { db } from "@/lib/db";
-import { releaseFinishedShipAllocations, promoteStartedShips } from "@/lib/release-finished-ships";
+import { releaseFinishedShipAllocations, releaseShipAllocationsNow, promoteStartedShips } from "@/lib/release-finished-ships";
 import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 import { SHIFT_PERIODS, isEscalableJobUnit, type ShiftPeriod } from "@/types/database";
@@ -362,6 +362,9 @@ export default function NaviosPage() {
       const map = new Map<number, "EMBARQUE" | "COSTADO">();
       for (const a of (data as Array<{ employee_id: number | null; kind: string | null }> | null) || []) {
         if (a.employee_id == null) continue;
+        // Alocação ADMINISTRATIVA é custo automático (Financeiro), não embarque
+        // — não pode pintar a pessoa de "Embarcado" no seletor de escala.
+        if (a.kind === "ADMINISTRATIVO") continue;
         const k: "EMBARQUE" | "COSTADO" = a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE";
         // COSTADO ganha precedencia se ja existir entrada -- alguem em ambos
         // (raro, mas possivel se houver bug de dados) aparece como Costado
@@ -618,7 +621,9 @@ export default function NaviosPage() {
         ? form.boarding_custom_text.trim()
         : null;
     const payload = {
-      name: form.name.trim(),
+      // Nome do navio SEMPRE em caixa alta — telas, WhatsApp, documentos e o
+      // Job financeiro (que copia este nome) contam com isso.
+      name: form.name.trim().toUpperCase(),
       arrival_date: form.arrival_date || null,
       departure_date: form.departure_date || null,
       port: form.port.trim() || null,
@@ -645,6 +650,13 @@ export default function NaviosPage() {
       // saída editada, senão o Financeiro continua com a data antiga.
       if (payload.status === "CONCLUIDO") {
         await db.from("jobs").update({ end_date: payload.departure_date }).eq("ship_id", editingShip.id);
+        // Concluído pela edição = mesma coisa que "Fechar": solta a tripulação
+        // na hora (idempotente — quem já foi removido não é tocado).
+        try {
+          await releaseShipAllocationsNow(editingShip.id, profile?.full_name || "sistema");
+        } catch (err) {
+          console.warn("[navios] release on edit-close failed:", (err as Error).message);
+        }
       }
       if (selectedShip?.id === editingShip.id) {
         setSelectedShip({ ...editingShip, ...payload });
@@ -946,6 +958,8 @@ export default function NaviosPage() {
     setSaving(false);
     setShowModal(false);
     loadShips();
+    // Escalou gente no salvar? O mapa de "quem já está em operação" muda junto.
+    loadOccupied();
   }
 
   async function handleDelete(id: string) {
@@ -982,9 +996,18 @@ export default function NaviosPage() {
     if (!selectedShip || !closeDate) return;
     await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate }).eq("id", selectedShip.id);
     await db.from("jobs").update({ end_date: closeDate }).eq("ship_id", selectedShip.id);
+    // Solta a tripulação AGORA. Confiar na varredura por data de saída deixava
+    // todo mundo "Embarcado" o resto do dia (fechar com saída = hoje só era
+    // varrido no dia seguinte) — o usuário tinha que relogar pra ver certo.
+    try {
+      await releaseShipAllocationsNow(selectedShip.id, profile?.full_name || "sistema");
+    } catch (err) {
+      console.warn("[navios] release on close failed:", (err as Error).message);
+    }
     // Atualiza o resumo aberto pra refletir Concluído (a seção de fechar some).
     setSelectedShip({ ...selectedShip, status: "CONCLUIDO", departure_date: closeDate });
     loadShips();
+    loadOccupied();
   }
 
   // ── Crew helpers ───────────────────────────────────────────────────────────
@@ -1008,10 +1031,12 @@ export default function NaviosPage() {
       // Escalados do navio (Embarque e Costado): os ATIVOS + os REMOVIDOS pela
       // liberação automática de navio finalizado — a escala segue aparecendo
       // como histórico depois que o navio sai (mesma regra da Folha de Ponto).
-      // Remoção manual/substituição fica de fora.
-      const allocs = (((allocRes.data as any[]) || []) as Array<{ status: string; removal_reason?: string | null }>).filter(
-        (a) => a.status === "ATIVO" || (a.removal_reason || "").startsWith("Navio finalizado"),
-      );
+      // Remoção manual/substituição fica de fora. ADMINISTRATIVO também: é o
+      // custo automático do escritório (só existe no Financeiro), não gente
+      // embarcada — no resumo do navio não aparece.
+      const allocs = (((allocRes.data as any[]) || []) as Array<{ kind?: string | null; status: string; removal_reason?: string | null }>)
+        .filter((a) => a.kind !== "ADMINISTRATIVO")
+        .filter((a) => a.status === "ATIVO" || (a.removal_reason || "").startsWith("Navio finalizado"));
       setShipAllocs(allocs as any[]);
       setShipExpenses((adjRes.data as ShipExpense[]) || []);
     } catch (err) {

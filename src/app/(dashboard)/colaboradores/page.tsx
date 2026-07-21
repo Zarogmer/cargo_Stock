@@ -122,6 +122,10 @@ export default function ColaboradoresPage() {
       const statusMap = new Map<number, "EMBARQUE" | "COSTADO">();
       ((allocRes.data as Array<{ employee_id: number | null; kind: string | null }> | null) || []).forEach((a) => {
         if (a.employee_id == null) return;
+        // ADMINISTRATIVO é o custo automático do escritório (só Financeiro),
+        // não embarque — ignorar aqui, senão vira badge errado (e esconderia
+        // um Costado real do mesmo colaborador pela regra de precedência).
+        if (a.kind === "ADMINISTRATIVO") return;
         const k = (a.kind || "EMBARQUE") as "EMBARQUE" | "COSTADO";
         const existing = statusMap.get(a.employee_id);
         if (!existing || (existing === "COSTADO" && k === "EMBARQUE")) {

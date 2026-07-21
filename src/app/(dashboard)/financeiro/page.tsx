@@ -52,6 +52,7 @@ if (typeof window !== "undefined") {
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import { releaseShipAllocationsNow } from "@/lib/release-finished-ships";
 import { hasPermission, canAccessFinanceiroBanco } from "@/lib/rbac";
 import { db } from "@/lib/db";
 import { allocCountsAsWorked } from "@/lib/alloc-worked";
@@ -334,9 +335,10 @@ function applyCadastroToAllocations(
 // Fecha o navio a partir do Financeiro: marca CONCLUIDO + data de saída (igual
 // à aba Navios) e, diferente do Navios, grava o Valor do Contrato no pagamento.
 function CloseShipModal({
-  job, onClose, onClosed,
+  job, profileName, onClose, onClosed,
 }: {
   job: Job | null;
+  profileName: string;
   onClose: () => void;
   onClosed: () => void;
 }) {
@@ -366,6 +368,13 @@ function CloseShipModal({
       // Fecha a ponta dos pagamentos do navio e grava o contrato neste pagamento.
       await db.from("jobs").update({ end_date: closeDate }).eq("ship_id", job!.ship_id);
       await db.from("jobs").update({ contract_value: cv }).eq("id", job!.id);
+      // Solta a tripulação na hora (mesma regra do "Fechar" da aba Navios) —
+      // senão os escalados seguem "Embarcado" até a varredura por data rodar.
+      try {
+        await releaseShipAllocationsNow(job!.ship_id, profileName);
+      } catch (e2) {
+        console.warn("[financeiro] release on close failed:", (e2 as Error).message);
+      }
       onClosed();
     } catch (e) {
       setErr((e as Error).message);
@@ -2709,6 +2718,7 @@ function TrabalhosTab({
 
       <CloseShipModal
         job={closeShipJob}
+        profileName={profileName}
         onClose={() => setCloseShipJob(null)}
         onClosed={() => { setCloseShipJob(null); onChange(); }}
       />
@@ -6726,6 +6736,7 @@ function CostadoTab({
 
       <CloseShipModal
         job={closeShipJob}
+        profileName={profileName}
         onClose={() => setCloseShipJob(null)}
         onClosed={() => { setCloseShipJob(null); onChange(); }}
       />
