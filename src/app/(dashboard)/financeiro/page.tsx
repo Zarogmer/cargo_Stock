@@ -61,7 +61,6 @@ import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { DocumentosTab } from "./documentos-tab";
 import { DemonstracaoFinanceiraPage } from "@/components/financeiro/demonstracao-financeira-page";
 import { RelatorioValesPage } from "@/components/financeiro/relatorio-vales-page";
 import {
@@ -695,7 +694,7 @@ export default function FinanceiroPage() {
     if (!hasAdmin) {
       const created = await db.from("job_functions").insert({
         name: "ADMINISTRATIVO",
-        description: "Pessoal administrativo — valor fixo por operação (navio). Entra no custo, fora da folha/Pluxee.",
+        description: "Pessoal administrativo — valor fixo por operação (navio). Entra no custo, fora da folha.",
         default_rate: 0,
         unit: "POR_OPERACAO",
         active: true,
@@ -836,19 +835,6 @@ export default function FinanceiroPage() {
           allocations={allocations}
           adjustments={adjustments}
           functions={functions}
-        />
-      ),
-    },
-    {
-      key: "documentos",
-      label: "📄 Documentos",
-      content: (
-        <DocumentosTab
-          jobs={jobs}
-          allocations={allocations}
-          employees={employees}
-          canEdit={canEdit}
-          profileName={profile?.full_name || "Sistema"}
         />
       ),
     },
@@ -4642,7 +4628,7 @@ function JobDetailModal({
                     <div className="bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
                       <p className="text-[10px] uppercase tracking-wider text-purple-900 font-semibold">A pagar (Folha)</p>
                       <p className="text-lg font-bold text-purple-700 mt-0.5">{brl(costadoGrandFolha)}</p>
-                      <p className="text-[10px] text-purple-700">custo − pluxee</p>
+                      <p className="text-[10px] text-purple-700">valor na folha</p>
                     </div>
                     <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                       <p className="text-[10px] uppercase tracking-wider text-amber-900 font-semibold">Dias com escala</p>
@@ -4685,7 +4671,7 @@ function JobDetailModal({
                                 {" "}({row.turnos * HOURS_PER_SHIFT}h){" · "}
                                 ☀️ {row.diurnos} diurno{row.diurnos === 1 ? "" : "s"} · 🌙 {row.noturnos} noturno{row.noturnos === 1 ? "" : "s"}
                                 {row.pluxee > 0 && (
-                                  <> · pluxee {brl(row.pluxee)} → folha <strong className="text-purple-700">{brl(row.folha)}</strong></>
+                                  <> · folha <strong className="text-purple-700">{brl(row.folha)}</strong></>
                                 )}
                               </p>
                               {shiftsByDate.size > 0 && (
@@ -5200,7 +5186,7 @@ function JobDetailModal({
             <div className="mb-2">
               <h3 className="text-sm font-semibold">🧑‍💼 Administrativo ({adminActive.length})</h3>
               <p className="text-[10px] text-text-light mt-0.5">
-                Valor fixo por operação — entra no custo do navio, fora da folha/Pluxee. O valor padrão de
+                Valor fixo por operação — entra no custo do navio, fora da folha. O valor padrão de
                 cada um vem de <a href="/financeiro?tab=funcoes" className="underline">Valores › 👤</a> e pode ser ajustado aqui só para este navio.
               </p>
             </div>
@@ -5622,33 +5608,30 @@ function FunctionRateModal({
     return Array.from(map.values()).sort((a, b) => a.function.name.localeCompare(b.function.name));
   }, [allocations, functions]);
 
-  const [values, setValues] = useState<Record<number, { days: string; rate: string; pluxee: string }>>({});
+  const [values, setValues] = useState<Record<number, { days: string; rate: string }>>({});
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (open) {
-      const initial: Record<number, { days: string; rate: string; pluxee: string }> = {};
+      const initial: Record<number, { days: string; rate: string }> = {};
       for (const g of groups) {
         const firstDays = g.allocs[0]?.quantity ?? 0;
         const firstRate = Number(g.allocs[0]?.rate ?? 0);
-        const firstPluxee = Number(g.allocs[0]?.pluxee_value ?? 0);
         const allSame = g.allocs.every(
           (a) =>
             a.quantity === firstDays &&
-            Number(a.rate) === firstRate &&
-            Number(a.pluxee_value || 0) === firstPluxee
+            Number(a.rate) === firstRate
         );
         initial[g.function.id] = {
           days: allSame && firstDays > 0 ? String(firstDays) : "",
           rate: allSame && firstRate > 0 ? String(firstRate) : String(g.function.default_rate),
-          pluxee: allSame && firstPluxee > 0 ? String(firstPluxee) : "0",
         };
       }
       setValues(initial);
     }
   }, [open, groups]);
 
-  function setField(fnId: number, field: "days" | "rate" | "pluxee", v: string) {
+  function setField(fnId: number, field: "days" | "rate", v: string) {
     setValues((prev) => ({ ...prev, [fnId]: { ...prev[fnId], [field]: v } }));
   }
 
@@ -5667,13 +5650,11 @@ function FunctionRateModal({
         if (!v) continue;
         const days = parseInt(v.days) || 0;
         const rate = parseFloat(v.rate) || 0;
-        const pluxee = parseFloat(v.pluxee) || 0;
-        if (days <= 0 && rate <= 0 && pluxee <= 0) continue;
+        if (days <= 0 && rate <= 0) continue;
         for (const a of g.allocs) {
           await db.from("job_allocations").update({
             quantity: days,
             rate: rate,
-            pluxee_value: pluxee,
           }).eq("id", a.id);
         }
       }
@@ -5692,7 +5673,7 @@ function FunctionRateModal({
     <Modal open={open} onClose={onClose} title="⚖️ Ajustar Valor por Função" maxWidth="max-w-3xl">
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-900">
-          💡 Para cada função, informe os <strong>dias trabalhados</strong>, <strong>valor diário</strong> e <strong>Pluxee</strong>.
+          💡 Para cada função, informe os <strong>dias trabalhados</strong> e o <strong>valor diário</strong>.
           Os valores serão aplicados a <strong>todos os membros</strong> dessa função.
           Diferenças individuais podem ser ajustadas depois (✏️ na linha).
         </div>
@@ -5702,20 +5683,19 @@ function FunctionRateModal({
         ) : (
           <div className="space-y-2">
             <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold text-text-light uppercase tracking-wider px-2">
-              <div className="col-span-3">Função</div>
+              <div className="col-span-4">Função</div>
               <div className="col-span-1 text-center">Pessoas</div>
               <div className="col-span-2">Dias</div>
-              <div className="col-span-2">Valor Diário</div>
-              <div className="col-span-2">Pluxee</div>
+              <div className="col-span-3">Valor Diário</div>
               <div className="col-span-2 text-right">Total Grupo</div>
             </div>
             {groups.map((g) => {
-              const v = values[g.function.id] || { days: "", rate: "", pluxee: "" };
+              const v = values[g.function.id] || { days: "", rate: "" };
               const perPerson = (parseInt(v.days) || 0) * (parseFloat(v.rate) || 0);
               const total = perPerson * g.allocs.length;
               return (
                 <div key={g.function.id} className="grid grid-cols-12 gap-2 items-center bg-card border border-border rounded-lg p-2">
-                  <div className="col-span-3">
+                  <div className="col-span-4">
                     <p className="font-semibold text-sm">{g.function.name}</p>
                     <p className="text-[10px] text-text-light truncate">
                       {g.allocs.map((a) => a.employees?.name?.split(" ")[0] || "—").slice(0, 3).join(", ")}
@@ -5728,11 +5708,8 @@ function FunctionRateModal({
                   <div className="col-span-2">
                     <input type="number" min={0} value={v.days} onChange={(e) => setField(g.function.id, "days", e.target.value)} className={inputCls} placeholder="0" />
                   </div>
-                  <div className="col-span-2">
+                  <div className="col-span-3">
                     <input type="number" step="0.01" min={0} value={v.rate} onChange={(e) => setField(g.function.id, "rate", e.target.value)} className={inputCls} placeholder="0,00" />
-                  </div>
-                  <div className="col-span-2">
-                    <input type="number" step="0.01" min={0} value={v.pluxee} onChange={(e) => setField(g.function.id, "pluxee", e.target.value)} className={inputCls} placeholder="0,00" />
                   </div>
                   <div className="col-span-2 text-right">
                     {perPerson > 0 ? (
@@ -7187,7 +7164,6 @@ function ControleTab({
     const workers = stats.filter((s) => s.totalEarnings > 0 || s.embarque.allocations > 0 || s.costado.allocations > 0);
     const totalPaid = stats.reduce((sum, s) => sum + s.totalEarnings, 0);
     const totalFolha = stats.reduce((sum, s) => sum + s.folha, 0);
-    const totalPluxee = stats.reduce((sum, s) => sum + s.pluxee, 0);
     const totalDescGeral = stats.reduce((sum, s) => sum + s.descGeral, 0);
     const totalAdiant = stats.reduce((sum, s) => sum + s.adiant, 0);
     const totalLiquido = stats.reduce((sum, s) => sum + s.liquido, 0);
@@ -7213,7 +7189,6 @@ function ControleTab({
       workers: workers.length,
       totalPaid,
       totalFolha,
-      totalPluxee,
       totalDescGeral,
       totalAdiant,
       totalLiquido,
@@ -7261,7 +7236,7 @@ function ControleTab({
       "Nome", "Função", "Equipe", "Status",
       "Embarque - Navios", "Embarque - Porões", "Embarque - Ganho",
       "Costado - Turnos", "Costado - Horas", "Costado - Diurnos", "Costado - Noturnos", "Costado - Navios", "Costado - Ganho",
-      "Total Ganho", "Valor da Folha", "Pluxee", "Desc. Geral", "Adiantamento", "Líquido", "Saldo de Vales",
+      "Total Ganho", "Valor da Folha", "Desc. Geral", "Adiantamento", "Líquido", "Saldo de Vales",
       "Última atividade",
     ].join(sep);
     const rows = visibleStats.map((s) => [
@@ -7280,7 +7255,6 @@ function ControleTab({
       s.costado.earnings.toFixed(2).replace(".", ","),
       s.totalEarnings.toFixed(2).replace(".", ","),
       s.folha.toFixed(2).replace(".", ","),
-      s.pluxee.toFixed(2).replace(".", ","),
       s.descGeral.toFixed(2).replace(".", ","),
       s.adiant.toFixed(2).replace(".", ","),
       s.liquido.toFixed(2).replace(".", ","),
@@ -7430,7 +7404,7 @@ function ControleTab({
           <div>
             <label
               className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1"
-              title="Ganho = o que a operação gerou (MV1). Folha = a parte paga no pagamento (Ganho − Pluxee)."
+              title="Ganho = o que a operação gerou (MV1). Folha = o que a contabilidade lança no pagamento."
             >
               Valores
             </label>
@@ -7522,10 +7496,9 @@ function ControleTab({
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
         <KpiCard label={`Trabalharam em ${periodLabel}`} value={periodKpis.workers.toString()} accent="blue" />
         {/* Ganho ≠ Folha: o ganho é o que a operação gerou (MV1); a folha é a
-            parte dele que sai no pagamento (ganho − Pluxee). */}
+            parte dele que sai no pagamento (o que a contabilidade lança). */}
         <KpiCard label="Ganho do período" value={brl(periodKpis.totalPaid)} accent="emerald" />
         <KpiCard label="Valor da folha" value={brl(periodKpis.totalFolha)} accent="purple" />
-        <KpiCard label="Pluxee (cartão)" value={brl(periodKpis.totalPluxee)} accent="purple" />
         <KpiCard label="Descontos (geral + vales)" value={brl(periodKpis.totalDescGeral + periodKpis.totalAdiant)} accent="amber" />
         <KpiCard label="Líquido a receber" value={brl(periodKpis.totalLiquido)} accent="emerald" />
         <KpiCard label="Porões trabalhados" value={periodKpis.totalPoroes.toString()} accent="amber" />
@@ -7646,7 +7619,7 @@ function ControleTab({
                   <th
                     className="px-3 py-1.5 text-right text-[10px] font-semibold text-purple-700 cursor-pointer hover:bg-emerald-100"
                     onClick={() => toggleSort("folha")}
-                    title="PAGTO NA FOLHA — o ganho menos o que foi pago no cartão Pluxee. Sem import da Relação de Líquidos, é igual ao Ganho."
+                    title="PAGTO NA FOLHA — o valor lançado no pagamento pela contabilidade. Sem import da Relação de Líquidos, é igual ao Ganho."
                   >
                     Folha {sortIcon("folha")}
                   </th>
@@ -7737,17 +7710,7 @@ function ControleTab({
                     )}
                     {moneyView !== "GANHO" && (
                       <td className="px-3 py-2 text-right text-sm font-bold text-purple-700">
-                        {s.folha > 0 ? (
-                          <>
-                            {brl(s.folha)}
-                            {/* Pluxee só aparece quando existe — senão folha = ganho. */}
-                            {s.pluxee > 0 && (
-                              <span className="block text-[9px] text-text-light font-normal">
-                                Pluxee {brl(s.pluxee)}
-                              </span>
-                            )}
-                          </>
-                        ) : <span className="text-text-light font-normal">—</span>}
+                        {s.folha > 0 ? brl(s.folha) : <span className="text-text-light font-normal">—</span>}
                       </td>
                     )}
                     {showDeductions && (
@@ -7827,8 +7790,8 @@ function ControleTab({
         {shipFilter !== "TODOS" && <> · Navio: <strong>{ships.find((s) => s.id === shipFilter)?.name || "?"}</strong></>}
         · Clique numa linha pra ver o detalhamento completo.
         <br />
-        <strong>Ganho</strong> = o que a operação gerou (MV1 da Folha de Pagamento). <strong>Folha</strong> = a parte paga no
-        pagamento (Ganho − Pluxee); sem o import da Relação de Líquidos os dois são iguais.{" "}
+        <strong>Ganho</strong> = o que a operação gerou (MV1 da Folha de Pagamento). <strong>Folha</strong> = o valor lançado no
+        pagamento pela contabilidade; sem o import da Relação de Líquidos os dois são iguais.{" "}
         <strong>Desc. Geral</strong> = material perdido rateado pela equipe do navio. <strong>Adiant.</strong> = vales
         descontados nesses navios. <strong>Líquido</strong> = Ganho − Desc. Geral − Adiant.
       </p>
@@ -7940,10 +7903,9 @@ function EmployeeDetailDrawer({
           <p className="text-xs font-bold text-emerald-900 mb-2">💰 Composição do pagamento em {periodLabel}</p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 text-xs">
             <p>Ganho (MV1): <strong className="text-emerald-800">{brl(stat.totalEarnings)}</strong></p>
-            <p title="PAGTO NA FOLHA — ganho menos o que saiu no cartão Pluxee">
+            <p title="PAGTO NA FOLHA — valor lançado no pagamento pela contabilidade">
               Valor da folha: <strong className="text-purple-700">{brl(stat.folha)}</strong>
             </p>
-            <p>Pluxee (cartão): <strong>{stat.pluxee > 0 ? brl(stat.pluxee) : "—"}</strong></p>
             <p title="Material perdido rateado pela equipe do navio">
               Desc. Geral: <strong className="text-red-700">{stat.descGeral > 0 ? `- ${brl(stat.descGeral)}` : "—"}</strong>
             </p>
