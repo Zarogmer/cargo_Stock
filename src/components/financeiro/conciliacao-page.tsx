@@ -358,11 +358,27 @@ export function ConciliacaoPage() {
   // Baixa via âncora (NÃO window.open): no app Electron, window.open pra um
   // .xlsx abre uma janela nova que fica branca/travada (a resposta é download,
   // não HTML). A âncora dispara direto o "Salvar como", sem abrir janela.
+  // Gera a planilha da conciliação RESPEITANDO o filtro de mês da tela:
+  //   • mês escolhido  → só ele, numa aba (do dia 1 ao último dia do mês);
+  //   • "Todos os meses" → o ano inteiro, uma aba por mês (formato que a
+  //     contabilidade mantinha à mão).
+  // Antes mandava sempre `year=<ano atual>` e ignorava o filtro — escolher
+  // junho baixava o ano todo do mesmo jeito.
   function gerarConciliacao(bank: "ITAU" | "SANTANDER") {
-    const year = new Date().getFullYear();
-    const url = `/api/financeiro/extrato/export?bank=${bank}&year=${year}`;
+    const params = new URLSearchParams({ bank });
+    if (monthFilter) {
+      const [y, m] = monthFilter.split("-").map(Number);
+      // Dia 0 do mês seguinte = último dia deste mês (fecha fevereiro/bissexto).
+      const to = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+      params.set("from", `${monthFilter}-01`);
+      params.set("to", to);
+    } else {
+      // O modo "ano" cobre um ano por arquivo: usa o ano dos lançamentos que
+      // existem (months vem do mais recente pro mais antigo).
+      params.set("year", months[0]?.slice(0, 4) || String(new Date().getFullYear()));
+    }
     const a = document.createElement("a");
-    a.href = url;
+    a.href = `/api/financeiro/extrato/export?${params.toString()}`;
     a.download = ""; // nome vem do servidor (Content-Disposition)
     document.body.appendChild(a);
     a.click();
@@ -578,12 +594,24 @@ export function ConciliacaoPage() {
                   </label>
                 )}
                 <span className="text-xs text-text-light">O banco é reconhecido no próprio arquivo.</span>
-                <div className="ml-auto flex items-center gap-2">
+                <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
+                  {/* O que sai no arquivo segue o filtro de mês logo abaixo. */}
+                  <span className="text-xs text-text-light">
+                    {monthFilter
+                      ? <>Gera só <strong className="text-text">{fmtMonth(monthFilter)}</strong></>
+                      : <>Gera <strong className="text-text">o ano inteiro</strong> (uma aba por mês)</>}
+                  </span>
                   <Button
                     variant="secondary"
                     onClick={() => gerarConciliacao("ITAU")}
                     disabled={txCountByBank("ITAU") === 0}
-                    title={txCountByBank("ITAU") === 0 ? "Importe o extrato do Itaú primeiro" : ""}
+                    title={
+                      txCountByBank("ITAU") === 0
+                        ? "Importe o extrato do Itaú primeiro"
+                        : monthFilter
+                          ? `Baixa a conciliação do Itaú de ${fmtMonth(monthFilter)}`
+                          : "Baixa a conciliação do Itaú do ano, uma aba por mês"
+                    }
                   >
                     Gerar conciliação Itaú
                   </Button>
@@ -591,7 +619,13 @@ export function ConciliacaoPage() {
                     variant="secondary"
                     onClick={() => gerarConciliacao("SANTANDER")}
                     disabled={txCountByBank("SANTANDER") === 0}
-                    title={txCountByBank("SANTANDER") === 0 ? "Importe o extrato do Santander primeiro" : ""}
+                    title={
+                      txCountByBank("SANTANDER") === 0
+                        ? "Importe o extrato do Santander primeiro"
+                        : monthFilter
+                          ? `Baixa a conciliação do Santander de ${fmtMonth(monthFilter)}`
+                          : "Baixa a conciliação do Santander do ano, uma aba por mês"
+                    }
                   >
                     Gerar conciliação Santander
                   </Button>

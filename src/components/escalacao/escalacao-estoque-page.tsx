@@ -195,6 +195,8 @@ export function EscalacaoEstoquePage() {
 
   const readyCount = itemsWithStatus.filter((i) => i.ready).length;
   const missingCount = itemsWithStatus.filter((i) => !i.ready).length;
+  // Nomes do que está faltando no Rancho — entram no aviso que trava o Embarcar.
+  const ranchoMissingNames = itemsWithStatus.filter((i) => !i.ready).map((i) => i.name);
 
   // Materiais do kit de embarque desta equipe (deduzidos do Estoque/GALPAO),
   // com o "Leva" ajustado por navio + itens extras puxados do Estoque.
@@ -246,6 +248,20 @@ export function EscalacaoEstoquePage() {
   const teamKit = [...kitRows, ...extraRows].sort((a, b) => a.estName.localeCompare(b.estName, "pt-BR"));
   const matReady = teamKit.filter((k) => k.ready).length;
   const matMissing = teamKit.length - matReady;
+
+  // ── Trava do Embarcar ────────────────────────────────────────────────────
+  // Faltou qualquer coisa (material ou rancho), não embarca. Antes o Embarcar
+  // baixava só o que tinha e seguia em frente — a equipe ia pro navio sem o
+  // item e o Estoque ficava dizendo que estava tudo certo. Embarque é controle:
+  // ou a lista está completa, ou se ajusta o "Leva" deste navio / repõe o
+  // Estoque antes. Bloqueia na tela E no handleEmbarcar (defesa dupla).
+  const missingNames = [
+    ...teamKit.filter((k) => !k.ready).map((k) => k.estName),
+    ...ranchoMissingNames,
+  ];
+  const hasMissing = missingNames.length > 0;
+  const missingSummary = missingNames.slice(0, 6).join(", ")
+    + (missingNames.length > 6 ? ` e mais ${missingNames.length - 6}` : "");
 
   // Candidatos do modal "Adicionar item": tudo que está no Estoque (materiais)
   // ou no Rancho da equipe e ainda não aparece na lista deste navio.
@@ -389,6 +405,17 @@ export function EscalacaoEstoquePage() {
 
   async function handleEmbarcar() {
     if (!currentShip || !selectedTeam) return;
+    // Trava de controle: com item faltando, não baixa nada. Vale mesmo se o
+    // botão for burlado (estado antigo, clique duplo) — a baixa parcial é o
+    // que deixava o Estoque mentindo.
+    if (hasMissing) {
+      setConfirmEmbark(false);
+      setEmbarkMsg(
+        `🚫 Não dá pra embarcar: ${missingNames.length} item(ns) sem quantidade no Estoque — ${missingSummary}. ` +
+          `Reponha o Estoque ou ajuste o "Leva" deste navio antes de embarcar.`,
+      );
+      return;
+    }
     setEmbarking(true);
     const actor = profile?.full_name || "Sistema";
 
@@ -963,7 +990,19 @@ export function EscalacaoEstoquePage() {
             <Button size="sm" variant="secondary" onClick={handleSendEmbarkList} disabled={sendingEmbarkList || embarking} title="Manda a lista no grupo do WhatsApp com o PDF anexado">
               {sendingEmbarkList ? "Enviando..." : "📨 Enviar lista pro WhatsApp"}
             </Button>
-            <Button size="sm" variant="warning" onClick={() => setConfirmEmbark(true)}>
+            {/* Com item faltando o Embarcar fica travado: embarque é controle,
+                não dá pra "tirar do estoque" o que não tem. */}
+            <Button
+              size="sm"
+              variant="warning"
+              onClick={() => setConfirmEmbark(true)}
+              disabled={hasMissing}
+              title={
+                hasMissing
+                  ? `Faltam ${missingNames.length} item(ns) no Estoque: ${missingSummary}`
+                  : "Baixa o kit e o rancho do Estoque e avisa o grupo no WhatsApp"
+              }
+            >
               ⚓ Embarcar
             </Button>
           </div>
@@ -972,6 +1011,18 @@ export function EscalacaoEstoquePage() {
 
       {tab === "embarque" && embarkMsg && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5 text-sm text-blue-800">{embarkMsg}</div>
+      )}
+
+      {/* Aviso fixo enquanto faltar item: explica por que o Embarcar está
+          travado e o que fazer, sem obrigar a caçar as linhas vermelhas. */}
+      {tab === "embarque" && canEmbarcar && selectedTeam && hasMissing && (
+        <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-800">
+          <p className="font-semibold">🚫 Embarque bloqueado — {missingNames.length} item(ns) sem quantidade no Estoque</p>
+          <p className="mt-1 text-xs">{missingSummary}</p>
+          <p className="mt-1.5 text-xs text-red-700">
+            Reponha o Estoque ou ajuste o <strong>Leva</strong> deste navio (pode zerar o que não vai) para liberar o embarque.
+          </p>
+        </div>
       )}
 
       {tab === "retorno" && selectedTeam && (

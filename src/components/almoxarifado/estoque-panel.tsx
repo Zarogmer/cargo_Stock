@@ -39,7 +39,7 @@ const STOCK_UNITS = [
 // EQUIPE_4 = "Equipe Turbo" (equipe maior, leva mais comida — mesmos alimentos).
 type RanchoTeam = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "EQUIPE_4";
 const RANCHO_TEAM_TABS: { key: RanchoTeam; label: string; emoji: string; activeCls: string }[] = [
-  { key: "EQUIPE_3", label: "Disponível", emoji: "🧮", activeCls: "bg-teal-600 text-white shadow-md" },
+  { key: "EQUIPE_3", label: "Disponível", emoji: "📦", activeCls: "bg-teal-600 text-white shadow-md" },
   { key: "EQUIPE_1", label: "Equipe 1", emoji: "🚢", activeCls: "bg-blue-600 text-white shadow-md" },
   { key: "EQUIPE_2", label: "Equipe 2", emoji: "🚢", activeCls: "bg-purple-600 text-white shadow-md" },
   { key: "EQUIPE_4", label: "Equipe Turbo", emoji: "🔥", activeCls: "bg-orange-600 text-white shadow-md" },
