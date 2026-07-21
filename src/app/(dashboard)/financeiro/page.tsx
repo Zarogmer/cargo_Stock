@@ -66,7 +66,7 @@ import { DemonstracaoFinanceiraPage } from "@/components/financeiro/demonstracao
 import { RelatorioValesPage } from "@/components/financeiro/relatorio-vales-page";
 import {
   type Advance, type AdvanceDiscount as AdvanceDiscountRow,
-  balanceOf, jobDiscountFor, openAdvances,
+  balanceOf, employeeBalance, jobDiscountFor, openAdvances,
 } from "@/lib/vales";
 import type {
   JobFunction,
@@ -622,6 +622,10 @@ export default function FinanceiroPage() {
   // junto com o resto, pra que qualquer modal já tenha o lookup pronto e
   // não dependa de fetch assíncrono ao abrir o form (evita race condition).
   const [specialRates, setSpecialRates] = useState<Map<string, number>>(new Map());
+  // Vales: adiantamentos e o que já foi descontado em cada navio. O Controle de
+  // Funcionários usa pra mostrar a coluna Adiant. e o saldo devedor de cada um.
+  const [advances, setAdvances] = useState<Advance[]>([]);
+  const [advDiscounts, setAdvDiscounts] = useState<AdvanceDiscountRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Filtro das telas de Pagamento — dirige os KPIs do topo e as listas das
@@ -653,7 +657,7 @@ export default function FinanceiroPage() {
 
   const loadAll = useCallback(async () => {
     setLoading(true);
-    const [fnRes, rtRes, jbRes, alRes, adRes, shRes, emRes, srRes] = await Promise.all([
+    const [fnRes, rtRes, jbRes, alRes, adRes, shRes, emRes, srRes, avRes, adcRes] = await Promise.all([
       db.from("job_functions").select("*").order("name"),
       db.from("job_function_rates").select("*").order("valid_from", { ascending: false }),
       db.from("jobs").select("*, ships(name, status, holds_count)").order("start_date", { ascending: false }),
@@ -662,6 +666,8 @@ export default function FinanceiroPage() {
       db.from("ships").select("id, name, status, services").order("arrival_date", { ascending: false }).limit(50),
       db.from("employees").select("id, name, role, cpf, birth_date, bank_name, bank_agency, bank_account, bank_account_type, status, sector").order("name"),
       db.from("employee_function_rates").select("employee_id, function_id, rate"),
+      db.from("employee_advances").select("*"),
+      db.from("advance_discounts").select("*"),
     ]);
     let allFunctions = (fnRes.data as JobFunction[]) || [];
     // Auto-cria a função COSTADO (valor fixo por turno) na primeira vez que
@@ -724,6 +730,8 @@ export default function FinanceiroPage() {
     setAllocations(applyCadastroToAllocations(rawAllocs, emps, allFunctions, srMap));
     setAdjustments((adRes.data as JobAdjustment[]) || []);
     setShips((shRes.data as Ship[]) || []);
+    setAdvances((avRes.data as Advance[]) || []);
+    setAdvDiscounts((adcRes.data as AdvanceDiscountRow[]) || []);
     setLoading(false);
   }, []);
 
@@ -813,6 +821,8 @@ export default function FinanceiroPage() {
           functions={functions}
           ships={ships}
           employees={employees}
+          advances={advances}
+          advDiscounts={advDiscounts}
           loading={loading}
         />
       ),
@@ -962,12 +972,14 @@ export default function FinanceiroPage() {
 
 // ─── KPI Card ───────────────────────────────────────────────────────────────
 
-function KpiCard({ label, value, accent }: { label: string; value: string; accent: "blue" | "amber" | "red" | "emerald" }) {
+function KpiCard({ label, value, accent }: { label: string; value: string; accent: "blue" | "amber" | "red" | "emerald" | "purple" }) {
   const accentMap = {
     blue: "border-blue-200 bg-blue-50",
     amber: "border-amber-200 bg-amber-50",
     red: "border-red-200 bg-red-50",
     emerald: "border-emerald-200 bg-emerald-50",
+    // Roxo = valores de folha/Pluxee (mesma cor da coluna Folha no Pagamento).
+    purple: "border-purple-200 bg-purple-50",
   };
   return (
     <div className={`rounded-xl border p-3 ${accentMap[accent]}`}>
@@ -6806,6 +6818,8 @@ interface EmployeeStats {
     ships: Set<string>;
     poroes: number;       // soma de porões (= holds_count por job, contado uma vez por funcionário/job)
     earnings: number;     // ganho total Embarque (rate × holds + extra)
+    folha: number;        // parte do ganho que sai na folha (ganho − Pluxee)
+    pluxee: number;       // parte paga no cartão Pluxee
     allocations: number;  // nº de alocações registradas
   };
   costado: {
@@ -6814,9 +6828,22 @@ interface EmployeeStats {
     diurnos: number;
     noturnos: number;
     earnings: number;
+    folha: number;
+    pluxee: number;
     allocations: number;
   };
   totalEarnings: number;
+  // ── Espelho das colunas da Folha de Pagamento (modal do navio) ───────────
+  // Ganho = MV1 (o que a operação gerou). Folha = PAGTO NA FOLHA (Ganho −
+  // Pluxee). Desc. Geral e Adiant. são abatimentos: o que a pessoa recebe de
+  // fato é o Líquido.
+  folha: number;
+  pluxee: number;
+  descGeral: number;   // rateio de material perdido nos navios do período
+  adiant: number;      // vales descontados nesses navios
+  liquido: number;     // Ganho − Desc. Geral − Adiant.
+  valeBalance: number; // saldo devedor de vales do colaborador (independe do período)
+  jobIds: Set<string>; // navios (jobs) considerados no período/filtros
   lastActivity: string | null; // ISO date da movimentação mais recente
   history: Array<{
     jobId: string;
@@ -6834,16 +6861,18 @@ interface EmployeeStats {
 }
 
 function ControleTab({
-  jobs, allocations, functions, ships, employees, loading,
+  jobs, allocations, adjustments, functions, ships, employees, advances, advDiscounts, loading,
 }: {
   jobs: Job[];
   allocations: JobAllocation[];
-  // adjustments existem mas só afetam o custo do job (compras/despesas) —
-  // não o ganho individual dos colaboradores, então não usamos aqui.
+  // Compras/despesas não mexem no ganho individual, mas MATERIAL_PERDIDO sim:
+  // vira Desc. Geral rateado pela equipe do navio (igual à Folha de Pagamento).
   adjustments: JobAdjustment[];
   functions: JobFunction[];
   ships: Ship[];
   employees: Employee[];
+  advances: Advance[];
+  advDiscounts: AdvanceDiscountRow[];
   loading: boolean;
 }) {
   // ── Filtros ──────────────────────────────────────────────────────────────
@@ -6859,8 +6888,15 @@ function ControleTab({
   const [employeeFilter, setEmployeeFilter] = useState<number | "TODOS">("TODOS");
   // Filtro por navio ("TODOS" = sem filtro) — só alocações daquele navio contam.
   const [shipFilter, setShipFilter] = useState<string | "TODOS">("TODOS");
+  // Filtro por função/cargo do cadastro ("TODAS" = sem filtro).
+  const [roleFilter, setRoleFilter] = useState<string>("TODAS");
   const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState<"name" | "earnings" | "poroes" | "turnos" | "ships">("earnings");
+  // Quais colunas de dinheiro aparecem. Ganho ≠ Folha (a folha é o ganho menos
+  // o Pluxee), então dá pra olhar cada um sozinho ou os dois lado a lado.
+  const [moneyView, setMoneyView] = useState<"AMBOS" | "GANHO" | "FOLHA">("AMBOS");
+  // Desc. Geral / Adiant. / Líquido — abatimentos, ligados por padrão.
+  const [showDeductions, setShowDeductions] = useState(true);
+  const [sortBy, setSortBy] = useState<"name" | "earnings" | "folha" | "liquido" | "poroes" | "turnos" | "ships">("earnings");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [detailEmp, setDetailEmp] = useState<Employee | null>(null);
 
@@ -6901,14 +6937,45 @@ function ControleTab({
       const isActive = (e.status ?? "ATIVO") === "ATIVO";
       if (statusFilter === "ATIVOS" && !isActive) continue;
       if (employeeFilter !== "TODOS" && e.id !== employeeFilter) continue;
+      if (roleFilter !== "TODAS" && (e.role || "").trim().toUpperCase() !== roleFilter) continue;
       map.set(e.id, {
         employee: e,
-        embarque: { ships: new Set(), poroes: 0, earnings: 0, allocations: 0 },
-        costado: { ships: new Set(), turnos: 0, diurnos: 0, noturnos: 0, earnings: 0, allocations: 0 },
+        embarque: { ships: new Set(), poroes: 0, earnings: 0, folha: 0, pluxee: 0, allocations: 0 },
+        costado: { ships: new Set(), turnos: 0, diurnos: 0, noturnos: 0, earnings: 0, folha: 0, pluxee: 0, allocations: 0 },
         totalEarnings: 0,
+        folha: 0, pluxee: 0, descGeral: 0, adiant: 0, liquido: 0,
+        valeBalance: employeeBalance(e.id, advances, advDiscounts),
+        jobIds: new Set(),
         lastActivity: null,
         history: [],
       });
+    }
+
+    // ── Desc. Geral por navio: material PERDIDO rateado pela equipe ─────────
+    // Mesma conta do modal de Pagamento (perda do job ÷ nº de cabeças da
+    // equipe), pra que o valor aqui bata com o da Folha de Pagamento.
+    const perdaPorJob = new Map<string, number>();
+    for (const adj of adjustments) {
+      const isPerda =
+        adj.category === "MATERIAL_PERDIDO" ||
+        (adj.category === "MATERIAL_DANIFICADO" && adj.description.startsWith("Retorno de material"));
+      if (!isPerda) continue;
+      perdaPorJob.set(adj.job_id, (perdaPorJob.get(adj.job_id) || 0) + Number(adj.amount || 0));
+    }
+    // Cabeças por job: cada colaborador conta uma vez (no Costado ele aparece
+    // uma vez por turno). Conta sobre TODAS as alocações do job, não só as
+    // filtradas — o rateio é o do navio inteiro.
+    const headcountPorJob = new Map<string, Set<number>>();
+    for (const a of allocations) {
+      if (a.employee_id == null) continue;
+      const set = headcountPorJob.get(a.job_id) || new Set<number>();
+      set.add(a.employee_id);
+      headcountPorJob.set(a.job_id, set);
+    }
+    const descGeralPorJob = new Map<string, number>();
+    for (const [jobId, perda] of perdaPorJob) {
+      const heads = headcountPorJob.get(jobId)?.size || 0;
+      if (perda > 0 && heads > 0) descGeralPorJob.set(jobId, +(perda / heads).toFixed(2));
     }
 
     // Pra contar "porões por funcionário por navio" sem duplicar quando alguém
@@ -6942,10 +7009,16 @@ function ControleTab({
 
       const rate = kind === "COSTADO" ? ctrlCostadoRate : Number(a.rate);
       const extra = Number(a.extra_value || 0);
+      // Pluxee: parte do ganho paga no cartão (vem do import da Relação de
+      // Líquidos). O que sobra é o que sai na folha — mesma conta do modal.
+      const pluxee = Number(a.pluxee_value || 0);
+      s.jobIds.add(a.job_id);
 
       if (kind === "EMBARQUE") {
         const holds = Math.max(1, Number(job?.holds_count || 1));
         const earnings = rate * holds + extra;
+        s.embarque.pluxee += pluxee;
+        s.embarque.folha += Math.max(0, earnings - pluxee);
         const seen = embarqueJobSeen.get(a.employee_id) || new Set<string>();
         // Soma porões só uma vez por (employee, job) — várias alocações no mesmo
         // job não duplicam a contagem.
@@ -6972,6 +7045,8 @@ function ControleTab({
         // Costado: cada linha é 1 turno escalado (quantity=0 é legado, vira 1).
         const qty = Math.max(1, a.quantity);
         const earnings = rate * qty + extra;
+        s.costado.pluxee += pluxee;
+        s.costado.folha += Math.max(0, earnings - pluxee);
         s.costado.turnos += qty;
         if (a.shift_period && ["19-01", "01-07"].includes(a.shift_period)) {
           s.costado.noturnos += qty;
@@ -6998,6 +7073,18 @@ function ControleTab({
     // Finaliza totais
     for (const s of map.values()) {
       s.totalEarnings = s.embarque.earnings + s.costado.earnings;
+      s.folha = s.embarque.folha + s.costado.folha;
+      s.pluxee = s.embarque.pluxee + s.costado.pluxee;
+      // Abatimentos são por NAVIO, não por alocação: cada um entra uma vez por
+      // job em que a pessoa trabalhou no período filtrado.
+      let descGeral = 0, adiant = 0;
+      for (const jobId of s.jobIds) {
+        descGeral += descGeralPorJob.get(jobId) || 0;
+        adiant += jobDiscountFor(jobId, s.employee.id, advDiscounts);
+      }
+      s.descGeral = +descGeral.toFixed(2);
+      s.adiant = +adiant.toFixed(2);
+      s.liquido = +(s.totalEarnings - s.descGeral - s.adiant).toFixed(2);
       // Ordena history mais recente primeiro
       s.history.sort((x, y) => (y.date || "").localeCompare(x.date || ""));
     }
@@ -7005,7 +7092,18 @@ function ControleTab({
     return Array.from(map.values());
   // passesPeriodFilter / allocMonthKey usam só year/month/jobs — já cobertos.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employees, allocations, jobs, ships, functions, statusFilter, employeeFilter, shipFilter, activity, year, month]);
+  }, [employees, allocations, adjustments, advances, advDiscounts, jobs, ships, functions, statusFilter, employeeFilter, roleFilter, shipFilter, activity, year, month]);
+
+  // ── Funções disponíveis pro filtro (cargo do cadastro) ─────────────────
+  const roleOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of employees) {
+      if (statusFilter === "ATIVOS" && (e.status ?? "ATIVO") !== "ATIVO") continue;
+      const r = (e.role || "").trim().toUpperCase();
+      if (r) set.add(r);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [employees, statusFilter]);
 
   // ── Navios disponíveis pro filtro (só os que têm job) ───────────────────
   const shipOptions = useMemo(() => {
@@ -7073,6 +7171,8 @@ function ControleTab({
       switch (sortBy) {
         case "name": return a.employee.name.localeCompare(b.employee.name, "pt-BR") * dir;
         case "earnings": return (a.totalEarnings - b.totalEarnings) * dir;
+        case "folha": return (a.folha - b.folha) * dir;
+        case "liquido": return (a.liquido - b.liquido) * dir;
         case "poroes": return (a.embarque.poroes - b.embarque.poroes) * dir;
         case "turnos": return (a.costado.turnos - b.costado.turnos) * dir;
         case "ships": return ((a.embarque.ships.size + a.costado.ships.size) - (b.embarque.ships.size + b.costado.ships.size)) * dir;
@@ -7086,6 +7186,11 @@ function ControleTab({
   const periodKpis = useMemo(() => {
     const workers = stats.filter((s) => s.totalEarnings > 0 || s.embarque.allocations > 0 || s.costado.allocations > 0);
     const totalPaid = stats.reduce((sum, s) => sum + s.totalEarnings, 0);
+    const totalFolha = stats.reduce((sum, s) => sum + s.folha, 0);
+    const totalPluxee = stats.reduce((sum, s) => sum + s.pluxee, 0);
+    const totalDescGeral = stats.reduce((sum, s) => sum + s.descGeral, 0);
+    const totalAdiant = stats.reduce((sum, s) => sum + s.adiant, 0);
+    const totalLiquido = stats.reduce((sum, s) => sum + s.liquido, 0);
     // Porões do período por JOB distinto: o porão é da operação/navio, não de
     // cada colaborador — somar s.embarque.poroes de todo mundo multiplicava os
     // porões do navio pelo tamanho da equipe (ex.: 7 porões × 25 pessoas = 172).
@@ -7107,6 +7212,11 @@ function ControleTab({
     return {
       workers: workers.length,
       totalPaid,
+      totalFolha,
+      totalPluxee,
+      totalDescGeral,
+      totalAdiant,
+      totalLiquido,
       totalPoroes,
       totalTurnos,
       totalHoras,
@@ -7137,6 +7247,9 @@ function ControleTab({
     return sortDir === "asc" ? "▲" : "▼";
   }
 
+  // Quantas colunas o grupo "Valores" ocupa — depende dos toggles Valores/Descontos.
+  const moneyColCount = (moneyView === "AMBOS" ? 2 : 1) + (showDeductions ? 3 : 0);
+
   const monthNames = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
   const periodLabel = month === "TODOS" ? `Ano ${year}` : `${monthNames[month]}/${year}`;
 
@@ -7148,7 +7261,8 @@ function ControleTab({
       "Nome", "Função", "Equipe", "Status",
       "Embarque - Navios", "Embarque - Porões", "Embarque - Ganho",
       "Costado - Turnos", "Costado - Horas", "Costado - Diurnos", "Costado - Noturnos", "Costado - Navios", "Costado - Ganho",
-      "Total Ganho", "Última atividade",
+      "Total Ganho", "Valor da Folha", "Pluxee", "Desc. Geral", "Adiantamento", "Líquido", "Saldo de Vales",
+      "Última atividade",
     ].join(sep);
     const rows = visibleStats.map((s) => [
       `"${s.employee.name}"`,
@@ -7165,6 +7279,12 @@ function ControleTab({
       s.costado.ships.size,
       s.costado.earnings.toFixed(2).replace(".", ","),
       s.totalEarnings.toFixed(2).replace(".", ","),
+      s.folha.toFixed(2).replace(".", ","),
+      s.pluxee.toFixed(2).replace(".", ","),
+      s.descGeral.toFixed(2).replace(".", ","),
+      s.adiant.toFixed(2).replace(".", ","),
+      s.liquido.toFixed(2).replace(".", ","),
+      s.valeBalance.toFixed(2).replace(".", ","),
       s.lastActivity ? new Date(s.lastActivity).toLocaleDateString("pt-BR") : "",
     ].join(sep));
     const csv = "﻿" + [header, ...rows].join("\n");
@@ -7276,6 +7396,21 @@ function ControleTab({
             </select>
           </div>
 
+          {/* Função (cargo do cadastro) */}
+          <div>
+            <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Função</label>
+            <select
+              value={roleFilter}
+              onChange={(e) => setRoleFilter(e.target.value)}
+              className="px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none max-w-[180px]"
+            >
+              <option value="TODAS">Todas</option>
+              {roleOptions.map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Navio específico */}
           <div>
             <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Navio</label>
@@ -7289,6 +7424,49 @@ function ControleTab({
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
+          </div>
+
+          {/* Valores mostrados: Ganho, Folha ou os dois lado a lado */}
+          <div>
+            <label
+              className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1"
+              title="Ganho = o que a operação gerou (MV1). Folha = a parte paga no pagamento (Ganho − Pluxee)."
+            >
+              Valores
+            </label>
+            <div className="flex gap-1">
+              {(["AMBOS", "GANHO", "FOLHA"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setMoneyView(v)}
+                  className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition ${
+                    moneyView === v
+                      ? "bg-primary text-white border-primary"
+                      : "border-border text-text-light hover:bg-gray-50"
+                  }`}
+                >
+                  {v === "AMBOS" ? "Ganho + Folha" : v === "GANHO" ? "Só Ganho" : "Só Folha"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Descontos (Desc. Geral, Adiant., Líquido) */}
+          <div>
+            <label className="block text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">Descontos</label>
+            <button
+              type="button"
+              onClick={() => setShowDeductions((v) => !v)}
+              title="Mostra Desc. Geral (material perdido rateado), Adiantamentos (vales) e o líquido a receber"
+              className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition ${
+                showDeductions
+                  ? "bg-primary text-white border-primary"
+                  : "border-border text-text-light hover:bg-gray-50"
+              }`}
+            >
+              {showDeductions ? "✓ Mostrando" : "Ocultos"}
+            </button>
           </div>
 
           {/* Busca */}
@@ -7343,7 +7521,13 @@ function ControleTab({
       {/* KPIs do período ─────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
         <KpiCard label={`Trabalharam em ${periodLabel}`} value={periodKpis.workers.toString()} accent="blue" />
-        <KpiCard label="Folha do período" value={brl(periodKpis.totalPaid)} accent="emerald" />
+        {/* Ganho ≠ Folha: o ganho é o que a operação gerou (MV1); a folha é a
+            parte dele que sai no pagamento (ganho − Pluxee). */}
+        <KpiCard label="Ganho do período" value={brl(periodKpis.totalPaid)} accent="emerald" />
+        <KpiCard label="Valor da folha" value={brl(periodKpis.totalFolha)} accent="purple" />
+        <KpiCard label="Pluxee (cartão)" value={brl(periodKpis.totalPluxee)} accent="purple" />
+        <KpiCard label="Descontos (geral + vales)" value={brl(periodKpis.totalDescGeral + periodKpis.totalAdiant)} accent="amber" />
+        <KpiCard label="Líquido a receber" value={brl(periodKpis.totalLiquido)} accent="emerald" />
         <KpiCard label="Porões trabalhados" value={periodKpis.totalPoroes.toString()} accent="amber" />
         <KpiCard label="Turnos Costado" value={`${periodKpis.totalTurnos} (${periodKpis.totalHoras}h)`} accent="amber" />
         <KpiCard label="Navios Embarque" value={periodKpis.shipsEmbarque.toString()} accent="blue" />
@@ -7420,11 +7604,8 @@ function ControleTab({
                 <th className="px-3 py-2 text-center text-[10px] font-semibold text-indigo-800 uppercase tracking-wider bg-indigo-50" colSpan={4}>
                   ⚓ Costado
                 </th>
-                <th
-                  className="px-3 py-2 text-right text-[10px] font-semibold text-text-light uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                  onClick={() => toggleSort("earnings")}
-                >
-                  Ganho Total {sortIcon("earnings")}
+                <th className="px-3 py-2 text-center text-[10px] font-semibold text-emerald-800 uppercase tracking-wider bg-emerald-50" colSpan={moneyColCount}>
+                  💰 Valores
                 </th>
                 <th className="px-3 py-2 text-center text-[10px] font-semibold text-text-light uppercase tracking-wider">Última</th>
               </tr>
@@ -7452,7 +7633,47 @@ function ControleTab({
                 <th className="px-2 py-1.5 text-center text-[10px] font-semibold text-indigo-800">☀️/🌙</th>
                 <th className="px-2 py-1.5 text-center text-[10px] font-semibold text-indigo-800">Navios</th>
                 <th className="px-2 py-1.5 text-right text-[10px] font-semibold text-indigo-800">Ganho</th>
-                <th></th>
+                {moneyView !== "FOLHA" && (
+                  <th
+                    className="px-3 py-1.5 text-right text-[10px] font-semibold text-emerald-800 cursor-pointer hover:bg-emerald-100"
+                    onClick={() => toggleSort("earnings")}
+                    title="Ganho total da operação (MV1) — Embarque + Costado"
+                  >
+                    Ganho {sortIcon("earnings")}
+                  </th>
+                )}
+                {moneyView !== "GANHO" && (
+                  <th
+                    className="px-3 py-1.5 text-right text-[10px] font-semibold text-purple-700 cursor-pointer hover:bg-emerald-100"
+                    onClick={() => toggleSort("folha")}
+                    title="PAGTO NA FOLHA — o ganho menos o que foi pago no cartão Pluxee. Sem import da Relação de Líquidos, é igual ao Ganho."
+                  >
+                    Folha {sortIcon("folha")}
+                  </th>
+                )}
+                {showDeductions && (
+                  <>
+                    <th
+                      className="px-2 py-1.5 text-right text-[10px] font-semibold text-red-700"
+                      title="Material perdido no navio, rateado entre a equipe"
+                    >
+                      Desc. Geral
+                    </th>
+                    <th
+                      className="px-2 py-1.5 text-right text-[10px] font-semibold text-amber-700"
+                      title="Vales descontados nos navios do período"
+                    >
+                      Adiant.
+                    </th>
+                    <th
+                      className="px-3 py-1.5 text-right text-[10px] font-semibold text-emerald-800 cursor-pointer hover:bg-emerald-100"
+                      onClick={() => toggleSort("liquido")}
+                      title="Ganho − Desc. Geral − Adiantamentos"
+                    >
+                      Líquido {sortIcon("liquido")}
+                    </th>
+                  </>
+                )}
                 <th></th>
               </tr>
             </thead>
@@ -7508,10 +7729,53 @@ function ControleTab({
                       {s.costado.earnings > 0 ? brl(s.costado.earnings) : <span className="text-text-light">—</span>}
                     </td>
 
-                    {/* Total */}
-                    <td className="px-3 py-2 text-right text-sm font-bold text-emerald-800">
-                      {s.totalEarnings > 0 ? brl(s.totalEarnings) : <span className="text-text-light font-normal">—</span>}
-                    </td>
+                    {/* Valores: Ganho / Folha / abatimentos */}
+                    {moneyView !== "FOLHA" && (
+                      <td className="px-3 py-2 text-right text-sm font-bold text-emerald-800">
+                        {s.totalEarnings > 0 ? brl(s.totalEarnings) : <span className="text-text-light font-normal">—</span>}
+                      </td>
+                    )}
+                    {moneyView !== "GANHO" && (
+                      <td className="px-3 py-2 text-right text-sm font-bold text-purple-700">
+                        {s.folha > 0 ? (
+                          <>
+                            {brl(s.folha)}
+                            {/* Pluxee só aparece quando existe — senão folha = ganho. */}
+                            {s.pluxee > 0 && (
+                              <span className="block text-[9px] text-text-light font-normal">
+                                Pluxee {brl(s.pluxee)}
+                              </span>
+                            )}
+                          </>
+                        ) : <span className="text-text-light font-normal">—</span>}
+                      </td>
+                    )}
+                    {showDeductions && (
+                      <>
+                        <td className="px-2 py-2 text-right text-sm text-red-700">
+                          {s.descGeral > 0 ? `- ${brl(s.descGeral)}` : <span className="text-text-light">—</span>}
+                        </td>
+                        <td className="px-2 py-2 text-right text-sm text-amber-700">
+                          {s.adiant > 0 ? (
+                            <>
+                              {`- ${brl(s.adiant)}`}
+                              {s.valeBalance > 0 && (
+                                <span className="block text-[9px] text-text-light font-normal" title="Saldo devedor de vales (todos os períodos)">
+                                  saldo {brl(s.valeBalance)}
+                                </span>
+                              )}
+                            </>
+                          ) : s.valeBalance > 0 ? (
+                            <span className="text-[9px] text-text-light" title="Saldo devedor de vales (todos os períodos)">
+                              saldo {brl(s.valeBalance)}
+                            </span>
+                          ) : <span className="text-text-light">—</span>}
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm font-bold text-emerald-800">
+                          {s.totalEarnings > 0 ? brl(s.liquido) : <span className="text-text-light font-normal">—</span>}
+                        </td>
+                      </>
+                    )}
 
                     {/* Última */}
                     <td className="px-3 py-2 text-center text-[10px] text-text-light whitespace-nowrap">
@@ -7536,7 +7800,19 @@ function ControleTab({
                 <td className="px-2 py-2 text-center text-text-light">—</td>
                 <td className="px-2 py-2 text-center text-indigo-800">{periodKpis.shipsCostado}</td>
                 <td className="px-2 py-2 text-right text-emerald-700">{brl(visibleStats.reduce((s, x) => s + x.costado.earnings, 0))}</td>
-                <td className="px-3 py-2 text-right text-emerald-800">{brl(periodKpis.totalPaid)}</td>
+                {moneyView !== "FOLHA" && (
+                  <td className="px-3 py-2 text-right text-emerald-800">{brl(visibleStats.reduce((s, x) => s + x.totalEarnings, 0))}</td>
+                )}
+                {moneyView !== "GANHO" && (
+                  <td className="px-3 py-2 text-right text-purple-700">{brl(visibleStats.reduce((s, x) => s + x.folha, 0))}</td>
+                )}
+                {showDeductions && (
+                  <>
+                    <td className="px-2 py-2 text-right text-red-700">{brl(visibleStats.reduce((s, x) => s + x.descGeral, 0))}</td>
+                    <td className="px-2 py-2 text-right text-amber-700">{brl(visibleStats.reduce((s, x) => s + x.adiant, 0))}</td>
+                    <td className="px-3 py-2 text-right text-emerald-800">{brl(visibleStats.reduce((s, x) => s + x.liquido, 0))}</td>
+                  </>
+                )}
                 <td></td>
               </tr>
             </tfoot>
@@ -7547,8 +7823,14 @@ function ControleTab({
       <p className="text-[10px] text-text-light italic text-center">
         Período: <strong>{periodLabel}</strong> · Filtro: <strong>{activity === "TODAS" ? "Todas atividades" : activity === "EMBARQUE" ? "Só Embarque" : "Só Costado"}</strong>
         {employeeFilter !== "TODOS" && <> · Funcionário: <strong>{employees.find((e) => e.id === employeeFilter)?.name || "?"}</strong></>}
+        {roleFilter !== "TODAS" && <> · Função: <strong>{roleFilter}</strong></>}
         {shipFilter !== "TODOS" && <> · Navio: <strong>{ships.find((s) => s.id === shipFilter)?.name || "?"}</strong></>}
         · Clique numa linha pra ver o detalhamento completo.
+        <br />
+        <strong>Ganho</strong> = o que a operação gerou (MV1 da Folha de Pagamento). <strong>Folha</strong> = a parte paga no
+        pagamento (Ganho − Pluxee); sem o import da Relação de Líquidos os dois são iguais.{" "}
+        <strong>Desc. Geral</strong> = material perdido rateado pela equipe do navio. <strong>Adiant.</strong> = vales
+        descontados nesses navios. <strong>Líquido</strong> = Ganho − Desc. Geral − Adiant.
       </p>
 
       {/* Drawer de detalhe por colaborador */}
@@ -7653,6 +7935,30 @@ function EmployeeDetailDrawer({
           </div>
         </div>
 
+        {/* Composição do pagamento — mesma leitura da Folha de Pagamento */}
+        <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-3">
+          <p className="text-xs font-bold text-emerald-900 mb-2">💰 Composição do pagamento em {periodLabel}</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 text-xs">
+            <p>Ganho (MV1): <strong className="text-emerald-800">{brl(stat.totalEarnings)}</strong></p>
+            <p title="PAGTO NA FOLHA — ganho menos o que saiu no cartão Pluxee">
+              Valor da folha: <strong className="text-purple-700">{brl(stat.folha)}</strong>
+            </p>
+            <p>Pluxee (cartão): <strong>{stat.pluxee > 0 ? brl(stat.pluxee) : "—"}</strong></p>
+            <p title="Material perdido rateado pela equipe do navio">
+              Desc. Geral: <strong className="text-red-700">{stat.descGeral > 0 ? `- ${brl(stat.descGeral)}` : "—"}</strong>
+            </p>
+            <p title="Vales descontados nos navios deste período">
+              Adiantamentos: <strong className="text-amber-700">{stat.adiant > 0 ? `- ${brl(stat.adiant)}` : "—"}</strong>
+            </p>
+            <p>Líquido: <strong className="text-emerald-800">{brl(stat.liquido)}</strong></p>
+          </div>
+          {stat.valeBalance > 0 && (
+            <p className="text-[10px] text-amber-800 mt-2 pt-2 border-t border-emerald-200">
+              ⚠️ Saldo devedor de vales: <strong>{brl(stat.valeBalance)}</strong> (total em aberto, independe do período)
+            </p>
+          )}
+        </div>
+
         {/* Breakdown Embarque vs Costado */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="bg-blue-50/60 border border-blue-200 rounded-xl p-3">
@@ -7664,6 +7970,7 @@ function EmployeeDetailDrawer({
               <p className="text-emerald-700 pt-1 border-t border-blue-200 mt-1">
                 Ganho: <strong>{brl(stat.embarque.earnings)}</strong>
               </p>
+              <p className="text-purple-700">Folha: <strong>{brl(stat.embarque.folha)}</strong></p>
             </div>
             {stat.embarque.ships.size > 0 && (
               <div className="mt-2 pt-2 border-t border-blue-200">
@@ -7692,6 +7999,7 @@ function EmployeeDetailDrawer({
               <p className="text-emerald-700 pt-1 border-t border-indigo-200 mt-1">
                 Ganho: <strong>{brl(stat.costado.earnings)}</strong>
               </p>
+              <p className="text-purple-700">Folha: <strong>{brl(stat.costado.folha)}</strong></p>
             </div>
             {stat.costado.ships.size > 0 && (
               <div className="mt-2 pt-2 border-t border-indigo-200">
