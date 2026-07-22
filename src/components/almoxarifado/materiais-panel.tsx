@@ -66,20 +66,16 @@ const KIND_CONFIG: Record<InventoryKind, KindConfig> = {
 // (o total menos o que já foi alocado); o botão Transferir separa uma quantidade
 // pra uma equipe. EQUIPE_4 = "Equipe Turbo" (mesma chave do Rancho).
 type XferTeam = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4";
-const XFER_TEAMS: { value: XferTeam; label: string; badgeCls: string }[] = [
-  { value: "EQUIPE_1", label: "Equipe 1", badgeCls: "bg-blue-100 text-blue-700" },
-  { value: "EQUIPE_2", label: "Equipe 2", badgeCls: "bg-purple-100 text-purple-700" },
-  { value: "EQUIPE_4", label: "Equipe Turbo", badgeCls: "bg-orange-100 text-orange-700" },
-];
 
 // Abas de visão (igual o Rancho): "Disponível" (no galpão) + uma por equipe. A
 // aba filtra o que a tabela mostra; não é mais a "casa" do item (assigned_team).
 type StockView = "DISPONIVEL" | XferTeam;
-const VIEW_TABS: { value: StockView; label: string; activeCls: string }[] = [
-  { value: "DISPONIVEL", label: "Disponível", activeCls: "bg-teal-600 text-white shadow-md" },
-  { value: "EQUIPE_1", label: "Equipe 1", activeCls: "bg-blue-600 text-white shadow-md" },
-  { value: "EQUIPE_2", label: "Equipe 2", activeCls: "bg-purple-600 text-white shadow-md" },
-  { value: "EQUIPE_4", label: "Equipe Turbo", activeCls: "bg-orange-600 text-white shadow-md" },
+// Emojis iguais aos das abas do Rancho (estoque-panel.tsx) pra ficar consistente.
+const VIEW_TABS: { value: StockView; label: string; emoji: string; activeCls: string }[] = [
+  { value: "DISPONIVEL", label: "Disponível", emoji: "📦", activeCls: "bg-teal-600 text-white shadow-md" },
+  { value: "EQUIPE_1", label: "Equipe 1", emoji: "🚢", activeCls: "bg-blue-600 text-white shadow-md" },
+  { value: "EQUIPE_2", label: "Equipe 2", emoji: "🚢", activeCls: "bg-purple-600 text-white shadow-md" },
+  { value: "EQUIPE_4", label: "Equipe Turbo", emoji: "🔥", activeCls: "bg-orange-600 text-white shadow-md" },
 ];
 const VIEW_LABEL: Record<string, string> = Object.fromEntries(VIEW_TABS.map((t) => [t.value, t.label]));
 
@@ -400,31 +396,19 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
       },
     },
     {
+      // Quantidade NA VISÃO atual: no "Disponível" é o que sobra no galpão (total
+      // − o que está com as equipes); numa aba de equipe é o que aquela equipe tem
+      // separado. O rótulo acompanha a aba, então some a coluna "Com as equipes".
       key: "disponivel",
-      label: "Disponível",
+      label: view === "DISPONIVEL" ? "Disponível" : VIEW_LABEL[view],
       render: (i: StockItem) => {
-        const disp = disponivelOf(i);
+        const qty = inViewQty(i);
         return (
-          <span className={`font-semibold ${disp <= 0 ? "text-text-light" : "text-teal-700"}`} title="No almoxarifado (total − o que está com as equipes)">
-            {formatQty(disp)}
-          </span>
-        );
-      },
-    },
-    {
-      key: "por_equipe",
-      label: "Com as equipes",
-      render: (i: StockItem) => {
-        const a = allocByItem.get(i.id) || {};
-        const parts = XFER_TEAMS.filter((t) => (a[t.value] || 0) > 0);
-        if (parts.length === 0) return <span className="text-text-light">—</span>;
-        return (
-          <span className="flex flex-wrap gap-1">
-            {parts.map((t) => (
-              <span key={t.value} className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-medium ${t.badgeCls}`} title={t.label}>
-                {t.label.replace("Equipe ", "").replace("Equipe", "")}: {formatQty(a[t.value])}
-              </span>
-            ))}
+          <span
+            className={`font-semibold ${qty <= 0 ? "text-text-light" : "text-teal-700"}`}
+            title={view === "DISPONIVEL" ? "No almoxarifado (total − o que está com as equipes)" : `Separado para ${VIEW_LABEL[view]}`}
+          >
+            {formatQty(qty)}
           </span>
         );
       },
@@ -556,7 +540,7 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
               onClick={() => setView(t.value)}
               className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${view === t.value ? t.activeCls : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
             >
-              {t.label}{count > 0 ? ` (${count})` : ""}
+              {t.emoji} {t.label}{count > 0 ? ` (${count})` : ""}
             </button>
           );
         })}
