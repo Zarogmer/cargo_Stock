@@ -104,6 +104,13 @@ function isServiceExtra(s: string): boolean {
   return s === "RASPAGEM" || s === "PINTURA";
 }
 
+// Funções que são SERVIÇOS extras (Raspagem/Pintura): não são cargo de ninguém,
+// qualquer colaborador do OPERACIONAL pode fazer, pago pelo valor da função. Por
+// isso o Valores e o modal de valores especiais agrupam pelo setor operacional.
+function isServicoExtra(fnName: string): boolean {
+  return isServiceExtra(fnName.trim().toUpperCase());
+}
+
 // Fluxo simplificado: tudo que não foi pago aparece como "Em Aberto" (cobre
 // também os legados ABERTO e VERIFICADO). FECHADO = "Pago".
 const STATUS_LABELS: Record<JobStatus, string> = {
@@ -1620,6 +1627,27 @@ function FuncoesTab({
               </span>
             );
           }
+          // Raspagem/Pintura são SERVIÇOS extras que qualquer colaborador do
+          // OPERACIONAL pode fazer (pago pelo valor da função, R$200/porão) —
+          // ninguém tem esse cargo, então agrupamos pelo setor, igual o
+          // Administrativo. Assim não fica "nenhum cadastrado".
+          if (isServicoExtra(f.name)) {
+            const opPeople = employees.filter((e) => e.sector === "OPERACIONAL" && (e.status ?? "ATIVO") === "ATIVO");
+            if (opPeople.length === 0) return <span className="text-text-light/60">— ninguém no operacional</span>;
+            return (
+              <button
+                type="button"
+                onClick={() => setViewEmpsFn(f)}
+                className="inline-flex items-center gap-1 px-2 py-1 -mx-2 -my-1 rounded hover:bg-blue-50 hover:text-primary transition cursor-pointer"
+                title="Ver pessoal do operacional (todos podem fazer este serviço)"
+              >
+                <span>🛠️</span>
+                <strong className="text-text">{opPeople.length}</strong>
+                <span>do operacional</span>
+                <span className="text-[10px] opacity-60">▸</span>
+              </button>
+            );
+          }
           const n = employeeCount(f.name);
           if (n === 0) return <span className="text-text-light/60">— nenhum cadastrado</span>;
           return (
@@ -2054,8 +2082,13 @@ function EmployeesByFunctionModal({
     // escritório pode estar como PENDENCIA (ex.: Lucas Nunes), o filtro "Só ativos"
     // aqui significa "não demitido" pra não esconder ninguém do setor.
     const isAdmin = target === "ADMINISTRATIVO";
+    // Raspagem/Pintura: serviço do OPERACIONAL — agrupa pelo setor operacional.
+    const isServico = isServicoExtra(fn.name);
     return employees
-      .filter((e) => (isAdmin ? e.sector === "ADMINISTRATIVO" : (e.role || "").trim().toUpperCase() === target))
+      .filter((e) =>
+        isAdmin ? e.sector === "ADMINISTRATIVO"
+        : isServico ? e.sector === "OPERACIONAL"
+        : (e.role || "").trim().toUpperCase() === target)
       .filter((e) =>
         statusFilter === "TODOS"
           ? true
@@ -2120,7 +2153,11 @@ function EmployeesByFunctionModal({
 
           <div className="text-xs text-text-light">
             {list.length === 0 ? "Nenhum colaborador" : `${list.length} ${list.length === 1 ? "colaborador" : "colaboradores"}`}
-            {" "}cuja função (role) é <strong className="text-text">{fn.name}</strong>.
+            {isServicoExtra(fn.name)
+              ? <> do <strong className="text-text">operacional</strong> — todos podem fazer <strong className="text-text">{fn.name}</strong> pelo valor da função.</>
+              : fn.name.trim().toUpperCase() === "ADMINISTRATIVO"
+                ? <> do setor <strong className="text-text">administrativo</strong>.</>
+                : <> cuja função (role) é <strong className="text-text">{fn.name}</strong>.</>}
           </div>
 
           <div className="border border-border rounded-xl divide-y divide-border max-h-[55vh] overflow-y-auto">
@@ -2334,10 +2371,14 @@ function EmployeeRatesModal({
   // "mostrar todos" libera o resto (navio escalando alguém em outra função).
   const fnTarget = (fn?.name || "").trim().toUpperCase();
   const isAdminFn = fnTarget === "ADMINISTRATIVO";
+  // Raspagem/Pintura são serviços do operacional — o grupo padrão é o setor.
+  const isServicoFn = isServicoExtra(fnTarget);
   const filtered = employees.filter((e) => {
     if (!showAll) {
-      // Administrativo agrupa pelo SETOR; as demais funções, pela role (cargo base).
-      const inGroup = isAdminFn ? e.sector === "ADMINISTRATIVO" : (e.role || "").trim().toUpperCase() === fnTarget;
+      // Administrativo/Serviço agrupam pelo SETOR; as demais, pela role (cargo base).
+      const inGroup = isAdminFn ? e.sector === "ADMINISTRATIVO"
+        : isServicoFn ? e.sector === "OPERACIONAL"
+        : (e.role || "").trim().toUpperCase() === fnTarget;
       if (!inGroup) return false;
     }
     return e.name.toLowerCase().includes(search.toLowerCase());
