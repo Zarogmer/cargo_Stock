@@ -111,7 +111,72 @@ const INITIAL_SCHED_FORM: SchedForm = {
   minute: 0,
 };
 
-// Editor de um "destino" de aviso: um grupo (opcional) + um conjunto de funções
+// Seletor de VÁRIOS grupos de destino (lista de checkboxes). O modelo já guarda
+// `groups` como array e todas as rotas de aviso iteram sobre todos — aqui o
+// usuário marca quantos grupos quiser (o aviso é postado em cada um).
+function GroupMultiSelect({
+  selected,
+  onChange,
+  groups,
+  disabled,
+  label,
+  hint,
+}: {
+  selected: NotifyGroup[];
+  onChange: (groups: NotifyGroup[]) => void;
+  groups: GroupLite[];
+  disabled: boolean;
+  label: string;
+  hint: string;
+}) {
+  const selectedJids = new Set(selected.map((g) => g.jid));
+
+  function toggle(jid: string) {
+    if (selectedJids.has(jid)) {
+      onChange(selected.filter((g) => g.jid !== jid));
+    } else {
+      const g = groups.find((x) => x.remote_jid === jid);
+      onChange([...selected, { jid, label: g?.push_name || null }]);
+    }
+  }
+
+  return (
+    <div>
+      <label className="block text-xs font-medium mb-1 text-text-light">
+        {label}{selected.length > 0 ? ` · ${selected.length} selecionado${selected.length === 1 ? "" : "s"}` : ""}
+      </label>
+      <div className="border border-border rounded-lg max-h-48 overflow-y-auto divide-y divide-border">
+        {groups.length === 0 ? (
+          <p className="text-xs text-text-light p-3">Nenhum grupo. Sincronize os grupos na aba Conversas.</p>
+        ) : (
+          groups.map((g) => {
+            const checked = selectedJids.has(g.remote_jid);
+            return (
+              <label
+                key={g.remote_jid}
+                className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(g.remote_jid)}
+                  disabled={disabled}
+                  className="w-4 h-4"
+                />
+                <span className="flex-1 text-sm truncate">
+                  👥 {g.push_name || g.remote_jid.replace("@g.us", "")}
+                </span>
+              </label>
+            );
+          })
+        )}
+      </div>
+      <p className="text-[11px] text-text-light mt-1">{hint}</p>
+    </div>
+  );
+}
+
+// Editor de um "destino" de aviso: um ou mais grupos + um conjunto de funções
 // que recebem DM. Cada função mostra a contagem de pessoas e um "ver quem está"
 // que lista os colaboradores (marcando quem está sem telefone).
 function NotifyTargetEditor({
@@ -159,30 +224,16 @@ function NotifyTargetEditor({
     });
   }
 
-  function setGroup(jid: string) {
-    if (!jid) { onChange({ ...target, groups: [] }); return; }
-    const g = groups.find((x) => x.remote_jid === jid);
-    onChange({ ...target, groups: [{ jid, label: g?.push_name || null }] });
-  }
-
   const groupBlock = (
-    <div key="grp">
-      <label className="block text-xs font-medium mb-1 text-text-light">{groupLabel}</label>
-      <select
-        value={target.groups[0]?.jid || ""}
-        onChange={(e) => setGroup(e.target.value)}
-        disabled={disabled}
-        className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
-      >
-        <option value="">Nenhum grupo</option>
-        {groups.map((g) => (
-          <option key={g.remote_jid} value={g.remote_jid}>
-            {g.push_name || g.remote_jid.replace("@g.us", "")}
-          </option>
-        ))}
-      </select>
-      <p className="text-[11px] text-text-light mt-1">{groupHint}</p>
-    </div>
+    <GroupMultiSelect
+      key="grp"
+      selected={target.groups}
+      onChange={(gs) => onChange({ ...target, groups: gs })}
+      groups={groups}
+      disabled={disabled}
+      label={groupLabel}
+      hint={groupHint}
+    />
   );
 
   const funcBlock = (
@@ -1251,36 +1302,18 @@ export default function MensagensPage() {
                 <span>Enviar a lista de embarque</span>
               </label>
 
-              <div>
-                <label className="block text-xs font-medium mb-1 text-text-light">Grupo de destino</label>
-                <select
-                  value={notifyCfg.embarqueLista?.groups[0]?.jid || ""}
-                  onChange={(e) => {
-                    const jid = e.target.value;
-                    const g = groups.find((x) => x.remote_jid === jid);
-                    setNotifyCfg((c) => {
-                      if (!c) return c;
-                      const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
-                      return {
-                        ...c,
-                        embarqueLista: { ...prev, groups: jid ? [{ jid, label: g?.push_name || null }] : [] },
-                      };
-                    });
-                  }}
-                  disabled={savingCfg || notifyCfg.embarqueLista?.enabled === false}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
-                >
-                  <option value="">Nenhum grupo</option>
-                  {groups.map((g) => (
-                    <option key={g.remote_jid} value={g.remote_jid}>
-                      {g.push_name || g.remote_jid.replace("@g.us", "")}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[11px] text-text-light mt-1">
-                  Sem grupo escolhido o botão avisa e não envia — escolha o grupo de teste primeiro, depois o oficial.
-                </p>
-              </div>
+              <GroupMultiSelect
+                selected={notifyCfg.embarqueLista?.groups ?? []}
+                onChange={(gs) => setNotifyCfg((c) => {
+                  if (!c) return c;
+                  const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                  return { ...c, embarqueLista: { ...prev, groups: gs } };
+                })}
+                groups={groups}
+                disabled={savingCfg || notifyCfg.embarqueLista?.enabled === false}
+                label="Grupos de destino"
+                hint="A lista é postada em cada grupo marcado. Sem grupo (e sem a caixinha abaixo) o botão avisa e não envia — marque o de teste primeiro, depois o oficial."
+              />
 
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input
@@ -1345,36 +1378,18 @@ export default function MensagensPage() {
                 <span>Enviar o aviso de quebrados</span>
               </label>
 
-              <div>
-                <label className="block text-xs font-medium mb-1 text-text-light">Grupo de destino</label>
-                <select
-                  value={notifyCfg.retornoMaterial?.groups[0]?.jid || ""}
-                  onChange={(e) => {
-                    const jid = e.target.value;
-                    const g = groups.find((x) => x.remote_jid === jid);
-                    setNotifyCfg((c) => {
-                      if (!c) return c;
-                      const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
-                      return {
-                        ...c,
-                        retornoMaterial: { ...prev, groups: jid ? [{ jid, label: g?.push_name || null }] : [] },
-                      };
-                    });
-                  }}
-                  disabled={savingCfg || notifyCfg.retornoMaterial?.enabled === false}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
-                >
-                  <option value="">Nenhum grupo</option>
-                  {groups.map((g) => (
-                    <option key={g.remote_jid} value={g.remote_jid}>
-                      {g.push_name || g.remote_jid.replace("@g.us", "")}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[11px] text-text-light mt-1">
-                  O aviso vai pro grupo escolhido — sem grupo (e sem a caixinha abaixo) o botão avisa e não envia.
-                </p>
-              </div>
+              <GroupMultiSelect
+                selected={notifyCfg.retornoMaterial?.groups ?? []}
+                onChange={(gs) => setNotifyCfg((c) => {
+                  if (!c) return c;
+                  const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                  return { ...c, retornoMaterial: { ...prev, groups: gs } };
+                })}
+                groups={groups}
+                disabled={savingCfg || notifyCfg.retornoMaterial?.enabled === false}
+                label="Grupos de destino"
+                hint="O aviso vai pra cada grupo marcado. Sem grupo (e sem a caixinha abaixo) o botão avisa e não envia."
+              />
 
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input
