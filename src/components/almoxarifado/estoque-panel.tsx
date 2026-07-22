@@ -32,10 +32,10 @@ const STOCK_UNITS = [
   { value: "SACO", label: "Saco" },
 ];
 
-// Abas do Rancho. EQUIPE_3 = "Disponível" (ex-"Total"; lista-mãe: cadastra os
-// alimentos e mostra a SOMA das quantidades das equipes — renomeada pra casar
-// com o botão teal "Disponível" das outras abas do Almoxarifado). EQUIPE_1/2/4 =
-// equipes reais, cada uma com suas próprias quantidades (cadastro livre).
+// Abas do Rancho. EQUIPE_3 = "Disponível" = ESTOQUE DO GALPÃO: cadastra os
+// alimentos e guarda a quantidade real no galpão (igual ao Almoxarifado). O
+// "Preparar" baixa do galpão pra equipe. EQUIPE_1/2/4 = equipes reais, cada uma
+// com suas próprias quantidades (cadastro livre).
 // EQUIPE_4 = "Equipe Turbo" (equipe maior, leva mais comida — mesmos alimentos).
 type RanchoTeam = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "EQUIPE_4";
 const RANCHO_TEAM_TABS: { key: RanchoTeam; label: string; emoji: string; activeCls: string }[] = [
@@ -88,6 +88,8 @@ export function EstoquePanel() {
   const [saving, setSaving] = useState(false);
   const [showPreparar, setShowPreparar] = useState(false);
   const [preparing, setPreparing] = useState(false);
+  // Aviso do "Preparar" quando o galpão não cobriu o Padrão de algum item.
+  const [prepararWarning, setPrepararWarning] = useState<string | null>(null);
 
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, "ESTOQUE", "create");
@@ -190,8 +192,9 @@ export function EstoquePanel() {
     return m;
   }, [items]);
 
-  // Disponível (EQUIPE_3) é a lista-mãe: cadastro dos alimentos + soma das equipes.
-  // Aqui não há "qtd atual" própria nem baixa — a quantidade é o somatório.
+  // Disponível (EQUIPE_3) é o ESTOQUE DO GALPÃO: cadastro dos alimentos + quantidade
+  // real no galpão (com setas ↑/↓ e edição). "Preparar" puxa daqui pras equipes.
+  // A soma das equipes vira só uma coluna de referência ao lado do galpão.
   const isMaster = activeTeam === "EQUIPE_3";
 
   // Linhas do Disponível: UNIÃO dos alimentos — os da lista-mãe (EQUIPE_3, editáveis)
@@ -325,36 +328,66 @@ export function EstoquePanel() {
       .eq("id", item.id);
   }
 
-  // "Preparar": copia os itens do Disponível (lista-mãe, EQUIPE_3) para a equipe
-  // escolhida, usando a quantidade padrão de cada um. Casa por nome: item
-  // existente na equipe é atualizado; o que falta é criado.
+  // "Preparar": topa a equipe escolhida até o Padrão de cada alimento, puxando a
+  // diferença do estoque do galpão (Disponível, EQUIPE_3) e BAIXANDO o galpão.
+  // Casa por nome: item existente na equipe é atualizado; o que falta é criado.
+  // Se o galpão não cobrir o Padrão, leva só o que há e acumula o nome no aviso.
   async function handlePreparar(targetTeam: "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4") {
     setPreparing(true);
+    setPrepararWarning(null);
     const actor = profile?.full_name || "Sistema";
-    const reservaItems = items.filter((i) => i.team === "EQUIPE_3");
+    const today = new Date().toISOString().split("T")[0];
+    const galpaoItems = items.filter((i) => i.team === "EQUIPE_3");
     const destItems = items.filter((i) => i.team === targetTeam);
     const norm = (s: string) => (s || "").trim().toLowerCase();
-    for (const it of reservaItems) {
-      const qty = it.default_quantity || 0;
-      const existing = destItems.find((d) => norm(d.name) === norm(it.name));
-      const payload = {
-        name: it.name,
-        category: it.category,
-        unit: it.unit,
-        quantity: qty,
-        default_quantity: it.default_quantity,
-        min_quantity: 0,
-        team: targetTeam,
-        updated_by: actor,
-      } as Record<string, unknown>;
+    const faltas: string[] = [];
+    for (const g of galpaoItems) {
+      const d = g.default_quantity || 0;
+      if (d <= 0) continue;
+      const existing = destItems.find((x) => norm(x.name) === norm(g.name));
+      const tc = existing ? Number(existing.quantity) || 0 : 0;
+      const need = Math.max(0, +(d - tc).toFixed(3));
+      if (need <= 0) continue; // equipe já está no Padrão
+      const gq = Number(g.quantity) || 0;
+      const move = Math.min(need, gq);
+      if (move <= 0) { faltas.push(g.name); continue; } // galpão vazio pra este item
+      const newTeamQty = +(tc + move).toFixed(3);
+      const newGalpao = +(gq - move).toFixed(3);
+      // Equipe recebe o que veio do galpão.
       if (existing) {
-        await db.from("stock_items").update(payload).eq("id", existing.id);
+        await db.from("stock_items")
+          .update({ quantity: newTeamQty, default_quantity: d, updated_by: actor } as Record<string, unknown>)
+          .eq("id", existing.id);
       } else {
-        await db.from("stock_items").insert(payload);
+        await db.from("stock_items").insert({
+          name: g.name, category: g.category, unit: g.unit,
+          quantity: newTeamQty, default_quantity: d, min_quantity: 0,
+          team: targetTeam, updated_by: actor,
+        } as Record<string, unknown>);
       }
+      // Galpão baixa o que saiu.
+      await db.from("stock_items")
+        .update({ quantity: newGalpao, updated_by: actor } as Record<string, unknown>)
+        .eq("id", g.id);
+      await db.from("stock_movements").insert({
+        stock_item_id: g.id,
+        movement_type: "BAIXA",
+        quantity: move,
+        movement_date: today,
+        notes: `Preparar ${ranchoTeamLabel(targetTeam)}: -${formatQty(move)} do galpão`,
+        created_by: actor,
+      } as Record<string, unknown>);
+      if (move < need) faltas.push(g.name); // topou parcial
     }
     setPreparing(false);
     setShowPreparar(false);
+    if (faltas.length > 0) {
+      const nomes = [...new Set(faltas)];
+      setPrepararWarning(
+        `Galpão insuficiente para ${nomes.length} ${nomes.length === 1 ? "item" : "itens"}: ${nomes.join(", ")}. ` +
+        `A equipe recebeu só o que havia no galpão — reponha o Disponível e prepare de novo.`,
+      );
+    }
     loadItems();
   }
 
@@ -404,14 +437,16 @@ export function EstoquePanel() {
     },
     {
       key: "quantity",
-      label: isMaster ? "Soma equipes" : "Qtd",
+      label: isMaster ? "Disponível" : "Qtd",
       render: (i: StockItem) => {
-        // No Disponível, a quantidade é o somatório das equipes (por nome).
+        // No Disponível, mostra o ESTOQUE DO GALPÃO (quantity da linha-mãe EQUIPE_3).
+        // Linhas que só existem nas equipes não têm estoque de galpão → "—".
         if (isMaster) {
-          const sum = teamSumByName.get((i.name || "").trim().toLowerCase()) || 0;
+          if (isTeamOnly(i)) return <span className="text-text-light">—</span>;
+          const disp = Number(i.quantity) || 0;
           return (
-            <span className={`font-semibold ${sum <= 0 ? "text-danger" : "text-text"}`}>
-              {formatQty(sum)} <span className="text-xs font-normal text-text-light">{unitSuffix(i.unit)}</span>
+            <span className={`font-semibold ${disp <= 0 ? "text-text-light" : "text-teal-700"}`} title="No galpão (Disponível para preparar as equipes)">
+              {formatQty(disp)} <span className="text-xs font-normal text-text-light">{unitSuffix(i.unit)}</span>
             </span>
           );
         }
@@ -425,6 +460,19 @@ export function EstoquePanel() {
         );
       },
     },
+    // Só no Disponível: quanto as equipes já seguram (referência ao lado do galpão).
+    ...(isMaster ? [{
+      key: "soma_equipes",
+      label: "Soma equipes",
+      render: (i: StockItem) => {
+        const sum = teamSumByName.get((i.name || "").trim().toLowerCase()) || 0;
+        return (
+          <span className={`text-sm ${sum <= 0 ? "text-text-light" : "text-text"}`}>
+            {formatQty(sum)} <span className="text-xs text-text-light">{unitSuffix(i.unit)}</span>
+          </span>
+        );
+      },
+    }] : []),
     {
       key: "expiry_date",
       label: "Validade",
@@ -445,23 +493,23 @@ export function EstoquePanel() {
       className: "w-24",
       render: (i: StockItem) => (
         <div className="flex items-center gap-1">
-          {canEdit && !isMaster && (
+          {canEdit && !isTeamOnly(i) && (
             <button
               onClick={(e) => { e.stopPropagation(); handleQuickAdjust(i, 1); }}
               className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded"
-              title="Aumentar 1"
+              title={isMaster ? "Aumentar 1 no galpão" : "Aumentar 1"}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
               </svg>
             </button>
           )}
-          {canBaixar && !isMaster && (
+          {canBaixar && !isTeamOnly(i) && (
             <button
               onClick={(e) => { e.stopPropagation(); handleQuickAdjust(i, -1); }}
               disabled={i.quantity <= 0}
               className="p-1.5 text-amber-600 hover:bg-amber-50 rounded disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-              title="Baixar 1"
+              title={isMaster ? "Baixar 1 do galpão" : "Baixar 1"}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
@@ -499,7 +547,14 @@ export function EstoquePanel() {
         </div>
       )}
 
-      {/* Seletor de aba — Disponível primeiro (lista-mãe + soma das equipes). */}
+      {prepararWarning && (
+        <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-sm text-amber-800 flex items-start justify-between gap-3">
+          <span>⚠️ {prepararWarning}</span>
+          <button onClick={() => setPrepararWarning(null)} className="shrink-0 text-amber-600 hover:text-amber-800 font-medium" title="Fechar">✕</button>
+        </div>
+      )}
+
+      {/* Seletor de aba — Disponível primeiro (galpão + soma das equipes). */}
       <div className="flex gap-2 flex-wrap">
         {RANCHO_TEAM_TABS.map((t) => (
           <button
@@ -652,8 +707,8 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
       name,
       category: category as StockItem["category"],
       unit,
-      // No Disponível a quantidade própria não é usada (mostra a soma das equipes).
-      quantity: isMaster ? 0 : parseDecimalBR(quantity),
+      // No Disponível a quantidade é o estoque do galpão (real, editável).
+      quantity: parseDecimalBR(quantity),
       default_quantity: parseDecimalBR(defaultQuantity),
       expiry_date: expiryDate || null,
       min_quantity: 0,
@@ -756,17 +811,15 @@ function StockFormModal({ open, onClose, onSave, item, saving, team, sourceItems
             </select>
           )}
         </div>
-        <div className={`grid ${isMaster ? "grid-cols-2" : "grid-cols-3"} gap-4`}>
+        <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-text mb-1">Qtd Padrão</label>
             <input type="text" inputMode="decimal" value={defaultQuantity} onChange={(e) => setDefaultQuantity(e.target.value)} placeholder="Ex: 10 ou 1,5" className={inputCls} />
           </div>
-          {!isMaster && (
-            <div>
-              <label className="block text-sm font-medium text-text mb-1">Qtd Atual</label>
-              <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 1,5" className={inputCls} />
-            </div>
-          )}
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">{isMaster ? "Qtd no galpão" : "Qtd Atual"}</label>
+            <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 1,5" className={inputCls} />
+          </div>
           <div>
             <label className="block text-sm font-medium text-text mb-1">Validade</label>
             <input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} className={inputCls} />
@@ -797,12 +850,12 @@ function PrepararModal({ open, onClose, onConfirm, count, saving }: {
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
 
   return (
-    <Modal open={open} onClose={onClose} title="Preparar suprimentos do Disponível">
+    <Modal open={open} onClose={onClose} title="Preparar equipe a partir do galpão">
       <div className="space-y-4">
         <p className="text-sm text-text-light">
-          Copia os <strong>{count}</strong> {count === 1 ? "item" : "itens"} do Disponível para a equipe escolhida,
-          usando a <strong>quantidade padrão</strong> de cada um. Itens com o mesmo nome na equipe são atualizados;
-          os que faltam são criados.
+          Completa a equipe escolhida até a <strong>quantidade padrão</strong> de cada alimento,
+          puxando a diferença do <strong>estoque do galpão</strong> (Disponível) e baixando o galpão.
+          Se o galpão não cobrir o padrão, a equipe recebe só o que houver e você é avisado.
         </p>
         <div>
           <label className="block text-sm font-medium text-text mb-1">Equipe destino</label>
