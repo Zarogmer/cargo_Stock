@@ -1106,7 +1106,7 @@ export function EscalacaoEstoquePage() {
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Item</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Categoria</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto vai neste navio — editável, sem mexer no kit padrão da equipe">Padrão</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto vai neste navio — editável, sem mexer no kit padrão da equipe">Materiais</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto deste material está separado pra esta equipe (transferido no Almoxarifado)">{selectedTeam ? TEAM_LABELS[selectedTeam] : "Separado"}</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Status</th>
                 </tr>
