@@ -35,12 +35,7 @@ interface NotifyGroup { jid: string; label: string | null }
 interface NotifyTarget { groups: NotifyGroup[]; functions: string[] }
 interface RetornoNotifyTarget extends NotifyTarget { enabled: boolean; dmAdmin: boolean }
 interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget; retornoMaterial: RetornoNotifyTarget; embarqueLista: RetornoNotifyTarget }
-interface FunctionLite { id: number; name: string; active?: boolean }
 interface EmployeeRoleLite { id: number; name: string; phone: string | null; role: string | null; status: string | null; sector: string | null }
-interface MemberLite { id: number; name: string; phone: string | null }
-
-// Normaliza nome de função pra comparar com Employee.role (trim + maiúsculas).
-const normFn = (s: string) => (s || "").trim().toUpperCase();
 
 // Templates de dados ao vivo que o usuário pode inserir no texto antes de enviar
 // pro grupo. Renderizados no servidor por /api/whatsapp/templates.
@@ -176,136 +171,6 @@ function GroupMultiSelect({
   );
 }
 
-// Editor de um "destino" de aviso: um ou mais grupos + um conjunto de funções
-// que recebem DM. Cada função mostra a contagem de pessoas e um "ver quem está"
-// que lista os colaboradores (marcando quem está sem telefone).
-function NotifyTargetEditor({
-  target,
-  onChange,
-  functions,
-  membersByFn,
-  groups,
-  groupFirst,
-  funcLabel,
-  funcHint,
-  groupLabel,
-  groupHint,
-  disabled,
-}: {
-  target: NotifyTarget;
-  onChange: (t: NotifyTarget) => void;
-  functions: FunctionLite[];
-  membersByFn: Map<string, MemberLite[]>;
-  groups: GroupLite[];
-  groupFirst: boolean;
-  funcLabel: string;
-  funcHint: string;
-  groupLabel: string;
-  groupHint: string;
-  disabled: boolean;
-}) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const selected = new Set(target.functions.map(normFn));
-
-  function toggleFn(name: string) {
-    const norm = normFn(name);
-    const next = selected.has(norm)
-      ? target.functions.filter((f) => normFn(f) !== norm)
-      : [...target.functions, name];
-    onChange({ ...target, functions: next });
-  }
-
-  function toggleExpand(name: string) {
-    const norm = normFn(name);
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(norm)) next.delete(norm); else next.add(norm);
-      return next;
-    });
-  }
-
-  const groupBlock = (
-    <GroupMultiSelect
-      key="grp"
-      selected={target.groups}
-      onChange={(gs) => onChange({ ...target, groups: gs })}
-      groups={groups}
-      disabled={disabled}
-      label={groupLabel}
-      hint={groupHint}
-    />
-  );
-
-  const funcBlock = (
-    <div key="fns">
-      <label className="block text-xs font-medium mb-1 text-text-light">{funcLabel}</label>
-      <div className="border border-border rounded-lg max-h-56 overflow-y-auto divide-y divide-border">
-        {functions.length === 0 ? (
-          <p className="text-xs text-text-light p-3">Nenhuma função cadastrada.</p>
-        ) : (
-          functions.map((fn) => {
-            const members = membersByFn.get(normFn(fn.name)) || [];
-            const checked = selected.has(normFn(fn.name));
-            const isOpen = expanded.has(normFn(fn.name));
-            return (
-              <div key={fn.id}>
-                <div className="flex items-center gap-2 px-3 py-2">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggleFn(fn.name)}
-                    disabled={disabled}
-                    className="w-4 h-4"
-                  />
-                  <span className="flex-1 text-sm">{fn.name}</span>
-                  <span className="text-[11px] text-text-light">
-                    {members.length} pessoa{members.length === 1 ? "" : "s"}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => toggleExpand(fn.name)}
-                    className="text-xs text-primary hover:underline"
-                  >
-                    {isOpen ? "ocultar" : "ver quem está"}
-                  </button>
-                </div>
-                {isOpen && (
-                  <div className="px-3 pb-2 pl-9 space-y-1 bg-gray-50">
-                    {members.length === 0 ? (
-                      <p className="text-xs text-text-light pt-1">Ninguém com essa função.</p>
-                    ) : (
-                      members.map((m) => {
-                        const hasPhone = !!m.phone && m.phone.trim().length >= 10;
-                        return (
-                          <div key={m.id} className="flex items-center gap-2 text-xs pt-1">
-                            <span className="flex-1">{m.name}</span>
-                            {hasPhone ? (
-                              <span className="font-mono text-text-light">{formatPhone(m.phone || "")}</span>
-                            ) : (
-                              <span className="text-amber-700">sem telefone</span>
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
-      </div>
-      <p className="text-[11px] text-text-light mt-1">{funcHint}</p>
-    </div>
-  );
-
-  return (
-    <div className="space-y-3">
-      {groupFirst ? [groupBlock, funcBlock] : [funcBlock, groupBlock]}
-    </div>
-  );
-}
-
 export default function MensagensPage() {
   const { profile } = useAuth();
   const canView = !!profile && hasModuleAccess(profile.role, "MENSAGENS");
@@ -351,7 +216,6 @@ export default function MensagensPage() {
   const [loadingCfg, setLoadingCfg] = useState(true);
   const [savingCfg, setSavingCfg] = useState(false);
   const [cfgMsg, setCfgMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-  const [cfgFunctions, setCfgFunctions] = useState<FunctionLite[]>([]);
   const [cfgEmployees, setCfgEmployees] = useState<EmployeeRoleLite[]>([]);
 
   // Mensagem de aniversário (parabéns automático às 10h, no dia do aniversário)
@@ -478,19 +342,17 @@ export default function MensagensPage() {
     }
   }, [bdayEnabled, bdayTemplate]);
 
-  // Funções (job_functions ativas) + colaboradores (com função) pra montar o
-  // seletor e o "ver quem está na função".
+  // Colaboradores (com função/setor) pra montar a lista de quem é do
+  // Administrativo (caixinha "Mandar também pro Administrativo").
   const loadFunctions = useCallback(async () => {
     try {
-      const [fnRes, empRes] = await Promise.all([
-        db.from("job_functions").select("id, name, active").order("name"),
-        db.from("employees").select("id, name, phone, role, status, sector").order("name"),
-      ]);
-      const fns = ((fnRes.data || []) as FunctionLite[]).filter((f) => f.active !== false);
-      setCfgFunctions(fns);
+      const empRes = await db
+        .from("employees")
+        .select("id, name, phone, role, status, sector")
+        .order("name");
       setCfgEmployees((empRes.data || []) as EmployeeRoleLite[]);
     } catch (err) {
-      console.error("Erro ao carregar funções:", err);
+      console.error("Erro ao carregar colaboradores:", err);
     }
   }, []);
 
@@ -561,19 +423,6 @@ export default function MensagensPage() {
     ),
     [cfgEmployees],
   );
-
-  // Mapa função (normalizada) → colaboradores ativos. Alimenta o "ver quem está".
-  const membersByFn = useMemo(() => {
-    const map = new Map<string, MemberLite[]>();
-    for (const e of cfgEmployees) {
-      if (e.status === "INATIVO") continue;
-      const key = normFn(e.role || "");
-      if (!key) continue;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push({ id: e.id, name: e.name, phone: e.phone });
-    }
-    return map;
-  }, [cfgEmployees]);
 
   async function saveNotifyConfig() {
     if (!notifyCfg) return;
@@ -1241,18 +1090,13 @@ export default function MensagensPage() {
                 <p className="text-sm font-semibold">🛒 Nova solicitação</p>
                 <p className="text-[11px] text-text-light">Disparado quando alguém cria uma solicitação de compra.</p>
               </div>
-              <NotifyTargetEditor
-                target={notifyCfg.novaSolicitacao}
-                onChange={(t) => setNotifyCfg((c) => (c ? { ...c, novaSolicitacao: t } : c))}
-                functions={cfgFunctions}
-                membersByFn={membersByFn}
+              <GroupMultiSelect
+                selected={notifyCfg.novaSolicitacao.groups}
+                onChange={(gs) => setNotifyCfg((c) => (c ? { ...c, novaSolicitacao: { groups: gs, functions: [] } } : c))}
                 groups={groups}
-                groupFirst={false}
-                funcLabel="Funções que recebem o aviso (no WhatsApp particular)"
-                funcHint="Cada pessoa dessas funções recebe a mensagem no WhatsApp dela."
-                groupLabel="Grupo (opcional)"
-                groupHint="Se escolher um grupo, o aviso também é postado nele."
                 disabled={savingCfg}
+                label="Grupos de destino"
+                hint="O aviso é postado em cada grupo marcado. Sem grupo, ninguém é avisado."
               />
             </div>
 
@@ -1261,18 +1105,13 @@ export default function MensagensPage() {
                 <p className="text-sm font-semibold">✅ Compra concluída</p>
                 <p className="text-[11px] text-text-light">Disparado quando a solicitação é aprovada e a compra registrada.</p>
               </div>
-              <NotifyTargetEditor
-                target={notifyCfg.compraConcluida}
-                onChange={(t) => setNotifyCfg((c) => (c ? { ...c, compraConcluida: t } : c))}
-                functions={cfgFunctions}
-                membersByFn={membersByFn}
+              <GroupMultiSelect
+                selected={notifyCfg.compraConcluida.groups}
+                onChange={(gs) => setNotifyCfg((c) => (c ? { ...c, compraConcluida: { groups: gs, functions: [] } } : c))}
                 groups={groups}
-                groupFirst={true}
-                groupLabel="Grupo de destino"
-                groupHint="Sem grupo escolhido, usamos o grupo “Compras” padrão."
-                funcLabel="Funções que também recebem (opcional)"
-                funcHint="Além do grupo, cada pessoa dessas funções recebe no WhatsApp dela."
                 disabled={savingCfg}
+                label="Grupos de destino"
+                hint="A compra concluída é postada em cada grupo marcado. Sem grupo escolhido, usamos o grupo “Compras” padrão."
               />
             </div>
 
