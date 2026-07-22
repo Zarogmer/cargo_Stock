@@ -647,6 +647,21 @@ export default function NaviosPage() {
         .update(payload)
         .eq("id", editingShip.id);
       if (error) { setFormError(error.message); setSaving(false); return; }
+      // Sincroniza o Pagamento (Job) com o cadastro do navio: o navio é a fonte
+      // da verdade. Sem isso, editar porões/cliente/carga/porto/datas no navio
+      // não refletia no Financeiro (o job guardava o valor antigo). Só campos
+      // que vêm do navio — contract_value/status do pagamento não são tocados.
+      const jobSync: Record<string, unknown> = {
+        name: payload.name,
+        client: payload.client_name,
+        cargo_type: payload.cargo_type,
+        port: payload.port,
+        holds_count: payload.holds_count,
+      };
+      // start_date é NOT NULL no Job — só sobrescreve se o navio tem chegada.
+      if (payload.arrival_date) jobSync.start_date = payload.arrival_date;
+      if (payload.departure_date) jobSync.end_date = payload.departure_date;
+      await db.from("jobs").update(jobSync).eq("ship_id", editingShip.id);
       // Navio já concluído: mantém o end_date do(s) job(s) em sincronia com a
       // saída editada, senão o Financeiro continua com a data antiga.
       if (payload.status === "CONCLUIDO") {
