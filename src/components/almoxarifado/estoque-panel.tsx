@@ -488,7 +488,7 @@ export function EstoquePanel() {
           return (
             <button
               key={t.key}
-              onClick={() => setActiveTeam(t.key)}
+              onClick={() => { setActiveTeam(t.key); setFilterCategory("TODOS"); }}
               className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTeam === t.key ? t.activeCls : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
             >
               {t.emoji} {t.label}{count > 0 ? ` (${count})` : ""}
