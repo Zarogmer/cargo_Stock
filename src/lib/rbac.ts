@@ -329,6 +329,7 @@ export const NAV_ITEMS: NavItem[] = [
           { label: "Aviso Médico", href: "/colaboradores?tab=documentos&doc=aviso-medico" },
           { label: "Recibo de Pagamento", href: "/colaboradores?tab=documentos&doc=recibo-pagamento" },
           { label: "Folha de Ponto", href: "/colaboradores?tab=documentos&doc=folha-ponto" },
+          { label: "Listagem", href: "/colaboradores?tab=documentos&doc=listagem" },
         ],
       },
     ],

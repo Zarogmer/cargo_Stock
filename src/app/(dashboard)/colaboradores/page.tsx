@@ -590,6 +590,7 @@ export default function ColaboradoresPage() {
     "aviso-medico": "Aviso Médico",
     "recibo-pagamento": "Recibo de Pagamento",
     "folha-ponto": "Folha de Ponto",
+    "listagem": "Listagem",
   };
   const docCrumb = initialTab === "documentos" ? docSubLabel[docSub || "dds"] : null;
 
