@@ -621,6 +621,14 @@ export default function NaviosPage() {
       boardingSituation === "PERSONALIZADO" && form.boarding_custom_text.trim()
         ? form.boarding_custom_text.trim()
         : null;
+    // Reabrir navio: um navio CONCLUIDO que teve a Data de Término apagada volta
+    // a ATIVO (EM_OPERACAO) — reaparece no Embarque/Retorno e o job perde o
+    // end_date (sai do fechamento do Financeiro). Só quando o usuário não mudou
+    // o status na mão (deixou CONCLUIDO e limpou o término).
+    const reopening = !!editingShip
+      && editingShip.status === "CONCLUIDO"
+      && form.status === "CONCLUIDO"
+      && !form.departure_date;
     const payload = {
       // Nome do navio SEMPRE em caixa alta — telas, WhatsApp, documentos e o
       // Job financeiro (que copia este nome) contam com isso.
@@ -628,7 +636,7 @@ export default function NaviosPage() {
       arrival_date: form.arrival_date || null,
       departure_date: form.departure_date || null,
       port: form.port.trim() || null,
-      status: form.status,
+      status: reopening ? "EM_OPERACAO" : form.status,
       assigned_team: form.assigned_team || null,
       cargo_type: form.cargo_type.trim() || null,
       holds_count: isCostado ? null : holdsParsed,
@@ -661,6 +669,8 @@ export default function NaviosPage() {
       // start_date é NOT NULL no Job — só sobrescreve se o navio tem chegada.
       if (payload.arrival_date) jobSync.start_date = payload.arrival_date;
       if (payload.departure_date) jobSync.end_date = payload.departure_date;
+      // Reabrindo: limpa o end_date do job pra sair do fechamento do Financeiro.
+      if (reopening) jobSync.end_date = null;
       await db.from("jobs").update(jobSync).eq("ship_id", editingShip.id);
       // Navio já concluído: mantém o end_date do(s) job(s) em sincronia com a
       // saída editada, senão o Financeiro continua com a data antiga.
@@ -2019,7 +2029,8 @@ export default function NaviosPage() {
                     className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
                   />
                   <p className="text-[10px] text-text-light mt-1">
-                    🏁 Navio já concluído — corrija o término aqui. A data também é atualizada no Financeiro.
+                    🏁 Navio já concluído — corrija o término aqui (a data também é atualizada no Financeiro).
+                    {" "}Apagar a data <strong>reabre</strong> o navio (volta pra Em Operação e aparece de novo no Embarque/Retorno).
                   </p>
                 </div>
               )}
