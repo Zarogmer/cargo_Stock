@@ -89,6 +89,9 @@ export function EscalacaoEstoquePage() {
 
   const [ships, setShips] = useState<Ship[]>([]);
   const [selectedShip, setSelectedShip] = useState<string>("");
+  // Mostrar navios finalizados (Concluído/Cancelado) no seletor — igual à aba
+  // Escalação. Por padrão só os ativos (Agendado / Em Operação).
+  const [showFinished, setShowFinished] = useState(false);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [kitItems, setKitItems] = useState<KitItem[]>([]);
   const [overrides, setOverrides] = useState<ListOverride[]>([]);
@@ -127,7 +130,7 @@ export function EscalacaoEstoquePage() {
     setLoading(true);
     try {
       const [shipsRes, stockRes, kitRes, retRes, ovrRes, allocRes] = await Promise.all([
-        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO"]).order("arrival_date"),
+        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]).order("arrival_date"),
         db.from("stock_items").select("*").order("name"),
         db.from("embark_kit_items").select("*, stock_items(id, name, quantity, location, unit)"),
         db.from("material_returns").select("*, material_return_items(id, return_id, stock_item_id, item_name, went_qty, returned_qty, broken_qty, lost_qty, note)").order("created_at", { ascending: false }),
@@ -149,9 +152,16 @@ export function EscalacaoEstoquePage() {
 
   useEffect(() => { loadData(); }, [loadData, pathname]);
 
+  // Navio "ativo" = ainda em andamento (Agendado / Em Operação). Finalizados
+  // (Concluído / Cancelado) só aparecem com o toggle "mostrar finalizados".
+  const isActiveShip = (s: Ship) => s.status === "AGENDADO" || s.status === "EM_OPERACAO";
+  const visibleShips = showFinished ? ships : ships.filter(isActiveShip);
+
   useEffect(() => {
-    if (ships.length > 0 && !selectedShip) {
-      setSelectedShip(ships[0].id);
+    // Auto-seleciona o 1º navio ativo (não um finalizado que veio junto na query).
+    if (!selectedShip) {
+      const first = ships.find(isActiveShip) || ships[0];
+      if (first) setSelectedShip(first.id);
     }
   }, [ships, selectedShip]);
 
@@ -416,6 +426,18 @@ export function EscalacaoEstoquePage() {
 
   async function handleEmbarcar() {
     if (!currentShip || !selectedTeam) return;
+    // Um embarque por navio: só embarca quem está AGENDADO. Depois de embarcar o
+    // navio vira EM_OPERACAO (e no fim CONCLUIDO), então clicar de novo não baixa
+    // o estoque duas vezes.
+    if (currentShip.status !== "AGENDADO") {
+      setConfirmEmbark(false);
+      setEmbarkMsg(
+        currentShip.status === "CONCLUIDO"
+          ? "✅ Este navio já foi concluído — não dá pra embarcar de novo."
+          : "⚓ Este navio já embarcou (Em Operação) — não dá pra embarcar de novo. Se precisar, faça o Retorno.",
+      );
+      return;
+    }
     // Trava de controle: com item faltando, não baixa nada. Vale mesmo se o
     // botão for burlado (estado antigo, clique duplo) — a baixa parcial é o
     // que deixava o Estoque mentindo.
@@ -818,6 +840,13 @@ export function EscalacaoEstoquePage() {
         autoNote += " ⚠️ Não consegui lançar a despesa de material perdido no navio.";
       }
 
+      // Retorno confirmado FECHA o navio: vira CONCLUIDO e sai da lista ativa
+      // (só reaparece com "mostrar finalizados"). Assim não há um 2º retorno.
+      if (currentShip.status !== "CONCLUIDO") {
+        await db.from("ships").update({ status: "CONCLUIDO" } as any).eq("id", selectedShip);
+        autoNote += " ✅ Navio concluído.";
+      }
+
       setReturnMsg(baseMsg + autoNote);
       loadData();
     } catch (err) {
@@ -966,9 +995,11 @@ export function EscalacaoEstoquePage() {
       <h1 className="text-2xl font-bold text-text">Embarque/Retorno 📦</h1>
 
       <ShipSelector
-        ships={ships}
+        ships={visibleShips}
         selectedShip={selectedShip}
         onSelect={setSelectedShip}
+        showFinished={showFinished}
+        onToggleFinished={setShowFinished}
       />
 
       {/* Abas: Embarque (preparar/baixar) x Retorno (conferir o que voltou) */}
@@ -1017,20 +1048,31 @@ export function EscalacaoEstoquePage() {
               {sendingEmbarkList ? "Enviando..." : "📨 Enviar lista pro WhatsApp"}
             </Button>
             {/* Com item faltando o Embarcar fica travado: embarque é controle,
-                não dá pra "tirar do estoque" o que não tem. */}
-            <Button
-              size="sm"
-              variant="warning"
-              onClick={() => setConfirmEmbark(true)}
-              disabled={hasMissing}
-              title={
-                hasMissing
-                  ? `Faltam ${missingNames.length} item(ns) no Estoque: ${missingSummary}`
-                  : "Baixa o kit e o rancho do Estoque e avisa o grupo no WhatsApp"
-              }
-            >
-              ⚓ Embarcar
-            </Button>
+                não dá pra "tirar do estoque" o que não tem. Só embarca AGENDADO
+                (um embarque por navio); depois vira Em Operação/Concluído. */}
+            {currentShip?.status === "AGENDADO" ? (
+              <Button
+                size="sm"
+                variant="warning"
+                onClick={() => setConfirmEmbark(true)}
+                disabled={hasMissing}
+                title={
+                  hasMissing
+                    ? `Faltam ${missingNames.length} item(ns) no Estoque: ${missingSummary}`
+                    : "Baixa o kit e o rancho do Estoque e avisa o grupo no WhatsApp"
+                }
+              >
+                ⚓ Embarcar
+              </Button>
+            ) : (
+              <span className="text-xs font-medium px-3 py-2 rounded-lg bg-gray-100 text-text-light">
+                {currentShip?.status === "CONCLUIDO"
+                  ? "✅ Navio concluído"
+                  : currentShip?.status === "CANCELADO"
+                    ? "🚫 Navio cancelado"
+                    : "⚓ Já embarcado (Em Operação) — faça o Retorno na aba ao lado"}
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -1068,6 +1110,7 @@ export function EscalacaoEstoquePage() {
           saving={savingReturn}
           sending={sendingWhats}
           canEdit={canEmbarcar}
+          concluded={!!currentShip && !isActiveShip(currentShip)}
           message={returnMsg}
           history={existingReturn ? [existingReturn] : []}
           editing={!!existingReturn}
@@ -1331,7 +1374,7 @@ interface ReturnKitRow { id: number; stock_item_id: number; estName: string; nee
 
 function RetornoSection({
   shipName, team, teamKit, ranchoKit, draft, setDraft, notes, setNotes,
-  onSave, onSend, onDownload, downloading, saving, sending, canEdit, message, history, editing,
+  onSave, onSend, onDownload, downloading, saving, sending, canEdit, concluded, message, history, editing,
 }: {
   shipName: string;
   team: string;
@@ -1348,11 +1391,16 @@ function RetornoSection({
   saving: boolean;
   sending: boolean;
   canEdit: boolean;
+  // true = navio já concluído (retorno confirmado): campos travados e sem
+  // reconfirmar (um retorno por navio).
+  concluded: boolean;
   message: string | null;
   history: MaterialReturn[];
   editing: boolean;
 }) {
   const numCls = "w-16 px-2 py-1 border border-border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40";
+  // Campos travados: sem permissão OU navio já concluído (um retorno por navio).
+  const locked = !canEdit || concluded;
   // Listas recolhíveis: materiais e rancho.
   const [showMat, setShowMat] = useState(true);
   const [showRancho, setShowRancho] = useState(true);
@@ -1396,7 +1444,7 @@ function RetornoSection({
                     <td className="px-4 py-2.5 font-medium">{k.estName}</td>
                     <td className="px-4 py-2.5 text-center text-text-light">{k.need}</td>
                     <td className="px-4 py-2.5 text-center">
-                      <input type="number" min={0} step={1} value={d.returned} disabled={!canEdit}
+                      <input type="number" min={0} step={1} value={d.returned} disabled={locked}
                         onChange={(e) => {
                           const v = e.target.value;
                           const ret = parseInt(v);
@@ -1410,7 +1458,7 @@ function RetornoSection({
                         className={numCls} placeholder="0" />
                     </td>
                     <td className="px-4 py-2.5 text-center">
-                      <input type="number" min={0} step={1} value={d.broken} disabled={!canEdit}
+                      <input type="number" min={0} step={1} value={d.broken} disabled={locked}
                         onChange={(e) => {
                           const v = e.target.value;
                           const bro = parseInt(v) || 0;
@@ -1422,12 +1470,12 @@ function RetornoSection({
                         className={`${numCls} ${(parseInt(d.broken) || 0) > 0 ? "border-amber-300 text-amber-700" : ""}`} placeholder="0" />
                     </td>
                     <td className="px-4 py-2.5 text-center">
-                      <input type="number" min={0} step={1} value={d.lost} disabled={!canEdit}
+                      <input type="number" min={0} step={1} value={d.lost} disabled={locked}
                         onChange={(e) => setDraft(k.stock_item_id, { lost: e.target.value })}
                         className={`${numCls} ${(parseInt(d.lost) || 0) > 0 ? "border-red-300 text-red-700 font-semibold" : ""}`} placeholder="0" />
                     </td>
                     <td className="px-4 py-2.5">
-                      <input type="text" value={d.note} disabled={!canEdit}
+                      <input type="text" value={d.note} disabled={locked}
                         onChange={(e) => setDraft(k.stock_item_id, { note: e.target.value })}
                         placeholder={labels.obsPlaceholder}
                         className="w-full px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
@@ -1453,7 +1501,12 @@ function RetornoSection({
           </span>
         </div>
 
-        {editing && (
+        {concluded ? (
+          <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+            ✅ Navio finalizado — o retorno já foi fechado (aparece em &ldquo;mostrar finalizados&rdquo;).
+            Os campos ficam só pra consulta.
+          </p>
+        ) : editing && (
           <p className="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
             ✏️ Este navio já tem um retorno confirmado — os campos mostram o que foi salvo.
             Ajuste o que precisar e confirme de novo: o Estoque é corrigido pela diferença.
@@ -1496,7 +1549,7 @@ function RetornoSection({
           empty: "Nenhum alimento cadastrado no Rancho desta equipe", emptyIcon: "🛒",
         })}
 
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} disabled={!canEdit} rows={2}
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} disabled={locked} rows={2}
           placeholder="Observações gerais do retorno (opcional)..."
           className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 resize-none" />
 
@@ -1517,8 +1570,8 @@ function RetornoSection({
             <Button size="sm" variant="secondary" onClick={onSend} disabled={sending || saving}>
               {sending ? "Enviando..." : "📨 Enviar ocorrências pro WhatsApp"}
             </Button>
-            <Button size="sm" onClick={onSave} disabled={saving || sending}>
-              {saving ? "Confirmando..." : "✅ Confirmar Retorno"}
+            <Button size="sm" onClick={onSave} disabled={saving || sending || concluded}>
+              {saving ? "Confirmando..." : concluded ? "✅ Retorno concluído" : "✅ Confirmar Retorno"}
             </Button>
           </div>
         )}
@@ -1587,11 +1640,13 @@ function RetornoSection({
 }
 
 function ShipSelector({
-  ships, selectedShip, onSelect,
+  ships, selectedShip, onSelect, showFinished, onToggleFinished,
 }: {
   ships: Ship[];
   selectedShip: string;
   onSelect: (id: string) => void;
+  showFinished: boolean;
+  onToggleFinished: (v: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -1615,11 +1670,13 @@ function ShipSelector({
   });
 
   function statusBadge(status: string) {
-    return status === "AGENDADO"
-      ? { cls: "bg-blue-100 text-blue-700", label: "Agendado", icon: "📅" }
-      : status === "EM_OPERACAO"
-        ? { cls: "bg-amber-100 text-amber-700", label: "Em Operação", icon: "⚓" }
-        : { cls: "bg-gray-100 text-gray-700", label: status, icon: "🚢" };
+    switch (status) {
+      case "AGENDADO": return { cls: "bg-blue-100 text-blue-700", label: "Agendado", icon: "📅" };
+      case "EM_OPERACAO": return { cls: "bg-amber-100 text-amber-700", label: "Em Operação", icon: "⚓" };
+      case "CONCLUIDO": return { cls: "bg-emerald-100 text-emerald-700", label: "Concluído", icon: "✅" };
+      case "CANCELADO": return { cls: "bg-red-100 text-red-700", label: "Cancelado", icon: "🚫" };
+      default: return { cls: "bg-gray-100 text-gray-700", label: status, icon: "🚢" };
+    }
   }
 
   return (
@@ -1726,8 +1783,19 @@ function ShipSelector({
               })
             )}
           </div>
-          <div className="px-3 py-2 bg-gray-50 border-t border-border text-[10px] text-text-light text-center">
-            {ships.length} navio(s) disponível(eis) (Agendado / Em Operação)
+          <div className="px-3 py-2 bg-gray-50 border-t border-border flex items-center justify-between gap-2">
+            <span className="text-[10px] text-text-light">
+              {ships.length} navio(s) {showFinished ? "(inclui finalizados)" : "(Agendado / Em Operação)"}
+            </span>
+            <label className="flex items-center gap-1.5 text-[11px] text-text-light cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showFinished}
+                onChange={(e) => onToggleFinished(e.target.checked)}
+                className="w-3.5 h-3.5"
+              />
+              Mostrar finalizados
+            </label>
           </div>
         </div>
       )}
