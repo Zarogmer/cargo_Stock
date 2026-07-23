@@ -383,30 +383,23 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
       render: (i: StockItem) => <span className="font-mono text-xs text-text-light">{codeMap.get(i.id) || "—"}</span>,
     },
     {
-      key: "quantity",
-      label: "Total",
-      render: (i: StockItem) => {
-        const belowMin = i.min_quantity > 0 && i.quantity < i.min_quantity;
-        const isEmpty = i.quantity <= 0;
-        return (
-          <span className={`font-semibold ${isEmpty || belowMin ? "text-danger" : ""}`} title={belowMin ? `Abaixo do mínimo (${formatQty(i.min_quantity)})` : undefined}>
-            {formatQty(i.quantity)}
-          </span>
-        );
-      },
-    },
-    {
       // Quantidade NA VISÃO atual: no "Disponível" é o que sobra no galpão (total
       // − o que está com as equipes); numa aba de equipe é o que aquela equipe tem
-      // separado. O rótulo acompanha a aba, então some a coluna "Com as equipes".
+      // separado. O rótulo acompanha a aba. Não mostramos mais o "Total" (soma de
+      // tudo) pra não confundir com o que é da visão.
       key: "disponivel",
       label: view === "DISPONIVEL" ? "Disponível" : VIEW_LABEL[view],
       render: (i: StockItem) => {
         const qty = inViewQty(i);
+        const belowMin = view === "DISPONIVEL" && i.min_quantity > 0 && qty < i.min_quantity;
         return (
           <span
-            className={`font-semibold ${qty <= 0 ? "text-text-light" : "text-teal-700"}`}
-            title={view === "DISPONIVEL" ? "No almoxarifado (total − o que está com as equipes)" : `Separado para ${VIEW_LABEL[view]}`}
+            className={`font-semibold ${belowMin ? "text-danger" : qty <= 0 ? "text-text-light" : "text-teal-700"}`}
+            title={
+              belowMin
+                ? `Abaixo do mínimo (${formatQty(i.min_quantity)})`
+                : view === "DISPONIVEL" ? "No almoxarifado (total − o que está com as equipes)" : `Separado para ${VIEW_LABEL[view]}`
+            }
           >
             {formatQty(qty)}
           </span>
