@@ -104,6 +104,9 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
   const [view, setView] = useState<StockView>("DISPONIVEL");
   // Item cujo botão "Transferir" foi clicado — abre o modal de transferência.
   const [transferItem, setTransferItem] = useState<StockItem | null>(null);
+  // Item cujo botão "Duplicar" foi clicado — copia uma qtd pra uma equipe,
+  // puxando do Disponível (não infla o total).
+  const [duplicateItem, setDuplicateItem] = useState<StockItem | null>(null);
 
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, cfg.module, "create");
@@ -451,7 +454,7 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
     {
       key: "actions",
       label: "",
-      className: "w-32",
+      className: "w-40",
       render: (i: StockItem) => (
         <div className="flex items-center gap-1">
           {canEdit && (
@@ -463,6 +466,18 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m4 6H4m0 0l4 4m-4-4l4-4" />
+              </svg>
+            </button>
+          )}
+          {canEdit && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setDuplicateItem(i); }}
+              disabled={disponivelOf(i) <= 0}
+              className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              title="Duplicar pra uma equipe (puxa do Disponível, sem inflar o estoque)"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
               </svg>
             </button>
           )}
@@ -593,6 +608,21 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
         saving={saving}
       />
 
+      <DuplicateModal
+        item={duplicateItem}
+        code={duplicateItem ? codeMap.get(duplicateItem.id) || null : null}
+        // Quantidade sugerida = o que o item tem na visão atual (é o que se está
+        // "duplicando"); limitada ao Disponível pra não inflar o estoque.
+        currentQty={duplicateItem ? inViewQty(duplicateItem) : 0}
+        disponivel={duplicateItem ? disponivelOf(duplicateItem) : 0}
+        alloc={duplicateItem ? allocByItem.get(duplicateItem.id) || {} : {}}
+        onClose={() => setDuplicateItem(null)}
+        // Duplicar = alocar pra equipe puxando do Disponível (mesma mecânica do
+        // Transferir Disponível→equipe): a origem não é mexida, o total não muda.
+        onConfirm={(item, team, qty) => handleTransfer(item, "DISPONIVEL", team, qty)}
+        saving={saving}
+      />
+
       <ConfirmDialog
         open={!!deleteItem}
         onClose={() => setDeleteItem(null)}
@@ -705,6 +735,112 @@ function TransferModal({ item, source, code, alloc, disponivel, onClose, onTrans
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={!valid || saving}>
             {saving ? "Transferindo..." : "Transferir"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// Modal de "Duplicar": copia uma quantidade do item pra uma EQUIPE, puxando do
+// Disponível. O item é o mesmo (mesmo nome/código/valor) — não cria item novo e
+// não infla o total (a qtd sai do Disponível, limitada ao que há nele). Útil pra
+// replicar numa equipe o que outra já tem, sem mexer na origem.
+function DuplicateModal({ item, code, currentQty, disponivel, alloc, onClose, onConfirm, saving }: {
+  item: StockItem | null;
+  code: string | null;
+  currentQty: number;
+  disponivel: number;
+  alloc: Record<string, number>;
+  onClose: () => void;
+  onConfirm: (item: StockItem, team: XferTeam, qty: number) => void;
+  saving: boolean;
+}) {
+  const teams: XferTeam[] = ["EQUIPE_1", "EQUIPE_2", "EQUIPE_4"];
+  const [dest, setDest] = useState<XferTeam>("EQUIPE_1");
+  const [qty, setQty] = useState("");
+
+  // Ao (re)abrir, sugere a qtd da visão atual (o que se está duplicando),
+  // limitada ao Disponível.
+  useEffect(() => {
+    if (item) {
+      setQty(formatQty(Math.min(currentQty > 0 ? currentQty : disponivel, disponivel)));
+      setDest("EQUIPE_1");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item]);
+
+  if (!item) return null;
+  const parsed = parseDecimalBR(qty);
+  const valid = parsed > 0 && parsed <= disponivel + 1e-9;
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
+
+  return (
+    <Modal open={!!item} onClose={onClose} title="Duplicar para uma equipe">
+      <form
+        onSubmit={(e) => { e.preventDefault(); if (valid) onConfirm(item, dest, parsed); }}
+        className="space-y-4"
+      >
+        <div className="rounded-lg border border-border bg-gray-50 px-3 py-2 text-sm">
+          <p className="font-medium text-text">
+            {item.name}
+            {code && <span className="ml-2 font-mono text-xs text-text-light">{code}</span>}
+          </p>
+          <p className="text-xs text-text-light mt-0.5">
+            No Disponível: <strong className="text-teal-700">{formatQty(disponivel)}</strong> · Total do item {formatQty(item.quantity)}
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Duplicar para</label>
+          <div className="flex gap-1 flex-wrap">
+            {teams.map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setDest(d)}
+                className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition ${
+                  dest === d ? "bg-primary text-white border-primary" : "border-border text-text-light hover:bg-gray-50"
+                }`}
+              >
+                {VIEW_LABEL[d]}{(alloc[d] || 0) > 0 ? ` (${formatQty(alloc[d])})` : ""}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Quantidade</label>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={qty}
+            onChange={(e) => setQty(e.target.value)}
+            autoFocus
+            className={inputCls}
+          />
+          <div className="mt-1.5 flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-[11px] text-text-light">
+              {valid
+                ? <>Vão <strong>{formatQty(parsed)}</strong> pra {VIEW_LABEL[dest]} (saem do Disponível). O item de origem não muda.</>
+                : <span className="text-amber-700">Informe um valor entre 1 e {formatQty(disponivel)} (o que há no Disponível).</span>}
+            </p>
+            {disponivel > 0 && (
+              <button
+                type="button"
+                onClick={() => setQty(formatQty(disponivel))}
+                className="text-[11px] font-medium text-primary hover:underline"
+              >
+                Tudo ({formatQty(disponivel)})
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex gap-3 justify-end pt-1">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={!valid || saving}>
+            {saving ? "Duplicando..." : "Duplicar"}
           </Button>
         </div>
       </form>
