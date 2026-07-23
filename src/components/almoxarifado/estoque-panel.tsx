@@ -149,11 +149,6 @@ export function EstoquePanel() {
     (name: string, team: RanchoTeam) => Number(teamRowByName.get(norm(name))?.get(team)?.quantity) || 0,
     [teamRowByName],
   );
-  // Total do alimento = galpão + o que está com as equipes.
-  const totalQty = useCallback(
-    (name: string) => disponivelQty(name) + REAL_TEAMS.reduce((s, t) => s + teamQty(name, t), 0),
-    [disponivelQty, teamQty],
-  );
   // Linhas da aba Disponível: UNIÃO dos alimentos — a linha-mãe do galpão (EQUIPE_3)
   // + os que só existem em equipes (representante = 1ª linha achada). Deduplicado
   // por nome; a linha-mãe tem prioridade como representante.
@@ -364,23 +359,24 @@ export function EstoquePanel() {
       ),
     },
     {
-      key: "total",
-      label: "Total",
+      // Padrão (quanto o alimento deve ter) — único por alimento, mora na linha-mãe
+      // do galpão; cai pro default_quantity da própria linha se não houver galpão.
+      key: "padrao",
+      label: "Padrão",
       render: (i: StockItem) => {
-        const tot = totalQty(i.name);
+        const padrao = Number(galpaoByName.get(norm(i.name))?.default_quantity ?? i.default_quantity) || 0;
         return (
-          <span className={`font-semibold ${tot <= 0 ? "text-text-light" : ""}`} title="Total do alimento (galpão + o que está com as equipes)">
-            {formatQty(tot)} <span className="text-xs font-normal text-text-light">{unitSuffix(i.unit)}</span>
+          <span className="text-text-light">
+            {padrao ? `${formatQty(padrao)} ${unitSuffix(i.unit)}` : "—"}
           </span>
         );
       },
     },
     {
-      // Quantidade NA VISÃO atual: no "Disponível" é o que está no galpão (não
-      // separado); numa aba de equipe é o que aquela equipe tem. O rótulo acompanha
-      // a aba, como no resto do Almoxarifado.
+      // Atual: no "Disponível" é o que está no galpão (não separado); numa aba de
+      // equipe é o que aquela equipe tem separado.
       key: "quantity",
-      label: isMaster ? "Disponível" : ranchoTeamLabel(activeTeam),
+      label: "Atual",
       render: (i: StockItem) => {
         const qty = isMaster ? disponivelQty(i.name) : Number(i.quantity) || 0;
         return (
