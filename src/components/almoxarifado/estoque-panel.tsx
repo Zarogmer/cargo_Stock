@@ -359,10 +359,11 @@ export function EstoquePanel() {
       ),
     },
     {
-      // Padrão (quanto o alimento deve ter) — único por alimento, mora na linha-mãe
-      // do galpão; cai pro default_quantity da própria linha se não houver galpão.
+      // Quantidade Mínima (quanto o alimento deve ter, o "padrão" que a equipe
+      // leva) — única por alimento, mora na linha-mãe do galpão; cai pro
+      // default_quantity da própria linha se não houver galpão.
       key: "padrao",
-      label: "Padrão",
+      label: "Mín.",
       render: (i: StockItem) => {
         const padrao = Number(galpaoByName.get(norm(i.name))?.default_quantity ?? i.default_quantity) || 0;
         return (
@@ -786,19 +787,19 @@ function StockFormModal({ open, onClose, onSave, item, saving, itemCode, allItem
             ))}
           </select>
         </div>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-text mb-1">Qtd Padrão</label>
+            <label className="block text-sm font-medium text-text mb-1">Quantidade Mínima</label>
             <input type="text" inputMode="decimal" value={defaultQuantity} onChange={(e) => setDefaultQuantity(e.target.value)} placeholder="Ex: 10 ou 1,5" className={inputCls} />
           </div>
           <div>
-            <label className="block text-sm font-medium text-text mb-1">{item && item.team !== DISPONIVEL ? "Qtd da equipe" : "Qtd no galpão"}</label>
+            <label className="block text-sm font-medium text-text mb-1">Quantidade Atual</label>
             <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 1,5" className={inputCls} />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-text mb-1">Validade</label>
-            <input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} className={inputCls} />
-          </div>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Validade</label>
+          <input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} className={inputCls} />
         </div>
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>

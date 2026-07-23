@@ -830,12 +830,12 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [
         )}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-text mb-1">Qtd Atual</label>
-            <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 8" className={inputCls} />
+            <label className="block text-sm font-medium text-text mb-1">Quantidade Mínima <span className="text-text-light font-normal">(opcional)</span></label>
+            <input type="text" inputMode="numeric" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} placeholder="0 = sem mínimo" className={inputCls} />
           </div>
           <div>
-            <label className="block text-sm font-medium text-text mb-1">Qtd Mínima <span className="text-text-light font-normal">(opcional)</span></label>
-            <input type="text" inputMode="numeric" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} placeholder="0 = sem mínimo" className={inputCls} />
+            <label className="block text-sm font-medium text-text mb-1">Quantidade Atual</label>
+            <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 8" className={inputCls} />
           </div>
         </div>
         {showValue && (
