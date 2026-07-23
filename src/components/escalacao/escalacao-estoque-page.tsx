@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
+import { releaseShipAllocationsNow } from "@/lib/release-finished-ships";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -840,11 +841,24 @@ export function EscalacaoEstoquePage() {
         autoNote += " ⚠️ Não consegui lançar a despesa de material perdido no navio.";
       }
 
-      // Retorno confirmado FECHA o navio: vira CONCLUIDO e sai da lista ativa
-      // (só reaparece com "mostrar finalizados"). Assim não há um 2º retorno.
+      // Retorno confirmado FECHA o navio de vez — mesmo fechamento do botão
+      // "Fechar" da aba Navios (handleClose), pra não precisar ir lá:
+      //   • marca CONCLUIDO + data de saída (departure_date);
+      //   • fecha o end_date do(s) job(s) — só assim o navio entra no Financeiro;
+      //   • solta a tripulação na hora (senão fica "Embarcado" o resto do dia).
+      // Também garante que não haja um 2º retorno (navio sai da lista ativa).
       if (currentShip.status !== "CONCLUIDO") {
-        await db.from("ships").update({ status: "CONCLUIDO" } as any).eq("id", selectedShip);
-        autoNote += " ✅ Navio concluído.";
+        const closeDate = currentShip.departure_date
+          ? String(currentShip.departure_date).slice(0, 10)
+          : today;
+        await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate } as any).eq("id", selectedShip);
+        await db.from("jobs").update({ end_date: closeDate } as any).eq("ship_id", selectedShip);
+        try {
+          await releaseShipAllocationsNow(selectedShip, actor);
+        } catch (err) {
+          console.warn("[retorno] release on close failed:", (err as Error).message);
+        }
+        autoNote += " ✅ Navio concluído (data de saída, Financeiro e tripulação fechados).";
       }
 
       setReturnMsg(baseMsg + autoNote);
