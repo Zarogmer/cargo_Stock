@@ -13,7 +13,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatPhone, formatDateTime, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, MOVEMENT_TYPE_LABELS, type NrCode } from "@/lib/utils";
 import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
-import type { Employee, JobFunction } from "@/types/database";
+import type { Employee, JobFunction, JobUnit } from "@/types/database";
 import { DocumentosTab } from "./documentos-tab";
 
 export default function ColaboradoresPage() {
@@ -96,7 +96,7 @@ export default function ColaboradoresPage() {
       const [empRes, allocRes, fnRes, rateRes] = await Promise.all([
         db.from("employees").select("*").order("name"),
         db.from("job_allocations").select("employee_id, kind, status").eq("status", "ATIVO"),
-        db.from("job_functions").select("id, name, default_rate").order("name"),
+        db.from("job_functions").select("id, name, default_rate, unit, active").order("name"),
         db.from("employee_function_rates").select("employee_id, function_id, rate"),
       ]);
 
@@ -577,6 +577,17 @@ export default function ColaboradoresPage() {
       })(),
     },
     {
+      key: "funcoes", label: "Funções",
+      content: (
+        <FuncoesRHTab
+          functions={jobFunctions}
+          canManage={canCreate}
+          loading={loading}
+          onChange={loadAll}
+        />
+      ),
+    },
+    {
       key: "documentos", label: "Documentos",
       content: <DocumentosTab employees={employees} />,
     },
@@ -872,6 +883,260 @@ function effectivePaga(
   const rate = special != null ? special : Number(fn.default_rate);
   if (!Number.isFinite(rate)) return null;
   return { rate, isSpecial: special != null, functionId: fn.id };
+}
+
+// ─── Aba Funções (RH) ───────────────────────────────────────────────────────
+// O RH cria e organiza as funções (nome + tipo). Grava na MESMA tabela
+// job_functions que a aba Valores do Financeiro (fonte única), mas nunca toca no
+// valor da paga — esse continua sendo exclusividade do Financeiro. Aqui a paga
+// aparece só como leitura, pra o RH ter noção de quais funções ainda faltam
+// precificar. Pedido do RH (funções eram criadas só no Financeiro).
+
+// Tipo simplificado pro RH → unidade real da função. A aba Valores derancia as
+// seções pela unidade, então mapeamos pros mesmos três grupos de lá.
+const RH_TIPO_OPTIONS: { value: JobUnit; label: string; hint: string }[] = [
+  { value: "PORAO", label: "🚢 Embarque", hint: "Trabalho a bordo, pago por porão" },
+  { value: "TURNO", label: "⚓ Serviço (Costado)", hint: "Pago por turno" },
+  { value: "MENSALISTA", label: "🗓️ Mensalista", hint: "Salário fixo mensal" },
+];
+
+// Mesma regra de seção da aba Valores (derivada da unidade, não do nome).
+function rhSectionOf(f: JobFunction): "EMBARQUE" | "SERVICOS" | "MENSALISTA" {
+  const u = (f.unit || "").toUpperCase();
+  if (u === "TURNO") return "SERVICOS";
+  if (u === "MENSALISTA" || u === "POR_DIA" || u === "POR_HORA") return "MENSALISTA";
+  return "EMBARQUE"; // PORAO, POR_NAVIO, POR_OPERACAO
+}
+
+function FuncoesRHTab({
+  functions, canManage, loading, onChange,
+}: {
+  functions: JobFunction[];
+  canManage: boolean;
+  loading: boolean;
+  onChange: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [editFn, setEditFn] = useState<JobFunction | null>(null);
+  const [toggleFn, setToggleFn] = useState<JobFunction | null>(null);
+
+  const SECTIONS = [
+    { key: "EMBARQUE", title: "🚢 Embarque", hint: "Trabalho a bordo, pago por porão" },
+    { key: "SERVICOS", title: "⚓ Serviços", hint: "Costado — pago por turno" },
+    { key: "MENSALISTA", title: "🗓️ Mensalista", hint: "Salário fixo mensal" },
+  ] as const;
+
+  const filtered = functions.filter((f) => f.name.toLowerCase().includes(search.toLowerCase()));
+  const fnsBySection = (key: string) =>
+    filtered.filter((f) => rhSectionOf(f) === key).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+
+  const inputCls = "w-full md:w-72 px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-sm text-text-light max-w-xl">
+            Crie e organize as funções dos colaboradores. O valor da paga é definido pelo Financeiro —
+            aqui ele aparece só para leitura.
+          </p>
+        </div>
+        {canManage && (
+          <Button size="sm" onClick={() => { setEditFn(null); setShowForm(true); }}>
+            <PlusIcon className="w-4 h-4" /> Nova Função
+          </Button>
+        )}
+      </div>
+
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Buscar função..."
+        className={inputCls}
+      />
+
+      {loading ? (
+        <div className="text-sm text-text-light py-8 text-center">Carregando...</div>
+      ) : (
+        SECTIONS.map((sec) => {
+          const rows = fnsBySection(sec.key);
+          return (
+            <div key={sec.key} className="bg-white border border-border rounded-lg overflow-hidden">
+              <div className="px-4 py-2.5 bg-gray-50 border-b border-border flex items-baseline gap-2">
+                <span className="font-semibold text-sm text-text">{sec.title}</span>
+                <span className="text-xs text-text-light">{sec.hint}</span>
+              </div>
+              {rows.length === 0 ? (
+                <div className="px-4 py-6 text-sm text-text-light/70 text-center">Nenhuma função aqui.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-[11px] text-text-light uppercase tracking-wider border-b border-border">
+                        <th className="px-4 py-2 font-medium">Função</th>
+                        <th className="px-4 py-2 font-medium">Paga (R$)</th>
+                        <th className="px-4 py-2 font-medium">Status</th>
+                        {canManage && <th className="px-4 py-2 font-medium w-32 text-right">Ações</th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((f) => (
+                        <tr key={f.id} className={`border-b border-border last:border-0 hover:bg-gray-50 ${!f.active ? "opacity-50" : ""}`}>
+                          <td className="px-4 py-2.5 font-medium">{f.name}</td>
+                          <td className="px-4 py-2.5">
+                            {Number(f.default_rate) > 0
+                              ? <span className="text-text">R$ {formatRateBR(Number(f.default_rate))}</span>
+                              : <span className="text-text-light/60 italic text-xs">a definir</span>}
+                            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 align-middle">Financeiro</span>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            {f.active
+                              ? <span className="text-xs text-emerald-600 font-medium">✓ Ativa</span>
+                              : <span className="text-xs text-text-light">Inativa</span>}
+                          </td>
+                          {canManage && (
+                            <td className="px-4 py-2.5">
+                              <div className="flex gap-1 justify-end items-center">
+                                <button
+                                  onClick={() => { setEditFn(f); setShowForm(true); }}
+                                  className="p-1.5 text-primary hover:bg-blue-50 rounded"
+                                  title="Editar nome/tipo"
+                                >
+                                  <EditIcon />
+                                </button>
+                                <button
+                                  onClick={() => setToggleFn(f)}
+                                  className="px-2 py-1 text-xs rounded hover:bg-gray-100 text-text-light"
+                                  title={f.active ? "Desativar (some dos seletores)" : "Reativar"}
+                                >
+                                  {f.active ? "Desativar" : "Reativar"}
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })
+      )}
+
+      <FunctionRHFormModal
+        open={showForm}
+        item={editFn}
+        onClose={() => { setShowForm(false); setEditFn(null); }}
+        onSaved={() => { setShowForm(false); setEditFn(null); onChange(); }}
+      />
+
+      <ConfirmDialog
+        open={!!toggleFn}
+        onClose={() => setToggleFn(null)}
+        onConfirm={async () => {
+          if (!toggleFn) return;
+          const res = await db.from("job_functions").update({ active: !toggleFn.active }).eq("id", toggleFn.id);
+          if (res.error) { alert(`Não consegui atualizar: ${res.error.message}`); return; }
+          setToggleFn(null); onChange();
+        }}
+        title={toggleFn?.active ? "Desativar Função" : "Reativar Função"}
+        message={
+          !toggleFn ? ""
+          : toggleFn.active
+            ? `Desativar "${toggleFn.name}"? Ela some dos seletores de função, mas o histórico é mantido.`
+            : `Reativar "${toggleFn.name}"? Ela volta a aparecer nos seletores.`
+        }
+        confirmLabel={toggleFn?.active ? "Desativar" : "Reativar"}
+        variant={toggleFn?.active ? "danger" : "primary"}
+      />
+    </div>
+  );
+}
+
+// ─── Modal de criar/editar função (RH — sem valor) ──────────────────────────
+function FunctionRHFormModal({
+  open, item, onClose, onSaved,
+}: {
+  open: boolean; item: JobFunction | null; onClose: () => void; onSaved: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [unit, setUnit] = useState<JobUnit>("PORAO");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (item) {
+      setName(item.name);
+      // Normaliza a unidade existente pros três tipos do seletor do RH.
+      const sec = rhSectionOf(item);
+      setUnit(sec === "SERVICOS" ? "TURNO" : sec === "MENSALISTA" ? "MENSALISTA" : "PORAO");
+    } else {
+      setName(""); setUnit("PORAO");
+    }
+    setError(null);
+  }, [item, open]);
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    const clean = name.trim().toUpperCase();
+    if (!clean) return;
+    setSaving(true);
+    setError(null);
+    // O RH nunca mexe no valor: no create o default_rate fica no default do banco
+    // (0) e no update só tocamos em nome/tipo.
+    const res = item
+      ? await db.from("job_functions").update({ name: clean, unit }).eq("id", item.id)
+      : await db.from("job_functions").insert({ name: clean, unit });
+    setSaving(false);
+    if (res.error) {
+      setError(/uniqu|duplicat|already exists/i.test(res.error.message)
+        ? "Já existe uma função com esse nome."
+        : res.error.message);
+      return;
+    }
+    onSaved();
+  }
+
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+
+  return (
+    <Modal open={open} onClose={onClose} title={item ? "Editar Função" : "Nova Função"}>
+      <form onSubmit={handleSave} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">Nome da função *</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            autoFocus
+            className={inputCls}
+            placeholder="Ex.: SOLDADOR"
+          />
+          <p className="text-[11px] text-text-light mt-1">Salvo em MAIÚSCULAS.</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Tipo</label>
+          <select value={unit} onChange={(e) => setUnit(e.target.value as JobUnit)} className={inputCls}>
+            {RH_TIPO_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <p className="text-[11px] text-text-light mt-1">{RH_TIPO_OPTIONS.find((o) => o.value === unit)?.hint}</p>
+        </div>
+        <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-text-light">
+          💰 O valor da paga é definido pelo Financeiro. Aqui você só cria e organiza as funções.
+        </div>
+        {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={saving || !name.trim()}>{saving ? "Salvando..." : "Salvar"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
 }
 
 function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, functions, specialRates, canEditPaga }: { open: boolean; onClose: () => void; onSave: (d: Partial<Employee>, paga?: { functionId: number | null; rate: number | null }) => void; item: Employee | null; saving: boolean; roleOptions: string[]; functions: JobFunction[]; specialRates: Map<string, number>; canEditPaga: boolean }) {
