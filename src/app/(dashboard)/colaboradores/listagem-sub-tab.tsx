@@ -139,7 +139,7 @@ export function ListagemSubTab({ employees }: { employees: Employee[] }) {
         <div>
           <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Porto</label>
           <div className="mt-1 inline-flex rounded-lg border border-border overflow-hidden">
-            {([["SANTOS", "Santos · ISPS CODE"], ["FORA", "Fora de Santos · RG"]] as const).map(([val, label]) => (
+            {([["SANTOS", "Santos"], ["FORA", "Viagem"]] as const).map(([val, label]) => (
               <button
                 key={val}
                 type="button"

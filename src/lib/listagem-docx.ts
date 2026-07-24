@@ -23,6 +23,7 @@ import {
   WidthType,
   BorderStyle,
   TableLayoutType,
+  Footer,
 } from "docx";
 
 export type ListagemVariant = "SANTOS" | "FORA";
@@ -99,6 +100,75 @@ function dataCell(text: string, colIdx: number, align: (typeof AlignmentType)[ke
   });
 }
 
+// Rodapé institucional (mesma marca da listagem): barra azul + razão social e
+// endereço. Replica o rodapé dos demais documentos da Cargo, no tom da marca.
+const FOOTER_WIDTH = COL_WIDTHS.reduce((a, b) => a + b, 0);
+const NO_BORDER = { style: BorderStyle.NONE, size: 0, color: "auto" };
+
+function buildFooter(): Footer {
+  const bar = new Table({
+    layout: TableLayoutType.FIXED,
+    columnWidths: [FOOTER_WIDTH],
+    width: { size: FOOTER_WIDTH, type: WidthType.DXA },
+    borders: {
+      top: NO_BORDER,
+      bottom: NO_BORDER,
+      left: NO_BORDER,
+      right: NO_BORDER,
+      insideHorizontal: NO_BORDER,
+      insideVertical: NO_BORDER,
+    },
+    rows: [
+      new TableRow({
+        height: { value: 90, rule: "atLeast" },
+        children: [
+          new TableCell({
+            width: { size: FOOTER_WIDTH, type: WidthType.DXA },
+            shading: { fill: BRAND_BLUE, color: "auto", type: "clear" },
+            borders: {
+              top: NO_BORDER,
+              bottom: NO_BORDER,
+              left: NO_BORDER,
+              right: NO_BORDER,
+            },
+            children: [new Paragraph({ spacing: { before: 0, after: 0 }, children: [] })],
+          }),
+        ],
+      }),
+    ],
+  });
+
+  return new Footer({
+    children: [
+      bar,
+      new Paragraph({
+        spacing: { before: 80, after: 0 },
+        children: [
+          new TextRun({
+            text: "CARGO SHIPS CLEANING LTDA",
+            bold: true,
+            allCaps: true,
+            color: BRAND_BLUE,
+            font: FONT,
+            size: 15,
+          }),
+        ],
+      }),
+      new Paragraph({
+        spacing: { before: 0, after: 0 },
+        children: [
+          new TextRun({
+            text: "Praça Iguatemi Martins, 08, Vila Nova, Santos/SP, CEP: 11013-310",
+            color: BRAND_BLUE,
+            font: FONT,
+            size: 14,
+          }),
+        ],
+      }),
+    ],
+  });
+}
+
 export async function buildListagemDocx(
   employees: ListagemEmployee[],
   variant: ListagemVariant,
@@ -161,6 +231,7 @@ export async function buildListagemDocx(
     sections: [
       {
         properties: {},
+        footers: { default: buildFooter() },
         children: [
           new Paragraph({
             alignment: AlignmentType.CENTER,
