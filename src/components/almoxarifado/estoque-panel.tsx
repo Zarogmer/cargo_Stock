@@ -363,7 +363,7 @@ export function EstoquePanel() {
       // leva) — única por alimento, mora na linha-mãe do galpão; cai pro
       // default_quantity da própria linha se não houver galpão.
       key: "padrao",
-      label: "Mín.",
+      label: "Padrão",
       render: (i: StockItem) => {
         const padrao = Number(galpaoByName.get(norm(i.name))?.default_quantity ?? i.default_quantity) || 0;
         return (
@@ -789,7 +789,7 @@ function StockFormModal({ open, onClose, onSave, item, saving, itemCode, allItem
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-text mb-1">Quantidade Mínima</label>
+            <label className="block text-sm font-medium text-text mb-1">Padrão</label>
             <input type="text" inputMode="decimal" value={defaultQuantity} onChange={(e) => setDefaultQuantity(e.target.value)} placeholder="Ex: 10 ou 1,5" className={inputCls} />
           </div>
           <div>

@@ -408,7 +408,7 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
     },
     {
       key: "min_quantity",
-      label: "Mín.",
+      label: "Padrão",
       render: (i: StockItem) => (
         <span className="text-text-light text-sm">{i.min_quantity > 0 ? formatQty(i.min_quantity) : "—"}</span>
       ),
@@ -830,8 +830,8 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [
         )}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-text mb-1">Quantidade Mínima <span className="text-text-light font-normal">(opcional)</span></label>
-            <input type="text" inputMode="numeric" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} placeholder="0 = sem mínimo" className={inputCls} />
+            <label className="block text-sm font-medium text-text mb-1">Padrão <span className="text-text-light font-normal">(opcional)</span></label>
+            <input type="text" inputMode="numeric" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} placeholder="0 = sem padrão" className={inputCls} />
           </div>
           <div>
             <label className="block text-sm font-medium text-text mb-1">Quantidade Atual</label>
