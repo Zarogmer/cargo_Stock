@@ -331,6 +331,7 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       { label: "Colaboradores", href: "/colaboradores?tab=colaboradores" },
       { label: "Funções", href: "/colaboradores?tab=funcoes" },
+      { label: "Petição", href: "/colaboradores?tab=peticao" },
       {
         label: "Documentos",
         href: "/colaboradores?tab=documentos",

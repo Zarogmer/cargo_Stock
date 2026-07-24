@@ -19,6 +19,7 @@ import {
 import { UnitFormModal } from "@/components/job-unit-form-modal";
 import type { Employee, JobFunction, WorkUnit } from "@/types/database";
 import { DocumentosTab } from "./documentos-tab";
+import { PeticaoSubTab } from "./peticao-sub-tab";
 
 export default function ColaboradoresPage() {
   const { profile } = useAuth();
@@ -606,6 +607,10 @@ export default function ColaboradoresPage() {
     {
       key: "documentos", label: "Documentos",
       content: <DocumentosTab employees={employees} />,
+    },
+    {
+      key: "peticao", label: "Petição",
+      content: <PeticaoSubTab employees={employees} />,
     },
   ];
 
