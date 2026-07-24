@@ -5,18 +5,20 @@ import { prisma } from "@/lib/prisma";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Listas cadastráveis da Petição (Gates e Meios de Transporte). Ficam em
-// app_settings (chave/valor JSON) pra não exigir migração de schema. As Agências
-// NÃO moram aqui: reusam a lista de clientes já cadastrada nos navios.
+// Listas cadastráveis da Petição (Gates, Meios de Transporte e Agências). Ficam
+// em app_settings (chave/valor JSON) pra não exigir migração de schema. As
+// Agências cadastradas aqui se somam aos clientes já usados nos navios — as duas
+// telas (Petição e Navios) mostram a mesma lista unificada.
 const KEYS = {
   gate: "peticao_gates",
   transporte: "peticao_transportes",
+  agencia: "peticao_agencias",
 } as const;
 
 type Kind = keyof typeof KEYS;
 
 function isKind(v: unknown): v is Kind {
-  return v === "gate" || v === "transporte";
+  return v === "gate" || v === "transporte" || v === "agencia";
 }
 
 // Lê uma lista do app_settings; tolera ausência/JSON inválido devolvendo [].
@@ -53,15 +55,19 @@ async function writeList(kind: Kind, list: string[], actor: string | null): Prom
   });
 }
 
-// GET → { gates: string[], transportes: string[] }
+// GET → { gates: string[], transportes: string[], agencias: string[] }
 export async function GET() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const [gates, transportes] = await Promise.all([readList("gate"), readList("transporte")]);
-  return NextResponse.json({ gates, transportes });
+  const [gates, transportes, agencias] = await Promise.all([
+    readList("gate"),
+    readList("transporte"),
+    readList("agencia"),
+  ]);
+  return NextResponse.json({ gates, transportes, agencias });
 }
 
-// POST { kind: "gate"|"transporte", name } → adiciona e devolve a lista atualizada.
+// POST { kind: "gate"|"transporte"|"agencia", name } → adiciona e devolve a lista atualizada.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

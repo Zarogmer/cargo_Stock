@@ -200,6 +200,9 @@ export default function NaviosPage() {
   const pathname = usePathname();
 
   const [ships, setShips] = useState<Ship[]>([]);
+  // Agências cadastradas na Petição (RH › Documentos › Petição). Entram na mesma
+  // lista de clientes do cadastro de navio — as duas telas compartilham a lista.
+  const [peticaoAgencias, setPeticaoAgencias] = useState<string[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   // IDs de funcionarios que ja tem job_allocation ATIVA em qualquer navio.
   // Usado pra esconder eles da lista de selecao no modal de novo navio --
@@ -461,8 +464,13 @@ export default function NaviosPage() {
       const v = (s.client_name || "").trim();
       if (v && !map.has(v.toLowerCase())) map.set(v.toLowerCase(), v);
     }
+    // Agências cadastradas na Petição — mesma lista dos dois lados.
+    for (const a of peticaoAgencias) {
+      const v = (a || "").trim();
+      if (v && !map.has(v.toLowerCase())) map.set(v.toLowerCase(), v);
+    }
     return Array.from(map.values()).sort((a, b) => a.localeCompare(b, "pt-BR"));
-  }, [ships]);
+  }, [ships, peticaoAgencias]);
 
   useEffect(() => {
     loadShips();
@@ -470,6 +478,18 @@ export default function NaviosPage() {
     loadJobFunctions();
     loadOccupied();
     loadSituationTemplates();
+    // Agências cadastradas na Petição — pra somar na lista de clientes do navio.
+    (async () => {
+      try {
+        const res = await fetch("/api/peticao/options");
+        if (res.ok) {
+          const b = await res.json();
+          if (Array.isArray(b.agencias)) setPeticaoAgencias(b.agencias);
+        }
+      } catch {
+        /* silencioso — a lista de clientes cai só pros navios já cadastrados */
+      }
+    })();
   }, [loadShips, loadEmployees, loadJobFunctions, loadOccupied, loadSituationTemplates, pathname]);
 
   // ── Filter ─────────────────────────────────────────────────────────────────

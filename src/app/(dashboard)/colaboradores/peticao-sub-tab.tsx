@@ -17,7 +17,16 @@ interface Ship {
   id: string;
   name: string;
   client_name: string | null;
+  status: string | null;
 }
+
+// Sementes de agência = mesmos clientes-semente da aba Navios (DEFAULT_CLIENTS),
+// pra a lista abrir com as opções conhecidas mesmo sem navio cadastrado.
+const DEFAULT_AGENCIES = ["Deep", "Transatlântica", "Continental", "Wilson"];
+
+// Navios que ainda aparecem na sugestão do campo Navio: só os no ciclo de vida
+// ativo (Agendado / Em Operação). Finalizados e cancelados ficam de fora.
+const ACTIVE_SHIP_STATUSES = new Set(["AGENDADO", "EM_OPERACAO"]);
 
 interface KitRow {
   team: string;
@@ -54,6 +63,7 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
   const [kit, setKit] = useState<KitRow[]>([]);
   const [gates, setGates] = useState<string[]>([]);
   const [transportes, setTransportes] = useState<string[]>([]);
+  const [agencias, setAgencias] = useState<string[]>([]);
 
   // Form
   const [data, setData] = useState<string>(todayInput);
@@ -78,7 +88,7 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
     let active = true;
     (async () => {
       const [shipsRes, kitRes] = await Promise.all([
-        db.from("ships").select("id, name, client_name").order("name"),
+        db.from("ships").select("id, name, client_name, status").order("name"),
         db.from("embark_kit_items").select("team, quantity, stock_items(id, name)"),
       ]);
       if (!active) return;
@@ -98,22 +108,33 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
         const b = await res.json();
         setGates(Array.isArray(b.gates) ? b.gates : []);
         setTransportes(Array.isArray(b.transportes) ? b.transportes : []);
+        setAgencias(Array.isArray(b.agencias) ? b.agencias : []);
       }
     } catch {
       /* silencioso */
     }
   }
 
-  // Agências = clientes distintos já usados nos navios (o usuário disse que são
-  // "as mesmas do navio"). Pode digitar uma nova (vira texto livre no documento).
+  // Agências = mesma lista da aba Navios (clientes) + as agências cadastradas
+  // aqui. Junta: sementes (iguais às do Navios) + clientes já usados em navios +
+  // agências salvas na Petição. Dedup case-insensitive mantendo a 1ª grafia.
   const agencyOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const s of ships) {
-      const c = (s.client_name || "").trim();
-      if (c) set.add(c);
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
-  }, [ships]);
+    const map = new Map<string, string>();
+    const add = (v: string | null | undefined) => {
+      const c = (v || "").trim();
+      if (c && !map.has(c.toLowerCase())) map.set(c.toLowerCase(), c);
+    };
+    DEFAULT_AGENCIES.forEach(add);
+    ships.forEach((s) => add(s.client_name));
+    agencias.forEach(add);
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [ships, agencias]);
+
+  // Sugestões do campo Navio: só navios no ciclo ativo (Agendado / Em Operação).
+  const activeShips = useMemo(
+    () => ships.filter((s) => ACTIVE_SHIP_STATUSES.has((s.status || "").toUpperCase())),
+    [ships]
+  );
 
   const sortedEmployees = useMemo(
     () =>
@@ -163,7 +184,7 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
     });
   }
 
-  async function addOption(kind: "gate" | "transporte", name: string) {
+  async function addOption(kind: "gate" | "transporte" | "agencia", name: string) {
     const clean = name.trim();
     if (!clean) return;
     try {
@@ -178,16 +199,19 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
       if (kind === "gate") {
         setGates(list);
         setGate(clean);
-      } else {
+      } else if (kind === "transporte") {
         setTransportes(list);
         setSelTransportes((prev) => new Set(prev).add(clean));
+      } else {
+        setAgencias(list);
+        setAgencia(clean);
       }
     } catch {
       /* silencioso */
     }
   }
 
-  async function removeOption(kind: "gate" | "transporte", name: string) {
+  async function removeOption(kind: "gate" | "transporte" | "agencia", name: string) {
     try {
       const res = await fetch(
         `/api/peticao/options?kind=${kind}&name=${encodeURIComponent(name)}`,
@@ -199,13 +223,16 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
       if (kind === "gate") {
         setGates(list);
         if (gate === name) setGate("");
-      } else {
+      } else if (kind === "transporte") {
         setTransportes(list);
         setSelTransportes((prev) => {
           const next = new Set(prev);
           next.delete(name);
           return next;
         });
+      } else {
+        setAgencias(list);
+        if (agencia === name) setAgencia("");
       }
     } catch {
       /* silencioso */
@@ -323,7 +350,7 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
               className={fieldCls}
             />
             <datalist id="peticao-navios">
-              {ships.map((s) => (
+              {activeShips.map((s) => (
                 <option key={s.id} value={s.name} />
               ))}
             </datalist>
@@ -353,30 +380,25 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
             </div>
           </div>
 
-          {/* Agência */}
-          <div>
-            <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Agência</label>
-            <input
-              type="text"
-              list="peticao-agencias"
-              value={agencia}
-              onChange={(e) => setAgencia(e.target.value)}
-              placeholder="Selecione ou digite a agência"
-              className={fieldCls}
-            />
-            <datalist id="peticao-agencias">
-              {agencyOptions.map((a) => (
-                <option key={a} value={a} />
-              ))}
-            </datalist>
-          </div>
-
           {/* Motivo */}
           <div>
             <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Motivo</label>
             <input type="text" value={motivo} onChange={(e) => setMotivo(e.target.value)} className={fieldCls} />
           </div>
         </div>
+
+        {/* Agência (cadastrável) — mesma lista de clientes da aba Navios */}
+        <OptionsManager
+          label="Agência"
+          hint="Mesma lista de clientes/agências da aba Navios. Cadastre uma nova se faltar."
+          options={agencyOptions}
+          multi={false}
+          selectedSingle={agencia}
+          onPickSingle={setAgencia}
+          onAdd={(name) => addOption("agencia", name)}
+          onRemove={(name) => removeOption("agencia", name)}
+          addPlaceholder="Ex.: Wilson Sons"
+        />
 
         {/* Gate (cadastrável) — aplicado aos 4 locais de embarque/desembarque */}
         <OptionsManager
