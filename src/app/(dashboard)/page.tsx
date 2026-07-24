@@ -668,22 +668,29 @@ export default function DashboardPage() {
           title="Prontidão para embarque"
           subtitle="Comparativo de rancho entre equipes"
         >
-          <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-border">
-            <div className="p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-600" />
-                <span className="text-xs font-semibold uppercase tracking-wider text-text-light">Equipe 1</span>
+          {(() => {
+            // Equipes com rancho para comparar. Turbo (EQUIPE_4) só entra quando
+            // já tem itens de rancho — senão sairia um "0/0" enganoso.
+            const teams = [
+              { team: "EQUIPE_1", label: "Equipe 1", dot: "bg-blue-600" },
+              { team: "EQUIPE_2", label: "Equipe 2", dot: "bg-violet-600" },
+              { team: "EQUIPE_4", label: "Equipe Turbo", dot: "bg-amber-500" },
+            ].filter((t) => stockItems.some((i) => i.team === t.team));
+            const cols = teams.length >= 3 ? "lg:grid-cols-3" : "lg:grid-cols-2";
+            return (
+              <div className={`grid grid-cols-1 ${cols} divide-y lg:divide-y-0 lg:divide-x divide-border`}>
+                {teams.map((t) => (
+                  <div key={t.team} className="p-6">
+                    <div className="flex items-center gap-2 mb-4">
+                      <span className={`w-1.5 h-1.5 rounded-full ${t.dot}`} />
+                      <span className="text-xs font-semibold uppercase tracking-wider text-text-light">{t.label}</span>
+                    </div>
+                    <EmbarqueChart items={stockItems.filter((i) => i.team === t.team)} />
+                  </div>
+                ))}
               </div>
-              <EmbarqueChart items={stockItems.filter((i) => i.team === "EQUIPE_1")} />
-            </div>
-            <div className="p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <span className="w-1.5 h-1.5 rounded-full bg-violet-600" />
-                <span className="text-xs font-semibold uppercase tracking-wider text-text-light">Equipe 2</span>
-              </div>
-              <EmbarqueChart items={stockItems.filter((i) => i.team === "EQUIPE_2")} />
-            </div>
-          </div>
+            );
+          })()}
         </CollapsibleSection>
       )}
 
