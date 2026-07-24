@@ -275,7 +275,10 @@ export function GeralPanel() {
     return <EditableNum value={value} onCommit={(v) => commitEdit(row, col, v)} disabled={saving} strong={strong} />;
   };
 
-  const columns = [
+  // Colunas fixas + colunas de quantidade que dependem da aba: em "Todos" mostra
+  // o quadro completo (Total/Disponível/equipes); numa aba específica mostra só a
+  // quantidade daquela visão (uma coluna), igual aos painéis por setor.
+  const baseCols = [
     { key: "name", label: "Item", render: (r: Row) => <span className="font-medium">{r.name}</span> },
     {
       key: "setor", label: "Setor",
@@ -284,12 +287,24 @@ export function GeralPanel() {
         return <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${chip}`}>{r.setorLabel}</span>;
       },
     },
-    { key: "total", label: "Total", render: (r: Row) => cell(r, "TOTAL", r.total, true) },
-    { key: "disp", label: "Disponível", render: (r: Row) => cell(r, "DISP", r.disp) },
-    ...TEAM_COLS.map((t) => ({
-      key: t.key, label: t.label, render: (r: Row) => cell(r, t.key, r.teams[t.key]),
-    })),
   ];
+  const qtyCols =
+    teamView === "TODOS"
+      ? [
+          { key: "total", label: "Total", render: (r: Row) => cell(r, "TOTAL", r.total, true) },
+          { key: "disp", label: "Disponível", render: (r: Row) => cell(r, "DISP", r.disp) },
+          ...TEAM_COLS.map((t) => ({
+            key: t.key, label: t.label, render: (r: Row) => cell(r, t.key, r.teams[t.key]),
+          })),
+        ]
+      : teamView === "DISP"
+        ? [{ key: "disp", label: "Disponível", render: (r: Row) => cell(r, "DISP", r.disp, true) }]
+        : [{
+            key: teamView,
+            label: VIEW_TABS.find((v) => v.key === teamView)?.label || teamView,
+            render: (r: Row) => cell(r, teamView, r.teams[teamView], true),
+          }];
+  const columns = [...baseCols, ...qtyCols];
 
   return (
     <div className="space-y-4">
