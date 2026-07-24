@@ -21,10 +21,12 @@ export function ListagemSubTab({ employees }: { employees: Employee[] }) {
   const [error, setError] = useState<string | null>(null);
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
 
-  // Ativos primeiro, por nome.
+  // Só quem embarca: ativos do operacional. Administrativo (RH, financeiro…)
+  // não vai na listagem de embarque. Sem setor definido é tratado como
+  // operacional para não sumir com quem esqueceram de categorizar.
   const sortedEmployees = useMemo(() => {
     return [...employees]
-      .filter((e) => e.status !== "INATIVO")
+      .filter((e) => e.status !== "INATIVO" && e.sector !== "ADMINISTRATIVO")
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [employees]);
 
