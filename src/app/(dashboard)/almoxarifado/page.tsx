@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { Tabs } from "@/components/ui/tabs";
 import { EstoquePanel } from "@/components/almoxarifado/estoque-panel";
+import { GeralPanel } from "@/components/almoxarifado/geral-panel";
 import { StockInventoryPanel } from "@/components/almoxarifado/materiais-panel";
 import { SimpleInventoryPanel } from "@/components/almoxarifado/inventory-simple-panel";
 import { HistoricoPanel } from "@/components/almoxarifado/historico-panel";
@@ -38,6 +39,7 @@ import { ComprasPanel } from "@/components/almoxarifado/compras-panel";
 // Chaves das abas internas de cada grupo. A ordem define o que aparece na barra
 // de abas, da esquerda pra direita.
 const ESTOQUE_KEYS = [
+  "geral",
   "estoque",
   "rancho",
   "fluidos",
@@ -64,6 +66,7 @@ export default function AlmoxarifadoPage() {
 
   // Abas internas do grupo Estoque — barra de abas visível no topo da página.
   const estoqueTabs = [
+    { key: "geral", label: "Geral", content: <GeralPanel /> },
     { key: "estoque", label: "Utensílios", content: <StockInventoryPanel kind="GALPAO" /> },
     { key: "rancho", label: "Rancho", content: <EstoquePanel /> },
     { key: "fluidos", label: "Fluídos", content: <StockInventoryPanel kind="FLUIDOS" /> },
