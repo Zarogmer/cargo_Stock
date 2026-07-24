@@ -81,16 +81,26 @@ import type {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-const UNIT_LABELS: Record<JobUnit, string> = {
-  MENSALISTA: "Mensalista",
-  PORAO: "Porão",
-  POR_NAVIO: "Porão",
-  POR_DIA: "Mensalista",
-  POR_HORA: "Mensalista",
-  POR_OPERACAO: "Porão",
-  TURNO: "Turno (Costado)",
-  ADMIN_COSTADO: "Por Navio",
+// Rótulo curto e legível da UNIDADE de uma função — sempre em MAIÚSCULO. As
+// unidades conhecidas têm um nome amigável; qualquer unidade nova, criada na
+// hora pelo usuário no modal de função, aparece com o próprio texto digitado.
+const KNOWN_UNIT_LABELS: Record<string, string> = {
+  MENSALISTA: "MENSALISTA",
+  PORAO: "PORÃO",
+  POR_NAVIO: "POR NAVIO",
+  POR_DIA: "POR DIA",
+  POR_HORA: "POR HORA",
+  POR_OPERACAO: "POR OPERAÇÃO",
+  TURNO: "TURNO (COSTADO)",
+  ADMIN_COSTADO: "ADMINISTRATIVO",
 };
+function unitLabel(unit: string | null | undefined): string {
+  const u = (unit || "").trim().toUpperCase();
+  return KNOWN_UNIT_LABELS[u] || u.replace(/_/g, " ");
+}
+// Unidades "de fábrica" oferecidas no combobox do modal, além das que já existem
+// nas funções cadastradas. O usuário pode digitar uma nova livremente.
+const SUGGESTED_UNITS = ["PORAO", "TURNO", "MENSALISTA"];
 
 // Serviços de Embarque do navio (ships.services), pra mostrar num relance quais
 // navios tiveram Raspagem/Pintura — os extras que rendem 200/porão a mais. O
@@ -1560,26 +1570,40 @@ function FuncoesTab({
     onChange();
   }
 
-  // Seção de cada função na aba Valores, derivada da UNIDADE (não do nome, pra
-  // funcionar com funções novas sem manutenção): Embarque = pago por porão
-  // (ajudante, wap, raspagem, pintura, administrativo...); Serviços = Costado
-  // (por turno); Mensalista = salário fixo (Analista RH, Auxiliar Operacional).
-  function sectionOf(f: JobFunction): "EMBARQUE" | "SERVICOS" | "ADMIN_COSTADO" | "MENSALISTA" {
-    const u = (f.unit || "").toUpperCase();
+  // Seção (grupo) de cada função na aba Valores, derivada da UNIDADE (não do
+  // nome). As unidades conhecidas caem em seções canônicas (Embarque = pago por
+  // porão; Costado = por turno; Mensalista = salário fixo). Qualquer unidade
+  // nova, criada na hora pelo usuário, vira a SUA PRÓPRIA seção — assim ele pode
+  // "criar unidade" livremente sem mexer no código.
+  function sectionKeyOf(f: JobFunction): string {
+    const u = (f.unit || "").trim().toUpperCase();
     if (u === "TURNO") return "SERVICOS";
-    if (u === "ADMIN_COSTADO") return "ADMIN_COSTADO";
     if (u === "MENSALISTA" || u === "POR_DIA" || u === "POR_HORA") return "MENSALISTA";
-    return "EMBARQUE"; // PORAO, POR_NAVIO, POR_OPERACAO
+    if (u === "" || u === "PORAO" || u === "POR_NAVIO" || u === "POR_OPERACAO") return "EMBARQUE";
+    return u; // unidade customizada = seção própria
   }
-  const SECTIONS = [
-    { key: "EMBARQUE", title: "🚢 Embarque", hint: "Pago por porão — inclui os extras Raspagem e Pintura" },
-    { key: "SERVICOS", title: "⚓ Costado", hint: "Pago por turno" },
-    { key: "ADMIN_COSTADO", title: "🧑‍💼 Administrativo (Costado)", hint: "Valor fixo por navio — pessoal de escritório no Costado" },
-    { key: "MENSALISTA", title: "🗓️ Mensalista", hint: "Salário fixo mensal" },
-  ] as const;
+  const SECTION_META: Record<string, { title: string; hint: string }> = {
+    EMBARQUE: { title: "🚢 EMBARQUE", hint: "Pago por porão — inclui os extras Raspagem e Pintura" },
+    SERVICOS: { title: "⚓ COSTADO", hint: "Pago por turno" },
+    MENSALISTA: { title: "🗓️ MENSALISTA", hint: "Salário fixo mensal" },
+  };
+  function sectionMeta(key: string) {
+    return SECTION_META[key] || { title: `📋 ${unitLabel(key)}`, hint: "Unidade personalizada" };
+  }
+  // Ordem das seções: Embarque e Costado primeiro, depois as unidades
+  // personalizadas (alfabético) e a Mensalista sempre por último.
+  const sectionKeys = (() => {
+    const present = Array.from(new Set(filtered.map(sectionKeyOf)));
+    const head = ["EMBARQUE", "SERVICOS"].filter((k) => present.includes(k));
+    const custom = present
+      .filter((k) => !["EMBARQUE", "SERVICOS", "MENSALISTA"].includes(k))
+      .sort((a, b) => a.localeCompare(b, "pt-BR"));
+    const tail = present.includes("MENSALISTA") ? ["MENSALISTA"] : [];
+    return [...head, ...custom, ...tail];
+  })();
   const fnsBySection = (key: string) =>
     filtered
-      .filter((f) => sectionOf(f) === key)
+      .filter((f) => sectionKeyOf(f) === key)
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
 
   // Linha da tabela de uma função (reusada nas 3 seções).
@@ -1593,7 +1617,7 @@ function FuncoesTab({
           onSave={(v) => saveRateInline(f, v)}
         />
       </td>
-      <td className="px-4 py-2.5 text-text-light text-xs">{f.name.trim().toUpperCase() === "ADMINISTRATIVO" ? "Por Navio" : UNIT_LABELS[f.unit]}</td>
+      <td className="px-4 py-2.5 text-text-light text-xs">{f.name.trim().toUpperCase() === "ADMINISTRATIVO" ? "POR NAVIO" : unitLabel(f.unit)}</td>
       <td className="px-4 py-2.5 text-text-light text-xs">
         {(() => {
           // Administrativo agrupa pelo SETOR (não pela role) — o pessoal
@@ -1744,14 +1768,15 @@ function FuncoesTab({
         // Uma tabela por seção (Embarque / Serviços / Mensalista). Seção sem
         // função (ex.: busca filtrou tudo) não aparece.
         <div className="space-y-5">
-          {SECTIONS.map((sec) => {
-            const list = fnsBySection(sec.key);
+          {sectionKeys.map((key) => {
+            const list = fnsBySection(key);
             if (list.length === 0) return null;
+            const meta = sectionMeta(key);
             return (
-              <div key={sec.key} className="space-y-1.5">
+              <div key={key} className="space-y-1.5">
                 <div className="flex items-baseline gap-2 flex-wrap">
-                  <h3 className="text-sm font-bold text-text">{sec.title}</h3>
-                  <span className="text-xs text-text-light">{sec.hint}</span>
+                  <h3 className="text-sm font-bold text-text">{meta.title}</h3>
+                  <span className="text-xs text-text-light">{meta.hint}</span>
                 </div>
                 <div className="bg-card rounded-xl border border-border overflow-x-auto">
                   <table className="w-full text-sm">
@@ -1774,6 +1799,7 @@ function FuncoesTab({
       <FunctionFormModal
         open={showFnForm}
         item={editFn}
+        existingUnits={Array.from(new Set(functions.map((f) => (f.unit || "").trim().toUpperCase()).filter(Boolean)))}
         onClose={() => { setShowFnForm(false); setEditFn(null); }}
         onSaved={() => { setShowFnForm(false); setEditFn(null); onChange(); }}
       />
@@ -1855,14 +1881,14 @@ function FuncoesTab({
 // ─── Function Form Modal ────────────────────────────────────────────────────
 
 function FunctionFormModal({
-  open, item, onClose, onSaved,
+  open, item, existingUnits, onClose, onSaved,
 }: {
-  open: boolean; item: JobFunction | null; onClose: () => void; onSaved: () => void;
+  open: boolean; item: JobFunction | null; existingUnits: string[]; onClose: () => void; onSaved: () => void;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [defaultRate, setDefaultRate] = useState("");
-  const [unit, setUnit] = useState<JobUnit>("PORAO");
+  const [unit, setUnit] = useState<string>("PORAO");
   const [active, setActive] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -1894,7 +1920,7 @@ function FunctionFormModal({
       name: name.trim().toUpperCase(),
       description: description.trim() || null,
       default_rate: rateNum,
-      unit,
+      unit: (unit || "PORAO").trim().toUpperCase().replace(/\s+/g, "_"),
       active,
     };
     if (item) {
@@ -1907,6 +1933,10 @@ function FunctionFormModal({
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
+
+  // Sugestões do combobox de unidade: as "de fábrica" + as já usadas por outras
+  // funções. O usuário ainda pode digitar uma nova livremente.
+  const unitSuggestions = Array.from(new Set([...SUGGESTED_UNITS, ...existingUnits])).filter(Boolean);
 
   return (
     <Modal open={open} onClose={onClose} title={item ? "Editar Função" : "Nova Função"}>
@@ -1926,12 +1956,22 @@ function FunctionFormModal({
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Unidade</label>
-            <select value={unit} onChange={(e) => setUnit(e.target.value as JobUnit)} className={inputCls}>
-              <option value="PORAO">Porão (Embarque)</option>
-              <option value="TURNO">Turno (Costado)</option>
-              <option value="ADMIN_COSTADO">Administrativo (Costado) — fixo por navio</option>
-              <option value="MENSALISTA">Mensalista</option>
-            </select>
+            <input
+              type="text"
+              list="unit-options"
+              value={unit}
+              onChange={(e) => setUnit(e.target.value.toUpperCase())}
+              className={inputCls}
+              placeholder="PORAO, COSTADO..."
+            />
+            <datalist id="unit-options">
+              {unitSuggestions.map((u) => (
+                <option key={u} value={u} label={unitLabel(u)} />
+              ))}
+            </datalist>
+            <p className="mt-1 text-[11px] text-text-light">
+              Escolha uma existente ou digite uma nova — ela vira uma seção na lista de Valores.
+            </p>
           </div>
         </div>
         <div className="flex gap-3 justify-end pt-2">
