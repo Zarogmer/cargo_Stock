@@ -8,7 +8,8 @@ import { hasPermission, canViewStockValue, type Module } from "@/lib/rbac";
 import { DataTable } from "@/components/ui/data-table";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
-import { PlusIcon } from "@/components/icons";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { matchSearch, parseDecimalBR, formatQty, formatCurrency, normalize } from "@/lib/utils";
 import type { StockItem, MaterialTeamAllocation } from "@/types/database";
 
@@ -111,12 +112,22 @@ export function GeralPanel() {
   const [saving, setSaving] = useState(false);
   // Linha cujo botão "Transferir" foi clicado — abre o modal de transferência.
   const [transferRow, setTransferRow] = useState<Row | null>(null);
+  const [editRow, setEditRow] = useState<Row | null>(null);
+  const [deleteRow, setDeleteRow] = useState<Row | null>(null);
   const [showAdd, setShowAdd] = useState(false);
 
   const role = profile?.role || "RH";
   const canSeeValue = canViewStockValue(role);
   const canEditSetor = useCallback(
     (setor: string) => hasPermission(role, SETOR_MODULE[setor] || "ESTOQUE", "edit"),
+    [role],
+  );
+  const canBaixarSetor = useCallback(
+    (setor: string) => hasPermission(role, SETOR_MODULE[setor] || "ESTOQUE", "baixar"),
+    [role],
+  );
+  const canDeleteSetor = useCallback(
+    (setor: string) => hasPermission(role, SETOR_MODULE[setor] || "ESTOQUE", "delete"),
     [role],
   );
   // Setores em que o usuário pode CRIAR item (alimenta o seletor do "Adicionar").
@@ -393,6 +404,123 @@ export function GeralPanel() {
     }
   }
 
+  // Quantidade "de galpão" da linha (o que as setinhas ↑/↓ e o campo Quantidade
+  // da edição mexem): Total no material, Disponível no rancho.
+  const warehouseQty = (row: Row) => (row.kind === "MAT" ? row.total : row.disp);
+  const warehouseCol = (row: Row): ColKey => (row.kind === "MAT" ? "TOTAL" : "DISP");
+
+  // ── Setinhas ↑/↓ (±1 no galpão) ───────────────────────────────────────────
+  // Reaproveita o commitEdit (grava valor absoluto e já registra o movimento no
+  // histórico). Material mexe no Total; rancho na linha Disponível (EQUIPE_3).
+  async function handleQuickAdjust(row: Row, delta: 1 | -1) {
+    const cur = warehouseQty(row);
+    const next = Math.max(0, Math.round((cur + delta) * 1000) / 1000);
+    if (next === cur) return;
+    await commitEdit(row, warehouseCol(row), next);
+  }
+
+  // ── Edição do item (nome / padrão / quantidade / valor / obs) ─────────────
+  // Material: 1 linha stock_items — edita direto. Rancho: nome e padrão valem pro
+  // alimento todo (propaga pras linhas das equipes); a quantidade edita só o
+  // Disponível (linha EQUIPE_3). Mudança de quantidade registra movimento.
+  async function handleEditSave(data: { name: string; padrao: number; quantity: number; unitValue: number; notes: string | null }) {
+    if (!editRow) return;
+    const actor = profile?.full_name || "Sistema";
+    const today = new Date().toISOString().split("T")[0];
+    const name = data.name.trim() || editRow.name;
+    setSaving(true);
+    try {
+      if (editRow.kind === "MAT" && editRow.matItem) {
+        const it = editRow.matItem;
+        const payload: Record<string, unknown> = {
+          name,
+          min_quantity: Math.round(data.padrao),
+          quantity: data.quantity,
+          notes: data.notes,
+          updated_by: actor,
+        };
+        if (canSeeValue) payload.unit_value = data.unitValue;
+        await db.from("stock_items").update(payload).eq("id", it.id);
+        const diff = +(data.quantity - editRow.total).toFixed(3);
+        if (diff !== 0) {
+          await db.from("stock_movements").insert({
+            stock_item_id: it.id,
+            movement_type: diff > 0 ? "AJUSTE" : "BAIXA",
+            quantity: Math.abs(diff),
+            movement_date: today,
+            notes: `Aba Geral: edição do item ${editRow.total} → ${data.quantity}`,
+            created_by: actor,
+          } as Record<string, unknown>);
+        }
+      } else if (editRow.kind === "RANCHO" && editRow.ranchoRows) {
+        const group = editRow.ranchoRows;
+        const lines = Object.values(group).filter(Boolean) as StockItem[];
+        // Nome e padrão são do alimento inteiro: propaga pras linhas por equipe.
+        for (const line of lines) {
+          await db.from("stock_items")
+            .update({ name, default_quantity: data.padrao, updated_by: actor } as Record<string, unknown>)
+            .eq("id", line.id);
+        }
+        // Quantidade edita o Disponível (linha EQUIPE_3), logando o movimento.
+        const dispLine = group[DISPONIVEL_RANCHO];
+        if (dispLine) {
+          const diff = +(data.quantity - (Number(dispLine.quantity) || 0)).toFixed(3);
+          if (diff !== 0) {
+            await db.from("stock_items")
+              .update({ quantity: data.quantity, updated_by: actor } as Record<string, unknown>)
+              .eq("id", dispLine.id);
+            await db.from("stock_movements").insert({
+              stock_item_id: dispLine.id,
+              movement_type: diff > 0 ? "AJUSTE" : "BAIXA",
+              quantity: Math.abs(diff),
+              movement_date: today,
+              notes: `Aba Geral: edição do Disponível ${Number(dispLine.quantity) || 0} → ${data.quantity}`,
+              created_by: actor,
+            } as Record<string, unknown>);
+          }
+        } else if (data.quantity > 0) {
+          const mother = lines[0];
+          await db.from("stock_items").insert({
+            name,
+            category: mother?.category ?? "SUPRIMENTOS",
+            unit: mother?.unit ?? "UN",
+            quantity: data.quantity,
+            default_quantity: data.padrao,
+            min_quantity: 0,
+            team: DISPONIVEL_RANCHO,
+            updated_by: actor,
+          } as Record<string, unknown>);
+        }
+      }
+      await loadItems();
+    } finally {
+      setSaving(false);
+      setEditRow(null);
+    }
+  }
+
+  // ── Exclusão ──────────────────────────────────────────────────────────────
+  // Material: apaga a linha (alocações caem por cascade). Rancho: apaga TODAS as
+  // linhas do alimento (Disponível + equipes) — some do estoque inteiro.
+  async function handleDelete() {
+    if (!deleteRow) return;
+    setSaving(true);
+    try {
+      if (deleteRow.kind === "MAT" && deleteRow.matItem) {
+        await db.from("stock_items").delete().eq("id", deleteRow.matItem.id);
+      } else if (deleteRow.kind === "RANCHO" && deleteRow.ranchoRows) {
+        const lines = Object.values(deleteRow.ranchoRows).filter(Boolean) as StockItem[];
+        for (const line of lines) {
+          await db.from("stock_items").delete().eq("id", line.id);
+        }
+      }
+      await loadItems();
+    } finally {
+      setSaving(false);
+      setDeleteRow(null);
+    }
+  }
+
   const editable = (row: Row, col: ColKey) => {
     if (!canEditSetor(row.setor)) return false;
     if (row.kind === "MAT") return col !== "DISP"; // Disponível calculado
@@ -435,28 +563,76 @@ export function GeralPanel() {
             label: VIEW_TABS.find((v) => v.key === teamView)?.label || teamView,
             render: (r: Row) => cell(r, teamView, r.teams[teamView], true),
           }];
-  // Coluna de ação: botão Transferir (Geral é por equipe — manda de uma
-  // equipe/Disponível pra outra). Só aparece pra quem pode editar aquele setor.
-  const canEditAny = SETORES.some((s) => canEditSetor(s.key));
+  // Coluna de ação: Transferir · ↑ aumentar · ↓ tirar · editar · excluir (mesmo
+  // conjunto dos painéis por setor). Cada botão só aparece pra quem tem a
+  // permissão do setor daquela linha.
+  const canDoAnyAction = SETORES.some(
+    (s) => canEditSetor(s.key) || canBaixarSetor(s.key) || canDeleteSetor(s.key),
+  );
   const actionsCol = {
     key: "actions",
     label: "",
-    className: "w-14",
-    render: (r: Row) =>
-      canEditSetor(r.setor) ? (
-        <button
-          onClick={(e) => { e.stopPropagation(); setTransferRow(r); }}
-          disabled={r.total <= 0}
-          className="p-1.5 text-teal-600 hover:bg-teal-50 rounded disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-          title="Transferir entre equipes/Disponível"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m4 6H4m0 0l4 4m-4-4l4-4" />
-          </svg>
-        </button>
-      ) : null,
+    className: "w-44",
+    render: (r: Row) => (
+      <div className="flex items-center gap-1">
+        {canEditSetor(r.setor) && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setTransferRow(r); }}
+            disabled={r.total <= 0}
+            className="p-1.5 text-teal-600 hover:bg-teal-50 rounded disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+            title="Transferir entre equipes/Disponível"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m4 6H4m0 0l4 4m-4-4l4-4" />
+            </svg>
+          </button>
+        )}
+        {canEditSetor(r.setor) && (
+          <button
+            onClick={(e) => { e.stopPropagation(); handleQuickAdjust(r, 1); }}
+            disabled={saving}
+            className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+            title={r.kind === "MAT" ? "Aumentar 1 no Total" : "Aumentar 1 no Disponível"}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+            </svg>
+          </button>
+        )}
+        {canBaixarSetor(r.setor) && (
+          <button
+            onClick={(e) => { e.stopPropagation(); handleQuickAdjust(r, -1); }}
+            disabled={saving || warehouseQty(r) <= 0}
+            className="p-1.5 text-amber-600 hover:bg-amber-50 rounded disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+            title={r.kind === "MAT" ? "Baixar 1 do Total" : "Baixar 1 do Disponível"}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            </svg>
+          </button>
+        )}
+        {canEditSetor(r.setor) && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setEditRow(r); }}
+            className="p-1.5 text-primary hover:bg-blue-50 rounded"
+            title="Editar"
+          >
+            <EditIcon />
+          </button>
+        )}
+        {canDeleteSetor(r.setor) && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setDeleteRow(r); }}
+            className="p-1.5 text-danger hover:bg-red-50 rounded"
+            title="Excluir"
+          >
+            <TrashIcon />
+          </button>
+        )}
+      </div>
+    ),
   };
-  const columns = canEditAny ? [...baseCols, ...qtyCols, actionsCol] : [...baseCols, ...qtyCols];
+  const columns = canDoAnyAction ? [...baseCols, ...qtyCols, actionsCol] : [...baseCols, ...qtyCols];
 
   return (
     <div className="space-y-4">
@@ -520,6 +696,28 @@ export function GeralPanel() {
         onClose={() => setShowAdd(false)}
         onSave={handleAdd}
         saving={saving}
+      />
+
+      <GeralEditModal
+        row={editRow}
+        showValue={canSeeValue}
+        onClose={() => setEditRow(null)}
+        onSave={handleEditSave}
+        saving={saving}
+      />
+
+      <ConfirmDialog
+        open={!!deleteRow}
+        onClose={() => setDeleteRow(null)}
+        onConfirm={handleDelete}
+        title="Excluir item"
+        message={
+          deleteRow?.kind === "RANCHO"
+            ? `Excluir "${deleteRow?.name}" do estoque? Some o Disponível e o que está com todas as equipes.`
+            : `Tem certeza que deseja excluir "${deleteRow?.name}"?`
+        }
+        confirmLabel="Excluir"
+        loading={saving}
       />
     </div>
   );
@@ -725,6 +923,107 @@ function GeralAddModal({ open, setores, showValue, allNames, onClose, onSave, sa
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={saving || !trimmed}>{saving ? "Salvando..." : "Salvar"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// Modal de edição da aba Geral. Campos comuns (Nome, Padrão, Quantidade) valem
+// pros dois modelos; Valor unitário e Observações só aparecem pra material (o
+// rancho não guarda esses campos aqui). A Quantidade é a "de galpão": Total no
+// material, Disponível no rancho.
+function GeralEditModal({ row, showValue, onClose, onSave, saving }: {
+  row: Row | null;
+  showValue: boolean;
+  onClose: () => void;
+  onSave: (data: { name: string; padrao: number; quantity: number; unitValue: number; notes: string | null }) => void;
+  saving: boolean;
+}) {
+  const [name, setName] = useState("");
+  const [padrao, setPadrao] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [unitValue, setUnitValue] = useState("");
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => {
+    if (!row) return;
+    setName(row.name);
+    if (row.kind === "MAT") {
+      const it = row.matItem;
+      setPadrao(it?.min_quantity ? formatQty(it.min_quantity) : "");
+      setQuantity(formatQty(row.total));
+      setUnitValue(it?.unit_value ? formatQty(it.unit_value) : "");
+      setNotes(it?.notes || "");
+    } else {
+      const rr = row.ranchoRows || {};
+      const anyLine = rr[DISPONIVEL_RANCHO] || rr.EQUIPE_1 || rr.EQUIPE_2 || rr.EQUIPE_4;
+      const pad = Number(anyLine?.default_quantity) || 0;
+      setPadrao(pad ? formatQty(pad) : "");
+      setQuantity(formatQty(row.disp));
+      setUnitValue("");
+      setNotes("");
+    }
+  }, [row]);
+
+  if (!row) return null;
+  const isMat = row.kind === "MAT";
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    onSave({
+      name: name.trim(),
+      padrao: parseDecimalBR(padrao),
+      quantity: parseDecimalBR(quantity),
+      unitValue: parseDecimalBR(unitValue),
+      notes: notes.trim() || null,
+    });
+  }
+
+  return (
+    <Modal open={!!row} onClose={onClose} title={`Editar item — ${row.setorLabel}`}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Nome *</label>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} />
+          {!isMat && (
+            <p className="mt-1 text-[11px] text-text-light">Nome e Padrão valem pro alimento inteiro (Disponível + equipes).</p>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Padrão <span className="text-text-light font-normal">(opcional)</span></label>
+            <input type="text" inputMode="decimal" value={padrao} onChange={(e) => setPadrao(e.target.value)} placeholder="0 = sem padrão" className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">
+              {isMat ? "Quantidade (Total)" : "Quantidade (Disponível)"}
+            </label>
+            <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 8" className={inputCls} />
+          </div>
+        </div>
+        {isMat && showValue && (
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Valor Unitário <span className="text-text-light font-normal">(R$, opcional)</span></label>
+            <input type="text" inputMode="decimal" value={unitValue} onChange={(e) => setUnitValue(e.target.value)} placeholder="Ex: 24,90" className={inputCls} />
+            {parseDecimalBR(unitValue) > 0 && parseDecimalBR(quantity) > 0 && (
+              <p className="text-xs text-text-light mt-1">
+                Total em estoque: <strong>{formatCurrency(parseDecimalBR(unitValue) * parseDecimalBR(quantity))}</strong>
+              </p>
+            )}
+          </div>
+        )}
+        {isMat && (
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Observações <span className="text-text-light font-normal">(opcional)</span></label>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
+          </div>
+        )}
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={saving || !name.trim()}>{saving ? "Salvando..." : "Salvar"}</Button>
         </div>
       </form>
     </Modal>
