@@ -67,6 +67,9 @@ import {
   type Advance, type AdvanceDiscount as AdvanceDiscountRow,
   balanceOf, employeeBalance, jobDiscountFor, openAdvances,
 } from "@/lib/vales";
+import {
+  unitLabel, normalizeUnit, SUGGESTED_UNITS, sectionKeyOfUnit, sectionMeta, orderedSectionKeys,
+} from "@/lib/jobUnits";
 import type {
   JobFunction,
   JobFunctionRate,
@@ -81,26 +84,6 @@ import type {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-// Rótulo curto e legível da UNIDADE de uma função — sempre em MAIÚSCULO. As
-// unidades conhecidas têm um nome amigável; qualquer unidade nova, criada na
-// hora pelo usuário no modal de função, aparece com o próprio texto digitado.
-const KNOWN_UNIT_LABELS: Record<string, string> = {
-  MENSALISTA: "MENSALISTA",
-  PORAO: "PORÃO",
-  POR_NAVIO: "POR NAVIO",
-  POR_DIA: "POR DIA",
-  POR_HORA: "POR HORA",
-  POR_OPERACAO: "POR OPERAÇÃO",
-  TURNO: "TURNO (COSTADO)",
-  ADMIN_COSTADO: "ADMINISTRATIVO",
-};
-function unitLabel(unit: string | null | undefined): string {
-  const u = (unit || "").trim().toUpperCase();
-  return KNOWN_UNIT_LABELS[u] || u.replace(/_/g, " ");
-}
-// Unidades "de fábrica" oferecidas no combobox do modal, além das que já existem
-// nas funções cadastradas. O usuário pode digitar uma nova livremente.
-const SUGGESTED_UNITS = ["PORAO", "TURNO", "MENSALISTA"];
 
 // Serviços de Embarque do navio (ships.services), pra mostrar num relance quais
 // navios tiveram Raspagem/Pintura — os extras que rendem 200/porão a mais. O
@@ -1532,15 +1515,6 @@ function FuncoesTab({
   const allocCount = (fnId: number) =>
     allocations.filter((a) => a.function_id === fnId).length;
 
-  // Conta colaboradores ATIVOS cuja função (role) bate com o nome da função.
-  // Comparação case-insensitive e ignora INATIVO/PENDENCIA.
-  const employeeCount = (fnName: string) => {
-    const target = fnName.trim().toUpperCase();
-    return employees.filter(
-      (e) => (e.status ?? "ATIVO") === "ATIVO" && (e.role || "").trim().toUpperCase() === target,
-    ).length;
-  };
-
   const filtered = functions.filter((f) =>
     f.name.toLowerCase().includes(search.toLowerCase())
   );
@@ -1570,41 +1544,29 @@ function FuncoesTab({
     onChange();
   }
 
-  // Seção (grupo) de cada função na aba Valores, derivada da UNIDADE (não do
-  // nome). As unidades conhecidas caem em seções canônicas (Embarque = pago por
-  // porão; Costado = por turno; Mensalista = salário fixo). Qualquer unidade
-  // nova, criada na hora pelo usuário, vira a SUA PRÓPRIA seção — assim ele pode
-  // "criar unidade" livremente sem mexer no código.
-  function sectionKeyOf(f: JobFunction): string {
-    const u = (f.unit || "").trim().toUpperCase();
-    if (u === "TURNO") return "SERVICOS";
-    if (u === "MENSALISTA" || u === "POR_DIA" || u === "POR_HORA") return "MENSALISTA";
-    if (u === "" || u === "PORAO" || u === "POR_NAVIO" || u === "POR_OPERACAO") return "EMBARQUE";
-    return u; // unidade customizada = seção própria
-  }
-  const SECTION_META: Record<string, { title: string; hint: string }> = {
-    EMBARQUE: { title: "🚢 EMBARQUE", hint: "Pago por porão — inclui os extras Raspagem e Pintura" },
-    SERVICOS: { title: "⚓ COSTADO", hint: "Pago por turno" },
-    MENSALISTA: { title: "🗓️ MENSALISTA", hint: "Salário fixo mensal" },
-  };
-  function sectionMeta(key: string) {
-    return SECTION_META[key] || { title: `📋 ${unitLabel(key)}`, hint: "Unidade personalizada" };
-  }
-  // Ordem das seções: Embarque e Costado primeiro, depois as unidades
-  // personalizadas (alfabético) e a Mensalista sempre por último.
-  const sectionKeys = (() => {
-    const present = Array.from(new Set(filtered.map(sectionKeyOf)));
-    const head = ["EMBARQUE", "SERVICOS"].filter((k) => present.includes(k));
-    const custom = present
-      .filter((k) => !["EMBARQUE", "SERVICOS", "MENSALISTA"].includes(k))
-      .sort((a, b) => a.localeCompare(b, "pt-BR"));
-    const tail = present.includes("MENSALISTA") ? ["MENSALISTA"] : [];
-    return [...head, ...custom, ...tail];
-  })();
+  // Seções derivadas da UNIDADE (fonte única em @/lib/jobUnits) — iguais às da
+  // aba Funções do RH. Unidade nova, criada pelo usuário, vira a própria seção.
+  const sectionKeys = orderedSectionKeys(filtered.map((f) => f.unit));
   const fnsBySection = (key: string) =>
     filtered
-      .filter((f) => sectionKeyOf(f) === key)
+      .filter((f) => sectionKeyOfUnit(f.unit) === key)
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+
+  // Colaboradores de uma função, SEMPRE puxados da aba Colaboradores. Duas
+  // naturezas de vínculo (não misturar): por SETOR — Administrativo puxa o
+  // setor ADMINISTRATIVO; Costado, Pintura e Raspagem são atividades do
+  // OPERACIONAL — ou por CARGO — nas demais, a role bate com o nome da função.
+  // A coluna mostra todas igual: "N colaboradores", clicável, abrindo a lista.
+  const fnActivePeople = (f: JobFunction): Employee[] => {
+    const name = f.name.trim().toUpperCase();
+    if (name === "ADMINISTRATIVO")
+      // Admin pode estar como PENDENCIA (ex.: Lucas) — conta todo mundo não demitido.
+      return employees.filter((e) => e.sector === "ADMINISTRATIVO" && (e.status ?? "ATIVO") !== "INATIVO");
+    const active = employees.filter((e) => (e.status ?? "ATIVO") === "ATIVO");
+    if (name === "COSTADO" || isServicoExtra(f.name))
+      return active.filter((e) => e.sector === "OPERACIONAL");
+    return active.filter((e) => (e.role || "").trim().toUpperCase() === name);
+  };
 
   // Linha da tabela de uma função (reusada nas 3 seções).
   const renderFnRow = (f: JobFunction) => (
@@ -1620,62 +1582,7 @@ function FuncoesTab({
       <td className="px-4 py-2.5 text-text-light text-xs">{f.name.trim().toUpperCase() === "ADMINISTRATIVO" ? "POR NAVIO" : unitLabel(f.unit)}</td>
       <td className="px-4 py-2.5 text-text-light text-xs">
         {(() => {
-          // Administrativo agrupa pelo SETOR (não pela role) — o pessoal
-          // de escritório tem cargos variados (Analista RH, etc.).
-          const isAdmin = f.name.trim().toUpperCase() === "ADMINISTRATIVO";
-          if (isAdmin) {
-            const adminPeople = employees.filter((e) => e.sector === "ADMINISTRATIVO" && (e.status ?? "ATIVO") !== "INATIVO");
-            if (adminPeople.length === 0) return <span className="text-text-light/60">— ninguém no setor</span>;
-            return (
-              <button
-                type="button"
-                onClick={() => setViewEmpsFn(f)}
-                className="inline-flex items-center gap-1 px-2 py-1 -mx-2 -my-1 rounded hover:bg-blue-50 hover:text-primary transition cursor-pointer"
-                title="Ver pessoal do administrativo"
-              >
-                <span>🏢</span>
-                <strong className="text-text">{adminPeople.length}</strong>
-                <span>do administrativo</span>
-                <span className="text-[10px] opacity-60">▸</span>
-              </button>
-            );
-          }
-          // Costado é uma atividade, não uma role — qualquer
-          // colaborador operacional pode ser escalado. Mostra
-          // total de ativos em vez do match por role (que daria 0).
-          const isCostado = f.name.trim().toUpperCase() === "COSTADO";
-          if (isCostado) {
-            const totalActive = employees.filter((e) => (e.status ?? "ATIVO") === "ATIVO").length;
-            return (
-              <span className="inline-flex items-center gap-1 text-indigo-700">
-                <span>🌍 Qualquer um — </span>
-                <strong className="text-text">{totalActive}</strong>
-                <span>ativos no sistema</span>
-              </span>
-            );
-          }
-          // Raspagem/Pintura são SERVIÇOS extras que qualquer colaborador do
-          // OPERACIONAL pode fazer (pago pelo valor da função, R$200/porão) —
-          // ninguém tem esse cargo, então agrupamos pelo setor, igual o
-          // Administrativo. Assim não fica "nenhum cadastrado".
-          if (isServicoExtra(f.name)) {
-            const opPeople = employees.filter((e) => e.sector === "OPERACIONAL" && (e.status ?? "ATIVO") === "ATIVO");
-            if (opPeople.length === 0) return <span className="text-text-light/60">— ninguém no operacional</span>;
-            return (
-              <button
-                type="button"
-                onClick={() => setViewEmpsFn(f)}
-                className="inline-flex items-center gap-1 px-2 py-1 -mx-2 -my-1 rounded hover:bg-blue-50 hover:text-primary transition cursor-pointer"
-                title="Ver pessoal do operacional (todos podem fazer este serviço)"
-              >
-                <span>🛠️</span>
-                <strong className="text-text">{opPeople.length}</strong>
-                <span>do operacional</span>
-                <span className="text-[10px] opacity-60">▸</span>
-              </button>
-            );
-          }
-          const n = employeeCount(f.name);
+          const n = fnActivePeople(f).length;
           if (n === 0) return <span className="text-text-light/60">— nenhum cadastrado</span>;
           return (
             <button
@@ -1920,7 +1827,7 @@ function FunctionFormModal({
       name: name.trim().toUpperCase(),
       description: description.trim() || null,
       default_rate: rateNum,
-      unit: (unit || "PORAO").trim().toUpperCase().replace(/\s+/g, "_"),
+      unit: normalizeUnit(unit),
       active,
     };
     if (item) {
@@ -2126,8 +2033,8 @@ function EmployeesByFunctionModal({
     // escritório pode estar como PENDENCIA (ex.: Lucas Nunes), o filtro "Só ativos"
     // aqui significa "não demitido" pra não esconder ninguém do setor.
     const isAdmin = target === "ADMINISTRATIVO";
-    // Raspagem/Pintura: serviço do OPERACIONAL — agrupa pelo setor operacional.
-    const isServico = isServicoExtra(fn.name);
+    // Costado, Raspagem e Pintura: atividades do OPERACIONAL — agrupa pelo setor.
+    const isServico = isServicoExtra(fn.name) || target === "COSTADO";
     return employees
       .filter((e) =>
         isAdmin ? e.sector === "ADMINISTRATIVO"
@@ -2197,7 +2104,7 @@ function EmployeesByFunctionModal({
 
           <div className="text-xs text-text-light">
             {list.length === 0 ? "Nenhum colaborador" : `${list.length} ${list.length === 1 ? "colaborador" : "colaboradores"}`}
-            {isServicoExtra(fn.name)
+            {(isServicoExtra(fn.name) || fn.name.trim().toUpperCase() === "COSTADO")
               ? <> do <strong className="text-text">operacional</strong> — todos podem fazer <strong className="text-text">{fn.name}</strong> pelo valor da função.</>
               : fn.name.trim().toUpperCase() === "ADMINISTRATIVO"
                 ? <> do setor <strong className="text-text">administrativo</strong>.</>

@@ -13,7 +13,10 @@ import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatPhone, formatDateTime, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, MOVEMENT_TYPE_LABELS, type NrCode } from "@/lib/utils";
 import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
-import type { Employee, JobFunction, JobUnit } from "@/types/database";
+import {
+  unitLabel, normalizeUnit, SUGGESTED_UNITS, sectionKeyOfUnit, sectionMeta, orderedSectionKeys,
+} from "@/lib/jobUnits";
+import type { Employee, JobFunction } from "@/types/database";
 import { DocumentosTab } from "./documentos-tab";
 
 export default function ColaboradoresPage() {
@@ -892,24 +895,6 @@ function effectivePaga(
 // aparece só como leitura, pra o RH ter noção de quais funções ainda faltam
 // precificar. Pedido do RH (funções eram criadas só no Financeiro).
 
-// Tipo simplificado pro RH → unidade real da função. A aba Valores derancia as
-// seções pela unidade, então mapeamos pros mesmos três grupos de lá.
-const RH_TIPO_OPTIONS: { value: JobUnit; label: string; hint: string }[] = [
-  { value: "PORAO", label: "🚢 Embarque", hint: "Trabalho a bordo, pago por porão" },
-  { value: "TURNO", label: "⚓ Costado", hint: "Pago por turno" },
-  { value: "ADMIN_COSTADO", label: "🧑‍💼 Administrativo (Costado)", hint: "Custo fixo por navio no Costado" },
-  { value: "MENSALISTA", label: "🗓️ Mensalista", hint: "Salário fixo mensal" },
-];
-
-// Mesma regra de seção da aba Valores (derivada da unidade, não do nome).
-function rhSectionOf(f: JobFunction): "EMBARQUE" | "SERVICOS" | "ADMIN_COSTADO" | "MENSALISTA" {
-  const u = (f.unit || "").toUpperCase();
-  if (u === "TURNO") return "SERVICOS";
-  if (u === "ADMIN_COSTADO") return "ADMIN_COSTADO";
-  if (u === "MENSALISTA" || u === "POR_DIA" || u === "POR_HORA") return "MENSALISTA";
-  return "EMBARQUE"; // PORAO, POR_NAVIO, POR_OPERACAO
-}
-
 function FuncoesRHTab({
   functions, canManage, loading, onChange,
 }: {
@@ -923,16 +908,12 @@ function FuncoesRHTab({
   const [editFn, setEditFn] = useState<JobFunction | null>(null);
   const [toggleFn, setToggleFn] = useState<JobFunction | null>(null);
 
-  const SECTIONS = [
-    { key: "EMBARQUE", title: "🚢 Embarque", hint: "Trabalho a bordo, pago por porão" },
-    { key: "SERVICOS", title: "⚓ Costado", hint: "Pago por turno" },
-    { key: "ADMIN_COSTADO", title: "🧑‍💼 Administrativo (Costado)", hint: "Custo fixo por navio no Costado" },
-    { key: "MENSALISTA", title: "🗓️ Mensalista", hint: "Salário fixo mensal" },
-  ] as const;
-
   const filtered = functions.filter((f) => f.name.toLowerCase().includes(search.toLowerCase()));
+  // Seções derivadas da unidade — fonte única (@/lib/jobUnits), iguais às da
+  // aba Valores. Unidade nova, criada pelo usuário, vira a própria seção.
+  const sectionKeys = orderedSectionKeys(filtered.map((f) => f.unit));
   const fnsBySection = (key: string) =>
-    filtered.filter((f) => rhSectionOf(f) === key).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+    filtered.filter((f) => sectionKeyOfUnit(f.unit) === key).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
 
   const inputCls = "w-full md:w-72 px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
@@ -963,13 +944,14 @@ function FuncoesRHTab({
       {loading ? (
         <div className="text-sm text-text-light py-8 text-center">Carregando...</div>
       ) : (
-        SECTIONS.map((sec) => {
-          const rows = fnsBySection(sec.key);
+        sectionKeys.map((key) => {
+          const rows = fnsBySection(key);
+          const meta = sectionMeta(key);
           return (
-            <div key={sec.key} className="bg-white border border-border rounded-lg overflow-hidden">
+            <div key={key} className="bg-white border border-border rounded-lg overflow-hidden">
               <div className="px-4 py-2.5 bg-gray-50 border-b border-border flex items-baseline gap-2">
-                <span className="font-semibold text-sm text-text">{sec.title}</span>
-                <span className="text-xs text-text-light">{sec.hint}</span>
+                <span className="font-semibold text-sm text-text">{meta.title}</span>
+                <span className="text-xs text-text-light">{meta.hint}</span>
               </div>
               {rows.length === 0 ? (
                 <div className="px-4 py-6 text-sm text-text-light/70 text-center">Nenhuma função aqui.</div>
@@ -1033,6 +1015,7 @@ function FuncoesRHTab({
       <FunctionRHFormModal
         open={showForm}
         item={editFn}
+        existingUnits={Array.from(new Set(functions.map((f) => (f.unit || "").trim().toUpperCase()).filter(Boolean)))}
         onClose={() => { setShowForm(false); setEditFn(null); }}
         onSaved={() => { setShowForm(false); setEditFn(null); onChange(); }}
       />
@@ -1062,31 +1045,27 @@ function FuncoesRHTab({
 
 // ─── Modal de criar/editar função (RH — sem valor) ──────────────────────────
 function FunctionRHFormModal({
-  open, item, onClose, onSaved,
+  open, item, existingUnits, onClose, onSaved,
 }: {
-  open: boolean; item: JobFunction | null; onClose: () => void; onSaved: () => void;
+  open: boolean; item: JobFunction | null; existingUnits: string[]; onClose: () => void; onSaved: () => void;
 }) {
   const [name, setName] = useState("");
-  const [unit, setUnit] = useState<JobUnit>("PORAO");
+  const [unit, setUnit] = useState<string>("PORAO");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (item) {
       setName(item.name);
-      // Normaliza a unidade existente pros tipos do seletor do RH.
-      const sec = rhSectionOf(item);
-      setUnit(
-        sec === "SERVICOS" ? "TURNO"
-        : sec === "ADMIN_COSTADO" ? "ADMIN_COSTADO"
-        : sec === "MENSALISTA" ? "MENSALISTA"
-        : "PORAO",
-      );
+      setUnit((item.unit || "PORAO").trim().toUpperCase());
     } else {
       setName(""); setUnit("PORAO");
     }
     setError(null);
   }, [item, open]);
+
+  // Sugestões do combobox de unidade: as "de fábrica" + as já usadas em funções.
+  const unitSuggestions = Array.from(new Set([...SUGGESTED_UNITS, ...existingUnits])).filter(Boolean);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -1096,9 +1075,10 @@ function FunctionRHFormModal({
     setError(null);
     // O RH nunca mexe no valor: no create o default_rate fica no default do banco
     // (0) e no update só tocamos em nome/tipo.
+    const cleanUnit = normalizeUnit(unit);
     const res = item
-      ? await db.from("job_functions").update({ name: clean, unit }).eq("id", item.id)
-      : await db.from("job_functions").insert({ name: clean, unit });
+      ? await db.from("job_functions").update({ name: clean, unit: cleanUnit }).eq("id", item.id)
+      : await db.from("job_functions").insert({ name: clean, unit: cleanUnit });
     setSaving(false);
     if (res.error) {
       setError(/uniqu|duplicat|already exists/i.test(res.error.message)
@@ -1128,11 +1108,23 @@ function FunctionRHFormModal({
           <p className="text-[11px] text-text-light mt-1">Salvo em MAIÚSCULAS.</p>
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">Tipo</label>
-          <select value={unit} onChange={(e) => setUnit(e.target.value as JobUnit)} className={inputCls}>
-            {RH_TIPO_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-          <p className="text-[11px] text-text-light mt-1">{RH_TIPO_OPTIONS.find((o) => o.value === unit)?.hint}</p>
+          <label className="block text-sm font-medium mb-1">Unidade</label>
+          <input
+            type="text"
+            list="rh-unit-options"
+            value={unit}
+            onChange={(e) => setUnit(e.target.value.toUpperCase())}
+            className={inputCls}
+            placeholder="PORAO, COSTADO..."
+          />
+          <datalist id="rh-unit-options">
+            {unitSuggestions.map((u) => (
+              <option key={u} value={u} label={unitLabel(u)} />
+            ))}
+          </datalist>
+          <p className="text-[11px] text-text-light mt-1">
+            Escolha uma existente ou digite uma nova — ela vira uma seção nas Funções e no Valores.
+          </p>
         </div>
         <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-text-light">
           💰 O valor da paga é definido pelo Financeiro. Aqui você só cria e organiza as funções.
