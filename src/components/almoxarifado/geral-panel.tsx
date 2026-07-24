@@ -4,9 +4,12 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
-import { hasPermission, type Module } from "@/lib/rbac";
+import { hasPermission, canViewStockValue, type Module } from "@/lib/rbac";
 import { DataTable } from "@/components/ui/data-table";
-import { matchSearch, parseDecimalBR, formatQty, normalize } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Modal } from "@/components/ui/modal";
+import { PlusIcon } from "@/components/icons";
+import { matchSearch, parseDecimalBR, formatQty, formatCurrency, normalize } from "@/lib/utils";
 import type { StockItem, MaterialTeamAllocation } from "@/types/database";
 
 // Aba "Geral" do Almoxarifado: uma tabela única com TODOS os itens de todos os
@@ -57,6 +60,18 @@ const TEAM_COLS: { key: "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4"; label: string }[] 
 type TeamKey = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4";
 type ColKey = "TOTAL" | "DISP" | TeamKey;
 type TeamView = "TODOS" | "DISP" | TeamKey;
+// Origem/destino de transferência: Disponível ou uma equipe (sem "Todos").
+type XferView = "DISP" | TeamKey;
+
+// Opções de origem/destino no modal Transferir (Geral é por equipe: manda de
+// uma equipe/Disponível pra outra, valendo pra material e pro rancho).
+const XFER_VIEWS: { key: XferView; label: string }[] = [
+  { key: "DISP", label: "Disponível" },
+  { key: "EQUIPE_1", label: "Equipe 1" },
+  { key: "EQUIPE_2", label: "Equipe 2" },
+  { key: "EQUIPE_4", label: "Equipe Turbo" },
+];
+const XFER_LABEL: Record<string, string> = Object.fromEntries(XFER_VIEWS.map((v) => [v.key, v.label]));
 
 // Abas de visão por equipe (mesmo estilo do resto do Almoxarifado). "Todos" é o
 // padrão (Geral = tudo); as demais filtram as linhas pra quem tem quantidade
@@ -94,10 +109,19 @@ export function GeralPanel() {
   const [search, setSearch] = useState("");
   const [teamView, setTeamView] = useState<TeamView>("TODOS");
   const [saving, setSaving] = useState(false);
+  // Linha cujo botão "Transferir" foi clicado — abre o modal de transferência.
+  const [transferRow, setTransferRow] = useState<Row | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
 
   const role = profile?.role || "RH";
+  const canSeeValue = canViewStockValue(role);
   const canEditSetor = useCallback(
     (setor: string) => hasPermission(role, SETOR_MODULE[setor] || "ESTOQUE", "edit"),
+    [role],
+  );
+  // Setores em que o usuário pode CRIAR item (alimenta o seletor do "Adicionar").
+  const creatableSetores = useMemo(
+    () => SETORES.filter((s) => hasPermission(role, SETOR_MODULE[s.key] || "ESTOQUE", "create")),
     [role],
   );
 
@@ -262,6 +286,113 @@ export function GeralPanel() {
     }
   }
 
+  // Quantidade atual de uma linha numa visão (Disponível ou equipe).
+  const qtyOfView = (row: Row, v: XferView) => (v === "DISP" ? row.disp : row.teams[v]);
+
+  // ── Transferência entre equipes/Disponível (não muda o Total) ─────────────
+  // Material: Disponível é implícito (Total − alocações), então mover pra/de
+  // Disponível é só ajustar a alocação da equipe. Rancho: cada equipe é uma
+  // linha stock_items; move a quantidade entre elas (cria a linha se faltar).
+  // Transferir é redistribuição, não movimento de estoque — não gera histórico.
+  async function handleTransfer(row: Row, from: XferView, to: XferView, rawQty: number) {
+    const avail = qtyOfView(row, from);
+    const qty = Math.min(Math.max(rawQty, 0), avail);
+    if (qty <= 0 || from === to) { setTransferRow(null); return; }
+    const actor = profile?.full_name || "Sistema";
+    setSaving(true);
+    try {
+      if (row.kind === "MAT" && row.matItem) {
+        const it = row.matItem;
+        const setMatAlloc = async (team: TeamKey, absQty: number) => {
+          const clamped = Math.max(0, +absQty.toFixed(3));
+          const existing = allocs.find((a) => a.stock_item_id === it.id && a.team === team);
+          if (existing) {
+            await db.from("material_team_allocations").update({ quantity: clamped, updated_by: actor } as Record<string, unknown>).eq("id", existing.id);
+          } else if (clamped > 0) {
+            await db.from("material_team_allocations").insert({ stock_item_id: it.id, team, quantity: clamped, updated_by: actor } as Record<string, unknown>);
+          }
+        };
+        if (from !== "DISP") await setMatAlloc(from, row.teams[from] - qty);
+        if (to !== "DISP") await setMatAlloc(to, row.teams[to] + qty);
+      } else if (row.kind === "RANCHO" && row.ranchoRows) {
+        const setRanchoQty = async (view: XferView, absQty: number) => {
+          const team = view === "DISP" ? DISPONIVEL_RANCHO : view;
+          const clamped = Math.max(0, +absQty.toFixed(3));
+          const existing = row.ranchoRows![team];
+          if (existing) {
+            await db.from("stock_items").update({ quantity: clamped, updated_by: actor } as Record<string, unknown>).eq("id", existing.id);
+          } else if (clamped > 0) {
+            const mother = row.ranchoRows![DISPONIVEL_RANCHO] || row.ranchoRows!.EQUIPE_1 || row.ranchoRows!.EQUIPE_2 || row.ranchoRows!.EQUIPE_4;
+            await db.from("stock_items").insert({
+              name: mother?.name ?? row.name,
+              category: mother?.category ?? "SUPRIMENTOS",
+              unit: mother?.unit ?? "UN",
+              quantity: clamped,
+              default_quantity: mother?.default_quantity ?? 0,
+              min_quantity: 0,
+              team,
+              updated_by: actor,
+            } as Record<string, unknown>);
+          }
+        };
+        await setRanchoQty(from, qtyOfView(row, from) - qty);
+        await setRanchoQty(to, qtyOfView(row, to) + qty);
+      }
+      await loadItems();
+    } finally {
+      setSaving(false);
+      setTransferRow(null);
+    }
+  }
+
+  // ── Cadastro de item novo (Geral pergunta o setor) ────────────────────────
+  // Material: 1 linha stock_items com team = setor; a quantidade entra no galpão
+  // (Total, Disponível calculado). Rancho: 1 linha com team = EQUIPE_3 (a linha
+  // Disponível/galpão do alimento). Registra ENTRADA no histórico.
+  async function handleAdd(data: { setor: string; name: string; quantity: number; padrao: number; unitValue: number; notes: string | null }) {
+    const actor = profile?.full_name || "Sistema";
+    const today = new Date().toISOString().split("T")[0];
+    setSaving(true);
+    try {
+      const isRancho = data.setor === "RANCHO";
+      const payload: Record<string, unknown> = {
+        name: data.name,
+        quantity: data.quantity,
+        notes: data.notes,
+        updated_by: actor,
+      };
+      if (isRancho) {
+        payload.category = "SUPRIMENTOS";
+        payload.unit = "UN";
+        payload.team = DISPONIVEL_RANCHO;
+        payload.default_quantity = data.padrao;
+        payload.min_quantity = 0;
+      } else {
+        payload.category = "OUTROS";
+        payload.team = data.setor;
+        payload.min_quantity = Math.round(data.padrao);
+      }
+      if (canSeeValue && data.unitValue > 0) payload.unit_value = data.unitValue;
+
+      const insRes = (await db.from("stock_items").insert(payload)) as { data: { id?: number } | { id?: number }[] | null };
+      const created = Array.isArray(insRes.data) ? insRes.data[0] : insRes.data;
+      if (created?.id && data.quantity > 0) {
+        await db.from("stock_movements").insert({
+          stock_item_id: created.id,
+          movement_type: "ENTRADA",
+          quantity: data.quantity,
+          movement_date: today,
+          notes: "Cadastro do item na aba Geral",
+          created_by: actor,
+        } as Record<string, unknown>);
+      }
+      await loadItems();
+    } finally {
+      setSaving(false);
+      setShowAdd(false);
+    }
+  }
+
   const editable = (row: Row, col: ColKey) => {
     if (!canEditSetor(row.setor)) return false;
     if (row.kind === "MAT") return col !== "DISP"; // Disponível calculado
@@ -304,7 +435,28 @@ export function GeralPanel() {
             label: VIEW_TABS.find((v) => v.key === teamView)?.label || teamView,
             render: (r: Row) => cell(r, teamView, r.teams[teamView], true),
           }];
-  const columns = [...baseCols, ...qtyCols];
+  // Coluna de ação: botão Transferir (Geral é por equipe — manda de uma
+  // equipe/Disponível pra outra). Só aparece pra quem pode editar aquele setor.
+  const canEditAny = SETORES.some((s) => canEditSetor(s.key));
+  const actionsCol = {
+    key: "actions",
+    label: "",
+    className: "w-14",
+    render: (r: Row) =>
+      canEditSetor(r.setor) ? (
+        <button
+          onClick={(e) => { e.stopPropagation(); setTransferRow(r); }}
+          disabled={r.total <= 0}
+          className="p-1.5 text-teal-600 hover:bg-teal-50 rounded disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          title="Transferir entre equipes/Disponível"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m4 6H4m0 0l4 4m-4-4l4-4" />
+          </svg>
+        </button>
+      ) : null,
+  };
+  const columns = canEditAny ? [...baseCols, ...qtyCols, actionsCol] : [...baseCols, ...qtyCols];
 
   return (
     <div className="space-y-4">
@@ -344,8 +496,238 @@ export function GeralPanel() {
         searchValue={search}
         onSearchChange={setSearch}
         searchPlaceholder="Buscar item ou setor..."
+        actions={creatableSetores.length > 0 ? (
+          <Button onClick={() => setShowAdd(true)} size="sm">
+            <PlusIcon className="w-4 h-4" />
+            Adicionar
+          </Button>
+        ) : undefined}
+      />
+
+      <GeralTransferModal
+        row={transferRow}
+        initialFrom={teamView === "TODOS" || teamView === "DISP" ? "DISP" : teamView}
+        onClose={() => setTransferRow(null)}
+        onTransfer={handleTransfer}
+        saving={saving}
+      />
+
+      <GeralAddModal
+        open={showAdd}
+        setores={creatableSetores}
+        showValue={canSeeValue}
+        allNames={rows.map((r) => ({ name: r.name, setor: r.setor }))}
+        onClose={() => setShowAdd(false)}
+        onSave={handleAdd}
+        saving={saving}
       />
     </div>
+  );
+}
+
+// Modal de transferência da aba Geral: manda uma quantidade de uma ORIGEM
+// (Disponível ou equipe) pra um DESTINO. Vale pra material e rancho — o handler
+// decide como gravar. A origem começa na aba de visão atual.
+function GeralTransferModal({ row, initialFrom, onClose, onTransfer, saving }: {
+  row: Row | null;
+  initialFrom: XferView;
+  onClose: () => void;
+  onTransfer: (row: Row, from: XferView, to: XferView, qty: number) => void;
+  saving: boolean;
+}) {
+  const [from, setFrom] = useState<XferView>(initialFrom);
+  const [to, setTo] = useState<XferView>("DISP");
+  const [qty, setQty] = useState("");
+
+  const qtyOf = (r: Row, v: XferView) => (v === "DISP" ? r.disp : r.teams[v]);
+  const avail = row ? qtyOf(row, from) : 0;
+
+  // Ao (re)abrir: origem = aba atual; destino = primeira opção diferente da
+  // origem; quantidade = tudo que há na origem.
+  useEffect(() => {
+    if (!row) return;
+    const f = initialFrom;
+    const firstTo = XFER_VIEWS.map((v) => v.key).find((k) => k !== f) || "DISP";
+    setFrom(f);
+    setTo(firstTo);
+    setQty(formatQty(qtyOf(row, f)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row, initialFrom]);
+
+  if (!row) return null;
+  const parsed = parseDecimalBR(qty);
+  const valid = parsed > 0 && parsed <= avail + 1e-9 && from !== to;
+  const leftover = valid ? +(avail - parsed).toFixed(3) : avail;
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
+  const destinos = XFER_VIEWS.map((v) => v.key).filter((k) => k !== from);
+
+  const chip = (active: boolean) =>
+    `px-3 py-1.5 rounded-lg border text-xs font-medium transition ${active ? "bg-primary text-white border-primary" : "border-border text-text-light hover:bg-gray-50"}`;
+
+  return (
+    <Modal open={!!row} onClose={onClose} title="Transferir entre equipes">
+      <form
+        onSubmit={(e) => { e.preventDefault(); if (valid) onTransfer(row, from, to, parsed); }}
+        className="space-y-4"
+      >
+        <div className="rounded-lg border border-border bg-gray-50 px-3 py-2 text-sm">
+          <p className="font-medium text-text">
+            {row.name}
+            <span className="ml-2 text-xs text-text-light">{row.setorLabel}</span>
+          </p>
+          <p className="text-xs text-text-light mt-0.5">Total do item {formatQty(row.total)}</p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">De</label>
+          <div className="flex gap-1 flex-wrap">
+            {XFER_VIEWS.map((v) => (
+              <button
+                key={v.key}
+                type="button"
+                onClick={() => { setFrom(v.key); if (to === v.key) setTo(XFER_VIEWS.map((x) => x.key).find((k) => k !== v.key) || "DISP"); }}
+                className={chip(from === v.key)}
+              >
+                {v.label} ({formatQty(qtyOf(row, v.key))})
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Para</label>
+          <div className="flex gap-1 flex-wrap">
+            {destinos.map((d) => (
+              <button key={d} type="button" onClick={() => setTo(d)} className={chip(to === d)}>
+                {XFER_LABEL[d]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Quantidade</label>
+          <input type="text" inputMode="decimal" value={qty} onChange={(e) => setQty(e.target.value)} autoFocus className={inputCls} />
+          <div className="mt-1.5 flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-[11px] text-text-light">
+              {valid
+                ? <>Ficam <strong>{formatQty(leftover)}</strong> em {XFER_LABEL[from]}; vão <strong>{formatQty(parsed)}</strong> pra {XFER_LABEL[to]}.</>
+                : <span className="text-amber-700">Informe um valor entre 1 e {formatQty(avail)}.</span>}
+            </p>
+            {avail > 0 && (
+              <button type="button" onClick={() => setQty(formatQty(avail))} className="text-[11px] font-medium text-primary hover:underline">
+                Tudo ({formatQty(avail)})
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex gap-3 justify-end pt-1">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={!valid || saving}>{saving ? "Transferindo..." : "Transferir"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// Modal de cadastro na aba Geral: como a Geral é por equipe (e não por setor), o
+// primeiro campo é o SETOR — aí o item vai pro estoque certo (Utensílios,
+// Rancho, Fluídos, ...). A quantidade entra no galpão/Disponível.
+function GeralAddModal({ open, setores, showValue, allNames, onClose, onSave, saving }: {
+  open: boolean;
+  setores: { key: string; label: string }[];
+  showValue: boolean;
+  allNames: { name: string; setor: string }[];
+  onClose: () => void;
+  onSave: (data: { setor: string; name: string; quantity: number; padrao: number; unitValue: number; notes: string | null }) => void;
+  saving: boolean;
+}) {
+  const [setor, setSetor] = useState(setores[0]?.key || "GALPAO");
+  const [name, setName] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [padrao, setPadrao] = useState("");
+  const [unitValue, setUnitValue] = useState("");
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setSetor(setores[0]?.key || "GALPAO");
+      setName(""); setQuantity(""); setPadrao(""); setUnitValue(""); setNotes("");
+    }
+  }, [open, setores]);
+
+  const trimmed = name.trim();
+  const duplicate = trimmed
+    ? allNames.find((n) => n.setor === setor && normalize(n.name) === normalize(trimmed)) || null
+    : null;
+  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!trimmed) return;
+    onSave({
+      setor,
+      name: trimmed,
+      quantity: parseDecimalBR(quantity),
+      padrao: parseDecimalBR(padrao),
+      unitValue: parseDecimalBR(unitValue),
+      notes: notes.trim() || null,
+    });
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Novo item">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Setor *</label>
+          <select value={setor} onChange={(e) => setSetor(e.target.value)} className={inputCls}>
+            {setores.map((s) => (
+              <option key={s.key} value={s.key}>{s.label}</option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-text-light">Onde o item fica guardado no Almoxarifado — a quantidade entra no Disponível.</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Nome *</label>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} />
+          {duplicate && (
+            <p className="mt-1 text-[11px] text-amber-700">
+              ⚠️ Já existe <strong>{duplicate.name}</strong> nesse setor — confira antes de cadastrar de novo.
+            </p>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Padrão <span className="text-text-light font-normal">(opcional)</span></label>
+            <input type="text" inputMode="decimal" value={padrao} onChange={(e) => setPadrao(e.target.value)} placeholder="0 = sem padrão" className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Quantidade Atual</label>
+            <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 8" className={inputCls} />
+          </div>
+        </div>
+        {showValue && (
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Valor Unitário <span className="text-text-light font-normal">(R$, opcional)</span></label>
+            <input type="text" inputMode="decimal" value={unitValue} onChange={(e) => setUnitValue(e.target.value)} placeholder="Ex: 24,90" className={inputCls} />
+            {parseDecimalBR(unitValue) > 0 && parseDecimalBR(quantity) > 0 && (
+              <p className="text-xs text-text-light mt-1">
+                Total em estoque: <strong>{formatCurrency(parseDecimalBR(unitValue) * parseDecimalBR(quantity))}</strong>
+              </p>
+            )}
+          </div>
+        )}
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Observações <span className="text-text-light font-normal">(opcional)</span></label>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
+        </div>
+        <div className="flex gap-3 justify-end pt-2">
+          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={saving || !trimmed}>{saving ? "Salvando..." : "Salvar"}</Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
