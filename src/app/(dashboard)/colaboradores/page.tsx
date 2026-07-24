@@ -913,7 +913,7 @@ function FuncoesRHTab({
   const [showForm, setShowForm] = useState(false);
   const [editFn, setEditFn] = useState<JobFunction | null>(null);
   const [fnFormUnit, setFnFormUnit] = useState<string>("EMBARQUE");
-  const [toggleFn, setToggleFn] = useState<JobFunction | null>(null);
+  const [deleteFn, setDeleteFn] = useState<JobFunction | null>(null);
   const [showUnitForm, setShowUnitForm] = useState(false);
   const [editUnit, setEditUnit] = useState<WorkUnit | null>(null);
   const [deleteUnit, setDeleteUnit] = useState<WorkUnit | null>(null);
@@ -1017,17 +1017,19 @@ function FuncoesRHTab({
                                 <button
                                   onClick={() => { setEditFn(f); setShowForm(true); }}
                                   className="p-1.5 text-primary hover:bg-blue-50 rounded"
-                                  title="Editar nome/tipo"
+                                  title="Editar / renomear"
                                 >
                                   <EditIcon />
                                 </button>
-                                <button
-                                  onClick={() => setToggleFn(f)}
-                                  className="px-2 py-1 text-xs rounded hover:bg-gray-100 text-text-light"
-                                  title={f.active ? "Desativar (some dos seletores)" : "Reativar"}
-                                >
-                                  {f.active ? "Desativar" : "Reativar"}
-                                </button>
+                                {f.active ? (
+                                  <button onClick={() => setDeleteFn(f)} className="p-1.5 text-danger hover:bg-red-50 rounded" title="Excluir ou desativar">
+                                    <TrashIcon />
+                                  </button>
+                                ) : (
+                                  <button onClick={() => setDeleteFn(f)} className="px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 rounded font-medium" title="Reativar">
+                                    ↻ Reativar
+                                  </button>
+                                )}
                               </div>
                             </td>
                           )}
@@ -1075,23 +1077,34 @@ function FuncoesRHTab({
       />
 
       <ConfirmDialog
-        open={!!toggleFn}
-        onClose={() => setToggleFn(null)}
+        open={!!deleteFn}
+        onClose={() => setDeleteFn(null)}
         onConfirm={async () => {
-          if (!toggleFn) return;
-          const res = await db.from("job_functions").update({ active: !toggleFn.active }).eq("id", toggleFn.id);
-          if (res.error) { alert(`Não consegui atualizar: ${res.error.message}`); return; }
-          setToggleFn(null); onChange();
+          if (!deleteFn) return;
+          // Igual ao Financeiro: inativa → reativa; ativa → tenta excluir de vez;
+          // se tiver histórico (FK de alocações), cai pra desativar sem perder nada.
+          if (!deleteFn.active) {
+            const res = await db.from("job_functions").update({ active: true }).eq("id", deleteFn.id);
+            if (res.error) { alert(`Não consegui reativar: ${res.error.message}`); return; }
+          } else {
+            const del = await db.from("job_functions").delete().eq("id", deleteFn.id);
+            if (del.error) {
+              const de = await db.from("job_functions").update({ active: false }).eq("id", deleteFn.id);
+              if (de.error) { alert(`Não consegui excluir nem desativar: ${de.error.message}`); return; }
+              alert(`"${deleteFn.name}" tem histórico de pagamento e não pôde ser excluída — foi desativada (some dos seletores, dados ficam no banco).`);
+            }
+          }
+          setDeleteFn(null); onChange();
         }}
-        title={toggleFn?.active ? "Desativar Função" : "Reativar Função"}
+        title={deleteFn && !deleteFn.active ? "Reativar Função" : "Excluir Função"}
         message={
-          !toggleFn ? ""
-          : toggleFn.active
-            ? `Desativar "${toggleFn.name}"? Ela some dos seletores de função, mas o histórico é mantido.`
-            : `Reativar "${toggleFn.name}"? Ela volta a aparecer nos seletores.`
+          !deleteFn ? ""
+          : !deleteFn.active
+            ? `Reativar "${deleteFn.name}"? Ela volta a aparecer nos seletores.`
+            : `Excluir "${deleteFn.name}"? Se tiver histórico de pagamento, ela é desativada em vez de excluída (o histórico é preservado).`
         }
-        confirmLabel={toggleFn?.active ? "Desativar" : "Reativar"}
-        variant={toggleFn?.active ? "danger" : "primary"}
+        confirmLabel={deleteFn && !deleteFn.active ? "Reativar" : "Excluir"}
+        variant={deleteFn && !deleteFn.active ? "primary" : "danger"}
       />
     </div>
   );
