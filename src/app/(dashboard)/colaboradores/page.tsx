@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { usePathname, useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
-import { hasPermission } from "@/lib/rbac";
+import { hasPermission, hasModuleAccess } from "@/lib/rbac";
 import { DataTable } from "@/components/ui/data-table";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
@@ -35,6 +35,14 @@ export default function ColaboradoresPage() {
       router.replace(`/almoxarifado?tab=${tabParam}`);
     }
   }, [tabParam, router]);
+
+  // Manutenção não enxerga o RH/Colaboradores (só o menu já some, mas o guard
+  // barra quem chegar pela URL direto). Módulo COLABORADORES = todos menos ela.
+  useEffect(() => {
+    if (profile && !hasModuleAccess(profile.role, "COLABORADORES")) {
+      router.replace("/");
+    }
+  }, [profile, router]);
 
   const role = profile?.role || "RH";
   const canCreate = hasPermission(role, "EPI", "create");

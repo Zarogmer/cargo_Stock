@@ -7,6 +7,7 @@ export type Module =
   | "ALMOXARIFADO"
   | "ESTOQUE"
   | "EPI"
+  | "COLABORADORES"
   | "FERRAMENTAS"
   | "MAQUINARIO"
   | "ELETRICA"
@@ -42,6 +43,7 @@ const EXECUTIVO_PERMS: Partial<Record<Module, Permission[]>> = {
   EMBARQUE: ["view", "embarcar"],
   ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
   EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
+  COLABORADORES: ["view", "create", "edit", "delete"],
   FERRAMENTAS: ["view", "create", "edit", "delete", "baixar"],
   MAQUINARIO: ["view", "create", "edit", "delete", "baixar"],
   ELETRICA: ["view", "create", "edit", "delete", "baixar"],
@@ -64,6 +66,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     EMBARQUE: ["view", "embarcar"],
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
+    COLABORADORES: ["view", "create", "edit", "delete"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "baixar"],
     MAQUINARIO: ["view", "create", "edit", "delete", "baixar"],
     ELETRICA: ["view", "create", "edit", "delete", "baixar"],
@@ -97,6 +100,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     EMBARQUE: ["view", "embarcar"],
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
+    COLABORADORES: ["view", "create", "edit", "delete"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "baixar"],
     MAQUINARIO: ["view", "create", "edit", "delete", "baixar"],
     ELETRICA: ["view", "create", "edit", "delete", "baixar"],
@@ -116,6 +120,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     // segue só pra Executivo/Tecnologia (ver canEditPaga em colaboradores/page).
     EMBARQUE: ["view", "embarcar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
+    COLABORADORES: ["view", "create", "edit", "delete"],
     // Almoxarifado unificado: RH passa a gerenciar também Estoque, Ferramentas
     // e Maquinário (antes só via EPI/Uniforme).
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
@@ -136,6 +141,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     EMBARQUE: ["view", "embarcar"],
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
+    COLABORADORES: ["view", "create", "edit", "delete"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "baixar"],
     MAQUINARIO: ["view", "create", "edit", "delete", "baixar"],
     ELETRICA: ["view", "create", "edit", "delete", "baixar"],
@@ -155,6 +161,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     EMBARQUE: ["view", "embarcar"],
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
     EPI: ["view", "create", "edit", "delete", "entregar", "devolver"],
+    COLABORADORES: ["view", "create", "edit", "delete"],
     FERRAMENTAS: ["view", "create", "edit", "delete", "baixar"],
     MAQUINARIO: ["view", "create", "edit", "delete", "baixar"],
     ELETRICA: ["view", "create", "edit", "delete", "baixar"],
@@ -318,7 +325,9 @@ export const NAV_ITEMS: NavItem[] = [
     label: "Rh",
     href: "/colaboradores",
     icon: "epi",
-    module: "EPI",
+    // Módulo próprio (não EPI): Manutenção mantém EPI pro Almoxarifado, mas NÃO
+    // enxerga o RH/Colaboradores. Todos os outros papéis têm COLABORADORES.
+    module: "COLABORADORES",
     children: [
       { label: "Colaboradores", href: "/colaboradores?tab=colaboradores" },
       { label: "Funções", href: "/colaboradores?tab=funcoes" },
