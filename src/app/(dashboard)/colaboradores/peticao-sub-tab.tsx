@@ -136,10 +136,12 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
     [ships]
   );
 
+  // Petição é só operacional: fora inativos e o setor Administrativo (mesma
+  // regra da Listagem / Escala / Navios — some ADMINISTRATIVO, mantém o resto).
   const sortedEmployees = useMemo(
     () =>
       [...employees]
-        .filter((e) => e.status !== "INATIVO")
+        .filter((e) => e.status !== "INATIVO" && e.sector !== "ADMINISTRATIVO")
         .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
     [employees]
   );
