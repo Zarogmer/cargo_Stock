@@ -42,6 +42,10 @@ export function SimpleInventoryPanel({ kind }: { kind: "EPI" | "UNIFORME" }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
+  // Filtro por nome do item (Camisa, Calça, Bermuda, Bota...) — como as abas de
+  // equipe no Estoque. Um mesmo nome tem várias linhas (tamanhos), então agrupar
+  // pelo nome ajuda a achar rápido.
+  const [nameFilter, setNameFilter] = useState("TODOS");
   const [form, setForm] = useState(false);
   const [edit, setEdit] = useState<SimpleItem | null>(null);
   const [del, setDel] = useState<SimpleItem | null>(null);
@@ -126,7 +130,20 @@ export function SimpleInventoryPanel({ kind }: { kind: "EPI" | "UNIFORME" }) {
     )},
   ];
 
-  const visibleItems = items.filter((i) => matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search));
+  // Nomes distintos (Camisa, Calça, Bermuda...) pra montar as chips de filtro,
+  // com quantas linhas (tamanhos) cada um tem.
+  const nameGroups = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const i of items) counts.set(i.name, (counts.get(i.name) || 0) + 1);
+    return [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, [items]);
+
+  const visibleItems = items.filter((i) => {
+    if (nameFilter !== "TODOS" && i.name !== nameFilter) return false;
+    return matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search);
+  });
   // Total em R$ do que está listado (respeita a busca), pra bater com a tabela.
   const totalValue = visibleItems.reduce((sum, i) => sum + (i.unit_value || 0) * i.stock_qty, 0);
 
@@ -140,6 +157,19 @@ export function SimpleInventoryPanel({ kind }: { kind: "EPI" | "UNIFORME" }) {
           >
             Total em estoque: <strong className="font-semibold">{formatCurrency(totalValue)}</strong>
           </span>
+        </div>
+      )}
+      {nameGroups.length > 1 && (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {[{ name: "TODOS", count: items.length }, ...nameGroups].map((g) => (
+            <button
+              key={g.name}
+              onClick={() => setNameFilter(g.name)}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${nameFilter === g.name ? "bg-primary text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+            >
+              {g.name === "TODOS" ? "Todos" : g.name}{g.count > 0 ? ` (${g.count})` : ""}
+            </button>
+          ))}
         </div>
       )}
       <DataTable columns={columns} data={visibleItems}

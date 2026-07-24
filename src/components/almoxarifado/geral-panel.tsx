@@ -51,11 +51,23 @@ const SETOR_MODULE: Record<string, Module> = {
 const TEAM_COLS: { key: "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4"; label: string }[] = [
   { key: "EQUIPE_1", label: "Equipe 1" },
   { key: "EQUIPE_2", label: "Equipe 2" },
-  { key: "EQUIPE_4", label: "Turbo" },
+  { key: "EQUIPE_4", label: "Equipe Turbo" },
 ];
 
 type TeamKey = "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_4";
 type ColKey = "TOTAL" | "DISP" | TeamKey;
+type TeamView = "TODOS" | "DISP" | TeamKey;
+
+// Abas de visão por equipe (mesmo estilo do resto do Almoxarifado). "Todos" é o
+// padrão (Geral = tudo); as demais filtram as linhas pra quem tem quantidade
+// naquela equipe/Disponível. O setor já vem das abas de cima e da coluna Setor.
+const VIEW_TABS: { key: TeamView; label: string; emoji: string; activeCls: string }[] = [
+  { key: "TODOS", label: "Todos", emoji: "🗂️", activeCls: "bg-primary text-white shadow-md" },
+  { key: "DISP", label: "Disponível", emoji: "📦", activeCls: "bg-teal-600 text-white shadow-md" },
+  { key: "EQUIPE_1", label: "Equipe 1", emoji: "🚢", activeCls: "bg-blue-600 text-white shadow-md" },
+  { key: "EQUIPE_2", label: "Equipe 2", emoji: "🚢", activeCls: "bg-purple-600 text-white shadow-md" },
+  { key: "EQUIPE_4", label: "Equipe Turbo", emoji: "🔥", activeCls: "bg-orange-600 text-white shadow-md" },
+];
 
 interface Row {
   key: string;
@@ -80,7 +92,7 @@ export function GeralPanel() {
   const [loading, setLoading] = useState(true);
   const [dbError, setDbError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [setorFilter, setSetorFilter] = useState("TODOS");
+  const [teamView, setTeamView] = useState<TeamView>("TODOS");
   const [saving, setSaving] = useState(false);
 
   const role = profile?.role || "RH";
@@ -174,9 +186,15 @@ export function GeralPanel() {
   }, [items, allocOf]);
 
   const filtered = rows.filter((r) => {
-    if (setorFilter !== "TODOS" && r.setor !== setorFilter) return false;
+    if (teamView === "DISP" && r.disp <= 0) return false;
+    if ((teamView === "EQUIPE_1" || teamView === "EQUIPE_2" || teamView === "EQUIPE_4") && r.teams[teamView] <= 0) return false;
     return matchSearch(r.name, search) || matchSearch(r.setorLabel, search);
   });
+
+  const viewCount = (key: TeamView) =>
+    key === "TODOS" ? rows.length
+      : key === "DISP" ? rows.filter((r) => r.disp > 0).length
+        : rows.filter((r) => r.teams[key] > 0).length;
 
   // ── Gravação de uma célula (valor absoluto) ───────────────────────────────
   async function commitEdit(row: Row, col: ColKey, value: number) {
@@ -282,15 +300,15 @@ export function GeralPanel() {
       )}
 
       <div className="flex flex-wrap gap-2 items-center">
-        {[{ key: "TODOS", label: "Todos" }, ...SETORES].map((s) => {
-          const count = s.key === "TODOS" ? rows.length : rows.filter((r) => r.setor === s.key).length;
+        {VIEW_TABS.map((t) => {
+          const count = viewCount(t.key);
           return (
             <button
-              key={s.key}
-              onClick={() => setSetorFilter(s.key)}
-              className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${setorFilter === s.key ? "bg-primary text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+              key={t.key}
+              onClick={() => setTeamView(t.key)}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${teamView === t.key ? t.activeCls : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
             >
-              {s.label}{count > 0 ? ` (${count})` : ""}
+              {t.emoji} {t.label}{count > 0 ? ` (${count})` : ""}
             </button>
           );
         })}

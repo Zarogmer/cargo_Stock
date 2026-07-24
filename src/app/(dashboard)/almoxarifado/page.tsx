@@ -53,7 +53,7 @@ export default function AlmoxarifadoPage() {
   const searchParams = useSearchParams();
   // Aceita ?tab=ferramentas (link bem antigo da aba de empréstimo) como atalho
   // pro Estoque (galpão).
-  const rawTab = searchParams.get("tab") || "estoque";
+  const rawTab = searchParams.get("tab") || "geral";
   const tab = rawTab === "ferramentas" ? "estoque" : rawTab;
 
   // Cada chave de categoria seleciona seu grupo (Estoque ou Funcionário) e a aba
@@ -61,7 +61,7 @@ export default function AlmoxarifadoPage() {
   const isEstoque = ESTOQUE_KEYS.includes(tab);
   const isFuncionario = FUNCIONARIO_KEYS.includes(tab);
   const outerTab = isEstoque ? "estoque" : isFuncionario ? "funcionario" : tab;
-  const innerEstoque = isEstoque ? tab : "estoque";
+  const innerEstoque = isEstoque ? tab : "geral";
   const innerFuncionario = isFuncionario ? tab : "epi";
 
   // Abas internas do grupo Estoque — barra de abas visível no topo da página.
