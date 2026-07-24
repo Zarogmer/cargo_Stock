@@ -89,6 +89,7 @@ const UNIT_LABELS: Record<JobUnit, string> = {
   POR_HORA: "Mensalista",
   POR_OPERACAO: "Porão",
   TURNO: "Turno (Costado)",
+  ADMIN_COSTADO: "Por Navio",
 };
 
 // Serviços de Embarque do navio (ships.services), pra mostrar num relance quais
@@ -1563,15 +1564,17 @@ function FuncoesTab({
   // funcionar com funções novas sem manutenção): Embarque = pago por porão
   // (ajudante, wap, raspagem, pintura, administrativo...); Serviços = Costado
   // (por turno); Mensalista = salário fixo (Analista RH, Auxiliar Operacional).
-  function sectionOf(f: JobFunction): "EMBARQUE" | "SERVICOS" | "MENSALISTA" {
+  function sectionOf(f: JobFunction): "EMBARQUE" | "SERVICOS" | "ADMIN_COSTADO" | "MENSALISTA" {
     const u = (f.unit || "").toUpperCase();
     if (u === "TURNO") return "SERVICOS";
+    if (u === "ADMIN_COSTADO") return "ADMIN_COSTADO";
     if (u === "MENSALISTA" || u === "POR_DIA" || u === "POR_HORA") return "MENSALISTA";
     return "EMBARQUE"; // PORAO, POR_NAVIO, POR_OPERACAO
   }
   const SECTIONS = [
     { key: "EMBARQUE", title: "🚢 Embarque", hint: "Pago por porão — inclui os extras Raspagem e Pintura" },
     { key: "SERVICOS", title: "⚓ Costado", hint: "Pago por turno" },
+    { key: "ADMIN_COSTADO", title: "🧑‍💼 Administrativo (Costado)", hint: "Valor fixo por navio — pessoal de escritório no Costado" },
     { key: "MENSALISTA", title: "🗓️ Mensalista", hint: "Salário fixo mensal" },
   ] as const;
   const fnsBySection = (key: string) =>
@@ -1926,6 +1929,7 @@ function FunctionFormModal({
             <select value={unit} onChange={(e) => setUnit(e.target.value as JobUnit)} className={inputCls}>
               <option value="PORAO">Porão (Embarque)</option>
               <option value="TURNO">Turno (Costado)</option>
+              <option value="ADMIN_COSTADO">Administrativo (Costado) — fixo por navio</option>
               <option value="MENSALISTA">Mensalista</option>
             </select>
           </div>
@@ -3094,9 +3098,15 @@ function JobDetailModal({
   // adicionar/remover funcionários direto daqui também (além da Escalação).
   const peopleReadOnly = kindFilter === "COSTADO";
   // Função que representa o "administrativo" (custo fixo POR NAVIO, fora de folha)
-  // conforme o tipo de navio: Embarque usa ADMINISTRATIVO; Costado usa AUXILIAR
-  // OPERACIONAL. Em ambos o valor por pessoa vem de Valores › 👤 dessa função.
-  const adminFnName = kindFilter === "COSTADO" ? "AUXILIAR OPERACIONAL" : "ADMINISTRATIVO";
+  // conforme o tipo de navio. Embarque: função ADMINISTRATIVO (por nome). Costado:
+  // reconhecida pela CATEGORIA — qualquer função marcada como "Administrativo
+  // (Costado)" (unit ADMIN_COSTADO); assim dá pra renomear a função sem quebrar.
+  // Em ambos o valor por pessoa vem de Valores › 👤 dessa função.
+  const adminFn: JobFunction | null = kindFilter === "COSTADO"
+    ? (functions.find((f) => (f.unit || "").toUpperCase() === "ADMIN_COSTADO" && f.active)
+      || functions.find((f) => (f.unit || "").toUpperCase() === "ADMIN_COSTADO")
+      || null)
+    : (functions.find((f) => f.name.trim().toUpperCase() === "ADMINISTRATIVO") || null);
   const holdsMultiplier =
     kindFilter === "EMBARQUE" ? Math.max(1, Number(job?.holds_count || 1))
     : 1; // Costado: rate já é valor/turno, base = rate × qty.
@@ -3289,7 +3299,7 @@ function JobDetailModal({
     if (!open || !job || (kindFilter !== "EMBARQUE" && kindFilter !== "COSTADO") || !canEdit || job.status === "FECHADO") return;
     if (adminAutoRef.current === job.id) return;
     adminAutoRef.current = job.id; // marca antes do insert pra não duplicar entre renders
-    const adminFnLocal = functions.find((f) => f.name.trim().toUpperCase() === adminFnName);
+    const adminFnLocal = adminFn;
     if (!adminFnLocal) return;
     // Quem entra automático = TODO o Setor = Administrativo (menos demitidos),
     // igual ao seletor "+ Adicionar administrativo". Não filtra PENDENCIA: o
@@ -3327,9 +3337,10 @@ function JobDetailModal({
   const supervisorName = supervisorFromAllocations(allocations, job.id) || job.supervisor;
 
   const cost = calcJobCost(job, allocations.map((a) => ({ ...a, job_id: job.id })), adjustments.map((a) => ({ ...a, job_id: job.id })));
-  // Administrativo: pessoal de escritório com valor fixo por operação. Entra no
+  // Administrativo: pessoal de escritório com valor fixo por navio. Entra no
   // custo do navio (mão de obra), mas fora da folha/Pluxee (pagos à parte).
-  const adminFn = functions.find((f) => f.name.trim().toUpperCase() === adminFnName) || null;
+  // adminFn já foi resolvido no topo do componente (por nome no Embarque, por
+  // categoria ADMIN_COSTADO no Costado).
   const adminActive = adminAllocations.filter((a) => a.status === "ATIVO");
   const adminTotal = adminActive.reduce((s, a) => s + Number(a.rate) + Number(a.extra_value || 0), 0);
   // Folha = soma de (base + extra - pluxee) por funcionário = cost.base - pluxeeTotal.
@@ -5345,7 +5356,7 @@ function JobDetailModal({
               <p className="text-[10px] text-text-light mt-0.5">
                 Valor fixo por navio — entra no custo, fora da folha. O valor padrão de
                 cada um vem de <a href="/financeiro?tab=funcoes" className="underline">Valores › 👤</a>{" "}
-                (função {adminFnName === "AUXILIAR OPERACIONAL" ? "Auxiliar Operacional" : "Administrativo"}) e pode ser ajustado aqui só para este navio.
+                {adminFn ? ` (função ${adminFn.name})` : ""} e pode ser ajustado aqui só para este navio.
               </p>
             </div>
             {adminActive.length === 0 ? (
@@ -6758,13 +6769,16 @@ function CostadoTab({
   const costadoFnDef = functions.find((f) => f.name.trim().toUpperCase() === "COSTADO");
   const costadoRateDef = costadoFnDef ? Number(costadoFnDef.default_rate) : 0;
   // Administrativo do Costado: pessoal do setor Administrativo entra como custo
-  // fixo POR NAVIO, ligado à função AUXILIAR OPERACIONAL (valor por pessoa em
-  // Valores › 👤). Espelha o administrativo do Embarque, num navio de Costado.
-  const auxOpFnId = functions.find((f) => f.name.trim().toUpperCase() === "AUXILIAR OPERACIONAL")?.id ?? null;
+  // fixo POR NAVIO. Reconhecido pela CATEGORIA — funções marcadas como
+  // "Administrativo (Costado)" (unit ADMIN_COSTADO) — e não por um nome fixo. O
+  // valor por pessoa vem de Valores › 👤 dessa função.
+  const costadoAdminFnIds = new Set(
+    functions.filter((f) => (f.unit || "").toUpperCase() === "ADMIN_COSTADO").map((f) => f.id),
+  );
   const adminAllocsFor = (jobId: string) =>
     allocations.filter(
       (a) => a.job_id === jobId && (a.kind || "") === "ADMINISTRATIVO" && a.status === "ATIVO"
-        && (auxOpFnId == null || a.function_id === auxOpFnId),
+        && costadoAdminFnIds.has(a.function_id),
     );
   function effectiveCostadoQty(a: JobAllocation): number {
     return Math.max(1, a.quantity);

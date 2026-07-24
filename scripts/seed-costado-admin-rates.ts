@@ -18,7 +18,14 @@ async function main() {
     console.error("❌ Função AUXILIAR OPERACIONAL não encontrada — crie em Valores primeiro.");
     process.exit(1);
   }
-  console.log(`Função AUXILIAR OPERACIONAL: #${fn.id} (unit=${fn.unit}, default_rate=${fn.default_rate})`);
+  // Categoriza como "Administrativo (Costado)" — é assim que o Pagamento de
+  // Costado reconhece a função (pela categoria/unit, não pelo nome).
+  if (fn.unit !== "ADMIN_COSTADO") {
+    await prisma.jobFunction.update({ where: { id: fn.id }, data: { unit: "ADMIN_COSTADO" } });
+    console.log(`Função AUXILIAR OPERACIONAL: #${fn.id} unit ${fn.unit} → ADMIN_COSTADO`);
+  } else {
+    console.log(`Função AUXILIAR OPERACIONAL: #${fn.id} (unit já = ADMIN_COSTADO)`);
+  }
 
   for (const r of COSTADO_ADMIN_RATES) {
     const emp = await prisma.employee.findUnique({ where: { id: r.employeeId } });

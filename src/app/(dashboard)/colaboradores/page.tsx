@@ -896,14 +896,16 @@ function effectivePaga(
 // seções pela unidade, então mapeamos pros mesmos três grupos de lá.
 const RH_TIPO_OPTIONS: { value: JobUnit; label: string; hint: string }[] = [
   { value: "PORAO", label: "🚢 Embarque", hint: "Trabalho a bordo, pago por porão" },
-  { value: "TURNO", label: "⚓ Serviço (Costado)", hint: "Pago por turno" },
+  { value: "TURNO", label: "⚓ Costado", hint: "Pago por turno" },
+  { value: "ADMIN_COSTADO", label: "🧑‍💼 Administrativo (Costado)", hint: "Custo fixo por navio no Costado" },
   { value: "MENSALISTA", label: "🗓️ Mensalista", hint: "Salário fixo mensal" },
 ];
 
 // Mesma regra de seção da aba Valores (derivada da unidade, não do nome).
-function rhSectionOf(f: JobFunction): "EMBARQUE" | "SERVICOS" | "MENSALISTA" {
+function rhSectionOf(f: JobFunction): "EMBARQUE" | "SERVICOS" | "ADMIN_COSTADO" | "MENSALISTA" {
   const u = (f.unit || "").toUpperCase();
   if (u === "TURNO") return "SERVICOS";
+  if (u === "ADMIN_COSTADO") return "ADMIN_COSTADO";
   if (u === "MENSALISTA" || u === "POR_DIA" || u === "POR_HORA") return "MENSALISTA";
   return "EMBARQUE"; // PORAO, POR_NAVIO, POR_OPERACAO
 }
@@ -923,7 +925,8 @@ function FuncoesRHTab({
 
   const SECTIONS = [
     { key: "EMBARQUE", title: "🚢 Embarque", hint: "Trabalho a bordo, pago por porão" },
-    { key: "SERVICOS", title: "⚓ Serviços", hint: "Costado — pago por turno" },
+    { key: "SERVICOS", title: "⚓ Costado", hint: "Pago por turno" },
+    { key: "ADMIN_COSTADO", title: "🧑‍💼 Administrativo (Costado)", hint: "Custo fixo por navio no Costado" },
     { key: "MENSALISTA", title: "🗓️ Mensalista", hint: "Salário fixo mensal" },
   ] as const;
 
@@ -1071,9 +1074,14 @@ function FunctionRHFormModal({
   useEffect(() => {
     if (item) {
       setName(item.name);
-      // Normaliza a unidade existente pros três tipos do seletor do RH.
+      // Normaliza a unidade existente pros tipos do seletor do RH.
       const sec = rhSectionOf(item);
-      setUnit(sec === "SERVICOS" ? "TURNO" : sec === "MENSALISTA" ? "MENSALISTA" : "PORAO");
+      setUnit(
+        sec === "SERVICOS" ? "TURNO"
+        : sec === "ADMIN_COSTADO" ? "ADMIN_COSTADO"
+        : sec === "MENSALISTA" ? "MENSALISTA"
+        : "PORAO",
+      );
     } else {
       setName(""); setUnit("PORAO");
     }

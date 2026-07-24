@@ -254,7 +254,9 @@ export interface ToolRequest {
 
 // ── Sistema Financeiro ────────────────────────────────────────────────────────
 
-export type JobUnit = "MENSALISTA" | "PORAO" | "POR_NAVIO" | "POR_DIA" | "POR_HORA" | "POR_OPERACAO" | "TURNO";
+// ADMIN_COSTADO = categoria "Administrativo (Costado)": custo fixo por navio no
+// Pagamento de Costado (não entra na escala nem multiplica por porão/turno).
+export type JobUnit = "MENSALISTA" | "PORAO" | "POR_NAVIO" | "POR_DIA" | "POR_HORA" | "POR_OPERACAO" | "TURNO" | "ADMIN_COSTADO";
 
 // Unidades de função "operacionais" — as que entram na escala de navio: porão/
 // embarque (PORAO, POR_NAVIO, POR_OPERACAO) + turno de Costado (TURNO). As demais
