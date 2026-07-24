@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
-import { printPdfBlob } from "@/lib/print";
+import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
 import { PdfPreview } from "./pdf-preview";
 import { SearchIcon, PlusIcon, TrashIcon } from "@/components/icons";
 import type { Employee } from "@/types/database";
@@ -175,14 +175,7 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
       } else if (action === "print") {
         printPdfBlob(blob);
       } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `DDS ${shipName.trim().toUpperCase()}.${format}`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+        await shareOrDownloadBlob(blob, `DDS ${shipName.trim().toUpperCase()}.${format}`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Falha ao gerar DDS.";

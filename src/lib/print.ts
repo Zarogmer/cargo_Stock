@@ -43,3 +43,35 @@ export function printPdfBlob(blob: Blob): void {
   document.body.appendChild(iframe);
   iframe.src = url;
 }
+
+// Entrega um documento gerado (PDF/Word) ao usuário. No CELULAR usa a Web Share
+// API passando SÓ o arquivo — assim, ao mandar pro WhatsApp, anexa apenas o PDF/
+// Word, sem vazar o link `blob:` como texto (era o que acontecia com o download).
+// No desktop (ou quando o navegador não sabe compartilhar arquivos), baixa normal.
+export async function shareOrDownloadBlob(blob: Blob, fileName: string): Promise<void> {
+  const file = new File([blob], fileName, { type: blob.type || "application/octet-stream" });
+
+  // navigator.canShare/share com `files` existe basicamente só em mobile. Passar
+  // apenas { files } (sem title/text/url) faz o WhatsApp receber só o arquivo.
+  const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
+  if (typeof nav.share === "function" && nav.canShare?.({ files: [file] })) {
+    try {
+      await nav.share({ files: [file] });
+      return;
+    } catch (err) {
+      // Usuário cancelou o menu de compartilhar → não faz nada (não baixa).
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      // Qualquer outra falha: cai pro download abaixo.
+    }
+  }
+
+  // Fallback desktop: baixa o arquivo.
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

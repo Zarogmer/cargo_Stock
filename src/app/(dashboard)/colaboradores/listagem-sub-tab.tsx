@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { printPdfBlob } from "@/lib/print";
+import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
 import { PdfPreview } from "./pdf-preview";
 import type { Employee } from "@/types/database";
 
@@ -102,15 +102,9 @@ export function ListagemSubTab({ employees }: { employees: Employee[] }) {
       } else if (action === "print") {
         printPdfBlob(blob);
       } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
         const variantLabel = variant === "SANTOS" ? "Santos" : "Fora de Santos";
-        a.download = `Listagem de Embarque - ${variantLabel}.${format}`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+        // No celular compartilha só o arquivo (sem link blob:); no desktop baixa.
+        await shareOrDownloadBlob(blob, `Listagem de Embarque - ${variantLabel}.${format}`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Falha ao gerar a listagem.";

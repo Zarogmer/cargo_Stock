@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { printPdfBlob } from "@/lib/print";
+import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
 import { db } from "@/lib/db";
 import { AllocInput, JornadaFilter, WorkedMap, countWorkedKind, expandWorkedDates, periodoFileLabel, rangeDayCount } from "@/lib/folha-ponto";
 import { allocCountsAsWorked } from "@/lib/alloc-worked";
@@ -413,19 +413,13 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
       if (action === "print") {
         printPdfBlob(blob);
       } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
         const periodo = periodoFileLabel(startIso, endIso);
         const tipoLabel = jornada === "COSTADO" ? "Costado" : jornada === "EMBARQUE" ? "Embarque" : "Ambas";
         const shipPart = filtro === "NAVIO" && selectedShip ? ` ${selectedShip.name}` : "";
-        a.download = ids.length === 1
+        const fileName = ids.length === 1
           ? `Folha de Ponto ${tipoLabel}${shipPart} - ${periodo}.${format}`
           : `Folhas de Ponto ${tipoLabel}${shipPart} (${ids.length}) - ${periodo}.${format}`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+        await shareOrDownloadBlob(blob, fileName);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Falha ao gerar a folha de ponto.";

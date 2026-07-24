@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { printPdfBlob } from "@/lib/print";
+import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
 import { PdfPreview } from "./pdf-preview";
 import type { Employee } from "@/types/database";
 
@@ -87,15 +87,8 @@ export function FichaEpiSubTab({ employees }: { employees: Employee[] }) {
       } else if (action === "print") {
         printPdfBlob(blob);
       } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
         const safeName = nome.trim().replace(/[\\/:*?"<>|]+/g, "").trim() || "FUNCIONARIO";
-        a.download = `Ficha EPI ${safeName}.${format}`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+        await shareOrDownloadBlob(blob, `Ficha EPI ${safeName}.${format}`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Falha ao gerar ficha.";

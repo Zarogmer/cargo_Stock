@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { printPdfBlob } from "@/lib/print";
+import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
 import { PdfPreview } from "./pdf-preview";
 import { db } from "@/lib/db";
 import { parseDecimalBR } from "@/lib/utils";
@@ -201,14 +201,7 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
       } else if (action === "print") {
         printPdfBlob(blob);
       } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filenameFromResponse(res, recipients.length, format, recipients[0]?.nome || "");
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+        await shareOrDownloadBlob(blob, filenameFromResponse(res, recipients.length, format, recipients[0]?.nome || ""));
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Falha ao gerar recibo.";
