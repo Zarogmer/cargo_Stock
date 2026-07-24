@@ -598,6 +598,21 @@ model JobFunction {
   @@map("job_functions")
 }
 
+// Unidade = o GRUPO da função (EMBARQUE, COSTADO, MENSALISTA ou personalizada).
+// Vira uma seção nas abas Valores (Financeiro) e Funções (RH). Agora é cadastrável
+// com nome + descrição, pode existir vazia e receber funções depois. As funções
+// continuam apontando pela string `job_functions.unit`; o nome aqui é a chave.
+model WorkUnit {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique          // EMBARQUE, COSTADO, MENSALISTA, ...
+  description String?
+  sort_order  Int      @default(50)     // ordem na lista (menor = mais acima)
+  created_at  DateTime @default(now()) @db.Timestamptz()
+  updated_at  DateTime @updatedAt @db.Timestamptz()
+
+  @@map("job_units")
+}
+
 // (CostadoFunctionRate foi removido — Costado virou uma função única na
 // JobFunction com unit=TURNO e default_rate=valor por turno. Não há mais
 // distinção por função nem adicional noturno: valor fixo, igual pra todos.)

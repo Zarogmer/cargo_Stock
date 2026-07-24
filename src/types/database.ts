@@ -281,6 +281,17 @@ export interface JobFunction {
   updated_at: string;
 }
 
+// Unidade cadastrável (tabela job_units) — o GRUPO/seção da função, com nome e
+// descrição próprios. Pode existir vazia e receber funções depois.
+export interface WorkUnit {
+  id: number;
+  name: string;
+  description: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface JobFunctionRate {
   id: number;
   function_id: number;

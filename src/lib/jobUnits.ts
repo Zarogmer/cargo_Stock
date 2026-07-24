@@ -35,9 +35,6 @@ export function normalizeUnit(unit: string | null | undefined): string {
   return (unit || "").trim().toUpperCase().replace(/\s+/g, "_") || "EMBARQUE";
 }
 
-// Unidades "de fábrica" oferecidas no dropdown — os três grupos do sistema.
-export const SUGGESTED_UNITS = ["EMBARQUE", "COSTADO", "MENSALISTA"];
-
 // Seção (grupo) de uma unidade. As conhecidas (canônicas + legados) caem nas três
 // seções do sistema; qualquer outra vira a própria seção (a unidade em MAIÚSCULO).
 export function sectionKeyOfUnit(unit: string | null | undefined): string {
@@ -59,35 +56,56 @@ export function unitToOption(unit: string | null | undefined): string {
   return (unit || "").trim().toUpperCase(); // personalizada
 }
 
-// Opções do dropdown de unidade, sem duplicatas: as três canônicas + as
-// unidades personalizadas já em uso (uma por seção customizada).
-export function unitOptions(existingUnits: Array<string | null | undefined>): string[] {
-  const opts = [...SUGGESTED_UNITS];
-  for (const u of existingUnits) {
-    const opt = unitToOption(u);
-    if (opt && !opts.includes(opt)) opts.push(opt);
-  }
-  return opts;
+// Emoji do grupo — os canônicos mantêm o ícone de sempre; personalizados usam 📋.
+const UNIT_EMOJI: Record<string, string> = { EMBARQUE: "🚢", COSTADO: "⚓", MENSALISTA: "🗓️" };
+export function unitEmoji(name: string | null | undefined): string {
+  return UNIT_EMOJI[(name || "").trim().toUpperCase()] || "📋";
 }
 
-const SECTION_META: Record<string, { title: string; hint: string }> = {
-  EMBARQUE: { title: "🚢 EMBARQUE", hint: "Pago por porão — inclui os extras Raspagem e Pintura" },
-  SERVICOS: { title: "⚓ COSTADO", hint: "Pago por turno" },
-  MENSALISTA: { title: "🗓️ MENSALISTA", hint: "Salário fixo mensal" },
+// Descrição-padrão de fallback quando a unidade (ou legado) não tem texto próprio.
+const DEFAULT_UNIT_HINT: Record<string, string> = {
+  EMBARQUE: "Pago por porão — inclui os extras Raspagem e Pintura",
+  COSTADO: "Pago por turno",
+  MENSALISTA: "Salário fixo mensal",
 };
-
-export function sectionMeta(key: string): { title: string; hint: string } {
-  return SECTION_META[key] || { title: `📋 ${unitLabel(key)}`, hint: "Unidade personalizada" };
+export function unitHint(name: string | null | undefined, description?: string | null): string {
+  if (description && description.trim()) return description.trim();
+  return DEFAULT_UNIT_HINT[(name || "").trim().toUpperCase()] || "";
 }
 
-// Ordena as seções presentes: Embarque e Costado primeiro, as personalizadas no
-// meio (alfabético) e a Mensalista sempre por último.
-export function orderedSectionKeys(units: Array<string | null | undefined>): string[] {
-  const present = Array.from(new Set(units.map(sectionKeyOfUnit)));
-  const head = ["EMBARQUE", "SERVICOS"].filter((k) => present.includes(k));
-  const custom = present
-    .filter((k) => !["EMBARQUE", "SERVICOS", "MENSALISTA"].includes(k))
-    .sort((a, b) => a.localeCompare(b, "pt-BR"));
-  const tail = present.includes("MENSALISTA") ? ["MENSALISTA"] : [];
-  return [...head, ...custom, ...tail];
+// Monta as seções a partir das UNIDADES cadastradas (job_units) + as funções.
+// Cada unidade vira uma seção (na ordem sort_order → nome), mesmo vazia, pra o
+// usuário poder adicionar funções nela. Funções apontando pra uma unidade sem
+// cadastro (não deveria acontecer após o seed) viram seções extras no fim, pra
+// nada sumir da tela.
+export interface UnitSection<F> {
+  name: string;
+  description: string | null;
+  functions: F[];
+}
+export function buildUnitSections<F extends { unit?: string | null }>(
+  units: Array<{ name: string; description: string | null; sort_order: number }>,
+  functions: F[],
+): UnitSection<F>[] {
+  const byUnit = new Map<string, F[]>();
+  for (const f of functions) {
+    const key = unitToOption(f.unit);
+    if (!byUnit.has(key)) byUnit.set(key, []);
+    byUnit.get(key)!.push(f);
+  }
+  const rows = [...units].sort(
+    (a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name, "pt-BR"),
+  );
+  const seen = new Set(rows.map((u) => u.name.toUpperCase()));
+  const sections: UnitSection<F>[] = rows.map((u) => ({
+    name: u.name,
+    description: u.description,
+    functions: byUnit.get(u.name.toUpperCase()) || [],
+  }));
+  for (const [key, fns] of byUnit) {
+    if (!seen.has(key.toUpperCase())) {
+      sections.push({ name: key, description: null, functions: fns });
+    }
+  }
+  return sections;
 }

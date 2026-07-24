@@ -68,12 +68,13 @@ import {
   balanceOf, employeeBalance, jobDiscountFor, openAdvances,
 } from "@/lib/vales";
 import {
-  unitLabel, normalizeUnit, unitOptions, unitToOption, sectionKeyOfUnit, sectionMeta, orderedSectionKeys,
+  unitLabel, normalizeUnit, unitToOption, unitEmoji, unitHint, buildUnitSections,
 } from "@/lib/jobUnits";
 import type {
   JobFunction,
   JobFunctionRate,
   JobUnit,
+  WorkUnit,
   Job,
   JobAllocation,
   JobAdjustment,
@@ -81,6 +82,7 @@ import type {
   Ship,
   Employee,
 } from "@/types/database";
+import { UnitFormModal } from "@/components/job-unit-form-modal";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -625,6 +627,7 @@ export default function FinanceiroPage() {
   const canSeeDemonstracao = canAccessFinanceiroBanco(role);
 
   const [functions, setFunctions] = useState<JobFunction[]>([]);
+  const [units, setUnits] = useState<WorkUnit[]>([]);
   const [rates, setRates] = useState<JobFunctionRate[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [allocations, setAllocations] = useState<JobAllocation[]>([]);
@@ -670,8 +673,9 @@ export default function FinanceiroPage() {
 
   const loadAll = useCallback(async () => {
     setLoading(true);
-    const [fnRes, rtRes, jbRes, alRes, adRes, shRes, emRes, srRes, avRes, adcRes] = await Promise.all([
+    const [fnRes, unRes, rtRes, jbRes, alRes, adRes, shRes, emRes, srRes, avRes, adcRes] = await Promise.all([
       db.from("job_functions").select("*").order("name"),
+      db.from("job_units").select("*"),
       db.from("job_function_rates").select("*").order("valid_from", { ascending: false }),
       db.from("jobs").select("*, ships(name, status, holds_count)").order("start_date", { ascending: false }),
       db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)"),
@@ -719,6 +723,7 @@ export default function FinanceiroPage() {
       }
     }
     setFunctions(allFunctions);
+    setUnits((unRes.data as WorkUnit[]) || []);
     setRates((rtRes.data as JobFunctionRate[]) || []);
     // Porões: job criado pela escalação nasce sem holds_count — cai no valor do
     // CADASTRO do navio (ships.holds_count). Enriquecer aqui conserta todos os
@@ -792,6 +797,7 @@ export default function FinanceiroPage() {
       content: (
         <FuncoesTab
           functions={functions}
+          units={units}
           rates={rates}
           allocations={allocations}
           employees={employees}
@@ -1489,9 +1495,10 @@ function CustoPorOperacaoPanel({ functions }: { functions: JobFunction[] }) {
 }
 
 function FuncoesTab({
-  functions, rates, allocations, employees, canEdit, onChange, loading,
+  functions, units, rates, allocations, employees, canEdit, onChange, loading,
 }: {
   functions: JobFunction[];
+  units: WorkUnit[];
   rates: JobFunctionRate[];
   allocations: JobAllocation[];
   employees: Employee[];
@@ -1501,11 +1508,18 @@ function FuncoesTab({
 }) {
   const [editFn, setEditFn] = useState<JobFunction | null>(null);
   const [showFnForm, setShowFnForm] = useState(false);
+  // Unidade "trava" da função sendo criada (vem do botão da seção). Ao editar,
+  // usa a unidade da própria função.
+  const [fnFormUnit, setFnFormUnit] = useState<string>("EMBARQUE");
   const [historyFn, setHistoryFn] = useState<JobFunction | null>(null);
   const [deleteFn, setDeleteFn] = useState<JobFunction | null>(null);
   const [ratesFn, setRatesFn] = useState<JobFunction | null>(null);
   // Função cujo elenco de colaboradores está aberto no modal de listagem.
   const [viewEmpsFn, setViewEmpsFn] = useState<JobFunction | null>(null);
+  // Modal de UNIDADE (criar/editar) e unidade marcada pra excluir.
+  const [showUnitForm, setShowUnitForm] = useState(false);
+  const [editUnit, setEditUnit] = useState<WorkUnit | null>(null);
+  const [deleteUnit, setDeleteUnit] = useState<WorkUnit | null>(null);
   const [search, setSearch] = useState("");
 
   // Count distinct allocations (records), not the sum of worked days. With the
@@ -1544,13 +1558,14 @@ function FuncoesTab({
     onChange();
   }
 
-  // Seções derivadas da UNIDADE (fonte única em @/lib/jobUnits) — iguais às da
-  // aba Funções do RH. Unidade nova, criada pelo usuário, vira a própria seção.
-  const sectionKeys = orderedSectionKeys(filtered.map((f) => f.unit));
-  const fnsBySection = (key: string) =>
-    filtered
-      .filter((f) => sectionKeyOfUnit(f.unit) === key)
-      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  // Seções = UNIDADES cadastradas (tabela job_units), na ordem sort_order/nome.
+  // Cada unidade aparece mesmo vazia, pra o usuário adicionar funções nela. Fonte
+  // única em @/lib/jobUnits — iguais às da aba Funções do RH.
+  const sections = buildUnitSections(units, filtered).map((s) => ({
+    ...s,
+    functions: [...s.functions].sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
+  }));
+  const unitRowByName = new Map(units.map((u) => [u.name.toUpperCase(), u]));
 
   // Colaboradores de uma função, SEMPRE puxados da aba Colaboradores. Duas
   // naturezas de vínculo (não misturar): por SETOR — Administrativo puxa o
@@ -1653,8 +1668,8 @@ function FuncoesTab({
           className="px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none w-64"
         />
         {canEdit && (
-          <Button size="sm" onClick={() => { setEditFn(null); setShowFnForm(true); }}>
-            <PlusIcon className="w-4 h-4" />Nova Função
+          <Button size="sm" onClick={() => { setEditUnit(null); setShowUnitForm(true); }}>
+            <PlusIcon className="w-4 h-4" />Nova Unidade
           </Button>
         )}
       </div>
@@ -1666,30 +1681,56 @@ function FuncoesTab({
 
       {loading ? (
         <p className="text-center text-text-light py-12">Carregando...</p>
-      ) : filtered.length === 0 ? (
+      ) : sections.length === 0 ? (
         <div className="text-center py-12 bg-card rounded-xl border border-border">
           <p className="text-3xl mb-2">💼</p>
-          <p className="text-sm text-text-light">Nenhuma função encontrada</p>
+          <p className="text-sm text-text-light">Nenhuma unidade cadastrada — crie uma em "Nova Unidade".</p>
         </div>
       ) : (
-        // Uma tabela por seção (Embarque / Serviços / Mensalista). Seção sem
-        // função (ex.: busca filtrou tudo) não aparece.
+        // Uma tabela por UNIDADE (seção). A unidade aparece mesmo vazia, com o
+        // botão "+ Adicionar função" pra criar funções já dentro dela.
         <div className="space-y-5">
-          {sectionKeys.map((key) => {
-            const list = fnsBySection(key);
-            if (list.length === 0) return null;
-            const meta = sectionMeta(key);
+          {sections.map((sec) => {
+            // Com busca ativa, esconde seções que ficaram sem nenhuma função.
+            if (search.trim() && sec.functions.length === 0) return null;
+            const unitRow = unitRowByName.get(sec.name.toUpperCase()) || null;
             return (
-              <div key={key} className="space-y-1.5">
+              <div key={sec.name} className="space-y-1.5">
                 <div className="flex items-baseline gap-2 flex-wrap">
-                  <h3 className="text-sm font-bold text-text">{meta.title}</h3>
-                  <span className="text-xs text-text-light">{meta.hint}</span>
+                  <h3 className="text-sm font-bold text-text">{unitEmoji(sec.name)} {unitLabel(sec.name)}</h3>
+                  <span className="text-xs text-text-light">{unitHint(sec.name, sec.description)}</span>
+                  {canEdit && (
+                    <span className="flex items-center gap-1 ml-1">
+                      <button
+                        type="button"
+                        onClick={() => { setFnFormUnit(sec.name); setEditFn(null); setShowFnForm(true); }}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-primary text-[11px] font-medium hover:bg-blue-100 transition"
+                        title={`Adicionar função em ${unitLabel(sec.name)}`}
+                      >
+                        <PlusIcon className="w-3 h-3" />Adicionar função
+                      </button>
+                      {unitRow && (
+                        <>
+                          <button type="button" onClick={() => { setEditUnit(unitRow); setShowUnitForm(true); }} className="p-1 text-text-light hover:text-primary rounded" title="Editar unidade">
+                            <EditIcon />
+                          </button>
+                          <button type="button" onClick={() => setDeleteUnit(unitRow)} className="p-1 text-text-light hover:text-danger rounded" title="Excluir unidade (só se estiver vazia)">
+                            <TrashIcon />
+                          </button>
+                        </>
+                      )}
+                    </span>
+                  )}
                 </div>
                 <div className="bg-card rounded-xl border border-border overflow-x-auto">
                   <table className="w-full text-sm">
                     {tableHead}
                     <tbody>
-                      {list.map(renderFnRow)}
+                      {sec.functions.length === 0 ? (
+                        <tr><td colSpan={5} className="px-4 py-5 text-center text-xs text-text-light/70 italic">Nenhuma função nesta unidade ainda. Use "Adicionar função" acima.</td></tr>
+                      ) : (
+                        sec.functions.map(renderFnRow)
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1706,9 +1747,34 @@ function FuncoesTab({
       <FunctionFormModal
         open={showFnForm}
         item={editFn}
-        existingUnits={Array.from(new Set(functions.map((f) => (f.unit || "").trim().toUpperCase()).filter(Boolean)))}
+        fixedUnit={editFn ? (editFn.unit || fnFormUnit) : fnFormUnit}
         onClose={() => { setShowFnForm(false); setEditFn(null); }}
         onSaved={() => { setShowFnForm(false); setEditFn(null); onChange(); }}
+      />
+
+      <UnitFormModal
+        open={showUnitForm}
+        item={editUnit}
+        onClose={() => { setShowUnitForm(false); setEditUnit(null); }}
+        onSaved={() => { setShowUnitForm(false); setEditUnit(null); onChange(); }}
+      />
+
+      <ConfirmDialog
+        open={!!deleteUnit}
+        onClose={() => setDeleteUnit(null)}
+        onConfirm={async () => {
+          if (!deleteUnit) return;
+          // Só exclui unidade vazia — se tiver função, avisa e não mexe.
+          const inUse = functions.some((f) => unitToOption(f.unit) === deleteUnit.name.toUpperCase());
+          if (inUse) { alert(`A unidade "${unitLabel(deleteUnit.name)}" tem funções. Mova ou exclua as funções antes.`); setDeleteUnit(null); return; }
+          const res = await db.from("job_units").delete().eq("id", deleteUnit.id);
+          if (res.error) { alert(`Não consegui excluir: ${res.error.message}`); return; }
+          setDeleteUnit(null); onChange();
+        }}
+        title="Excluir Unidade"
+        message={deleteUnit ? `Excluir a unidade "${unitLabel(deleteUnit.name)}"? (Só é possível se não tiver nenhuma função.)` : ""}
+        confirmLabel="Excluir"
+        variant="danger"
       />
 
       <RateHistoryModal
@@ -1788,31 +1854,28 @@ function FuncoesTab({
 // ─── Function Form Modal ────────────────────────────────────────────────────
 
 function FunctionFormModal({
-  open, item, existingUnits, onClose, onSaved,
+  open, item, fixedUnit, onClose, onSaved,
 }: {
-  open: boolean; item: JobFunction | null; existingUnits: string[]; onClose: () => void; onSaved: () => void;
+  open: boolean; item: JobFunction | null; fixedUnit: string; onClose: () => void; onSaved: () => void;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [defaultRate, setDefaultRate] = useState("");
-  const [unit, setUnit] = useState<string>("EMBARQUE");
-  // true quando o usuário escolheu "➕ Criar nova unidade" — aí `unit` guarda o
-  // texto digitado da unidade nova.
-  const [creatingUnit, setCreatingUnit] = useState(false);
   const [active, setActive] = useState(true);
   const [saving, setSaving] = useState(false);
+  // A unidade não é mais escolhida aqui — vem travada do botão "+ Adicionar
+  // função" da seção (ou da própria função, ao editar).
+  const unit = fixedUnit;
 
   useEffect(() => {
     if (item) {
       setName(item.name);
       setDescription(item.description || "");
       setDefaultRate(Number(item.default_rate).toFixed(2).replace(".", ","));
-      setUnit(item.unit);
       setActive(item.active);
     } else {
-      setName(""); setDescription(""); setDefaultRate(""); setUnit("EMBARQUE"); setActive(true);
+      setName(""); setDescription(""); setDefaultRate(""); setActive(true);
     }
-    setCreatingUnit(false);
   }, [item, open]);
 
   function handleRateBlur() {
@@ -1845,48 +1908,20 @@ function FunctionFormModal({
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
-  // Opções do dropdown de unidade: os três grupos + unidades personalizadas já
-  // em uso (sem duplicatas). "Criar nova" fica como opção explícita no fim.
-  const unitSuggestions = unitOptions(existingUnits);
-
   return (
-    <Modal open={open} onClose={onClose} title={item ? "Editar Função" : "Nova Função"}>
+    <Modal open={open} onClose={onClose} title={item ? "Editar Função" : `Nova Função · ${unitLabel(unit)}`}>
       <form onSubmit={handleSave} className="space-y-4">
-        {/* 1º) Unidade — define em qual seção a função entra. O caminho fácil é
-            escolher uma existente; criar nova é uma opção explícita no fim. */}
+        {/* Unidade travada (vem da seção) — mostrada só pra referência. */}
         <div>
-          <label className="block text-sm font-medium mb-1">Unidade *</label>
-          <select
-            value={creatingUnit ? "__NEW__" : unitToOption(unit)}
-            onChange={(e) => {
-              if (e.target.value === "__NEW__") { setCreatingUnit(true); setUnit(""); }
-              else { setCreatingUnit(false); setUnit(e.target.value); }
-            }}
-            className={inputCls}
-          >
-            {unitSuggestions.map((u) => (
-              <option key={u} value={u}>{unitLabel(u)}</option>
-            ))}
-            <option value="__NEW__">➕ Criar nova unidade...</option>
-          </select>
-          {creatingUnit && (
-            <input
-              type="text"
-              autoFocus
-              value={unit}
-              onChange={(e) => setUnit(e.target.value.toUpperCase())}
-              className={`${inputCls} mt-2`}
-              placeholder="NOME DA NOVA UNIDADE"
-            />
-          )}
-          <p className="mt-1 text-[11px] text-text-light">
-            A unidade agrupa a função numa seção da lista de Valores.
-          </p>
+          <label className="block text-sm font-medium mb-1">Unidade</label>
+          <div className={`${inputCls} bg-gray-50 text-text-light flex items-center gap-1`}>
+            <span>{unitEmoji(unit)}</span>
+            <strong className="text-text">{unitLabel(unit)}</strong>
+          </div>
         </div>
-        {/* 2º) A função em si */}
         <div>
           <label className="block text-sm font-medium mb-1">Nome da função *</label>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} placeholder="WAP, AJUDANTE, ESFREGÃO..." />
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} required autoFocus className={inputCls} placeholder="WAP, AJUDANTE, ESFREGÃO..." />
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Descrição</label>

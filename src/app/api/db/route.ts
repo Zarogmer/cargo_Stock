@@ -31,6 +31,7 @@ const TABLE_MAP: Record<string, string> = {
   bank_accounts: "bankAccount",
   // Sistema financeiro
   job_functions: "jobFunction",
+  job_units: "workUnit",
   job_function_rates: "jobFunctionRate",
   employee_function_rates: "employeeFunctionRate",
   jobs: "job",
