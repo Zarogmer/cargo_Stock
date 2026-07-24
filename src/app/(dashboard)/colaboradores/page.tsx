@@ -1094,6 +1094,34 @@ function FunctionRHFormModal({
   return (
     <Modal open={open} onClose={onClose} title={item ? "Editar Função" : "Nova Função"}>
       <form onSubmit={handleSave} className="space-y-4">
+        {/* 1º) Unidade — escolha uma existente; criar nova é opção explícita. */}
+        <div>
+          <label className="block text-sm font-medium mb-1">Unidade *</label>
+          <select
+            value={unitSuggestions.includes(unit) ? unit : "__NEW__"}
+            onChange={(e) => setUnit(e.target.value === "__NEW__" ? "" : e.target.value)}
+            className={inputCls}
+          >
+            {unitSuggestions.map((u) => (
+              <option key={u} value={u}>{unitLabel(u)}</option>
+            ))}
+            <option value="__NEW__">➕ Criar nova unidade...</option>
+          </select>
+          {!unitSuggestions.includes(unit) && (
+            <input
+              type="text"
+              autoFocus
+              value={unit}
+              onChange={(e) => setUnit(e.target.value.toUpperCase())}
+              className={`${inputCls} mt-2`}
+              placeholder="NOME DA NOVA UNIDADE"
+            />
+          )}
+          <p className="text-[11px] text-text-light mt-1">
+            A unidade agrupa a função numa seção das Funções e do Valores.
+          </p>
+        </div>
+        {/* 2º) A função em si */}
         <div>
           <label className="block text-sm font-medium mb-1">Nome da função *</label>
           <input
@@ -1101,30 +1129,10 @@ function FunctionRHFormModal({
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
-            autoFocus
             className={inputCls}
             placeholder="Ex.: SOLDADOR"
           />
           <p className="text-[11px] text-text-light mt-1">Salvo em MAIÚSCULAS.</p>
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Unidade</label>
-          <input
-            type="text"
-            list="rh-unit-options"
-            value={unit}
-            onChange={(e) => setUnit(e.target.value.toUpperCase())}
-            className={inputCls}
-            placeholder="PORAO, COSTADO..."
-          />
-          <datalist id="rh-unit-options">
-            {unitSuggestions.map((u) => (
-              <option key={u} value={u} label={unitLabel(u)} />
-            ))}
-          </datalist>
-          <p className="text-[11px] text-text-light mt-1">
-            Escolha uma existente ou digite uma nova — ela vira uma seção nas Funções e no Valores.
-          </p>
         </div>
         <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-text-light">
           💰 O valor da paga é definido pelo Financeiro. Aqui você só cria e organiza as funções.

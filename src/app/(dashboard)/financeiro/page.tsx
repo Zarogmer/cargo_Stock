@@ -1848,38 +1848,46 @@ function FunctionFormModal({
   return (
     <Modal open={open} onClose={onClose} title={item ? "Editar Função" : "Nova Função"}>
       <form onSubmit={handleSave} className="space-y-4">
+        {/* 1º) Unidade — define em qual seção a função entra. O caminho fácil é
+            escolher uma existente; criar nova é uma opção explícita no fim. */}
         <div>
-          <label className="block text-sm font-medium mb-1">Nome *</label>
+          <label className="block text-sm font-medium mb-1">Unidade *</label>
+          <select
+            value={unitSuggestions.includes(unit) ? unit : "__NEW__"}
+            onChange={(e) => setUnit(e.target.value === "__NEW__" ? "" : e.target.value)}
+            className={inputCls}
+          >
+            {unitSuggestions.map((u) => (
+              <option key={u} value={u}>{unitLabel(u)}</option>
+            ))}
+            <option value="__NEW__">➕ Criar nova unidade...</option>
+          </select>
+          {!unitSuggestions.includes(unit) && (
+            <input
+              type="text"
+              autoFocus
+              value={unit}
+              onChange={(e) => setUnit(e.target.value.toUpperCase())}
+              className={`${inputCls} mt-2`}
+              placeholder="NOME DA NOVA UNIDADE"
+            />
+          )}
+          <p className="mt-1 text-[11px] text-text-light">
+            A unidade agrupa a função numa seção da lista de Valores.
+          </p>
+        </div>
+        {/* 2º) A função em si */}
+        <div>
+          <label className="block text-sm font-medium mb-1">Nome da função *</label>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} placeholder="WAP, AJUDANTE, ESFREGÃO..." />
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Descrição</label>
           <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} className={inputCls} placeholder="Opcional" />
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Valor Padrão (R$)</label>
-            <input type="text" inputMode="decimal" value={defaultRate} onChange={(e) => setDefaultRate(e.target.value.replace(/[^\d.,]/g, ""))} onBlur={handleRateBlur} className={inputCls} placeholder="0,00" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Unidade</label>
-            <input
-              type="text"
-              list="unit-options"
-              value={unit}
-              onChange={(e) => setUnit(e.target.value.toUpperCase())}
-              className={inputCls}
-              placeholder="PORAO, COSTADO..."
-            />
-            <datalist id="unit-options">
-              {unitSuggestions.map((u) => (
-                <option key={u} value={u} label={unitLabel(u)} />
-              ))}
-            </datalist>
-            <p className="mt-1 text-[11px] text-text-light">
-              Escolha uma existente ou digite uma nova — ela vira uma seção na lista de Valores.
-            </p>
-          </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Valor Padrão (R$)</label>
+          <input type="text" inputMode="decimal" value={defaultRate} onChange={(e) => setDefaultRate(e.target.value.replace(/[^\d.,]/g, ""))} onBlur={handleRateBlur} className={inputCls} placeholder="0,00" />
         </div>
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
