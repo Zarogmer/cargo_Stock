@@ -26,9 +26,9 @@ interface KitRow {
 }
 
 const TEAMS: { key: string; label: string }[] = [
-  { key: "EQUIPE_4", label: "Equipe Turbo" },
   { key: "EQUIPE_1", label: "Equipe 1" },
   { key: "EQUIPE_2", label: "Equipe 2" },
+  { key: "EQUIPE_4", label: "Equipe Turbo" },
 ];
 
 function todayInput(): string {
@@ -66,7 +66,7 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
   const [selTransportes, setSelTransportes] = useState<Set<string>>(new Set());
   const [gate, setGate] = useState("");
   const [motivo, setMotivo] = useState("Realização de Limpeza de Porões.");
-  const [team, setTeam] = useState("EQUIPE_4");
+  const [team, setTeam] = useState("EQUIPE_1");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [empSearch, setEmpSearch] = useState("");
 
