@@ -3269,22 +3269,27 @@ function JobDetailModal({
     return Array.from(byEmp.values()).sort((a, b) => b.total - a.total);
   }, [allocations, kindFilter, functions]);
 
-  // Auto-inclui o pessoal administrativo (RH › Setor = Administrativo) quando um
-  // navio de Embarque em aberto é aberto e ainda não tem ninguém do administrativo.
-  // O valor inicial de cada pessoa vem do valor especial por colaborador
-  // (Valores › 👤); sem valor configurado entra como 0 e o usuário ajusta na hora.
+  // Auto-inclui o pessoal administrativo (RH › Setor = Administrativo) ao abrir um
+  // navio de Embarque em aberto. Roda uma vez por abertura (adminAutoRef) e
+  // COMPLETA quem está faltando — então um navio que já tinha parte do pessoal
+  // (ex.: só a Camila) recebe os demais do setor sem precisar adicionar à mão.
+  // O valor inicial vem do valor especial por colaborador (Valores › 👤); sem
+  // valor configurado entra pelo default da função (ou 0) e o usuário ajusta.
   const adminAutoRef = useRef<string | null>(null);
   useEffect(() => {
     if (!open || !job || kindFilter !== "EMBARQUE" || !canEdit || job.status === "FECHADO") return;
-    if (adminAllocations.length > 0) { adminAutoRef.current = job.id; return; }
     if (adminAutoRef.current === job.id) return;
     adminAutoRef.current = job.id; // marca antes do insert pra não duplicar entre renders
     const adminFnLocal = functions.find((f) => f.name.trim().toUpperCase() === "ADMINISTRATIVO");
     if (!adminFnLocal) return;
-    // Quem entra automático = quem tem valor de administrativo configurado
-    // (Valores › 👤). Não filtra por status: o pessoal de escritório pode estar
-    // como PENDENCIA e mesmo assim entra no custo de cada navio.
-    const adminEmps = employees.filter((e) => specialRates.has(`${e.id}-${adminFnLocal.id}`));
+    // Quem entra automático = TODO o Setor = Administrativo (menos demitidos),
+    // igual ao seletor "+ Adicionar administrativo". Não filtra PENDENCIA: o
+    // pessoal de escritório pode estar assim e mesmo assim entra no custo.
+    // Pula quem já está alocado neste navio pra não duplicar.
+    const allocatedIds = new Set(adminAllocations.map((a) => a.employee_id));
+    const adminEmps = employees.filter(
+      (e) => e.sector === "ADMINISTRATIVO" && (e.status ?? "ATIVO") !== "INATIVO" && !allocatedIds.has(e.id),
+    );
     if (adminEmps.length === 0) return;
     (async () => {
       const rows = adminEmps.map((e) => {
