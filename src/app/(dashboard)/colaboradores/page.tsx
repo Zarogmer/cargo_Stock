@@ -14,7 +14,7 @@ import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatPhone, formatDateTime, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, MOVEMENT_TYPE_LABELS, type NrCode } from "@/lib/utils";
 import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
 import {
-  unitLabel, normalizeUnit, SUGGESTED_UNITS, sectionKeyOfUnit, sectionMeta, orderedSectionKeys,
+  unitLabel, normalizeUnit, unitOptions, unitToOption, sectionKeyOfUnit, sectionMeta, orderedSectionKeys,
 } from "@/lib/jobUnits";
 import type { Employee, JobFunction } from "@/types/database";
 import { DocumentosTab } from "./documentos-tab";
@@ -1050,22 +1050,25 @@ function FunctionRHFormModal({
   open: boolean; item: JobFunction | null; existingUnits: string[]; onClose: () => void; onSaved: () => void;
 }) {
   const [name, setName] = useState("");
-  const [unit, setUnit] = useState<string>("PORAO");
+  const [unit, setUnit] = useState<string>("EMBARQUE");
+  // true quando o usuário escolheu "➕ Criar nova unidade".
+  const [creatingUnit, setCreatingUnit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (item) {
       setName(item.name);
-      setUnit((item.unit || "PORAO").trim().toUpperCase());
+      setUnit((item.unit || "EMBARQUE").trim().toUpperCase());
     } else {
-      setName(""); setUnit("PORAO");
+      setName(""); setUnit("EMBARQUE");
     }
+    setCreatingUnit(false);
     setError(null);
   }, [item, open]);
 
-  // Sugestões do combobox de unidade: as "de fábrica" + as já usadas em funções.
-  const unitSuggestions = Array.from(new Set([...SUGGESTED_UNITS, ...existingUnits])).filter(Boolean);
+  // Opções do dropdown de unidade: os três grupos + personalizadas já em uso.
+  const unitSuggestions = unitOptions(existingUnits);
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -1098,8 +1101,11 @@ function FunctionRHFormModal({
         <div>
           <label className="block text-sm font-medium mb-1">Unidade *</label>
           <select
-            value={unitSuggestions.includes(unit) ? unit : "__NEW__"}
-            onChange={(e) => setUnit(e.target.value === "__NEW__" ? "" : e.target.value)}
+            value={creatingUnit ? "__NEW__" : unitToOption(unit)}
+            onChange={(e) => {
+              if (e.target.value === "__NEW__") { setCreatingUnit(true); setUnit(""); }
+              else { setCreatingUnit(false); setUnit(e.target.value); }
+            }}
             className={inputCls}
           >
             {unitSuggestions.map((u) => (
@@ -1107,7 +1113,7 @@ function FunctionRHFormModal({
             ))}
             <option value="__NEW__">➕ Criar nova unidade...</option>
           </select>
-          {!unitSuggestions.includes(unit) && (
+          {creatingUnit && (
             <input
               type="text"
               autoFocus

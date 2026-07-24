@@ -68,7 +68,7 @@ import {
   balanceOf, employeeBalance, jobDiscountFor, openAdvances,
 } from "@/lib/vales";
 import {
-  unitLabel, normalizeUnit, SUGGESTED_UNITS, sectionKeyOfUnit, sectionMeta, orderedSectionKeys,
+  unitLabel, normalizeUnit, unitOptions, unitToOption, sectionKeyOfUnit, sectionMeta, orderedSectionKeys,
 } from "@/lib/jobUnits";
 import type {
   JobFunction,
@@ -1579,7 +1579,7 @@ function FuncoesTab({
           onSave={(v) => saveRateInline(f, v)}
         />
       </td>
-      <td className="px-4 py-2.5 text-text-light text-xs">{f.name.trim().toUpperCase() === "ADMINISTRATIVO" ? "POR NAVIO" : unitLabel(f.unit)}</td>
+      <td className="px-4 py-2.5 text-text-light text-xs">{unitLabel(f.unit)}</td>
       <td className="px-4 py-2.5 text-text-light text-xs">
         {(() => {
           const n = fnActivePeople(f).length;
@@ -1795,7 +1795,10 @@ function FunctionFormModal({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [defaultRate, setDefaultRate] = useState("");
-  const [unit, setUnit] = useState<string>("PORAO");
+  const [unit, setUnit] = useState<string>("EMBARQUE");
+  // true quando o usuário escolheu "➕ Criar nova unidade" — aí `unit` guarda o
+  // texto digitado da unidade nova.
+  const [creatingUnit, setCreatingUnit] = useState(false);
   const [active, setActive] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -1807,8 +1810,9 @@ function FunctionFormModal({
       setUnit(item.unit);
       setActive(item.active);
     } else {
-      setName(""); setDescription(""); setDefaultRate(""); setUnit("PORAO"); setActive(true);
+      setName(""); setDescription(""); setDefaultRate(""); setUnit("EMBARQUE"); setActive(true);
     }
+    setCreatingUnit(false);
   }, [item, open]);
 
   function handleRateBlur() {
@@ -1841,9 +1845,9 @@ function FunctionFormModal({
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
-  // Sugestões do combobox de unidade: as "de fábrica" + as já usadas por outras
-  // funções. O usuário ainda pode digitar uma nova livremente.
-  const unitSuggestions = Array.from(new Set([...SUGGESTED_UNITS, ...existingUnits])).filter(Boolean);
+  // Opções do dropdown de unidade: os três grupos + unidades personalizadas já
+  // em uso (sem duplicatas). "Criar nova" fica como opção explícita no fim.
+  const unitSuggestions = unitOptions(existingUnits);
 
   return (
     <Modal open={open} onClose={onClose} title={item ? "Editar Função" : "Nova Função"}>
@@ -1853,8 +1857,11 @@ function FunctionFormModal({
         <div>
           <label className="block text-sm font-medium mb-1">Unidade *</label>
           <select
-            value={unitSuggestions.includes(unit) ? unit : "__NEW__"}
-            onChange={(e) => setUnit(e.target.value === "__NEW__" ? "" : e.target.value)}
+            value={creatingUnit ? "__NEW__" : unitToOption(unit)}
+            onChange={(e) => {
+              if (e.target.value === "__NEW__") { setCreatingUnit(true); setUnit(""); }
+              else { setCreatingUnit(false); setUnit(e.target.value); }
+            }}
             className={inputCls}
           >
             {unitSuggestions.map((u) => (
@@ -1862,7 +1869,7 @@ function FunctionFormModal({
             ))}
             <option value="__NEW__">➕ Criar nova unidade...</option>
           </select>
-          {!unitSuggestions.includes(unit) && (
+          {creatingUnit && (
             <input
               type="text"
               autoFocus
