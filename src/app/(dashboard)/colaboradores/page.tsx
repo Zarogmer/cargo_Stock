@@ -1460,7 +1460,27 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
                 className={inputCls}
               >
                 <option value="">Selecionar...</option>
-                {roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
+                {/* Agrupado por UNIDADE (EMBARQUE / COSTADO / MENSALISTA / ...)
+                    pra não ficar uma lista única confusa. */}
+                {(() => {
+                  const map = new Map<string, string[]>();
+                  for (const f of functions) {
+                    const g = unitToOption(f.unit);
+                    const arr = map.get(g) || [];
+                    arr.push(f.name);
+                    map.set(g, arr);
+                  }
+                  const order = (k: string) => (k === "EMBARQUE" ? 0 : k === "COSTADO" ? 1 : k === "MENSALISTA" ? 99 : 50);
+                  return [...map.keys()]
+                    .sort((a, b) => order(a) - order(b) || a.localeCompare(b, "pt-BR"))
+                    .map((k) => (
+                      <optgroup key={k} label={`${unitEmoji(k)} ${unitLabel(k)}`}>
+                        {map.get(k)!
+                          .sort((a, b) => a.localeCompare(b, "pt-BR"))
+                          .map((n) => <option key={n} value={n}>{n}</option>)}
+                      </optgroup>
+                    ));
+                })()}
                 {/* Mantém o valor atual visível mesmo que não esteja na lista de
                     funções do Financeiro (cadastro antigo ainda não ajustado). */}
                 {role && !roleOptions.includes(role) && <option value={role}>{role}</option>}
