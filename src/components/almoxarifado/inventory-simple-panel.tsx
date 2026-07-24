@@ -22,6 +22,11 @@ import type { Employee, EpiMovementType } from "@/types/database";
 // ver valores (canViewStockValue), então o campo simplesmente não vem.
 interface SimpleItem { id: number; name: string; size: string | null; stock_qty: number; min_quantity: number; unit_value?: number }
 
+// Chave de agrupamento por nome: ignora caixa e espaços extras para que
+// variações de grafia ("Bota de borracha" / "Bota de Borracha") caiam na mesma
+// chip de filtro. Acentos são mantidos (Óculos ≠ Oculos é raro e proposital).
+const normalizeName = (n: string) => n.trim().replace(/\s+/g, " ").toLowerCase();
+
 const CONFIG = {
   EPI: { table: "epis", movements: "epi_movements", fk: "epi_id", singular: "EPI", colLabel: "EPI", searchPlaceholder: "Buscar EPI...", newTitle: "Novo EPI", editTitle: "Editar EPI" },
   UNIFORME: { table: "uniforms", movements: "uniform_movements", fk: "uniform_id", singular: "Uniforme", colLabel: "Uniforme", searchPlaceholder: "Buscar uniforme...", newTitle: "Novo Uniforme", editTitle: "Editar Uniforme" },
@@ -131,17 +136,31 @@ export function SimpleInventoryPanel({ kind }: { kind: "EPI" | "UNIFORME" }) {
   ];
 
   // Nomes distintos (Camisa, Calça, Bermuda...) pra montar as chips de filtro,
-  // com quantas linhas (tamanhos) cada um tem.
+  // com quantas linhas (tamanhos) cada um tem. Agrupa por nome normalizado
+  // (ignora caixa e espaços extras) para que "Bota de borracha" e
+  // "Bota de Borracha" virem uma chip só — corrigir a grafia de um item já
+  // funde as chips. O rótulo exibido é a grafia mais usada.
   const nameGroups = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const i of items) counts.set(i.name, (counts.get(i.name) || 0) + 1);
-    return [...counts.entries()]
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+    const groups = new Map<string, { count: number; variants: Map<string, number> }>();
+    for (const i of items) {
+      const key = normalizeName(i.name);
+      const g = groups.get(key) || { count: 0, variants: new Map<string, number>() };
+      g.count += 1;
+      g.variants.set(i.name, (g.variants.get(i.name) || 0) + 1);
+      groups.set(key, g);
+    }
+    return [...groups.entries()]
+      .map(([key, g]) => {
+        const label = [...g.variants.entries()].sort(
+          (a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "pt-BR"),
+        )[0][0];
+        return { key, label, count: g.count };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
   }, [items]);
 
   const visibleItems = items.filter((i) => {
-    if (nameFilter !== "TODOS" && i.name !== nameFilter) return false;
+    if (nameFilter !== "TODOS" && normalizeName(i.name) !== nameFilter) return false;
     return matchSearch(i.name, search) || matchSearch(codeMap.get(i.id) || "", search);
   });
   // Total em R$ do que está listado (respeita a busca), pra bater com a tabela.
@@ -161,13 +180,13 @@ export function SimpleInventoryPanel({ kind }: { kind: "EPI" | "UNIFORME" }) {
       )}
       {nameGroups.length > 1 && (
         <div className="flex flex-wrap gap-2 mb-3">
-          {[{ name: "TODOS", count: items.length }, ...nameGroups].map((g) => (
+          {[{ key: "TODOS", label: "Todos", count: items.length }, ...nameGroups].map((g) => (
             <button
-              key={g.name}
-              onClick={() => setNameFilter(g.name)}
-              className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${nameFilter === g.name ? "bg-primary text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+              key={g.key}
+              onClick={() => setNameFilter(g.key)}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${nameFilter === g.key ? "bg-primary text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
             >
-              {g.name === "TODOS" ? "Todos" : g.name}{g.count > 0 ? ` (${g.count})` : ""}
+              {g.label}{g.count > 0 ? ` (${g.count})` : ""}
             </button>
           ))}
         </div>
