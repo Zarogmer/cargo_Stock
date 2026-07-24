@@ -331,7 +331,6 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       { label: "Colaboradores", href: "/colaboradores?tab=colaboradores" },
       { label: "Funções", href: "/colaboradores?tab=funcoes" },
-      { label: "Petição", href: "/colaboradores?tab=peticao" },
       {
         label: "Documentos",
         href: "/colaboradores?tab=documentos",
@@ -342,6 +341,7 @@ export const NAV_ITEMS: NavItem[] = [
           { label: "Recibo de Pagamento", href: "/colaboradores?tab=documentos&doc=recibo-pagamento" },
           { label: "Folha de Ponto", href: "/colaboradores?tab=documentos&doc=folha-ponto" },
           { label: "Listagem", href: "/colaboradores?tab=documentos&doc=listagem" },
+          { label: "Petição", href: "/colaboradores?tab=documentos&doc=peticao" },
         ],
       },
     ],

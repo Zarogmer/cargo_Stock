@@ -19,7 +19,6 @@ import {
 import { UnitFormModal } from "@/components/job-unit-form-modal";
 import type { Employee, JobFunction, WorkUnit } from "@/types/database";
 import { DocumentosTab } from "./documentos-tab";
-import { PeticaoSubTab } from "./peticao-sub-tab";
 
 export default function ColaboradoresPage() {
   const { profile } = useAuth();
@@ -608,10 +607,6 @@ export default function ColaboradoresPage() {
       key: "documentos", label: "Documentos",
       content: <DocumentosTab employees={employees} />,
     },
-    {
-      key: "peticao", label: "Petição",
-      content: <PeticaoSubTab employees={employees} />,
-    },
   ];
 
   const activeTabLabel = tabs.find((t) => t.key === initialTab)?.label;
@@ -623,6 +618,7 @@ export default function ColaboradoresPage() {
     "recibo-pagamento": "Recibo de Pagamento",
     "folha-ponto": "Folha de Ponto",
     "listagem": "Listagem",
+    "peticao": "Petição",
   };
   const docCrumb = initialTab === "documentos" ? docSubLabel[docSub || "dds"] : null;
 
