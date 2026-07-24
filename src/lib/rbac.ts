@@ -290,8 +290,9 @@ export const NAV_ITEMS: NavItem[] = [
       // só abre/fecha a lista. Compras e Histórico seguem como níveis externos.
       {
         label: "Estoque",
-        href: "/almoxarifado?tab=estoque",
+        href: "/almoxarifado?tab=geral",
         children: [
+          { label: "Geral", href: "/almoxarifado?tab=geral" },
           { label: "Utensílios", href: "/almoxarifado?tab=estoque" },
           { label: "Rancho", href: "/almoxarifado?tab=rancho" },
           { label: "Fluídos", href: "/almoxarifado?tab=fluidos" },
@@ -320,6 +321,7 @@ export const NAV_ITEMS: NavItem[] = [
     module: "EPI",
     children: [
       { label: "Colaboradores", href: "/colaboradores?tab=colaboradores" },
+      { label: "Funções", href: "/colaboradores?tab=funcoes" },
       {
         label: "Documentos",
         href: "/colaboradores?tab=documentos",
