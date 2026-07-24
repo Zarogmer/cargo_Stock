@@ -270,12 +270,17 @@ export function isEscalableJobUnit(unit: string | null | undefined): boolean {
 export type JobStatus = "ABERTO" | "EM_ANDAMENTO" | "VERIFICADO" | "FECHADO" | "CANCELADO";
 export type AdjustmentType = "ADICIONAL" | "REDUCAO";
 
+// Setor que recebe a função: OPERACIONAL entra na escala do navio; ADMINISTRATIVO
+// é pessoal de escritório (fora da escala; custo do navio automático).
+export type FunctionSector = "OPERACIONAL" | "ADMINISTRATIVO";
+
 export interface JobFunction {
   id: number;
   name: string;
   description: string | null;
   default_rate: string | number;
   unit: JobUnit;
+  sector: FunctionSector;
   active: boolean;
   created_at: string;
   updated_at: string;
@@ -287,6 +292,8 @@ export interface WorkUnit {
   id: number;
   name: string;
   description: string | null;
+  // PORAO | TURNO | MENSAL — como a unidade paga (ver jobUnits.ts).
+  pay_mode: string;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -359,6 +366,11 @@ export interface JobAllocation {
   // Valor extra de rateio (quando faltou alguém da função e o valor foi dividido).
   extra_value: string | number | null;
   extra_reason: string | null;
+  // Serviço extra do navio (Raspagem/Pintura) somado por porão à limpeza de TODO
+  // o operacional. NÃO é coluna do banco — é enriquecido em memória no Financeiro
+  // a partir de ships.services (soma dos default_rate das funções RASPAGEM/PINTURA
+  // do navio). Ver isServiceExtra e a montagem em loadAll.
+  service_extra_rate?: number | null;
   notes: string | null;
   status: AllocationStatus;
   kind: AllocationKind;

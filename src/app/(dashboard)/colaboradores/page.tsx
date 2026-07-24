@@ -109,7 +109,7 @@ export default function ColaboradoresPage() {
       const [empRes, allocRes, fnRes, rateRes, unitRes] = await Promise.all([
         db.from("employees").select("*").order("name"),
         db.from("job_allocations").select("employee_id, kind, status").eq("status", "ATIVO"),
-        db.from("job_functions").select("id, name, default_rate, unit, active").order("name"),
+        db.from("job_functions").select("id, name, default_rate, unit, sector, active").order("name"),
         db.from("employee_function_rates").select("employee_id, function_id, rate"),
         db.from("job_units").select("*"),
       ]);

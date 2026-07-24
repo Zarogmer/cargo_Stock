@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { db } from "@/lib/db";
-import { normalizeUnit, unitLabel } from "@/lib/jobUnits";
+import { normalizeUnit, unitLabel, normalizePayMode, PAY_MODE_LABELS, type UnitPayMode } from "@/lib/jobUnits";
 import type { WorkUnit } from "@/types/database";
 
 // Modal de criar/editar UNIDADE (o grupo/seção das funções). Só nome + descrição.
@@ -20,6 +20,7 @@ export function UnitFormModal({
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [payMode, setPayMode] = useState<UnitPayMode>("PORAO");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,9 +28,11 @@ export function UnitFormModal({
     if (item) {
       setName(item.name);
       setDescription(item.description || "");
+      setPayMode(normalizePayMode(item.pay_mode));
     } else {
       setName("");
       setDescription("");
+      setPayMode("PORAO");
     }
     setError(null);
   }, [item, open]);
@@ -42,7 +45,7 @@ export function UnitFormModal({
     if (!clean) return;
     setSaving(true);
     setError(null);
-    const payload = { name: clean, description: description.trim() || null };
+    const payload = { name: clean, description: description.trim() || null, pay_mode: payMode };
     const res = item
       ? await db.from("job_units").update(payload).eq("id", item.id)
       : await db.from("job_units").insert(payload);
@@ -75,6 +78,21 @@ export function UnitFormModal({
               Vira a seção <strong>{unitLabel(normalizeUnit(name))}</strong> na lista.
             </p>
           )}
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Como será o pagamento? *</label>
+          <select
+            value={payMode}
+            onChange={(e) => setPayMode(e.target.value as UnitPayMode)}
+            className={inputCls}
+          >
+            {(Object.keys(PAY_MODE_LABELS) as UnitPayMode[]).map((m) => (
+              <option key={m} value={m}>{PAY_MODE_LABELS[m]}</option>
+            ))}
+          </select>
+          <p className="text-[11px] text-text-light mt-1">
+            Por porão e por turno entram na escala do navio. Mensalidade é valor fixo (fica fora da escala).
+          </p>
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Descrição</label>

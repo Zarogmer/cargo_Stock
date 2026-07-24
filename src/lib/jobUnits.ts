@@ -62,6 +62,49 @@ export function unitEmoji(name: string | null | undefined): string {
   return UNIT_EMOJI[(name || "").trim().toUpperCase()] || "📋";
 }
 
+// ── Forma de pagamento da unidade (job_units.pay_mode) ───────────────────────
+// PORAO = por porão (Embarque), TURNO = por turno (Costado), MENSAL = salário
+// fixo (Mensalista). PORAO/TURNO entram na escala do navio; MENSAL fica fora.
+export type UnitPayMode = "PORAO" | "TURNO" | "MENSAL";
+
+export const PAY_MODE_LABELS: Record<UnitPayMode, string> = {
+  PORAO: "Por porão (como Embarque)",
+  TURNO: "Por turno (como Costado)",
+  MENSAL: "Mensalidade (salário fixo)",
+};
+
+// Normaliza o pay_mode vindo do banco; default PORAO (igual às personalizadas).
+export function normalizePayMode(mode: string | null | undefined): UnitPayMode {
+  const m = (mode || "").trim().toUpperCase();
+  return m === "TURNO" || m === "MENSAL" ? m : "PORAO";
+}
+
+// Só PORAO e TURNO trabalham em navio (viram escala). MENSAL é valor fixo.
+export function payModeIsEscalable(mode: string | null | undefined): boolean {
+  const m = normalizePayMode(mode);
+  return m === "PORAO" || m === "TURNO";
+}
+
+// Pay_mode-padrão derivado do nome quando a unidade não tem o campo (legado):
+// COSTADO/TURNO → TURNO; MENSALISTA/POR_DIA/POR_HORA → MENSAL; resto → PORAO.
+export function fallbackPayModeOfUnit(unit: string | null | undefined): UnitPayMode {
+  const key = sectionKeyOfUnit(unit);
+  if (key === "SERVICOS") return "TURNO";
+  if (key === "MENSALISTA") return "MENSAL";
+  return "PORAO";
+}
+
+// Decide o pay_mode de uma função pela unidade dela: procura a unidade cadastrada
+// (mapa nome→pay_mode, chave em MAIÚSCULO) e cai no fallback pelo nome se faltar.
+export function payModeOfFunctionUnit(
+  unit: string | null | undefined,
+  payModeByUnitName: Map<string, string>,
+): UnitPayMode {
+  const optName = unitToOption(unit).toUpperCase();
+  const found = payModeByUnitName.get(optName);
+  return found ? normalizePayMode(found) : fallbackPayModeOfUnit(unit);
+}
+
 // Descrição-padrão de fallback quando a unidade (ou legado) não tem texto próprio.
 const DEFAULT_UNIT_HINT: Record<string, string> = {
   EMBARQUE: "Pago por porão — inclui os extras Raspagem e Pintura",

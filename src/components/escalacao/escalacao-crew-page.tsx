@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EditIcon, TrashIcon } from "@/components/icons";
 import { formatDate } from "@/lib/utils";
-import { isEscalableJobUnit } from "@/types/database";
+import { payModeIsEscalable, payModeOfFunctionUnit } from "@/lib/jobUnits";
 import type {
   JobFunction,
   Job,
@@ -56,6 +56,9 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
   const [showFinished, setShowFinished] = useState(false);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [functions, setFunctions] = useState<JobFunction[]>([]);
+  // Unidades cadastradas (nome → pay_mode): a escala inclui só quem paga por
+  // porão ou por turno (mensalidade fica fora).
+  const [payModeByUnit, setPayModeByUnit] = useState<Map<string, string>>(new Map());
   const [jobs, setJobs] = useState<Job[]>([]);
   const [allocations, setAllocations] = useState<JobAllocation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,12 +66,13 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [shipsRes, empRes, fnRes, jobsRes, allocsRes] = await Promise.all([
+      const [shipsRes, empRes, fnRes, jobsRes, allocsRes, unitsRes] = await Promise.all([
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]).order("arrival_date"),
         db.from("employees").select("id, name, role, status, sector, escala_unavailable, bank_name, bank_agency, bank_account, bank_account_type").order("name"),
         db.from("job_functions").select("*").order("name"),
         db.from("jobs").select("*"),
         db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)").order("added_at", { ascending: true }),
+        db.from("job_units").select("name, pay_mode"),
       ]);
       // Embarque tab shows only ships that are NOT costado (services array doesn't include "COSTADO").
       const allShips = (shipsRes.data as Ship[]) || [];
@@ -77,6 +81,11 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
       setFunctions((fnRes.data as JobFunction[]) || []);
       setJobs((jobsRes.data as Job[]) || []);
       setAllocations((allocsRes.data as JobAllocation[]) || []);
+      const m = new Map<string, string>();
+      for (const u of (unitsRes.data as Array<{ name: string; pay_mode: string }> | null) || []) {
+        if (u?.name) m.set(u.name.toUpperCase(), u.pay_mode);
+      }
+      setPayModeByUnit(m);
     } catch (err) {
       console.error("Load error:", err);
     } finally {
@@ -170,6 +179,7 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
         allocations={shipAllocations}
         employees={employees}
         functions={functions}
+        payModeByUnit={payModeByUnit}
         canEdit={canEdit}
         profileName={profileName}
         kind={config.kind}
@@ -352,13 +362,14 @@ function ShipSelector({
 // ─── ESCALAÇÃO TAB ──────────────────────────────────────────────────────────
 
 function EscalacaoTab({
-  ship, shipJob, allocations, employees, functions, canEdit, profileName, kind, onChange, otherJobOccupiedKind,
+  ship, shipJob, allocations, employees, functions, payModeByUnit, canEdit, profileName, kind, onChange, otherJobOccupiedKind,
 }: {
   ship: Ship | null;
   shipJob: Job | null;
   allocations: JobAllocation[];
   employees: Employee[];
   functions: JobFunction[];
+  payModeByUnit: Map<string, string>;
   canEdit: boolean;
   profileName: string;
   kind: AllocationKind;
@@ -526,6 +537,7 @@ function EscalacaoTab({
         ensureJob={ensureJob}
         employees={employees}
         functions={functions}
+        payModeByUnit={payModeByUnit}
         existingAllocs={activeAllocs.filter((a) => a.id !== editAlloc?.id)}
         otherJobOccupiedKind={otherJobOccupiedKind}
         profileName={profileName}
@@ -548,13 +560,14 @@ function EscalacaoTab({
 // ─── Crew Form Modal (add/edit member) ──────────────────────────────────────
 
 function CrewFormModal({
-  open, item, ensureJob, employees, functions, existingAllocs, otherJobOccupiedKind, profileName, kind, onClose, onSaved,
+  open, item, ensureJob, employees, functions, payModeByUnit, existingAllocs, otherJobOccupiedKind, profileName, kind, onClose, onSaved,
 }: {
   open: boolean;
   item: JobAllocation | null;
   ensureJob: () => Promise<string>;
   employees: Employee[];
   functions: JobFunction[];
+  payModeByUnit: Map<string, string>;
   existingAllocs: JobAllocation[];
   otherJobOccupiedKind: Map<number, "EMBARQUE" | "COSTADO">;
   profileName: string;
@@ -761,9 +774,14 @@ function CrewFormModal({
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
-  // Só funções operacionais entram na escala (porão/embarque + costado); as
-  // mensalistas/admin (ex.: Analista RH) ficam de fora do seletor de função.
-  const activeFunctions = functions.filter((f) => f.active && isEscalableJobUnit(f.unit));
+  // Só funções operacionais entram na escala: a unidade paga por porão ou por
+  // turno (mensalidade fica fora) e o setor não é Administrativo (escritório).
+  const activeFunctions = functions.filter(
+    (f) =>
+      f.active &&
+      f.sector !== "ADMINISTRATIVO" &&
+      payModeIsEscalable(payModeOfFunctionUnit(f.unit, payModeByUnit)),
+  );
   const selectedList = Array.from(selectedIds).map((id) => employees.find((e) => e.id === id)).filter(Boolean) as Employee[];
 
   return (

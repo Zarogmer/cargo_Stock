@@ -588,6 +588,9 @@ model JobFunction {
   // POR_NAVIO, PORAO, POR_DIA, POR_HORA, POR_OPERACAO = porão de Embarque;
   // TURNO = turno de 6h de Costado; MENSALISTA = admin.
   unit            String                 @default("POR_NAVIO")
+  // Setor que recebe: OPERACIONAL entra na escala do navio; ADMINISTRATIVO é
+  // pessoal de escritório (fica fora da escala; custo do navio automático).
+  sector          String                 @default("OPERACIONAL")
   active          Boolean                @default(true)
   rates           JobFunctionRate[]
   allocations     JobAllocation[]
@@ -606,6 +609,10 @@ model WorkUnit {
   id          Int      @id @default(autoincrement())
   name        String   @unique          // EMBARQUE, COSTADO, MENSALISTA, ...
   description String?
+  // Como a unidade paga: PORAO (por porão, como Embarque), TURNO (por turno,
+  // como Costado) ou MENSAL (salário fixo, como Mensalista). PORAO/TURNO entram
+  // na escala do navio; MENSAL fica fora (valor fixo mensal).
+  pay_mode    String   @default("PORAO")
   sort_order  Int      @default(50)     // ordem na lista (menor = mais acima)
   created_at  DateTime @default(now()) @db.Timestamptz()
   updated_at  DateTime @updatedAt @db.Timestamptz()

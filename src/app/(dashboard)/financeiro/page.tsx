@@ -72,6 +72,7 @@ import {
 } from "@/lib/jobUnits";
 import type {
   JobFunction,
+  FunctionSector,
   JobFunctionRate,
   JobUnit,
   WorkUnit,
@@ -273,7 +274,10 @@ function calcAllocBase(a: JobAllocation, holdsCount: number | null): number {
   const extra = Number(a.extra_value || 0);
   if (k === "EMBARQUE") {
     const holds = Math.max(1, Number(holdsCount || 1));
-    return rate * holds + extra;
+    // Raspagem/Pintura: valor/porão do serviço extra do navio, somado à limpeza
+    // de todo o operacional (enriquecido em loadAll a partir de ships.services).
+    const serviceExtra = Number(a.service_extra_rate || 0);
+    return (rate + serviceExtra) * holds + extra;
   }
   if (k === "ADMINISTRATIVO") {
     // Administrativo: valor fixo por operação — não multiplica por porões nem
@@ -715,6 +719,7 @@ export default function FinanceiroPage() {
         description: "Pessoal administrativo — valor fixo por operação (navio). Entra no custo, fora da folha.",
         default_rate: 0,
         unit: "POR_OPERACAO",
+        sector: "ADMINISTRATIVO",
         active: true,
       } as Record<string, unknown>);
       if (!created.error) {
@@ -745,9 +750,38 @@ export default function FinanceiroPage() {
     // Função e valor de embarque vêm sempre do cadastro do colaborador — todo
     // navio reflete o cadastro atual (ver applyCadastroToAllocations).
     const rawAllocs = (alRes.data as JobAllocation[]) || [];
-    setAllocations(applyCadastroToAllocations(rawAllocs, emps, allFunctions, srMap));
+    const withCadastro = applyCadastroToAllocations(rawAllocs, emps, allFunctions, srMap);
+    // Raspagem/Pintura: serviço extra do navio que TODO o operacional recebe por
+    // porão, somado à limpeza (dois serviços na mesma operação). O valor/porão
+    // vem do default_rate da função de mesmo nome (RASPAGEM/PINTURA), já cadastrada
+    // em Valores. Mapeia job → soma dos serviços extras do navio.
+    const shipsData = (shRes.data as Ship[]) || [];
+    const shipById = new Map(shipsData.map((s) => [s.id, s]));
+    const serviceFnRate = (svc: string): number => {
+      const f = allFunctions.find((fn) => fn.name.trim().toUpperCase() === svc);
+      return f ? Number(f.default_rate || 0) : 0;
+    };
+    const jobServiceExtra = new Map<string, number>();
+    for (const j of rawJobs) {
+      if (!j.ship_id) continue;
+      const services = shipById.get(j.ship_id)?.services || [];
+      const extra = services.filter(isServiceExtra).reduce((s, svc) => s + serviceFnRate(svc), 0);
+      if (extra > 0) jobServiceExtra.set(j.id, extra);
+    }
+    const withService = withCadastro.map((a) => {
+      // Só operacional de Embarque; Administrativo (custo fixo) fica fora.
+      if ((a.kind || "EMBARQUE") !== "EMBARQUE") return a;
+      const extraRate = jobServiceExtra.get(a.job_id) || 0;
+      if (extraRate <= 0) return a;
+      // Se a própria função da pessoa JÁ é o serviço (RASPAGEM/PINTURA), não soma
+      // de novo — evita dobrar o valor.
+      const fnName = (a.job_functions?.name || "").trim().toUpperCase();
+      if (isServiceExtra(fnName)) return a;
+      return { ...a, service_extra_rate: extraRate };
+    });
+    setAllocations(withService);
     setAdjustments((adRes.data as JobAdjustment[]) || []);
-    setShips((shRes.data as Ship[]) || []);
+    setShips(shipsData);
     setAdvances((avRes.data as Advance[]) || []);
     setAdvDiscounts((adcRes.data as AdvanceDiscountRow[]) || []);
     setLoading(false);
@@ -1861,6 +1895,7 @@ function FunctionFormModal({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [defaultRate, setDefaultRate] = useState("");
+  const [sector, setSector] = useState<FunctionSector>("OPERACIONAL");
   const [active, setActive] = useState(true);
   const [saving, setSaving] = useState(false);
   // A unidade não é mais escolhida aqui — vem travada do botão "+ Adicionar
@@ -1872,9 +1907,10 @@ function FunctionFormModal({
       setName(item.name);
       setDescription(item.description || "");
       setDefaultRate(Number(item.default_rate).toFixed(2).replace(".", ","));
+      setSector(item.sector === "ADMINISTRATIVO" ? "ADMINISTRATIVO" : "OPERACIONAL");
       setActive(item.active);
     } else {
-      setName(""); setDescription(""); setDefaultRate(""); setActive(true);
+      setName(""); setDescription(""); setDefaultRate(""); setSector("OPERACIONAL"); setActive(true);
     }
   }, [item, open]);
 
@@ -1895,6 +1931,7 @@ function FunctionFormModal({
       description: description.trim() || null,
       default_rate: rateNum,
       unit: normalizeUnit(unit),
+      sector,
       active,
     };
     if (item) {
@@ -1922,6 +1959,16 @@ function FunctionFormModal({
         <div>
           <label className="block text-sm font-medium mb-1">Nome da função *</label>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} required autoFocus className={inputCls} placeholder="WAP, AJUDANTE, ESFREGÃO..." />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Setor que recebe *</label>
+          <select value={sector} onChange={(e) => setSector(e.target.value as FunctionSector)} className={inputCls}>
+            <option value="OPERACIONAL">Operacional (entra na escala do navio)</option>
+            <option value="ADMINISTRATIVO">Administrativo (escritório)</option>
+          </select>
+          <p className="text-[11px] text-text-light mt-1">
+            Operacional é escalado no navio. Administrativo é pessoal de escritório — fica fora da escala.
+          </p>
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Descrição</label>
@@ -2851,6 +2898,7 @@ function TrabalhosTab({
         canEditFunction={canEditFunction}
         profileName={profileName}
         kindFilter="EMBARQUE"
+        shipServices={(ships.find((s) => s.id === detailJob?.ship_id)?.services || []).filter((s) => s !== "COSTADO")}
         onClose={() => setDetailJob(null)}
         onChange={() => { onChange(); }}
       />
@@ -3066,11 +3114,14 @@ interface PurchaseOrderLite {
 }
 
 function JobDetailModal({
-  open, job, allocations, adminAllocations = [], adjustments, functions, employees, specialRates, canEdit, canEditFunction = false, profileName, kindFilter, onClose, onChange,
+  open, job, allocations, adminAllocations = [], adjustments, functions, employees, specialRates, canEdit, canEditFunction = false, profileName, kindFilter, shipServices = [], onClose, onChange,
 }: {
   open: boolean;
   job: Job | null;
   allocations: JobAllocation[];
+  // Serviços do navio (ships.services) — Raspagem/Pintura entram na paga do
+  // operacional por porão. Usado só pra rotular a quebra na linha (Embarque).
+  shipServices?: string[];
   // Administrativo (kind=ADMINISTRATIVO) deste navio — só usado no modal de Embarque,
   // renderizado numa seção própria. Vazio em Costado.
   adminAllocations?: JobAllocation[];
@@ -3107,6 +3158,17 @@ function JobDetailModal({
   const holdsMultiplier =
     kindFilter === "EMBARQUE" ? Math.max(1, Number(job?.holds_count || 1))
     : 1; // Costado: rate já é valor/turno, base = rate × qty.
+  // Serviços extras do navio (Raspagem/Pintura) — pra rotular a quebra da paga
+  // por porão de cada linha ("Limpeza X + Raspagem Y"). Cada um tem seu valor/
+  // porão vindo do default_rate da função de mesmo nome (Valores).
+  const extraServices = (kindFilter === "EMBARQUE" ? shipServices : [])
+    .filter(isServiceExtra)
+    .map((s) => ({
+      code: s,
+      label: EMBARQUE_SERVICE_LABELS[s] || s,
+      rate: Number(functions.find((f) => f.name.trim().toUpperCase() === s)?.default_rate || 0),
+    }))
+    .filter((s) => s.rate > 0);
   const rateLabel = kindFilter === "EMBARQUE" ? "Valor/Porão" : kindFilter === "COSTADO" ? "Valor/Turno" : "Valor Diário";
   // Costado não tem mais coluna de multiplicador — rate já é por turno.
   const multiplierLabel = kindFilter === "EMBARQUE" ? "Porões" : null;
@@ -3404,7 +3466,10 @@ function JobDetailModal({
       const fn = functions.find((f) => f.id === a.function_id);
       const defaultRate = Number(fn?.default_rate ?? a.rate);
       const isEmb = kindFilter === "EMBARQUE";
-      const base = isEmb ? defaultRate * holdsMultiplier : Number(a.rate) * a.quantity * holdsMultiplier;
+      // Serviço extra (Raspagem/Pintura) entra na Base — é paga por trabalho feito,
+      // não "especial/rateio". Assim Extra continua sendo só especial + rateio.
+      const serviceExtra = isEmb ? Number(a.service_extra_rate || 0) * holdsMultiplier : 0;
+      const base = (isEmb ? defaultRate * holdsMultiplier : Number(a.rate) * a.quantity * holdsMultiplier) + serviceExtra;
       baseSum += base;
       extraSum += allocTotalPerson(a) - base;
     }
@@ -3698,8 +3763,10 @@ function JobDetailModal({
     const defaultRate = Number(fn?.default_rate ?? a.rate);
     const actualRate = Number(a.rate);
     const isEmbarque = kindFilter === "EMBARQUE";
+    // Serviço extra (Raspagem/Pintura) do navio, por porão, somado à limpeza.
+    const serviceExtra = isEmbarque ? Number(a.service_extra_rate || 0) * holdsMultiplier : 0;
     const base = isEmbarque
-      ? defaultRate * holdsMultiplier
+      ? defaultRate * holdsMultiplier + serviceExtra
       : actualRate * a.quantity * holdsMultiplier;
     const specialDelta = isEmbarque ? (actualRate - defaultRate) * holdsMultiplier : 0;
     const rateioExtra = Number(a.extra_value || 0);
@@ -4955,9 +5022,13 @@ function JobDetailModal({
                     const isCostado = kindFilter === "COSTADO";
                     const rowRate = rateForRow(a);
                     const rowQty = effectiveQty(a);
-                    const displayRate = isEmbarque ? defaultRate : rowRate;
+                    // Raspagem/Pintura: valor/porão do serviço extra do navio,
+                    // somado à limpeza (mesmo operacional fez os dois serviços).
+                    const serviceExtraRate = isEmbarque ? Number(a.service_extra_rate || 0) : 0;
+                    // Valor/Porão exibido = limpeza + serviços extras do navio.
+                    const displayRate = isEmbarque ? defaultRate + serviceExtraRate : rowRate;
                     const base = isEmbarque
-                      ? defaultRate * holdsMultiplier
+                      ? (defaultRate + serviceExtraRate) * holdsMultiplier
                       : isCostado ? rowRate * rowQty
                       : actualRate * a.quantity * holdsMultiplier;
                     // Costado: marca turnos noturnos visualmente.
@@ -5004,6 +5075,14 @@ function JobDetailModal({
                           {specialDelta !== 0 && (
                             <p className="text-[10px] text-blue-700 italic mt-0.5" title={`Valor especial: ${brl(actualRate)}/porão (padrão ${brl(defaultRate)})`}>
                               💰 Valor especial {brl(actualRate)}/porão
+                            </p>
+                          )}
+                          {serviceExtraRate > 0 && (
+                            <p
+                              className="text-[10px] text-amber-700 italic mt-0.5"
+                              title={`Este navio teve serviços extras. Cada porão soma: limpeza ${brl(defaultRate)} + ${extraServices.map((s) => `${s.label} ${brl(s.rate)}`).join(" + ")} = ${brl(displayRate)}/porão`}
+                            >
+                              ✚ Limpeza {brl(defaultRate)} + {extraServices.map((s) => `${s.label} ${brl(s.rate)}`).join(" + ")} = {brl(displayRate)}/porão
                             </p>
                           )}
                           {rateioExtra > 0 && a.extra_reason && (
@@ -5274,7 +5353,9 @@ function JobDetailModal({
                       if (isEmbarque) {
                         const fn = functions.find((f) => f.id === a.function_id);
                         const defaultRate = Number(fn?.default_rate ?? a.rate);
-                        return s + defaultRate * holdsMultiplier;
+                        // Inclui o serviço extra do navio (Raspagem/Pintura) por porão.
+                        const serviceExtra = Number(a.service_extra_rate || 0);
+                        return s + (defaultRate + serviceExtra) * holdsMultiplier;
                       }
                       if (isCostado) return s + costadoRate * effectiveQty(a);
                       return s + Number(a.rate) * a.quantity * holdsMultiplier;
@@ -7174,7 +7255,10 @@ function ControleTab({
 
       if (kind === "EMBARQUE") {
         const holds = Math.max(1, Number(job?.holds_count || 1));
-        const earnings = rate * holds + extra;
+        // Serviço extra do navio (Raspagem/Pintura) por porão, somado à limpeza —
+        // mesmo Ganho/porão que a Folha de Pagamento mostra.
+        const embRate = rate + Number(a.service_extra_rate || 0);
+        const earnings = embRate * holds + extra;
         s.embarque.pluxee += pluxee;
         s.embarque.folha += Math.max(0, earnings - pluxee);
         const seen = embarqueJobSeen.get(a.employee_id) || new Set<string>();
@@ -7196,7 +7280,7 @@ function ControleTab({
           // protegida pelo firstTime acima; o mapa poroesPorJob (total geral)
           // grava o mesmo valor de novo, sem duplicar.
           kind, date: job?.start_date || null, poroes: holds,
-          quantity: 1, rate, earnings,
+          quantity: 1, rate: embRate, earnings,
           functionName: fn?.name || null,
         });
       } else {

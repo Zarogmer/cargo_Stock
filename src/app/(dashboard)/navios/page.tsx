@@ -8,7 +8,8 @@ import { db } from "@/lib/db";
 import { releaseFinishedShipAllocations, releaseShipAllocationsNow, promoteStartedShips } from "@/lib/release-finished-ships";
 import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
-import { SHIFT_PERIODS, isEscalableJobUnit, type ShiftPeriod } from "@/types/database";
+import { SHIFT_PERIODS, type ShiftPeriod } from "@/types/database";
+import { payModeIsEscalable, payModeOfFunctionUnit } from "@/lib/jobUnits";
 import { Modal } from "@/components/ui/modal";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -241,11 +242,23 @@ export default function NaviosPage() {
   // pagas. A chave só existe quando o usuário clicou em "+ 2ª função".
   const [groupPerEmpFn2, setGroupPerEmpFn2] = useState<Map<number, string>>(new Map());
   // Active job functions, loaded once for the function selector
-  const [jobFunctions, setJobFunctions] = useState<{ id: number; name: string; active: boolean; default_rate: string | number; unit: string }[]>([]);
-  // Só funções operacionais entram na escala (porão/embarque + costado). As
-  // mensalistas/admin (ex.: Analista RH) ficam de fora dos seletores de função
-  // — mas `jobFunctions` continua completo pros lookups por id (nome/rate).
-  const escalableFunctions = useMemo(() => jobFunctions.filter((f) => isEscalableJobUnit(f.unit)), [jobFunctions]);
+  const [jobFunctions, setJobFunctions] = useState<{ id: number; name: string; active: boolean; default_rate: string | number; unit: string; sector: string | null }[]>([]);
+  // Unidades cadastradas (nome → pay_mode), pra decidir quais funções entram na
+  // escala pela FORMA DE PAGAMENTO (por porão / por turno = sim; mensalidade = não).
+  const [payModeByUnit, setPayModeByUnit] = useState<Map<string, string>>(new Map());
+  // Só funções operacionais entram na escala. Regra nova: a UNIDADE decide pela
+  // forma de pagamento (porão/turno) e a FUNÇÃO pelo setor (Administrativo fica
+  // fora). Mensalistas/admin (ex.: Analista RH) continuam de fora — mas
+  // `jobFunctions` segue completo pros lookups por id (nome/rate).
+  const escalableFunctions = useMemo(
+    () =>
+      jobFunctions.filter(
+        (f) =>
+          f.sector !== "ADMINISTRATIVO" &&
+          payModeIsEscalable(payModeOfFunctionUnit(f.unit, payModeByUnit)),
+      ),
+    [jobFunctions, payModeByUnit],
+  );
   // Costado-only: shift date + period for the bulk-allocated rows
   const [costadoShiftDate, setCostadoShiftDate] = useState("");
   const [costadoShiftPeriod, setCostadoShiftPeriod] = useState("07-13");
@@ -386,11 +399,16 @@ export default function NaviosPage() {
   // employee in the "criar grupo + escalar" panel of the new-ship modal.
   const loadJobFunctions = useCallback(async () => {
     try {
-      const { data } = await db
-        .from("job_functions")
-        .select("id, name, active, default_rate, unit")
-        .order("name");
-      setJobFunctions(((data as any[]) || []).filter((f) => f.active !== false));
+      const [fnRes, unitRes] = await Promise.all([
+        db.from("job_functions").select("id, name, active, default_rate, unit, sector").order("name"),
+        db.from("job_units").select("name, pay_mode"),
+      ]);
+      setJobFunctions(((fnRes.data as any[]) || []).filter((f) => f.active !== false));
+      const m = new Map<string, string>();
+      for (const u of (unitRes.data as Array<{ name: string; pay_mode: string }> | null) || []) {
+        if (u?.name) m.set(u.name.toUpperCase(), u.pay_mode);
+      }
+      setPayModeByUnit(m);
     } catch (err) {
       console.error("loadJobFunctions error:", err);
     }
