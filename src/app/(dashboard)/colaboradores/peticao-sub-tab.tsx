@@ -340,22 +340,19 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
             </select>
           </div>
 
-          {/* Navio */}
+          {/* Navio — dropdown dos navios no ciclo ativo (igual ao campo Equipe) */}
           <div>
             <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Navio</label>
-            <input
-              type="text"
-              list="peticao-navios"
+            <select
               value={navioName}
-              onChange={(e) => setNavioName(e.target.value.toUpperCase())}
-              placeholder="Nome do navio"
+              onChange={(e) => setNavioName(e.target.value)}
               className={fieldCls}
-            />
-            <datalist id="peticao-navios">
+            >
+              <option value="">Selecione o navio…</option>
               {activeShips.map((s) => (
-                <option key={s.id} value={s.name} />
+                <option key={s.id} value={s.name}>{s.name}</option>
               ))}
-            </datalist>
+            </select>
           </div>
 
           {/* Bandeira + IMO */}
@@ -525,7 +522,11 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
   );
 }
 
-// ─── Lista cadastrável (Gate único / Transportes múltiplos) ───────────────────
+// ─── Lista cadastrável em formato dropdown (igual ao campo Equipe) ────────────
+// Escolha por menu suspenso. Único (Agência/Gate) grava a opção; múltiplo
+// (Transporte) vai somando os selecionados em chips com × pra tirar da seleção.
+// O "+ Cadastrar" adiciona ao cadastro e "Remover do cadastro" abre a lista
+// pra apagar opções — nenhuma funcionalidade dos antigos chips se perde.
 function OptionsManager({
   label,
   hint,
@@ -552,6 +553,7 @@ function OptionsManager({
   addPlaceholder?: string;
 }) {
   const [novo, setNovo] = useState("");
+  const [managing, setManaging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function submitAdd() {
@@ -562,46 +564,63 @@ function OptionsManager({
     inputRef.current?.focus();
   }
 
+  // No múltiplo, o dropdown serve só pra ADICIONAR — some as já escolhidas.
+  const pickerOptions = multi ? options.filter((o) => !selectedMulti?.has(o)) : options;
+
   return (
     <div>
       <label className="text-xs font-semibold text-text-light uppercase tracking-wider">{label}</label>
       {hint && <p className="text-[11px] text-text-light">{hint}</p>}
-      <div className="mt-1 flex flex-wrap gap-1.5">
-        {options.length === 0 && (
-          <span className="text-[11px] text-text-light py-1">Nada cadastrado — adicione abaixo.</span>
-        )}
-        {options.map((opt) => {
-          const active = multi ? !!selectedMulti?.has(opt) : selectedSingle === opt;
-          return (
+
+      {/* Dropdown de escolha — mesmo estilo do campo Equipe */}
+      <select
+        value={multi ? "" : selectedSingle || ""}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (multi) {
+            if (v) onToggleMulti?.(v);
+          } else {
+            onPickSingle?.(v);
+          }
+        }}
+        className={fieldCls}
+        disabled={options.length === 0}
+      >
+        <option value="">
+          {options.length === 0
+            ? "Nada cadastrado — adicione abaixo"
+            : multi
+              ? "Adicionar…"
+              : "— Selecione —"}
+        </option>
+        {pickerOptions.map((opt) => (
+          <option key={opt} value={opt}>{opt}</option>
+        ))}
+      </select>
+
+      {/* Selecionados (múltiplo) — chips com × que tiram só da seleção */}
+      {multi && (selectedMulti?.size ?? 0) > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {Array.from(selectedMulti!).map((opt) => (
             <span
               key={opt}
-              className={`inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full text-xs border transition ${
-                active
-                  ? "bg-primary text-white border-primary"
-                  : "bg-card text-text border-border hover:border-primary/50"
-              }`}
+              className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full text-xs bg-primary text-white border border-primary"
             >
+              <span className="font-medium">{opt}</span>
               <button
                 type="button"
-                onClick={() => (multi ? onToggleMulti?.(opt) : onPickSingle?.(active ? "" : opt))}
-                className="font-medium"
-              >
-                {opt}
-              </button>
-              <button
-                type="button"
-                title="Remover do cadastro"
-                onClick={() => onRemove(opt)}
-                className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] ${
-                  active ? "hover:bg-white/25" : "text-text-light hover:bg-gray-200"
-                }`}
+                title="Tirar da seleção"
+                onClick={() => onToggleMulti?.(opt)}
+                className="w-4 h-4 rounded-full flex items-center justify-center text-[10px] hover:bg-white/25"
               >
                 ×
               </button>
             </span>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
+
+      {/* Cadastrar nova opção */}
       <div className="mt-1.5 flex gap-2">
         <input
           ref={inputRef}
@@ -625,6 +644,39 @@ function OptionsManager({
           + Cadastrar
         </button>
       </div>
+
+      {/* Remover do cadastro — recolhido por padrão pra manter o form limpo */}
+      {options.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setManaging((m) => !m)}
+            className="mt-1 text-[11px] text-text-light hover:text-text hover:underline"
+          >
+            {managing ? "Concluir" : "Remover do cadastro"}
+          </button>
+          {managing && (
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {options.map((opt) => (
+                <span
+                  key={opt}
+                  className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full text-xs bg-card text-text border border-border"
+                >
+                  <span className="font-medium">{opt}</span>
+                  <button
+                    type="button"
+                    title="Remover do cadastro"
+                    onClick={() => onRemove(opt)}
+                    className="w-4 h-4 rounded-full flex items-center justify-center text-[10px] text-text-light hover:bg-gray-200"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
