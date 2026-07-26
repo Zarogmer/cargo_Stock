@@ -69,6 +69,7 @@ import {
 } from "@/lib/vales";
 import {
   unitLabel, normalizeUnit, unitToOption, unitEmoji, unitHint, buildUnitSections,
+  pickFunctionByName,
 } from "@/lib/jobUnits";
 import type {
   JobFunction,
@@ -322,9 +323,6 @@ function applyCadastroToAllocations(
   specialRates: Map<string, number>,
 ): JobAllocation[] {
   const empById = new Map<number, Employee>(employees.map((e) => [e.id, e]));
-  const fnByName = new Map<string, JobFunction>(
-    functions.map((f) => [f.name.trim().toUpperCase(), f]),
-  );
   const fnById = new Map<number, JobFunction>(functions.map((f) => [f.id, f]));
   const embarkCount = new Map<string, number>();
   for (const a of allocs) {
@@ -344,7 +342,9 @@ function applyCadastroToAllocations(
     } else {
       const role = (empById.get(a.employee_id)?.role || "").trim().toUpperCase();
       if (!role) return a;
-      fn = fnByName.get(role);
+      // Cargo é pago por porão no Embarque → prefere a função da seção EMBARQUE
+      // quando o mesmo nome existe em mais de uma unidade.
+      fn = pickFunctionByName(functions, role, "EMBARQUE");
     }
     if (!fn) return a;
     const special = specialRates.get(`${a.employee_id}-${fn.id}`);
@@ -787,7 +787,7 @@ export default function FinanceiroPage() {
     const shipsData = (shRes.data as Ship[]) || [];
     const shipById = new Map(shipsData.map((s) => [s.id, s]));
     const serviceFnRate = (svc: string): number => {
-      const f = allFunctions.find((fn) => fn.name.trim().toUpperCase() === svc);
+      const f = pickFunctionByName(allFunctions, svc, "EMBARQUE");
       return f ? Number(f.default_rate || 0) : 0;
     };
     const jobServiceExtra = new Map<string, number>();
@@ -1981,12 +1981,20 @@ function FunctionFormModal({
       sector,
       active,
     };
-    if (item) {
-      await db.from("job_functions").update(payload).eq("id", item.id);
-    } else {
-      await db.from("job_functions").insert(payload);
-    }
+    const res: { error?: { message?: string } | null } = item
+      ? await db.from("job_functions").update(payload).eq("id", item.id)
+      : await db.from("job_functions").insert(payload);
     setSaving(false);
+    if (res?.error) {
+      const msg = res.error.message || "";
+      // Nome único é POR UNIDADE agora: colisão só acontece na mesma unidade.
+      if (/unique|duplicat/i.test(msg)) {
+        alert(`Já existe uma função "${payload.name}" na unidade ${unitLabel(unit)}. Use outro nome nesta unidade (o mesmo nome é permitido em unidades diferentes).`);
+      } else {
+        alert(`Erro ao salvar a função: ${msg}`);
+      }
+      return;
+    }
     onSaved();
   }
 
@@ -2731,7 +2739,7 @@ function TrabalhosTab({
   // Administrativo do Embarque = alocações kind=ADMINISTRATIVO ligadas à função
   // ADMINISTRATIVO (o Costado usa AUXILIAR OPERACIONAL). Filtrar por função evita
   // misturar os dois caso um mesmo job tenha ambos.
-  const embAdminFnId = functions.find((f) => f.name.trim().toUpperCase() === "ADMINISTRATIVO")?.id ?? null;
+  const embAdminFnId = pickFunctionByName(functions, "ADMINISTRATIVO")?.id ?? null;
 
   // Embarque tab excludes Costado ships (those have services=["COSTADO"]).
   const costadoShipIds = new Set(
@@ -3201,7 +3209,7 @@ function JobDetailModal({
     ? (functions.find((f) => (f.unit || "").toUpperCase() === "ADMIN_COSTADO" && f.active)
       || functions.find((f) => (f.unit || "").toUpperCase() === "ADMIN_COSTADO")
       || null)
-    : (functions.find((f) => f.name.trim().toUpperCase() === "ADMINISTRATIVO") || null);
+    : (pickFunctionByName(functions, "ADMINISTRATIVO") || null);
   const holdsMultiplier =
     kindFilter === "EMBARQUE" ? Math.max(1, Number(job?.holds_count || 1))
     : 1; // Costado: rate já é valor/turno, base = rate × qty.
@@ -3213,7 +3221,7 @@ function JobDetailModal({
     .map((s) => ({
       code: s,
       label: EMBARQUE_SERVICE_LABELS[s] || s,
-      rate: Number(functions.find((f) => f.name.trim().toUpperCase() === s)?.default_rate || 0),
+      rate: Number(pickFunctionByName(functions, s, "EMBARQUE")?.default_rate || 0),
     }))
     .filter((s) => s.rate > 0);
   const rateLabel = kindFilter === "EMBARQUE" ? "Valor/Porão" : kindFilter === "COSTADO" ? "Valor/Turno" : "Valor Diário";
@@ -3353,7 +3361,7 @@ function JobDetailModal({
       pluxee: number;
       folha: number;
     }>;
-    const costadoFnLocal = functions.find((f) => f.name.trim().toUpperCase() === "COSTADO");
+    const costadoFnLocal = pickFunctionByName(functions, "COSTADO", "SERVICOS");
     const costadoRateLocal = costadoFnLocal ? Number(costadoFnLocal.default_rate) : 0;
     type Row = {
       employeeId: number | null;
@@ -4258,7 +4266,7 @@ function JobDetailModal({
     const emp = employees.find((e) => String(e.id) === empIdStr);
     if (!emp) return;
     // Auto-fill function from employee role
-    const fn = functions.find((f) => f.name.toUpperCase() === (emp.role || "").toUpperCase());
+    const fn = pickFunctionByName(functions, emp.role || "", "EMBARQUE");
     if (fn) {
       setAllocFn(String(fn.id));
       setAllocRate(rateForEmpFn(emp.id, fn).toString());
@@ -4296,7 +4304,7 @@ function JobDetailModal({
   // exibimos o valor atual da função COSTADO — assim o financeiro vê o que
   // VAI pagar com base na configuração de hoje, não no que ficou salvo.
   const costadoFn = kindFilter === "COSTADO"
-    ? functions.find((f) => f.name.trim().toUpperCase() === "COSTADO")
+    ? pickFunctionByName(functions, "COSTADO", "SERVICOS")
     : null;
   const costadoRate = costadoFn ? Number(costadoFn.default_rate) : 0;
   function effectiveQty(a: JobAllocation): number {
@@ -4775,7 +4783,7 @@ function JobDetailModal({
             // Função/Valores/Pagas → 👤, usa esse valor. Senão, valor padrão.
             const selectedEmp = allocEmp ? employees.find((e) => String(e.id) === allocEmp) : null;
             const resolvedFn = selectedEmp
-              ? functions.find((f) => f.name.toUpperCase() === (selectedEmp.role || "").toUpperCase())
+              ? pickFunctionByName(functions, selectedEmp.role || "", "EMBARQUE")
               : null;
             const resolvedRate = selectedEmp && resolvedFn
               ? rateForEmpFn(selectedEmp.id, resolvedFn)
@@ -6919,7 +6927,7 @@ function CostadoTab({
   // Para os cards de Costado, o rate canônico é o default_rate da função
   // COSTADO (configurada em Valores). O rate stored na alocação pode ser
   // legado errado (ex.: R$ 400 vindo do default_rate da role de Embarque).
-  const costadoFnDef = functions.find((f) => f.name.trim().toUpperCase() === "COSTADO");
+  const costadoFnDef = pickFunctionByName(functions, "COSTADO", "SERVICOS");
   const costadoRateDef = costadoFnDef ? Number(costadoFnDef.default_rate) : 0;
   // Administrativo do Costado: pessoal do setor Administrativo entra como custo
   // fixo POR NAVIO. Reconhecido pela CATEGORIA — funções marcadas como
@@ -7298,7 +7306,7 @@ function ControleTab({
 
     // Costado: rate canônico vem da função COSTADO em Valores (não do stored
     // rate da alocação, que pode ser legado errado).
-    const ctrlCostadoFn = functions.find((f) => f.name.trim().toUpperCase() === "COSTADO");
+    const ctrlCostadoFn = pickFunctionByName(functions, "COSTADO", "SERVICOS");
     const ctrlCostadoRate = ctrlCostadoFn ? Number(ctrlCostadoFn.default_rate) : 0;
 
     // Toda escalação trabalhada conta — não filtramos por pagamento/status do
@@ -7435,7 +7443,7 @@ function ControleTab({
   // inteiro selecionado (independe do mês/atividade/navio filtrados).
   const yearSummary = useMemo(() => {
     if (employeeFilter === "TODOS") return null;
-    const costadoFn = functions.find((f) => f.name.trim().toUpperCase() === "COSTADO");
+    const costadoFn = pickFunctionByName(functions, "COSTADO", "SERVICOS");
     const costadoRate = costadoFn ? Number(costadoFn.default_rate) : 0;
     let embarque = 0, costado = 0, poroes = 0, turnos = 0;
     const shipsEmb = new Set<string>();

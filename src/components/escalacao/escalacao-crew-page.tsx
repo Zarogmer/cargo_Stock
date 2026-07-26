@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EditIcon, TrashIcon } from "@/components/icons";
 import { formatDate } from "@/lib/utils";
-import { payModeIsEscalable, payModeOfFunctionUnit } from "@/lib/jobUnits";
+import { payModeIsEscalable, payModeOfFunctionUnit, pickFunctionByName } from "@/lib/jobUnits";
 import type {
   JobFunction,
   Job,
@@ -636,7 +636,7 @@ function CrewFormModal({
 
   function findFnIdForRole(role: string | null): string {
     if (!role) return "";
-    const fn = functions.find((f) => f.name.toUpperCase() === role.toUpperCase());
+    const fn = pickFunctionByName(functions, role, "EMBARQUE");
     return fn ? String(fn.id) : "";
   }
 

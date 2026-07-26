@@ -116,6 +116,26 @@ export function unitHint(name: string | null | undefined, description?: string |
   return DEFAULT_UNIT_HINT[(name || "").trim().toUpperCase()] || "";
 }
 
+// Resolve uma função pelo NOME. Agora que o mesmo nome pode existir em unidades
+// diferentes, isto desempata: prefere a função da SEÇÃO informada (ex.: "EMBARQUE"
+// pra cargo pago por porão, "SERVICOS" pro Costado), depois a ativa. Quando o nome
+// NÃO se repete, devolve a única — então o comportamento é idêntico ao de antes
+// pra qualquer dado sem nome duplicado (pagamento não muda).
+export function pickFunctionByName<
+  F extends { name: string; unit?: string | null; active?: boolean | null },
+>(functions: F[], name: string | null | undefined, preferSection?: string): F | undefined {
+  const target = (name || "").trim().toUpperCase();
+  if (!target) return undefined;
+  const matches = functions.filter((f) => (f.name || "").trim().toUpperCase() === target);
+  if (matches.length <= 1) return matches[0];
+  if (preferSection) {
+    const want = preferSection.trim().toUpperCase();
+    const pref = matches.find((f) => sectionKeyOfUnit(f.unit) === want && f.active !== false);
+    if (pref) return pref;
+  }
+  return matches.find((f) => f.active !== false) || matches[0];
+}
+
 // Monta as seções a partir das UNIDADES cadastradas (job_units) + as funções.
 // Cada unidade vira uma seção (na ordem sort_order → nome), mesmo vazia, pra o
 // usuário poder adicionar funções nela. Funções apontando pra uma unidade sem

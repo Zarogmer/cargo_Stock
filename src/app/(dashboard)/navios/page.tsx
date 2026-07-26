@@ -9,7 +9,7 @@ import { releaseFinishedShipAllocations, releaseShipAllocationsNow, promoteStart
 import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 import { SHIFT_PERIODS, type ShiftPeriod } from "@/types/database";
-import { payModeIsEscalable, payModeOfFunctionUnit } from "@/lib/jobUnits";
+import { payModeIsEscalable, payModeOfFunctionUnit, pickFunctionByName } from "@/lib/jobUnits";
 import { Modal } from "@/components/ui/modal";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -619,7 +619,7 @@ export default function NaviosPage() {
       }
       for (const e of teamAvailable) {
         const role = (e.role || "").trim().toUpperCase();
-        const fn = role ? escalableFunctions.find((f) => f.name.toUpperCase() === role) : null;
+        const fn = role ? pickFunctionByName(escalableFunctions, role, "EMBARQUE") : null;
         if (fn) nm.set(e.id, String(fn.id));
       }
       return nm;
@@ -1646,7 +1646,7 @@ export default function NaviosPage() {
                         // com uma função cadastrada (mesma lógica do modal).
                         const emp = employees.find((x) => String(x.id) === id);
                         const role = (emp?.role || "").trim().toUpperCase();
-                        const fn = role ? escalableFunctions.find((f) => f.name.toUpperCase() === role) : null;
+                        const fn = role ? pickFunctionByName(escalableFunctions, role, "EMBARQUE") : null;
                         if (fn) setCrewFnId(String(fn.id));
                       }}
                       autoFocus
@@ -2679,7 +2679,7 @@ export default function NaviosPage() {
                                         // no colaborador (emp.role), se houver match.
                                         const role = (emp.role || "").trim().toUpperCase();
                                         const fn = role
-                                          ? escalableFunctions.find((f) => f.name.toUpperCase() === role)
+                                          ? pickFunctionByName(escalableFunctions, role, "EMBARQUE")
                                           : null;
                                         if (fn) {
                                           setGroupPerEmpFn((m) => new Map(m).set(emp.id, String(fn.id)));

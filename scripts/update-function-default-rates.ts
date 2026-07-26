@@ -47,7 +47,7 @@ async function main() {
   const yesterday = dateOnly(Date.now() - 86_400_000);
 
   for (const t of TARGETS) {
-    const fn = await prisma.jobFunction.findUnique({ where: { name: t.name } });
+    const fn = await prisma.jobFunction.findFirst({ where: { name: t.name } });
     if (!fn) { console.log(`! função ${t.name} não encontrada — pulada`); continue; }
     if (Number(fn.default_rate) === t.rate) {
       console.log(`= ${t.name} já está em R$ ${t.rate}`);

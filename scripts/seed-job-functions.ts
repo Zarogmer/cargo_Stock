@@ -29,7 +29,7 @@ async function main() {
   let skipped = 0;
 
   for (const name of roleNames) {
-    const existing = await prisma.jobFunction.findUnique({ where: { name } });
+    const existing = await prisma.jobFunction.findFirst({ where: { name } });
     if (existing) {
       skipped++;
       continue;

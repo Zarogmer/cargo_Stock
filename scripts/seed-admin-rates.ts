@@ -10,19 +10,20 @@ const ADMIN_RATES: { employeeId: number; name: string; rate: number }[] = [
 ];
 
 async function main() {
-  // 1) Garante a função ADMINISTRATIVO (valor fixo por operação).
-  const fn = await prisma.jobFunction.upsert({
-    where: { name: "ADMINISTRATIVO" },
-    update: {},
-    create: {
-      name: "ADMINISTRATIVO",
-      description:
-        "Pessoal administrativo — valor fixo por operação (navio). Entra no custo, fora da folha/Pluxee.",
-      default_rate: 0,
-      unit: "POR_OPERACAO",
-      active: true,
-    },
-  });
+  // 1) Garante a função ADMINISTRATIVO (valor fixo por operação). Nome é único
+  // por unidade agora, então busca por nome com findFirst em vez de upsert.
+  const fn =
+    (await prisma.jobFunction.findFirst({ where: { name: "ADMINISTRATIVO" } })) ??
+    (await prisma.jobFunction.create({
+      data: {
+        name: "ADMINISTRATIVO",
+        description:
+          "Pessoal administrativo — valor fixo por operação (navio). Entra no custo, fora da folha/Pluxee.",
+        default_rate: 0,
+        unit: "POR_OPERACAO",
+        active: true,
+      },
+    }));
   console.log(`Função ADMINISTRATIVO: #${fn.id}`);
 
   // 2) Valor especial por pessoa (employee_function_rates).

@@ -15,6 +15,7 @@ import { formatPhone, formatDateTime, matchSearch, parseLegacyDate, parseNrsWith
 import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
 import {
   unitLabel, normalizeUnit, unitToOption, unitEmoji, unitHint, buildUnitSections,
+  pickFunctionByName,
 } from "@/lib/jobUnits";
 import { UnitFormModal } from "@/components/job-unit-form-modal";
 import type { Employee, JobFunction, WorkUnit } from "@/types/database";
@@ -894,7 +895,7 @@ function effectivePaga(
   employeeId: number | null | undefined,
   roleName: string | null | undefined,
 ): { rate: number; isSpecial: boolean; functionId: number } | null {
-  const fn = functions.find((f) => f.name === roleName);
+  const fn = pickFunctionByName(functions, roleName, "EMBARQUE");
   if (!fn) return null;
   const special = employeeId != null ? specialRates.get(`${employeeId}-${fn.id}`) : undefined;
   const rate = special != null ? special : Number(fn.default_rate);
@@ -1334,7 +1335,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const selectedFn = functions.find((f) => f.name === role);
+    const selectedFn = pickFunctionByName(functions, role, "EMBARQUE");
     const parsedPaga = paga.trim() === "" ? null : Number(paga.replace(",", "."));
     const pagaRate = parsedPaga != null && Number.isFinite(parsedPaga) ? parsedPaga : null;
     onSave({
