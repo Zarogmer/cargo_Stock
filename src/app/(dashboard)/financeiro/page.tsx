@@ -1647,9 +1647,26 @@ function FuncoesTab({
   };
 
   // Linha da tabela de uma função (reusada nas 3 seções).
-  const renderFnRow = (f: JobFunction) => (
+  const renderFnRow = (f: JobFunction) => {
+    // COSTADO é valor fixo único (sem valor por pessoa), então o nome não abre o
+    // modal — as demais funções abrem os "valores por colaborador" (mesmo que o 👤).
+    const hasPerPerson = f.name.trim().toUpperCase() !== "COSTADO";
+    return (
     <tr key={f.id} className="border-b border-border last:border-0 hover:bg-gray-50">
-      <td className="px-4 py-2.5 font-medium">{f.name}</td>
+      <td className="px-4 py-2.5 font-medium">
+        {hasPerPerson ? (
+          <button
+            type="button"
+            onClick={() => setRatesFn(f)}
+            className="text-left font-medium hover:text-primary hover:underline transition"
+            title="Escolher o valor dos colaboradores desta função"
+          >
+            {f.name}
+          </button>
+        ) : (
+          f.name
+        )}
+      </td>
       <td className="px-4 py-2.5">
         <InlineRateEditor
           value={Number(f.default_rate)}
@@ -1705,7 +1722,8 @@ function FuncoesTab({
         </div>
       </td>
     </tr>
-  );
+    );
+  };
 
   // Cabeçalho de coluna, repetido no topo de cada seção.
   const tableHead = (
