@@ -1102,6 +1102,10 @@ function FuncoesRHTab({
               const de = await db.from("job_functions").update({ active: false }).eq("id", deleteFn.id);
               if (de.error) { alert(`Não consegui excluir nem desativar: ${de.error.message}`); return; }
               alert(`"${deleteFn.name}" tem histórico de pagamento e não pôde ser excluída — foi desativada (some dos seletores, dados ficam no banco).`);
+            } else {
+              // Excluída de vez: tira a função dos colaboradores que a usavam
+              // (employees.role casa com job_functions.name por texto, sem FK).
+              await db.from("employees").update({ role: null }).eq("role", deleteFn.name);
             }
           }
           setDeleteFn(null); onChange();

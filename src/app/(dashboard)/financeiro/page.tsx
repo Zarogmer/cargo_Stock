@@ -1887,6 +1887,9 @@ function FuncoesTab({
               alert(`Não consegui excluir: ${res.error.message}\n\nProvavelmente há alocações antigas referenciando esta função. Tente desativar em vez de excluir.`);
               return;
             }
+            // Excluída de vez: remove a função dos colaboradores que a usavam
+            // (employees.role casa com job_functions.name por texto, sem FK).
+            await db.from("employees").update({ role: null }).eq("role", deleteFn.name);
           }
           setDeleteFn(null); onChange();
         }}
