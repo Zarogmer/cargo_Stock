@@ -11,7 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatPhone, formatDateTime, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, MOVEMENT_TYPE_LABELS, type NrCode } from "@/lib/utils";
+import { formatPhone, formatDateTime, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, MOVEMENT_TYPE_LABELS, buildCodeMap, codeForName, type NrCode } from "@/lib/utils";
 import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
 import {
   unitLabel, normalizeUnit, unitToOption, unitEmoji, unitHint, buildUnitSections,
@@ -929,6 +929,10 @@ function FuncoesRHTab({
   const [deleteUnit, setDeleteUnit] = useState<WorkUnit | null>(null);
 
   const filtered = functions.filter((f) => f.name.toLowerCase().includes(search.toLowerCase()));
+  // Código único derivado do nome — mesma lógica do Almoxarifado (só leitura,
+  // o sistema gera, o usuário não escolhe). Mapa sobre TODAS as funções pra o
+  // código ficar estável independente da busca.
+  const codeMap = buildCodeMap(functions, (f) => f.id, (f) => f.name);
   // Seções = UNIDADES cadastradas (job_units) — mesma fonte da aba Valores.
   const sections = buildUnitSections(units, filtered).map((s) => ({
     ...s,
@@ -1001,6 +1005,7 @@ function FuncoesRHTab({
                     <thead>
                       <tr className="text-left text-[11px] text-text-light uppercase tracking-wider border-b border-border">
                         <th className="px-4 py-2 font-medium">Função</th>
+                        <th className="px-4 py-2 font-medium">Código</th>
                         <th className="px-4 py-2 font-medium">Paga (R$)</th>
                         <th className="px-4 py-2 font-medium">Status</th>
                         {canManage && <th className="px-4 py-2 font-medium w-32 text-right">Ações</th>}
@@ -1010,6 +1015,7 @@ function FuncoesRHTab({
                       {rows.map((f) => (
                         <tr key={f.id} className={`border-b border-border last:border-0 hover:bg-gray-50 ${!f.active ? "opacity-50" : ""}`}>
                           <td className="px-4 py-2.5 font-medium">{f.name}</td>
+                          <td className="px-4 py-2.5 font-mono text-xs font-bold text-primary">{codeMap.get(f.id)}</td>
                           <td className="px-4 py-2.5">
                             {Number(f.default_rate) > 0
                               ? <span className="text-text">R$ {formatRateBR(Number(f.default_rate))}</span>
@@ -1057,6 +1063,7 @@ function FuncoesRHTab({
       <FunctionRHFormModal
         open={showForm}
         item={editFn}
+        functions={functions}
         fixedUnit={editFn ? (editFn.unit || fnFormUnit) : fnFormUnit}
         onClose={() => { setShowForm(false); setEditFn(null); }}
         onSaved={() => { setShowForm(false); setEditFn(null); onChange(); }}
@@ -1126,9 +1133,9 @@ function FuncoesRHTab({
 
 // ─── Modal de criar/editar função (RH — sem valor) ──────────────────────────
 function FunctionRHFormModal({
-  open, item, fixedUnit, onClose, onSaved,
+  open, item, functions, fixedUnit, onClose, onSaved,
 }: {
-  open: boolean; item: JobFunction | null; fixedUnit: string; onClose: () => void; onSaved: () => void;
+  open: boolean; item: JobFunction | null; functions: JobFunction[]; fixedUnit: string; onClose: () => void; onSaved: () => void;
 }) {
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1136,6 +1143,12 @@ function FunctionRHFormModal({
   // A unidade vem travada do botão "+ Adicionar função" da seção (ou da própria
   // função, ao editar) — não é mais escolhida aqui.
   const unit = fixedUnit;
+  // Código gerado pelo sistema a partir do nome (igual ao Almoxarifado) — só
+  // leitura. Muda junto com o nome; o usuário nunca escolhe o código.
+  const trimmedName = name.trim();
+  const shownCode = trimmedName
+    ? codeForName(functions, (f) => f.id, (f) => f.name, trimmedName)
+    : null;
 
   useEffect(() => {
     if (item) {
@@ -1182,7 +1195,15 @@ function FunctionRHFormModal({
           </div>
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">Nome da função *</label>
+          <div className="flex items-center justify-between mb-1 gap-2">
+            <label className="block text-sm font-medium">Nome da função *</label>
+            {shownCode && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-text-light" title={item ? "Código único desta função" : "Código que será gerado ao salvar"}>
+                <span>{item ? "Código" : "Código novo"}</span>
+                <span className="font-mono text-sm font-bold text-primary">{shownCode}</span>
+              </span>
+            )}
+          </div>
           <input
             type="text"
             value={name}
@@ -1192,7 +1213,7 @@ function FunctionRHFormModal({
             className={inputCls}
             placeholder="Ex.: SOLDADOR"
           />
-          <p className="text-[11px] text-text-light mt-1">Salvo em MAIÚSCULAS.</p>
+          <p className="text-[11px] text-text-light mt-1">Salvo em MAIÚSCULAS. O código sai do nome — muda se você mudar o nome.</p>
         </div>
         <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-text-light">
           💰 O valor da paga é definido pelo Financeiro. Aqui você só cria e organiza as funções.
