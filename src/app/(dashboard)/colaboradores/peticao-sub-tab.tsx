@@ -565,7 +565,6 @@ function OptionsManager({
 }) {
   const [novo, setNovo] = useState("");
   const [typing, setTyping] = useState(false);
-  const [managing, setManaging] = useState(false);
 
   function submitAdd() {
     const v = novo.trim();
@@ -660,37 +659,31 @@ function OptionsManager({
         </div>
       )}
 
-      {/* Remover do cadastro — recolhido por padrão pra manter o form limpo */}
+      {/* Cadastrados — sempre visíveis, cada um com × pra remover do cadastro.
+          Fica fora do dropdown (um <select> nativo não aceita botão dentro das
+          opções), então o × é sempre alcançável sem abrir o menu. */}
       {!typing && options.length > 0 && (
-        <>
-          <button
-            type="button"
-            onClick={() => setManaging((m) => !m)}
-            className="mt-1 text-[11px] text-text-light hover:text-text hover:underline"
-          >
-            {managing ? "Concluir" : "Remover do cadastro"}
-          </button>
-          {managing && (
-            <div className="mt-1 flex flex-wrap gap-1.5">
-              {options.map((opt) => (
-                <span
-                  key={opt}
-                  className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full text-xs bg-card text-text border border-border"
+        <div className="mt-1.5">
+          <p className="text-[11px] text-text-light mb-1">Cadastrados — clique no × para remover:</p>
+          <div className="flex flex-wrap gap-1.5">
+            {options.map((opt) => (
+              <span
+                key={opt}
+                className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full text-xs bg-card text-text border border-border"
+              >
+                <span className="font-medium">{opt}</span>
+                <button
+                  type="button"
+                  title="Remover do cadastro"
+                  onClick={() => onRemove(opt)}
+                  className="w-4 h-4 rounded-full flex items-center justify-center text-[10px] text-text-light hover:bg-red-100 hover:text-red-600"
                 >
-                  <span className="font-medium">{opt}</span>
-                  <button
-                    type="button"
-                    title="Remover do cadastro"
-                    onClick={() => onRemove(opt)}
-                    className="w-4 h-4 rounded-full flex items-center justify-center text-[10px] text-text-light hover:bg-gray-200"
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-        </>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
