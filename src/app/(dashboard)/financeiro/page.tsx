@@ -3172,6 +3172,12 @@ function JobDetailModal({
   const rateLabel = kindFilter === "EMBARQUE" ? "Valor/Porão" : kindFilter === "COSTADO" ? "Valor/Turno" : "Valor Diário";
   // Costado não tem mais coluna de multiplicador — rate já é por turno.
   const multiplierLabel = kindFilter === "EMBARQUE" ? "Porões" : null;
+  // Raspagem/Pintura ganham coluna própria (por porão) quando o navio teve esses
+  // serviços — antes vinham só embutidos no Valor/Porão. Assim a limpeza fica no
+  // Valor/Porão e o extra do serviço numa coluna à parte: (Valor/Porão + Serviço)
+  // × Porões = Base. Só aparece no Embarque e quando há serviço extra.
+  const showServiceExtraColumn = kindFilter === "EMBARQUE" && extraServices.length > 0;
+  const serviceExtraLabel = extraServices.map((s) => s.label).join("/");
   // Embarque é pago por porão (uma operação só) — não há "qty" relevante por linha.
   const showQtyColumn = kindFilter !== "EMBARQUE";
   const qtyLabel = kindFilter === "COSTADO" ? "Turnos" : "Qtd";
@@ -4985,6 +4991,9 @@ function JobDetailModal({
                       <th className="px-2 py-2 text-center text-xs font-semibold text-text-light">{qtyLabel}</th>
                     )}
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light whitespace-nowrap">{rateLabel}</th>
+                    {showServiceExtraColumn && (
+                      <th className="px-2 py-2 text-right text-xs font-semibold text-amber-700 whitespace-nowrap" title="Raspagem/Pintura — serviço extra do navio, por porão. Somado ao Valor/Porão forma a Base.">{serviceExtraLabel}</th>
+                    )}
                     {multiplierLabel && (
                       <th className="px-2 py-2 text-center text-xs font-semibold text-text-light">{multiplierLabel}</th>
                     )}
@@ -5027,6 +5036,10 @@ function JobDetailModal({
                     const serviceExtraRate = isEmbarque ? Number(a.service_extra_rate || 0) : 0;
                     // Valor/Porão exibido = limpeza + serviços extras do navio.
                     const displayRate = isEmbarque ? defaultRate + serviceExtraRate : rowRate;
+                    // Quando Raspagem/Pintura têm coluna própria, o Valor/Porão mostra
+                    // só a limpeza (o extra vai na coluna ao lado). Sem coluna, mantém
+                    // o combinado como antes.
+                    const rateColValue = showServiceExtraColumn ? defaultRate : displayRate;
                     const base = isEmbarque
                       ? (defaultRate + serviceExtraRate) * holdsMultiplier
                       : isCostado ? rowRate * rowQty
@@ -5077,7 +5090,7 @@ function JobDetailModal({
                               💰 Valor especial {brl(actualRate)}/porão
                             </p>
                           )}
-                          {serviceExtraRate > 0 && (
+                          {serviceExtraRate > 0 && !showServiceExtraColumn && (
                             <p
                               className="text-[10px] text-amber-700 italic mt-0.5"
                               title={`Este navio teve serviços extras. Cada porão soma: limpeza ${brl(defaultRate)} + ${extraServices.map((s) => `${s.label} ${brl(s.rate)}`).join(" + ")} = ${brl(displayRate)}/porão`}
@@ -5191,7 +5204,7 @@ function JobDetailModal({
                                 ? "Valor vem do cadastro do colaborador (RH › Colaboradores)"
                                 : "Valor da função COSTADO definido em Valores"}
                             >
-                              {brl(displayRate)}
+                              {brl(rateColValue)}
                             </span>
                           ) : (
                             <button
@@ -5201,10 +5214,15 @@ function JobDetailModal({
                               className={canEdit && !isReadOnly ? "hover:bg-blue-50 rounded px-1 cursor-text" : ""}
                               title={canEdit && !isReadOnly ? (isEmbarque ? "Clique para editar (vira valor especial)" : "Clique para editar") : ""}
                             >
-                              {brl(displayRate)}
+                              {brl(rateColValue)}
                             </button>
                           )}
                         </td>
+                        {showServiceExtraColumn && (
+                          <td className="px-2 py-2 text-right whitespace-nowrap text-amber-700" title={serviceExtraRate > 0 ? `${serviceExtraLabel} — serviço extra do navio, por porão` : "Este colaborador não tem serviço extra neste navio"}>
+                            {serviceExtraRate > 0 ? `+ ${brl(serviceExtraRate)}` : "—"}
+                          </td>
+                        )}
                         {multiplierLabel && (
                           <td className="px-2 py-2 text-center text-text-light">× {holdsMultiplier}</td>
                         )}
@@ -5375,6 +5393,7 @@ function JobDetailModal({
                     const labelColSpan = 3
                       + (showCostadoShiftColumns ? 2 : 0)  // Data + Período
                       + (showQtyColumn ? 1 : 0)            // Turnos/Qtd
+                      + (showServiceExtraColumn ? 1 : 0)   // Raspagem/Pintura (só Embarque c/ serviço)
                       + (multiplierLabel ? 1 : 0);          // Porões (só Embarque)
                     return (
                       <tr>
