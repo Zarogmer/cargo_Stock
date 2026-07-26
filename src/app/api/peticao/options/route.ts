@@ -15,15 +15,21 @@ const KEYS = {
   agencia: "peticao_agencias",
 } as const;
 
+// Agências ocultadas: o dropdown de Agência junta sementes fixas + clientes dos
+// navios + agências salvas aqui. Como não dá pra "apagar" uma semente ou um
+// cliente de navio, guardamos aqui as agências que o usuário removeu, e o front
+// as filtra do dropdown (independente da fonte). Adicionar de novo desoculta.
+const AGENCIA_HIDDEN_KEY = "peticao_agencias_hidden";
+
 type Kind = keyof typeof KEYS;
 
 function isKind(v: unknown): v is Kind {
   return v === "gate" || v === "transporte" || v === "agencia";
 }
 
-// Lê uma lista do app_settings; tolera ausência/JSON inválido devolvendo [].
-async function readList(kind: Kind): Promise<string[]> {
-  const row = await prisma.appSetting.findUnique({ where: { key: KEYS[kind] } });
+// Lê uma lista do app_settings por chave; tolera ausência/JSON inválido → [].
+async function readByKey(key: string): Promise<string[]> {
+  const row = await prisma.appSetting.findUnique({ where: { key } });
   if (!row) return [];
   try {
     const parsed = JSON.parse(row.value);
@@ -34,7 +40,7 @@ async function readList(kind: Kind): Promise<string[]> {
   return [];
 }
 
-async function writeList(kind: Kind, list: string[], actor: string | null): Promise<void> {
+async function writeByKey(key: string, list: string[], actor: string | null): Promise<void> {
   // Ordena (pt-BR) e remove duplicados (case-insensitive, mantendo a 1ª grafia).
   const seen = new Set<string>();
   const clean = list
@@ -49,22 +55,26 @@ async function writeList(kind: Kind, list: string[], actor: string | null): Prom
     .sort((a, b) => a.localeCompare(b, "pt-BR"));
   const value = JSON.stringify(clean);
   await prisma.appSetting.upsert({
-    where: { key: KEYS[kind] },
+    where: { key },
     update: { value, updated_by: actor },
-    create: { key: KEYS[kind], value, updated_by: actor },
+    create: { key, value, updated_by: actor },
   });
 }
+
+const readList = (kind: Kind) => readByKey(KEYS[kind]);
+const writeList = (kind: Kind, list: string[], actor: string | null) => writeByKey(KEYS[kind], list, actor);
 
 // GET → { gates: string[], transportes: string[], agencias: string[] }
 export async function GET() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const [gates, transportes, agencias] = await Promise.all([
+  const [gates, transportes, agencias, agenciasHidden] = await Promise.all([
     readList("gate"),
     readList("transporte"),
     readList("agencia"),
+    readByKey(AGENCIA_HIDDEN_KEY),
   ]);
-  return NextResponse.json({ gates, transportes, agencias });
+  return NextResponse.json({ gates, transportes, agencias, agenciasHidden });
 }
 
 // POST { kind: "gate"|"transporte"|"agencia", name } → adiciona e devolve a lista atualizada.
@@ -86,7 +96,16 @@ export async function POST(req: NextRequest) {
   const list = await readList(body.kind);
   list.push(name);
   await writeList(body.kind, list, actor);
-  return NextResponse.json({ list: await readList(body.kind) });
+
+  // Adicionar uma agência a desoculta (some da lista de suprimidas).
+  let hidden: string[] | undefined;
+  if (body.kind === "agencia") {
+    const h = (await readByKey(AGENCIA_HIDDEN_KEY)).filter((s) => s.toLowerCase() !== name.toLowerCase());
+    await writeByKey(AGENCIA_HIDDEN_KEY, h, actor);
+    hidden = h;
+  }
+
+  return NextResponse.json({ list: await readList(body.kind), ...(hidden ? { hidden } : {}) });
 }
 
 // DELETE ?kind=gate&name=... → remove e devolve a lista atualizada.
@@ -102,5 +121,16 @@ export async function DELETE(req: NextRequest) {
   const actor = session.user.id || null;
   const list = (await readList(kind)).filter((s) => s.toLowerCase() !== name.toLowerCase());
   await writeList(kind, list, actor);
-  return NextResponse.json({ list });
+
+  // Remover uma agência a oculta: como ela pode vir de semente/cliente de navio
+  // (não só da lista salva), guardamos na lista de suprimidas pra sumir do menu.
+  let hidden: string[] | undefined;
+  if (kind === "agencia") {
+    const h = await readByKey(AGENCIA_HIDDEN_KEY);
+    h.push(name);
+    await writeByKey(AGENCIA_HIDDEN_KEY, h, actor);
+    hidden = await readByKey(AGENCIA_HIDDEN_KEY);
+  }
+
+  return NextResponse.json({ list, ...(hidden ? { hidden } : {}) });
 }

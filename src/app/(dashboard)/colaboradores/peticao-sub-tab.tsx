@@ -69,6 +69,7 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
   const [gates, setGates] = useState<string[]>([]);
   const [transportes, setTransportes] = useState<string[]>([]);
   const [agencias, setAgencias] = useState<string[]>([]);
+  const [agenciasHidden, setAgenciasHidden] = useState<string[]>([]);
 
   // Form
   const [data, setData] = useState<string>(todayInput);
@@ -114,6 +115,7 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
         setGates(Array.isArray(b.gates) ? b.gates : []);
         setTransportes(Array.isArray(b.transportes) ? b.transportes : []);
         setAgencias(Array.isArray(b.agencias) ? b.agencias : []);
+        setAgenciasHidden(Array.isArray(b.agenciasHidden) ? b.agenciasHidden : []);
       }
     } catch {
       /* silencioso */
@@ -124,16 +126,18 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
   // aqui. Junta: sementes (iguais às do Navios) + clientes já usados em navios +
   // agências salvas na Petição. Dedup case-insensitive mantendo a 1ª grafia.
   const agencyOptions = useMemo(() => {
+    const hidden = new Set(agenciasHidden.map((h) => h.toLowerCase()));
     const map = new Map<string, string>();
     const add = (v: string | null | undefined) => {
       const c = (v || "").trim();
-      if (c && !map.has(c.toLowerCase())) map.set(c.toLowerCase(), c);
+      const k = c.toLowerCase();
+      if (c && !hidden.has(k) && !map.has(k)) map.set(k, c);
     };
     DEFAULT_AGENCIES.forEach(add);
     ships.forEach((s) => add(s.client_name));
     agencias.forEach(add);
     return Array.from(map.values()).sort((a, b) => a.localeCompare(b, "pt-BR"));
-  }, [ships, agencias]);
+  }, [ships, agencias, agenciasHidden]);
 
   // Sugestões do campo Navio: só navios no ciclo ativo (Agendado / Em Operação).
   const activeShips = useMemo(
@@ -211,6 +215,7 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
         setSelTransportes((prev) => new Set(prev).add(clean));
       } else {
         setAgencias(list);
+        if (Array.isArray(b.hidden)) setAgenciasHidden(b.hidden);
         setAgencia(clean);
       }
     } catch {
@@ -239,6 +244,7 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
         });
       } else {
         setAgencias(list);
+        if (Array.isArray(b.hidden)) setAgenciasHidden(b.hidden);
         if (agencia === name) setAgencia("");
       }
     } catch {
