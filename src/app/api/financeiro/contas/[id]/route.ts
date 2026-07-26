@@ -48,6 +48,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   // Campos do controle de vencimentos, editáveis em qualquer status (menos cancelado).
   if (body.bank !== undefined) data.bank = body.bank ? String(body.bank).trim() : null;
   if (body.expense_type !== undefined) data.expense_type = body.expense_type ? String(body.expense_type).trim() : null;
+  if (body.team !== undefined) data.team = body.team ? String(body.team).trim() : null;
+  if (body.ship_id !== undefined) data.ship_id = body.ship_id ? String(body.ship_id) : null;
+  if (body.ship_name !== undefined) data.ship_name = body.ship_name ? String(body.ship_name).trim() : null;
   if (body.payment_method !== undefined) data.payment_method = normalizePaymentMethod(body.payment_method);
   if (body.recurrence !== undefined) data.recurrence = body.recurrence === "MENSAL" ? "MENSAL" : "UNICA";
   // Seção da Demonstração Financeira — fixas ("6.1".."12") ou custom ("c<id>"); vazio limpa.

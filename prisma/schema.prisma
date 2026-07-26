@@ -1200,6 +1200,14 @@ model PayableInvoice {
 
   notes String?
 
+  // Equipe (EQUIPE_1/2/4) e Navio (opcionais): herdados da compra ao lançar do
+  // Controle de Compras, ou informados direto na "Nova conta". Servem pra
+  // filtrar os títulos por equipe/navio. ship_name é snapshot (sobrevive à
+  // exclusão do navio).
+  team      String?
+  ship_id   String? @db.Uuid
+  ship_name String?
+
   // Origem "Controle de Compras": quando o título nasce de um registro de
   // purchase_orders, guarda o vínculo pra não puxar a mesma compra duas vezes e
   // pra referência cruzada. Não é mais único: FATURADO parcelado gera um título

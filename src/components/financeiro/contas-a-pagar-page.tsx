@@ -54,6 +54,11 @@ interface Invoice {
   // Forma de pagamento (PIX, DINHEIRO, BOLETO, FATURADO, cartão...) — herdada da
   // compra de origem ou escolhida à mão.
   payment_method: string | null;
+  // Equipe/Navio opcionais (herdados da compra ou informados na Nova conta) —
+  // usados pra filtrar os títulos.
+  team: string | null;
+  ship_id: string | null;
+  ship_name: string | null;
   // Classificação p/ filtro: "MENSAL" (repete todo mês) ou "UNICA".
   recurrence: string;
   // Conta mensal que gerou este título (null = conta única).
@@ -73,6 +78,15 @@ interface Invoice {
   suppliers: SupplierRef | null;
   attachments: AttachmentMeta[];
 }
+
+// Equipes pra filtrar/rotular os títulos (mesmos valores das compras).
+const CREW_TEAMS = [
+  { value: "EQUIPE_1", label: "Equipe 1" },
+  { value: "EQUIPE_2", label: "Equipe 2" },
+  { value: "EQUIPE_4", label: "Equipe Turbo" },
+];
+const teamLabelOf = (t: string | null): string =>
+  CREW_TEAMS.find((x) => x.value === t)?.label || t || "";
 
 interface Supplier {
   id: number;
@@ -224,6 +238,8 @@ interface FormState {
   digitable_line: string;
   bank: string;
   expense_type: string;
+  team: string;
+  ship_id: string;
   payment_method: string;
   recurrence: "MENSAL" | "UNICA";
   statement_section: string;
@@ -242,6 +258,8 @@ const EMPTY_FORM: FormState = {
   digitable_line: "",
   bank: "",
   expense_type: "",
+  team: "",
+  ship_id: "",
   payment_method: "",
   recurrence: "UNICA",
   statement_section: "",
@@ -259,6 +277,8 @@ export function ContasAPagarPage() {
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  // Navios pro seletor "Navio" da Nova conta (opcional).
+  const [ships, setShips] = useState<{ id: string; name: string }[]>([]);
   const [customSections, setCustomSections] = useState<CustomSectionRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -286,6 +306,8 @@ export function ContasAPagarPage() {
   const [recurrenceFilter, setRecurrenceFilter] = useState<"ALL" | "MENSAL" | "UNICA">("ALL");
   // Filtro por forma de pagamento ("ALL" = todas).
   const [paymentFilter, setPaymentFilter] = useState<string>("ALL");
+  // Filtro por equipe ("ALL" = todas).
+  const [teamFilter, setTeamFilter] = useState<string>("ALL");
 
   // "Conta única" x "Conta mensal" no modal de criação + campos da recorrência.
   const [billKind, setBillKind] = useState<"UNICA" | "MENSAL">("UNICA");
@@ -351,14 +373,16 @@ export function ContasAPagarPage() {
     try {
       // Antes de listar, para os títulos novos já aparecerem nesta carga.
       await reconcileCompras();
-      const [invRes, supRes, secRes] = await Promise.all([
+      const [invRes, supRes, secRes, shipRes] = await Promise.all([
         fetch("/api/financeiro/contas").then((r) => r.json()),
         db.from("suppliers").select("id, name, cnpj").order("name"),
         fetch("/api/financeiro/statement-sections").then((r) => r.json()).catch(() => ({})),
+        db.from("ships").select("id, name").order("arrival_date", { ascending: false }),
       ]);
       setInvoices((invRes.invoices as Invoice[]) || []);
       setSuppliers((supRes.data as Supplier[]) || []);
       setCustomSections((secRes.sections as CustomSectionRow[]) || []);
+      setShips((shipRes.data as { id: string; name: string }[]) || []);
     } catch {
       alert("Erro ao carregar as contas a pagar");
     } finally {
@@ -432,6 +456,12 @@ export function ContasAPagarPage() {
     return PAYMENT_METHODS.filter((m) => present.has(m));
   }, [invoices]);
 
+  // Equipes presentes nos títulos (pro filtro).
+  const teamOptions = useMemo(
+    () => CREW_TEAMS.filter((t) => invoices.some((i) => i.team === t.value)),
+    [invoices],
+  );
+
   const filtered = useMemo(() => {
     return invoices.filter((inv) => {
       if (monthFilter !== "ALL" && refMonthOf(inv) !== monthFilter) return false;
@@ -448,6 +478,7 @@ export function ContasAPagarPage() {
       if (recurrenceFilter === "MENSAL" && !isMensal) return false;
       if (recurrenceFilter === "UNICA" && isMensal) return false;
       if (paymentFilter !== "ALL" && (inv.payment_method || "") !== paymentFilter) return false;
+      if (teamFilter !== "ALL" && (inv.team || "") !== teamFilter) return false;
       if (search) {
         const blob = [
           inv.description,
@@ -467,7 +498,7 @@ export function ContasAPagarPage() {
       }
       return true;
     });
-  }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter, sectionFilter, recurrenceFilter, paymentFilter, merged]);
+  }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter, sectionFilter, recurrenceFilter, paymentFilter, teamFilter, merged]);
 
   // RESUMO do mês selecionado (ou de tudo), no espírito da aba RESUMO da
   // planilha: Falta pagar / Pago / Despesas (total) + contagem de vencidas.
@@ -573,6 +604,8 @@ export function ContasAPagarPage() {
       digitable_line: inv.digitable_line || "",
       bank: inv.bank || "",
       expense_type: inv.expense_type || "",
+      team: inv.team || "",
+      ship_id: inv.ship_id || "",
       payment_method: inv.payment_method || "",
       recurrence: inv.recurrence === "MENSAL" || inv.recurring_bill_id != null ? "MENSAL" : "UNICA",
       statement_section: inv.statement_section || "",
@@ -745,6 +778,7 @@ export function ContasAPagarPage() {
 
     setSaving(true);
     try {
+      const shipName = form.ship_id ? (ships.find((s) => s.id === form.ship_id)?.name || null) : null;
       const payload = {
         description: form.description,
         amount,
@@ -755,6 +789,9 @@ export function ContasAPagarPage() {
         digitable_line: form.digitable_line || null,
         bank: form.bank || null,
         expense_type: form.expense_type || null,
+        team: form.team || null,
+        ship_id: form.ship_id || null,
+        ship_name: shipName,
         payment_method: form.payment_method || null,
         recurrence: form.recurrence,
         statement_section: form.statement_section || null,
@@ -1209,6 +1246,18 @@ export function ContasAPagarPage() {
             ))}
           </select>
         )}
+        {teamOptions.length > 0 && (
+          <select
+            value={teamFilter}
+            onChange={(e) => setTeamFilter(e.target.value)}
+            className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
+          >
+            <option value="ALL">Todas as equipes</option>
+            {teamOptions.map((t) => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+        )}
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -1599,6 +1648,38 @@ export function ContasAPagarPage() {
                   className={inputCls}
                   placeholder="ex.: Rancho, Combustível..."
                 />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-text-light">Equipe <span className="font-normal text-text-light/70">(opcional)</span></label>
+                <select
+                  value={form.team}
+                  onChange={(e) => setForm({ ...form, team: e.target.value })}
+                  className={inputCls}
+                >
+                  <option value="">— sem equipe —</option>
+                  {CREW_TEAMS.map((t) => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-text-light">Navio <span className="font-normal text-text-light/70">(opcional)</span></label>
+                <select
+                  value={form.ship_id}
+                  onChange={(e) => setForm({ ...form, ship_id: e.target.value })}
+                  className={inputCls}
+                >
+                  <option value="">— sem navio —</option>
+                  {ships.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                  {/* Navio já vinculado mas fora da lista (apagado): preserva o vínculo. */}
+                  {form.ship_id && !ships.some((s) => s.id === form.ship_id) && editing?.ship_name && (
+                    <option value={form.ship_id}>{editing.ship_name}</option>
+                  )}
+                </select>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">

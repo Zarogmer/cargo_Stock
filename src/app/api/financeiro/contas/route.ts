@@ -96,6 +96,10 @@ export async function POST(request: NextRequest) {
       notes: body.notes ? String(body.notes) : null,
       bank: body.bank ? String(body.bank).trim() : null,
       expense_type: body.expense_type ? String(body.expense_type).trim() : null,
+      // Equipe/Navio opcionais (pra filtrar os títulos).
+      team: body.team ? String(body.team).trim() : null,
+      ship_id: body.ship_id ? String(body.ship_id) : null,
+      ship_name: body.ship_name ? String(body.ship_name).trim() : null,
       payment_method: normalizePaymentMethod(body.payment_method),
       recurrence: body.recurrence === "MENSAL" ? "MENSAL" : "UNICA",
       // Seção da Demonstração Financeira — fixas ("6.1".."12") ou custom ("c<id>").

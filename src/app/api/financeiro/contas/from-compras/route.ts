@@ -160,6 +160,10 @@ export async function POST(request: NextRequest) {
           // forma de pagamento da compra (FATURADO/PIX/DINHEIRO/...).
           payment_method: po.payment_method || null,
           notes: noteParts.length ? noteParts.join(" · ") : null,
+          // Herda equipe/navio da compra pra permitir filtrar os títulos por eles.
+          team: po.team || null,
+          ship_id: po.ship_id || null,
+          ship_name: po.ship_name || null,
           origin: "COMPRA",
           purchase_order_id: po.id,
           status: autoReason ? "APROVADO" : "AGUARDANDO_APROVACAO",
