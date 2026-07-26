@@ -617,6 +617,7 @@ export default function SolicitacoesPage() {
         description,
         department: spec.dest === "OUTROS" ? null : spec.dest,
         code: effectiveCode,
+        team: spec.crewTeam || null,
         supplier,
         purchase_date: purchaseDate,
         unit_value: unit,
@@ -676,7 +677,7 @@ export default function SolicitacoesPage() {
           const r = await storeInWarehouse(spec.dest, {
             name: description, quantity: qty,
             category: spec.category, unit: spec.unit, team: spec.team, size: spec.size,
-            code: effectiveCode,
+            code: effectiveCode, crewTeam: spec.crewTeam,
           });
           stockMsg = ` ${r.created ? "Criado" : "Reposto"} (+${formatQty(r.quantity)}) em ${r.where}.`;
         } catch (stockErr: any) {
@@ -1076,7 +1077,7 @@ export default function SolicitacoesPage() {
         name: stockRequest.tool_name,
         quantity: stockRequest.quantity,
         category: spec.category, unit: spec.unit, team: spec.team, size: spec.size,
-        code,
+        code, crewTeam: spec.crewTeam,
       });
       const itemName = stockRequest.tool_name;
       setStockRequest(null);
