@@ -874,6 +874,7 @@ model PurchaseOrder {
   card_id        Int?
   card           Card?     @relation(fields: [card_id], references: [id], onDelete: SetNull)
   notes          String? // OBSERVAÇÃO
+  digitable_line String? // linha digitável do boleto (preenchida ao escanear/importar NF)
   image_url      String? // foto do produto (herdada da solicitação ou anexada)
   product_url    String? // link do produto (Mercado Livre etc.), usado pra puxar nome/valor/foto
   request_id     String?   @db.Uuid // solicitação de origem, se houver

@@ -63,6 +63,7 @@ interface PurchaseOrder {
   payment_terms: number[] | null;
   card_id: number | null;
   notes: string | null;
+  digitable_line: string | null;
   image_url: string | null;
   product_url: string | null;
   request_id: string | null;
@@ -2512,6 +2513,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   const [quantity, setQuantity] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [notes, setNotes] = useState("");
+  // Linha digitável do boleto — campo próprio (antes ia dentro da Observação).
+  const [digitableLine, setDigitableLine] = useState("");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   // Destino no Almoxarifado (substitui o antigo "Departamento"). Em compras novas
   // o item é lançado no setor escolhido; ao editar, o destino vira só rótulo (não
@@ -2560,6 +2563,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       setQuantity(numToInput(item.quantity) || "1");
       setPaymentMethod(item.payment_method || "");
       setNotes(item.notes || "");
+      setDigitableLine(item.digitable_line || "");
       setImageUrl(item.image_url || null);
       setCode(item.code || "");
       setShipId(item.ship_id || "");
@@ -2585,13 +2589,14 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       setQuantity(numToInput(fromRequest.quantity) || "1");
       setPaymentMethod("");
       setNotes("");
+      setDigitableLine("");
       setImageUrl(fromRequest.image_url || null);
       setCode(fromRequest.code || "");
       setShipId("");
       setPaymentDueDates([""]); setCardId("");
     } else {
       setDescription(""); setLink(""); setDestSpec({ ...DEFAULT_DEST_SPEC, dest: "OUTROS" }); setSupplier(""); setPurchaseDate(todayISO);
-      setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setImageUrl(null); setCode(""); setShipId("");
+      setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setDigitableLine(""); setImageUrl(null); setCode(""); setShipId("");
       setPaymentDueDates([""]); setCardId("");
     }
   }, [item, fromRequest, open]);
@@ -2622,16 +2627,13 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
           ? "Conta de consumo/arrecadação (boleto escaneado)"
           : "Boleto escaneado",
     );
-    // Vencimento e linha digitável viram observação: a compra não tem campo de
-    // vencimento próprio (prazo em dias só existe no FATURADO).
-    const extra: string[] = [];
+    // Linha digitável vai pro campo próprio; só preenche se estiver em branco.
+    if (b.digits) setDigitableLine((prev) => prev.trim() ? prev : b.digits!);
+    // Vencimento vira observação: a compra não tem campo de vencimento próprio
+    // (prazo em dias só existe no FATURADO).
     if (b.dueDate) {
       const [y, m, d] = b.dueDate.toISOString().slice(0, 10).split("-");
-      extra.push(`Vencimento ${d}/${m}/${y}`);
-    }
-    if (b.digits) extra.push(`Linha digitável ${b.digits}`);
-    if (extra.length > 0) {
-      const line = extra.join(" · ");
+      const line = `Vencimento ${d}/${m}/${y}`;
       setNotes((prev) => (prev.includes(line) ? prev : prev ? `${prev} · ${line}` : line));
     }
   }, [open, scanned]);
@@ -2659,6 +2661,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       const matched = p.supplier_id ? suppliers.find((s) => s.id === p.supplier_id) : null;
       const supName = matched?.name || p.payee_name;
       if (supName) setSupplier((prev) => prev.trim() ? prev : supName);
+      if (p.digitable_line) setDigitableLine((prev) => prev.trim() ? prev : p.digitable_line);
       if (p.notes) setNotes((prev) => (prev ? `${prev} · ${p.notes}` : p.notes));
       if (p.scanned) {
         alert("PDF escaneado (sem texto). Confira/preencha os campos à mão.");
@@ -2754,6 +2757,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       payment_term_days: paymentMethod === "FATURADO" && validTerms.length > 0 ? validTerms[0] : null,
       card_id: paymentMethod === "CARTÃO DE CRÉDITO" && cardId ? Number(cardId) : null,
       notes: notes || null,
+      digitable_line: digitableLine.trim() || null,
       image_url: imageUrl,
       product_url: link.trim() || null,
       ship_id: shipId || null,
@@ -3039,6 +3043,20 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
             )}
           </select>
           <p className="text-[10px] text-text-light mt-1">Vincula esta compra a um navio cadastrado na aba Navios.</p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Linha digitável <span className="text-text-light font-normal">(boleto)</span>
+          </label>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={digitableLine}
+            onChange={(e) => setDigitableLine(e.target.value)}
+            placeholder="Preenchida ao escanear o boleto ou importar a NF"
+            className={`${inputCls} font-mono`}
+          />
+          <p className="text-[10px] text-text-light mt-1">Código de barras do boleto — usado pra pagar/conferir. Preenche sozinho ao escanear ou importar NF.</p>
         </div>
         <div>
           <label className="block text-sm font-medium mb-1">Observação</label>
