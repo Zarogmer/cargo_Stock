@@ -2344,7 +2344,7 @@ function useWarehouseCodes(dest: WarehouseDest, team: string, open: boolean): { 
 // casar pelo nome) e preenche o nome com o do item, pra ficar consistente com a aba
 // do Almoxarifado. Em branco = o sistema GERA o código pelo nome ao salvar (próximo
 // do prefixo) — não precisa mais cadastrar o item antes no Almoxarifado.
-function CodeField({ dest, team, value, name = "", onChange, onResolveName, open, required = false }: {
+function CodeField({ dest, team, value, name = "", onChange, onResolveName, open, required = false, auto = false }: {
   dest: WarehouseDest; team: string; value: string;
   // Nome do produto digitado — base da sugestão de código novo quando em branco.
   name?: string;
@@ -2354,19 +2354,55 @@ function CodeField({ dest, team, value, name = "", onChange, onResolveName, open
   // required: quando um destino de estoque foi escolhido, o código passa a ser
   // obrigatório (usado no Controle de Compras).
   required?: boolean;
+  // auto: código SÓ-LEITURA, sempre gerado pelo nome (Descrição). O usuário não
+  // digita nem escolhe — usado no Controle de Compras.
+  auto?: boolean;
 }) {
   const { codes, items } = useWarehouseCodes(dest, team, open);
-  if (!CODED_DESTS.includes(dest)) return null;
-  const listId = `wh-codes-${dest}`;
   const norm = (s: string) => s.trim().toUpperCase();
+  // Código gerado pelo nome (mesma regra do Almoxarifado — codeForName).
+  const suggested = name.trim() ? codeForName(items, (i) => i.id, (i) => i.name, name) : "";
+  // Modo auto: mantém o valor do formulário sempre igual ao código gerado, pra o
+  // save e a validação usarem o código automático mesmo sem o usuário digitar.
+  useEffect(() => {
+    if (auto && suggested !== value) onChange(suggested);
+  }, [auto, suggested, value, onChange]);
+  if (!CODED_DESTS.includes(dest)) return null;
+
+  if (auto) {
+    const matchedAuto = suggested ? codes.find((c) => norm(c.code) === norm(suggested)) : undefined;
+    return (
+      <div>
+        <label className="block text-sm font-medium mb-1">
+          Código no Almoxarifado{" "}
+          {required
+            ? <span className="text-danger">*</span>
+            : <span className="font-normal text-text-light">(opcional)</span>}
+        </label>
+        <div className="w-full px-3 py-2.5 border border-border rounded-lg text-sm bg-gray-50 flex items-center gap-2">
+          {suggested
+            ? <span className="font-mono font-bold text-primary">{suggested}</span>
+            : <span className="text-text-light italic">preencha a descrição acima</span>}
+          <span className="text-[10px] text-text-light ml-auto">🔒 gerado pelo nome</span>
+        </div>
+        <p className="text-[10px] text-text-light mt-1">
+          {matchedAuto
+            ? <>Repõe <strong>{matchedAuto.name}</strong>{matchedAuto.qty != null ? ` · ${formatQty(matchedAuto.qty)} em estoque` : ""}.</>
+            : suggested
+              ? "Código novo — o item será criado no Almoxarifado. Vem da descrição; não dá pra editar."
+              : "O código é gerado automaticamente pela descrição da compra."}
+        </p>
+      </div>
+    );
+  }
+
+  const listId = `wh-codes-${dest}`;
   const handleChange = (v: string) => {
     onChange(v);
     // Casou um código exato → preenche o nome com o do item (consistência).
     const hit = codes.find((c) => norm(c.code) === norm(v));
     if (hit && onResolveName) onResolveName(hit.name);
   };
-  // Código que será gerado se o campo ficar em branco (mesma regra do Almoxarifado).
-  const suggested = name.trim() ? codeForName(items, (i) => i.id, (i) => i.name, name) : "";
   const matched = value.trim() ? codes.find((c) => norm(c.code) === norm(value)) : undefined;
   return (
     <div>
@@ -3029,7 +3065,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
           <p className="text-[11px] font-semibold text-text-light uppercase tracking-wide">Opcional</p>
         </div>
         <WarehouseDestinationFields value={destSpec} onChange={(v) => { if (v.dest !== destSpec.dest) setCode(""); setDestSpec(v); }} quantity={qty} stocking={!item} />
-        {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} name={description} onChange={setCode} onResolveName={setDescription} open={open} required={CODED_DESTS.includes(destSpec.dest)} />}
+        {!item && <CodeField dest={destSpec.dest} team={destSpec.team} value={code} name={description} onChange={setCode} onResolveName={setDescription} open={open} required={CODED_DESTS.includes(destSpec.dest)} auto />}
         <div>
           <label className="block text-sm font-medium mb-1">
             Navio <span className="text-text-light font-normal">(opcional)</span>
