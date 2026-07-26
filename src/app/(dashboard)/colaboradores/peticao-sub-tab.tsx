@@ -642,16 +642,7 @@ function OptionsManager({
                         onClick={() => handlePick(opt)}
                         className="flex-1 flex items-center gap-2 px-3 py-2 text-sm text-left text-text"
                       >
-                        {multi && (
-                          <span
-                            className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] ${
-                              selected ? "bg-primary border-primary text-white" : "border-border"
-                            }`}
-                          >
-                            {selected ? "✓" : ""}
-                          </span>
-                        )}
-                        <span className={selected && !multi ? "font-medium" : ""}>{opt}</span>
+                        <span className={selected ? "font-medium" : ""}>{opt}</span>
                       </button>
                       <button
                         type="button"
