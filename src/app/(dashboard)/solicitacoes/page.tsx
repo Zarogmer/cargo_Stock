@@ -2807,7 +2807,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   const title = item ? "Editar Compra" : fromRequest ? "Registrar Compra" : "Nova Compra";
 
   return (
-    <Modal open={open} onClose={onClose} title={title} maxWidth="max-w-xl">
+    <Modal open={open} onClose={onClose} title={title} maxWidth="max-w-3xl">
       <form onSubmit={handleSubmit} className="space-y-4">
         {fromRequest && !item && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-800">
