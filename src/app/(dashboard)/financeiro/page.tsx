@@ -3213,6 +3213,39 @@ function JobDetailModal({
   const holdsMultiplier =
     kindFilter === "EMBARQUE" ? Math.max(1, Number(job?.holds_count || 1))
     : 1; // Costado: rate já é valor/turno, base = rate × qty.
+
+  // Materiais avariados/perdidos do Retorno deste navio (Embarque/Retorno),
+  // mostrados nas Despesas. Avariado a equipe trouxe (não custa); perdido vira
+  // custo do navio (já lançado como MATERIAL_PERDIDO). Aqui é o registro do que
+  // aconteceu com o kit, pra ficar visível no financeiro.
+  const [returnSummary, setReturnSummary] = useState<{
+    broken: { name: string; qty: number }[];
+    lost: { name: string; qty: number }[];
+  }>({ broken: [], lost: [] });
+  useEffect(() => {
+    if (!open || !job?.ship_id) { setReturnSummary({ broken: [], lost: [] }); return; }
+    let active = true;
+    (async () => {
+      const { data } = await db
+        .from("material_returns")
+        .select("material_return_items(item_name, broken_qty, lost_qty)")
+        .eq("ship_id", job.ship_id);
+      if (!active) return;
+      const brokenMap = new Map<string, number>();
+      const lostMap = new Map<string, number>();
+      const rows = (data as { material_return_items?: { item_name: string; broken_qty: number; lost_qty: number }[] }[] | null) || [];
+      for (const r of rows) {
+        for (const it of r.material_return_items || []) {
+          if (it.broken_qty > 0) brokenMap.set(it.item_name, (brokenMap.get(it.item_name) || 0) + it.broken_qty);
+          if ((it.lost_qty || 0) > 0) lostMap.set(it.item_name, (lostMap.get(it.item_name) || 0) + it.lost_qty);
+        }
+      }
+      const toArr = (m: Map<string, number>) =>
+        Array.from(m.entries()).map(([name, qty]) => ({ name, qty })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+      setReturnSummary({ broken: toArr(brokenMap), lost: toArr(lostMap) });
+    })().catch(() => { if (active) setReturnSummary({ broken: [], lost: [] }); });
+    return () => { active = false; };
+  }, [open, job?.ship_id]);
   // Serviços extras do navio (Raspagem/Pintura) — pra rotular a quebra da paga
   // por porão de cada linha ("Limpeza X + Raspagem Y"). Cada um tem seu valor/
   // porão vindo do default_rate da função de mesmo nome (Valores).
@@ -5617,6 +5650,27 @@ function JobDetailModal({
               </div>
             )}
           </div>
+
+          {/* Retorno de material — o que foi avariado/perdido no kit (Embarque/Retorno). */}
+          {(returnSummary.broken.length > 0 || returnSummary.lost.length > 0) && (
+            <div className="mb-2 rounded-lg border border-border bg-gray-50 p-3 text-xs space-y-1">
+              <p className="font-semibold text-text">🔧 Retorno de material</p>
+              {returnSummary.lost.length > 0 && (
+                <p>
+                  <span className="font-medium text-red-700">Perdido</span>
+                  <span className="text-text-light"> (custo do navio, rateado pela equipe): </span>
+                  {returnSummary.lost.map((it) => `${it.name} ×${it.qty}`).join(" · ")}
+                </p>
+              )}
+              {returnSummary.broken.length > 0 && (
+                <p>
+                  <span className="font-medium text-amber-700">Avariado</span>
+                  <span className="text-text-light"> (a equipe trouxe — não custa ao navio): </span>
+                  {returnSummary.broken.map((it) => `${it.name} ×${it.qty}`).join(" · ")}
+                </p>
+              )}
+            </div>
+          )}
 
           {showAddAdj && (
             <form onSubmit={handleAddAdj} className="bg-amber-50 rounded-lg p-3 mb-2 border border-amber-200 space-y-2">
