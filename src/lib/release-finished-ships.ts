@@ -99,13 +99,10 @@ export async function releaseShipAllocationsNow(shipId: string, actor: string): 
   return touched;
 }
 
-// Promove a EM_OPERACAO os navios ainda AGENDADOS cuja data de embarque
-// (arrival_date) já chegou ou passou. A operação começa no embarque, então o
-// navio deixa de ser "Agendado" e passa a "Em Operação" sozinho — sem precisar
-// abrir o navio e mudar na mão. Idempotente: roda no carregamento da tela de
-// Navios e só toca em quem ainda está AGENDADO (CONCLUIDO/CANCELADO ficam como
-// estão; navio sem data de embarque também não é promovido — null não casa o
-// filtro). Devolve quantos navios foram promovidos.
+// DEPRECADO / NÃO USADO: antes promovia AGENDADO → EM_OPERACAO pela data de
+// embarque (arrival_date). Isso foi removido do fluxo: agora o navio só sai de
+// "Agendado" quando o EMBARQUE é confirmado na aba Embarque/Retorno (a data não
+// muda mais o status). Mantida exportada por segurança, mas não é chamada.
 export async function promoteStartedShips(): Promise<number> {
   // ISO-8601 completo (o Prisma rejeita "YYYY-MM-DD" puro em filtro de data).
   // "agora" inclui o dia de hoje: arrival_date é data-only (00:00), então um
