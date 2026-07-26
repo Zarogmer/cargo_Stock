@@ -149,7 +149,9 @@ export default function DashboardPage() {
         db.from("stock_items").select("name, quantity, default_quantity, category, team").in("team", FOOD_TEAMS),
         // Colaboradores: só os ativos (status ATIVO), não demitidos/pendências.
         db.from("employees").select("id", { count: "exact", head: true }).eq("status", "ATIVO"),
-        db.from("tools").select("id", { count: "exact", head: true }).eq("asset_type", "MAQUINARIO"),
+        // Maquinário vive em stock_items (team=MAQUINARIO), não mais na tabela
+        // tools — conta os itens/tipos cadastrados, igual aos outros inventários.
+        db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "MAQUINARIO"),
         db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "FERRAMENTA"),
         db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "ELETRICA"),
         db.from("epis").select("id", { count: "exact", head: true }),
