@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { matchSearch, parseDecimalBR, formatQty, formatCurrency, normalize } from "@/lib/utils";
+import { matchSearch, parseDecimalBR, formatQty, formatCurrency, normalize, buildCodeMap } from "@/lib/utils";
 import type { StockItem, MaterialTeamAllocation } from "@/types/database";
 
 // Aba "Geral" do Almoxarifado: uma tabela única com TODOS os itens de todos os
@@ -220,10 +220,39 @@ export function GeralPanel() {
     return out;
   }, [items, allocOf]);
 
+  // Código de cada item, igual às abas de setor: o código sai do nome
+  // (buildCodeMap), calculado POR SETOR (agrupando materiais por team e o rancho
+  // junto) pra bater exatamente com o que cada aba mostra.
+  const codeMap = useMemo(() => {
+    const map = new Map<number, string>();
+    const byTeam = new Map<string, StockItem[]>();
+    for (const it of items) {
+      if (!MATERIAL_KINDS.includes(it.team as never)) continue;
+      const t = it.team as string;
+      if (!byTeam.has(t)) byTeam.set(t, []);
+      byTeam.get(t)!.push(it);
+    }
+    for (const list of byTeam.values()) {
+      for (const [id, code] of buildCodeMap(list, (i) => i.id, (i) => i.name)) map.set(id, code);
+    }
+    const rancho = items.filter((i) => RANCHO_TEAMS.includes(i.team as never));
+    for (const [id, code] of buildCodeMap(rancho, (i) => i.id, (i) => i.name)) map.set(id, code);
+    return map;
+  }, [items]);
+
+  // Código a exibir numa linha: material usa o id do próprio item; rancho usa
+  // qualquer linha do grupo (o código sai do nome, então todas dão o mesmo).
+  const codeOfRow = (r: Row): string => {
+    const id = r.kind === "MAT"
+      ? r.matItem?.id
+      : r.ranchoRows ? Object.values(r.ranchoRows).find(Boolean)?.id : undefined;
+    return (id != null ? codeMap.get(id) : undefined) || "—";
+  };
+
   const filtered = rows.filter((r) => {
     if (teamView === "DISP" && r.disp <= 0) return false;
     if ((teamView === "EQUIPE_1" || teamView === "EQUIPE_2" || teamView === "EQUIPE_4") && r.teams[teamView] <= 0) return false;
-    return matchSearch(r.name, search) || matchSearch(r.setorLabel, search);
+    return matchSearch(r.name, search) || matchSearch(r.setorLabel, search) || matchSearch(codeOfRow(r), search);
   });
 
   const viewCount = (key: TeamView) =>
@@ -539,6 +568,7 @@ export function GeralPanel() {
   // quantidade daquela visão (uma coluna), igual aos painéis por setor.
   const baseCols = [
     { key: "name", label: "Item", render: (r: Row) => <span className="font-medium">{r.name}</span> },
+    { key: "code", label: "Código", render: (r: Row) => <span className="font-mono text-xs text-text-light">{codeOfRow(r)}</span> },
     {
       key: "setor", label: "Setor",
       render: (r: Row) => {
