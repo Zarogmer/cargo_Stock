@@ -305,6 +305,14 @@ export function EscalacaoEstoquePage() {
   const matReady = teamKit.filter((k) => k.ready).length;
   const matMissing = teamKit.length - matReady;
 
+  // Layout responsivo das listas de Embarque (Materiais e Rancho), no mesmo
+  // molde do Retorno: no desktop (sm+) alinha em colunas (grid); no celular
+  // vira cartão — nome + categoria em cima e os campos numa linha com rótulo,
+  // sem a rolagem horizontal que cortava os nomes. 5 colunas:
+  // Item · Categoria · Quantidade · Em estoque/rancho · Status.
+  const embarkGrid =
+    "sm:grid sm:grid-cols-[minmax(0,1fr)_7rem_8rem_6rem_6rem] sm:items-center sm:gap-2";
+
   // ── Trava do Embarcar ────────────────────────────────────────────────────
   // Faltou qualquer coisa (material ou rancho), não embarca. Antes o Embarcar
   // baixava só o que tinha e seguia em frente — a equipe ia pro navio sem o
@@ -1199,85 +1207,89 @@ export function EscalacaoEstoquePage() {
         </div>
         {showMat && (
         <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-border">
-                <tr>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Item</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Categoria</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto vai neste navio — editável, sem mexer no kit padrão da equipe">Materiais</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto deste material está separado pra esta equipe (transferido no Almoxarifado)">{selectedTeam ? TEAM_LABELS[selectedTeam] : "Separado"}</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {teamKit.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-4 py-10 text-center text-text-light">
-                      <span className="text-3xl block mb-2">🧰</span>
-                      Sem kit de materiais para esta equipe
-                      {canEmbarcar && <span className="block text-xs mt-1">Use o ➕ Adicionar item pra montar a lista deste navio.</span>}
-                    </td>
-                  </tr>
-                ) : (
-                  teamKit.map((k) => (
-                    <tr key={k.id} className={`hover:bg-gray-50 ${!k.ready ? "bg-red-50/40" : ""}`}>
-                      <td className="px-4 py-3 font-medium">
-                        {k.estName}
-                        {k.added && (
-                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold uppercase" title="Item extra — só na lista deste navio">extra</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">{k.location}</span>
-                      </td>
-                      <td className="px-4 py-3 text-center text-text-light">
-                        {canEmbarcar ? (
-                          <span className="inline-flex items-center gap-1">
-                            <input
-                              type="number" min={0} step="any"
-                              value={qtyDraft[k.stock_item_id] ?? String(k.need)}
-                              onChange={(e) => setQtyDraft((d) => ({ ...d, [k.stock_item_id]: e.target.value }))}
-                              onBlur={() => commitQty("MATERIAL", k.stock_item_id, k.baseNeed)}
-                              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                              title={k.added ? "Item extra deste navio" : `Padrão do kit: ${k.baseNeed} — o ajuste vale só pra este navio`}
-                              className={`w-16 px-2 py-1 border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 ${k.overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-800" : "border-border"}`}
-                            />
-                            {k.overridden && (
-                              <button
-                                type="button"
-                                onClick={() => saveOverride("MATERIAL", k.stock_item_id, k.baseNeed, k.baseNeed)}
-                                className="text-xs text-text-light hover:text-primary transition"
-                                title={`Voltar ao padrão do kit (${k.baseNeed})`}
-                              >↺</button>
-                            )}
-                            {k.added && (
-                              <button
-                                type="button"
-                                onClick={() => saveOverride("MATERIAL", k.stock_item_id, 0, 0)}
-                                className="text-xs text-text-light hover:text-danger transition"
-                                title="Tirar este item extra da lista do navio"
-                              >✕</button>
-                            )}
-                          </span>
-                        ) : (
-                          k.need
-                        )}
-                      </td>
-                      <td className={`px-4 py-3 text-center font-bold ${!k.ready ? "text-danger" : "text-success"}`}>{k.emEstoque}</td>
-                      <td className="px-4 py-3 text-center">
-                        {k.ready ? (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">✓ Ok</span>
-                        ) : (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">Falta {k.falta}</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+          {/* Cabeçalho só no desktop */}
+          <div className={`${embarkGrid} bg-gray-50 border-b border-border px-4 py-3 text-xs font-semibold text-text-light uppercase hidden`}>
+            <span>Item</span>
+            <span className="text-center">Categoria</span>
+            <span className="text-center" title="Quanto vai neste navio — editável, sem mexer no kit padrão da equipe">Materiais</span>
+            <span className="text-center" title="Quanto deste material está separado pra esta equipe (transferido no Almoxarifado)">{selectedTeam ? TEAM_LABELS[selectedTeam] : "Separado"}</span>
+            <span className="text-center">Status</span>
           </div>
+
+          {teamKit.length === 0 ? (
+            <div className="px-4 py-10 text-center text-text-light">
+              <span className="text-3xl block mb-2">🧰</span>
+              Sem kit de materiais para esta equipe
+              {canEmbarcar && <span className="block text-xs mt-1">Use o ➕ Adicionar item pra montar a lista deste navio.</span>}
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {teamKit.map((k) => (
+                <div key={k.id} className={`px-4 py-3 sm:py-2.5 hover:bg-gray-50 flex flex-col gap-2 ${embarkGrid} ${!k.ready ? "bg-red-50/40" : ""}`}>
+                  {/* Nome + categoria — juntos no topo no celular; viram colunas no desktop */}
+                  <div className="flex items-center justify-between gap-2 sm:contents">
+                    <span className="font-medium sm:truncate">
+                      {k.estName}
+                      {k.added && (
+                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold uppercase" title="Item extra — só na lista deste navio">extra</span>
+                      )}
+                    </span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium whitespace-nowrap sm:justify-self-center">{k.location}</span>
+                  </div>
+
+                  {/* Campos — 3 colunas no celular; viram células no desktop */}
+                  <div className="grid grid-cols-3 gap-2 sm:contents">
+                    <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center text-text-light">
+                      <span className="text-[10px] text-text-light uppercase sm:hidden">Materiais</span>
+                      {canEmbarcar ? (
+                        <span className="inline-flex items-center gap-1">
+                          <input
+                            type="number" min={0} step="any"
+                            value={qtyDraft[k.stock_item_id] ?? String(k.need)}
+                            onChange={(e) => setQtyDraft((d) => ({ ...d, [k.stock_item_id]: e.target.value }))}
+                            onBlur={() => commitQty("MATERIAL", k.stock_item_id, k.baseNeed)}
+                            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                            title={k.added ? "Item extra deste navio" : `Padrão do kit: ${k.baseNeed} — o ajuste vale só pra este navio`}
+                            className={`w-16 px-2 py-1 border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 ${k.overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-800" : "border-border"}`}
+                          />
+                          {k.overridden && (
+                            <button
+                              type="button"
+                              onClick={() => saveOverride("MATERIAL", k.stock_item_id, k.baseNeed, k.baseNeed)}
+                              className="text-xs text-text-light hover:text-primary transition"
+                              title={`Voltar ao padrão do kit (${k.baseNeed})`}
+                            >↺</button>
+                          )}
+                          {k.added && (
+                            <button
+                              type="button"
+                              onClick={() => saveOverride("MATERIAL", k.stock_item_id, 0, 0)}
+                              className="text-xs text-text-light hover:text-danger transition"
+                              title="Tirar este item extra da lista do navio"
+                            >✕</button>
+                          )}
+                        </span>
+                      ) : (
+                        k.need
+                      )}
+                    </div>
+                    <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
+                      <span className="text-[10px] text-text-light uppercase sm:hidden">{selectedTeam ? TEAM_LABELS[selectedTeam] : "Separado"}</span>
+                      <span className={`font-bold ${!k.ready ? "text-danger" : "text-success"}`}>{k.emEstoque}</span>
+                    </div>
+                    <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
+                      <span className="text-[10px] text-text-light uppercase sm:hidden">Status</span>
+                      {k.ready ? (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium whitespace-nowrap">✓ Ok</span>
+                      ) : (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium whitespace-nowrap">Falta {k.falta}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         )}
       </section>
@@ -1308,89 +1320,91 @@ export function EscalacaoEstoquePage() {
         </div>
         {showRancho && (
         <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-border">
-                <tr>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Item</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Categoria</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto vai neste navio — editável, sem mexer no padrão do Rancho">Padrão</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Em Rancho</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {itemsWithStatus.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-4 py-10 text-center text-text-light">
-                      <span className="text-3xl block mb-2">🛒</span>
-                      Nenhum item com quantidade padrão definida
-                      {canEmbarcar && <span className="block text-xs mt-1">Use o ➕ Adicionar item pra montar a lista deste navio.</span>}
-                    </td>
-                  </tr>
-                ) : (
-                  itemsWithStatus.map((item) => (
-                    <tr key={item.id} className={`hover:bg-gray-50 ${!item.ready ? "bg-red-50/40" : ""}`}>
-                      <td className="px-4 py-3 font-medium">
-                        {item.name}
-                        {item.added && (
-                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold uppercase" title="Item extra — só na lista deste navio">extra</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
-                          {item.category === "CARNE" ? "Carne" : item.category === "FEIRA" ? "Feira" : "Suprimentos"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-center text-text-light">
-                        {canEmbarcar ? (
-                          <span className="inline-flex items-center gap-1">
-                            <input
-                              type="number" min={0} step="any"
-                              value={qtyDraft[item.id] ?? String(item.default_quantity)}
-                              onChange={(e) => setQtyDraft((d) => ({ ...d, [item.id]: e.target.value }))}
-                              onBlur={() => commitQty("RANCHO", item.id, item.base_default)}
-                              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                              title={item.added ? "Item extra deste navio" : `Padrão do Rancho: ${item.base_default} — o ajuste vale só pra este navio`}
-                              className={`w-16 px-2 py-1 border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 ${item.overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-800" : "border-border"}`}
-                            />
-                            {item.overridden && (
-                              <button
-                                type="button"
-                                onClick={() => saveOverride("RANCHO", item.id, item.base_default, item.base_default)}
-                                className="text-xs text-text-light hover:text-primary transition"
-                                title={`Voltar ao padrão do Rancho (${item.base_default})`}
-                              >↺</button>
-                            )}
-                            {item.added && (
-                              <button
-                                type="button"
-                                onClick={() => saveOverride("RANCHO", item.id, 0, 0)}
-                                className="text-xs text-text-light hover:text-danger transition"
-                                title="Tirar este item extra da lista do navio"
-                              >✕</button>
-                            )}
-                          </span>
-                        ) : (
-                          item.default_quantity
-                        )}
-                      </td>
-                      <td className={`px-4 py-3 text-center font-bold ${!item.ready ? "text-danger" : "text-success"}`}>
-                        {item.quantity}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        {item.ready ? (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">✓ Pronto</span>
-                        ) : (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">Falta {item.falta}</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+          {/* Cabeçalho só no desktop */}
+          <div className={`${embarkGrid} bg-gray-50 border-b border-border px-4 py-3 text-xs font-semibold text-text-light uppercase hidden`}>
+            <span>Item</span>
+            <span className="text-center">Categoria</span>
+            <span className="text-center" title="Quanto vai neste navio — editável, sem mexer no padrão do Rancho">Padrão</span>
+            <span className="text-center">Em Rancho</span>
+            <span className="text-center">Status</span>
           </div>
+
+          {itemsWithStatus.length === 0 ? (
+            <div className="px-4 py-10 text-center text-text-light">
+              <span className="text-3xl block mb-2">🛒</span>
+              Nenhum item com quantidade padrão definida
+              {canEmbarcar && <span className="block text-xs mt-1">Use o ➕ Adicionar item pra montar a lista deste navio.</span>}
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {itemsWithStatus.map((item) => (
+                <div key={item.id} className={`px-4 py-3 sm:py-2.5 hover:bg-gray-50 flex flex-col gap-2 ${embarkGrid} ${!item.ready ? "bg-red-50/40" : ""}`}>
+                  {/* Nome + categoria — juntos no topo no celular; viram colunas no desktop */}
+                  <div className="flex items-center justify-between gap-2 sm:contents">
+                    <span className="font-medium sm:truncate">
+                      {item.name}
+                      {item.added && (
+                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold uppercase" title="Item extra — só na lista deste navio">extra</span>
+                      )}
+                    </span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium whitespace-nowrap sm:justify-self-center">
+                      {item.category === "CARNE" ? "Carne" : item.category === "FEIRA" ? "Feira" : "Suprimentos"}
+                    </span>
+                  </div>
+
+                  {/* Campos — 3 colunas no celular; viram células no desktop */}
+                  <div className="grid grid-cols-3 gap-2 sm:contents">
+                    <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center text-text-light">
+                      <span className="text-[10px] text-text-light uppercase sm:hidden">Padrão</span>
+                      {canEmbarcar ? (
+                        <span className="inline-flex items-center gap-1">
+                          <input
+                            type="number" min={0} step="any"
+                            value={qtyDraft[item.id] ?? String(item.default_quantity)}
+                            onChange={(e) => setQtyDraft((d) => ({ ...d, [item.id]: e.target.value }))}
+                            onBlur={() => commitQty("RANCHO", item.id, item.base_default)}
+                            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                            title={item.added ? "Item extra deste navio" : `Padrão do Rancho: ${item.base_default} — o ajuste vale só pra este navio`}
+                            className={`w-16 px-2 py-1 border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 ${item.overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-800" : "border-border"}`}
+                          />
+                          {item.overridden && (
+                            <button
+                              type="button"
+                              onClick={() => saveOverride("RANCHO", item.id, item.base_default, item.base_default)}
+                              className="text-xs text-text-light hover:text-primary transition"
+                              title={`Voltar ao padrão do Rancho (${item.base_default})`}
+                            >↺</button>
+                          )}
+                          {item.added && (
+                            <button
+                              type="button"
+                              onClick={() => saveOverride("RANCHO", item.id, 0, 0)}
+                              className="text-xs text-text-light hover:text-danger transition"
+                              title="Tirar este item extra da lista do navio"
+                            >✕</button>
+                          )}
+                        </span>
+                      ) : (
+                        item.default_quantity
+                      )}
+                    </div>
+                    <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
+                      <span className="text-[10px] text-text-light uppercase sm:hidden">Em Rancho</span>
+                      <span className={`font-bold ${!item.ready ? "text-danger" : "text-success"}`}>{item.quantity}</span>
+                    </div>
+                    <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
+                      <span className="text-[10px] text-text-light uppercase sm:hidden">Status</span>
+                      {item.ready ? (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium whitespace-nowrap">✓ Pronto</span>
+                      ) : (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium whitespace-nowrap">Falta {item.falta}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         )}
       </section>
