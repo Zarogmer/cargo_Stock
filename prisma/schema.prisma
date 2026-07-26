@@ -862,6 +862,10 @@ model PurchaseOrder {
   description    String // DESCRIÇÃO
   department     String? // DEPARTAMENTO: MANUTENÇÃO, ESCRITÓRIO, OPERAÇÃO, RANCHO, EPI, OUTROS
   code           String? // CÓDIGO do item no Almoxarifado (ex.: "AR01") — repõe exatamente aquele item ao abastecer (derivado; ver buildCodeMap em utils.ts)
+  // Equipe (opcional) pra qual a compra foi feita: EQUIPE_1 | EQUIPE_2 | EQUIPE_4.
+  // Ao lançar no Almoxarifado, a quantidade é alocada direto pra essa equipe
+  // (material_team_allocations); em branco fica no Disponível.
+  team           String?
   supplier       String? // FORNECEDOR
   purchase_date  DateTime? @db.Date // DATA DA COMPRA
   unit_value     Float     @default(0) // VALOR unit. (R$)

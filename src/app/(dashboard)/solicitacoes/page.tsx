@@ -50,6 +50,8 @@ interface PurchaseOrder {
   description: string;
   department: string | null;
   code: string | null;
+  // Equipe pra qual a compra foi feita (EQUIPE_1/2/4) — aloca no Almoxarifado.
+  team: string | null;
   supplier: string | null;
   purchase_date: string | null;
   unit_value: number;
@@ -245,8 +247,8 @@ const RANCHO_TEAMS: { value: string; label: string }[] = [
 
 // Para onde a compra/solicitação será lançada no Almoxarifado, com os campos
 // específicos de cada setor. Compartilhado por Nova Compra, Aprovar e Armazenar.
-interface DestSpec { dest: WarehouseDest; category: string; unit: string; team: string; size: string }
-const DEFAULT_DEST_SPEC: DestSpec = { dest: "ESTOQUE", category: "", unit: "UN", team: "EQUIPE_1", size: "" };
+interface DestSpec { dest: WarehouseDest; category: string; unit: string; team: string; size: string; crewTeam: string }
+const DEFAULT_DEST_SPEC: DestSpec = { dest: "ESTOQUE", category: "", unit: "UN", team: "EQUIPE_1", size: "", crewTeam: "" };
 
 // Dados que o gestor confere/ajusta no "Aprovar e concluir" — além do destino
 // (DestSpec), o resumo editável da compra (descrição, fornecedor, valor, etc.),
@@ -798,7 +800,27 @@ export default function SolicitacoesPage() {
       } catch { /* histórico é best-effort */ }
     }
 
-    return { created, name, category, quantity: qty };
+    return { created, name, category, quantity: qty, stockItemId };
+  }, [profile]);
+
+  // Aloca uma quantidade recém-comprada direto pra uma equipe (material_team_
+  // allocations): a compra sai do Disponível e entra na equipe. Upsert por
+  // (stock_item_id, team). Best-effort — o item já foi reposto no estoque.
+  const allocateToTeam = useCallback(async (stockItemId: number, team: string, qty: number) => {
+    const actor = profile?.full_name || "Sistema";
+    if (!stockItemId || !team || qty <= 0) return;
+    const { data } = await db.from("material_team_allocations")
+      .select("id, quantity").eq("stock_item_id", stockItemId).eq("team", team);
+    const existing = (data as { id: number; quantity: number }[] | null)?.[0];
+    if (existing) {
+      await db.from("material_team_allocations").update({
+        quantity: Math.round((Number(existing.quantity || 0) + qty) * 1000) / 1000, updated_by: actor,
+      } as any).eq("id", existing.id);
+    } else {
+      await db.from("material_team_allocations").insert({
+        stock_item_id: stockItemId, team, quantity: qty, updated_by: actor,
+      } as any);
+    }
   }, [profile]);
 
   // Ponte genérica Compras/Solicitações → Almoxarifado INTEIRO. Lança o item no
@@ -807,7 +829,7 @@ export default function SolicitacoesPage() {
   // comprada vira uma máquina (status Disponível). Devolve um resumo pro toast.
   const storeInWarehouse = useCallback(async (
     dest: WarehouseDest,
-    opts: { name: string; quantity: number; category?: string; unit?: string; team?: string; size?: string; code?: string | null },
+    opts: { name: string; quantity: number; category?: string; unit?: string; team?: string; size?: string; code?: string | null; crewTeam?: string },
   ): Promise<{ created: boolean; where: string; quantity: number }> => {
     const actor = profile?.full_name || "Sistema";
     const name = (opts.name || "").trim();
@@ -820,7 +842,8 @@ export default function SolicitacoesPage() {
     // Estoque do galpão — reaproveita a ponte existente (stock_items team=GALPAO).
     if (dest === "ESTOQUE") {
       const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code });
-      return { created: r.created, where: `Estoque${r.category ? ` · ${r.category}` : ""}`, quantity: r.quantity };
+      if (opts.crewTeam && r.stockItemId) await allocateToTeam(r.stockItemId, opts.crewTeam, qty);
+      return { created: r.created, where: `Estoque${r.category ? ` · ${r.category}` : ""}${opts.crewTeam ? ` → ${teamLbl(opts.crewTeam)}` : ""}`, quantity: r.quantity };
     }
 
     // Rancho — comida por equipe (stock_items com team=EQUIPE_x). Casa por nome
@@ -900,12 +923,13 @@ export default function SolicitacoesPage() {
     // repetição mesmo quando a compra vem com nome diferente.
     if (dest === "FERRAMENTA" || dest === "ELETRICA" || dest === "FLUIDOS" || dest === "MAQUINARIO") {
       const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code, team: dest });
+      if (opts.crewTeam && r.stockItemId) await allocateToTeam(r.stockItemId, opts.crewTeam, qty);
       const label = dest === "FERRAMENTA" ? "Ferramenta" : dest === "ELETRICA" ? "Elétrica" : dest === "FLUIDOS" ? "Fluídos" : "Maquinário";
-      return { created: r.created, where: `${label}${r.category && r.category !== "Outros" ? ` · ${r.category}` : ""}`, quantity: r.quantity };
+      return { created: r.created, where: `${label}${r.category && r.category !== "Outros" ? ` · ${r.category}` : ""}${opts.crewTeam ? ` → ${teamLbl(opts.crewTeam)}` : ""}`, quantity: r.quantity };
     }
 
     throw new Error(`Destino inválido: ${dest}`);
-  }, [profile, storeInStock]);
+  }, [profile, storeInStock, allocateToTeam]);
 
   // Cadastra um cartão de crédito direto do Nova Compra (nem todo mundo tem
   // acesso ao Financeiro › Contas bancárias). Devolve o cartão já com o banco
@@ -1013,6 +1037,7 @@ export default function SolicitacoesPage() {
               name: data.description || "",
               quantity: Number(data.quantity) || 1,
               category: stock.category, unit: stock.unit, team: stock.team, size: stock.size,
+              crewTeam: stock.crewTeam,
               code,
             });
             // Anexa ao toast anterior (ex.: o do lançamento no Contas a Pagar).
@@ -2438,6 +2463,15 @@ function CodeField({ dest, team, value, name = "", onChange, onResolveName, open
 // Controlado (o pai guarda o DestSpec). Compartilhado por Nova Compra, Aprovar
 // e Armazenar. `stocking=false` (ex.: edição de compra) mostra só o seletor,
 // sem campos nem lançamento, pra não contar a quantidade duas vezes.
+// Destinos de material que suportam alocação por equipe (material_team_allocations).
+const TEAM_ALLOC_DESTS: WarehouseDest[] = ["ESTOQUE", "FERRAMENTA", "ELETRICA", "FLUIDOS", "MAQUINARIO"];
+// Equipes pra onde a compra de material pode ir direto (fora a "Disponível").
+const MATERIAL_CREW_TEAMS = [
+  { value: "EQUIPE_1", label: "Equipe 1" },
+  { value: "EQUIPE_2", label: "Equipe 2" },
+  { value: "EQUIPE_4", label: "Equipe Turbo" },
+];
+
 function WarehouseDestinationFields({ value, onChange, quantity, stocking = true }: {
   value: DestSpec; onChange: (v: DestSpec) => void; quantity?: number; stocking?: boolean;
 }) {
@@ -2447,7 +2481,7 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
   // Trocar de destino reseta os campos específicos pra não vazar valor de um
   // setor pro outro (ex.: "Elétrica" do Estoque indo parar na categoria do Rancho).
   const setDest = (dest: WarehouseDest) =>
-    onChange({ dest, category: dest === "RANCHO" ? "SUPRIMENTOS" : "", unit: "UN", team: "EQUIPE_1", size: "" });
+    onChange({ dest, category: dest === "RANCHO" ? "SUPRIMENTOS" : "", unit: "UN", team: "EQUIPE_1", size: "", crewTeam: "" });
   const selCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
 
   return (
@@ -2459,6 +2493,25 @@ function WarehouseDestinationFields({ value, onChange, quantity, stocking = true
           {WAREHOUSE_DESTINATIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
         </select>
       </div>
+
+      {/* Equipe (opcional): pra qual equipe a compra vai. Em branco fica no
+          Disponível; escolhendo, a quantidade é alocada direto pra ela. */}
+      {stocking && TEAM_ALLOC_DESTS.includes(value.dest) && (
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Equipe <span className="font-normal text-text-light">(opcional)</span>
+          </label>
+          <select value={value.crewTeam} onChange={(e) => onChange({ ...value, crewTeam: e.target.value })} className={selCls}>
+            <option value="">— Disponível (sem equipe)</option>
+            {MATERIAL_CREW_TEAMS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+          <p className="text-[11px] text-text-light mt-1">
+            {value.crewTeam
+              ? "A quantidade comprada vai direto pra esta equipe no Almoxarifado (sai do Disponível)."
+              : "Em branco, a compra entra no Disponível (galpão)."}
+          </p>
+        </div>
+      )}
 
       {/* Rancho (card #46): só registra o gasto na aba de Compras — não lança no
           Almoxarifado nem usa código, então não mostramos Equipe/Categoria/Unidade. */}
@@ -2781,6 +2834,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       description,
       department: destSpec.dest && destSpec.dest !== "NENHUM" ? destSpec.dest : null,
       code: code.trim().toUpperCase() || null,
+      team: destSpec.crewTeam || null,
       supplier: supplier || null,
       purchase_date: purchaseDate || null,
       unit_value: unit,
