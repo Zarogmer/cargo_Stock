@@ -5444,18 +5444,31 @@ function JobDetailModal({
                       return s + rateio;
                     }, 0);
                     const pluxeeTotal = totalAllocs.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
-                    // Total gasto com o serviço extra (Raspagem/Pintura): service_extra_rate × porões.
-                    const serviceExtraTotal = isEmbarque
-                      ? totalAllocs.reduce((s, a) => s + Number(a.service_extra_rate || 0) * holdsMultiplier, 0)
+                    // Somas de coluna estilo Excel (só Embarque, que é por porão):
+                    //  • Valor/Porão = soma dos valores/porão (quanto custa por porão a limpeza);
+                    //  • Raspagem/Pintura = soma dos extras/porão (por porão, NÃO × porões).
+                    const showRateTotal = isEmbarque;
+                    const rateColTotal = isEmbarque
+                      ? totalAllocs.reduce((s, a) => {
+                          const fn = functions.find((f) => f.id === a.function_id);
+                          const defRate = Number(fn?.default_rate ?? a.rate);
+                          return s + (showServiceExtraColumn ? defRate : defRate + Number(a.service_extra_rate || 0));
+                        }, 0)
                       : 0;
-                    // colSpan = "#" + nome + (data+periodo?) + (qty?) + rate = 3 base.
-                    // Raspagem e Porões têm célula própria no rodapé (não entram no label).
-                    const labelColSpan = 3
+                    const serviceExtraTotal = isEmbarque
+                      ? totalAllocs.reduce((s, a) => s + Number(a.service_extra_rate || 0), 0)
+                      : 0;
+                    // Label cobre "#" + nome (+ data/período + qty no Costado). No Embarque,
+                    // Valor/Porão, Raspagem e Porões ganham célula própria no rodapé.
+                    const labelColSpan = (showRateTotal ? 2 : 3)
                       + (showCostadoShiftColumns ? 2 : 0)  // Data + Período
                       + (showQtyColumn ? 1 : 0);           // Turnos/Qtd
                     return (
                       <tr>
                         <td colSpan={labelColSpan} className="px-2 py-2 text-text-light text-right">TOTAL</td>
+                        {showRateTotal && (
+                          <td className="px-2 py-2 text-right whitespace-nowrap">{brl(rateColTotal)}</td>
+                        )}
                         {showServiceExtraColumn && (
                           <td className="px-2 py-2 text-right whitespace-nowrap text-amber-700">
                             {serviceExtraTotal > 0 ? `+ ${brl(serviceExtraTotal)}` : "—"}
