@@ -143,9 +143,12 @@ export default function DashboardPage() {
       const monthEnd = `${nextMonthD.getFullYear()}-${pad2(nextMonthD.getMonth() + 1)}-01`;
       const [materiaisRes, ranchoRes, stockFullRes, employeesRes, maquinarioRes, ferramentasRes, eletricaRes, episRes, uniformsRes, solicitacoesRes, comprasRes, unreadRes] = await Promise.all([
         db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "GALPAO"),
-        db.from("stock_items").select("id", { count: "exact", head: true }).in("team", FOOD_TEAMS),
+        // Rancho: conta só a lista-mãe "Disponível" (EQUIPE_3). As outras equipes
+        // são cópias dela, então somar as 4 contaria o mesmo item ~4x.
+        db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "EQUIPE_3"),
         db.from("stock_items").select("name, quantity, default_quantity, category, team").in("team", FOOD_TEAMS),
-        db.from("employees").select("id", { count: "exact", head: true }),
+        // Colaboradores: só os ativos (status ATIVO), não demitidos/pendências.
+        db.from("employees").select("id", { count: "exact", head: true }).eq("status", "ATIVO"),
         db.from("tools").select("id", { count: "exact", head: true }).eq("asset_type", "MAQUINARIO"),
         db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "FERRAMENTA"),
         db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "ELETRICA"),
