@@ -885,14 +885,22 @@ export function EscalacaoEstoquePage() {
         const closeDate = currentShip.departure_date
           ? String(currentShip.departure_date).slice(0, 10)
           : today;
-        await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate } as any).eq("id", selectedShip);
-        await db.from("jobs").update({ end_date: closeDate } as any).eq("ship_id", selectedShip);
-        try {
-          await releaseShipAllocationsNow(selectedShip, actor);
-        } catch (err) {
-          console.warn("[retorno] release on close failed:", (err as Error).message);
+        // Confere o resultado do fechamento: se um update falhar (ex.: bloqueio
+        // de permissão no /api/db), o navio NÃO fecha — avisa em vez de dizer
+        // "concluído" sem ter fechado.
+        const shipClose: any = await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate } as any).eq("id", selectedShip);
+        const jobsClose: any = await db.from("jobs").update({ end_date: closeDate } as any).eq("ship_id", selectedShip);
+        if (shipClose?.error || jobsClose?.error) {
+          const why = shipClose?.error?.message || jobsClose?.error?.message || "erro desconhecido";
+          autoNote += ` ⚠️ Não consegui fechar o navio automaticamente (${why}). Feche manualmente em Controle › Navios.`;
+        } else {
+          try {
+            await releaseShipAllocationsNow(selectedShip, actor);
+          } catch (err) {
+            console.warn("[retorno] release on close failed:", (err as Error).message);
+          }
+          autoNote += " ✅ Navio concluído (data de saída, Financeiro e tripulação fechados).";
         }
-        autoNote += " ✅ Navio concluído (data de saída, Financeiro e tripulação fechados).";
       }
 
       setReturnMsg(baseMsg + autoNote);
