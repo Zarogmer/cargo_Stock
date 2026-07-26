@@ -714,6 +714,9 @@ model JobAllocation {
   // valor de quem faltou foi dividido entre os que foram). null/0 = sem rateio.
   extra_value   Decimal?    @default(0) @db.Decimal(10, 2)
   extra_reason  String? // ex: "Rateio: 1 WAP faltou, valor dividido entre 3"
+  // Desconto manual do colaborador NESTE navio (Desc. Geral clicável). Soma ao
+  // rateio automático de material perdido; abatido do líquido (o que ele recebe).
+  general_discount Decimal? @default(0) @db.Decimal(10, 2)
   notes         String?
   kind          String      @default("EMBARQUE") // EMBARQUE ou COSTADO — qual escalação
   // Override de função TRAVADO pelo executivo só neste navio: quando true, a

@@ -3246,6 +3246,19 @@ function JobDetailModal({
     })().catch(() => { if (active) setReturnSummary({ broken: [], lost: [] }); });
     return () => { active = false; };
   }, [open, job?.ship_id]);
+
+  // Desconto manual (Desc. Geral clicável) por alocação: qual está sendo editada
+  // e o rascunho do valor. Salva em job_allocations.general_discount.
+  const [editDescAlloc, setEditDescAlloc] = useState<JobAllocation | null>(null);
+  const [descDraft, setDescDraft] = useState("");
+  async function saveGeneralDiscount() {
+    if (!editDescAlloc) return;
+    const v = parseFloat(descDraft.replace(/\./g, "").replace(",", ".")) || 0;
+    await db.from("job_allocations").update({ general_discount: v }).eq("id", editDescAlloc.id);
+    setEditDescAlloc(null);
+    setDescDraft("");
+    onChange();
+  }
   // Serviços extras do navio (Raspagem/Pintura) — pra rotular a quebra da paga
   // por porão de cada linha ("Limpeza X + Raspagem Y"). Cada um tem seu valor/
   // porão vindo do default_rate da função de mesmo nome (Valores).
@@ -4037,6 +4050,8 @@ function JobDetailModal({
           descGeralSeen.add(a.employee_id);
           descGeral = descGeralPerPerson;
         }
+        // Desconto manual do colaborador neste navio (Desc. Geral clicável).
+        descGeral += Number(a.general_discount || 0);
         totalFolha += folha;
         totalNavio += total;
         totalAdto += adto;
@@ -5393,20 +5408,49 @@ function JobDetailModal({
                             </button>
                           )}
                         </td>
-                        {/* Desc. Geral — rateio do material perdido no navio.
-                            Mesmo valor pra todo mundo da equipe; some sozinho
-                            quando o retorno é corrigido. */}
+                        {/* Desc. Geral — rateio automático do material perdido +
+                            desconto manual (clicável) do colaborador. Os dois somam
+                            e são abatidos do líquido. */}
                         <td className="px-2 py-2 text-right whitespace-nowrap">
-                          {descGeralPerPerson > 0 ? (
-                            <span
-                              className="text-red-700"
-                              title={`Material perdido: ${brl(perdaTotal)} dividido por ${crewHeadcount} da equipe`}
-                            >
-                              − {brl(descGeralPerPerson)}
-                            </span>
-                          ) : (
-                            <span className="text-text-light">—</span>
-                          )}
+                          {(() => {
+                            const manual = Number(a.general_discount || 0);
+                            const total = descGeralPerPerson + manual;
+                            const clickable = canEdit && !isReadOnly && a.employee_id != null;
+                            if (editDescAlloc?.id === a.id) {
+                              return (
+                                <span className="inline-flex items-center gap-1">
+                                  <input
+                                    autoFocus
+                                    value={descDraft}
+                                    onChange={(e) => setDescDraft(e.target.value.replace(/[^\d.,]/g, ""))}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") saveGeneralDiscount();
+                                      if (e.key === "Escape") { setEditDescAlloc(null); setDescDraft(""); }
+                                    }}
+                                    placeholder="0,00"
+                                    className="w-20 px-1 py-0.5 border border-border rounded text-right text-xs"
+                                  />
+                                  <button type="button" onClick={saveGeneralDiscount} className="text-emerald-700" title="Salvar">✓</button>
+                                  <button type="button" onClick={() => { setEditDescAlloc(null); setDescDraft(""); }} className="text-text-light" title="Cancelar">×</button>
+                                </span>
+                              );
+                            }
+                            return (
+                              <button
+                                type="button"
+                                disabled={!clickable}
+                                onClick={() => { setEditDescAlloc(a); setDescDraft(manual > 0 ? manual.toFixed(2).replace(".", ",") : ""); }}
+                                className={`${total > 0 ? "text-red-700" : "text-text-light"} ${clickable ? "hover:bg-red-50 rounded px-1 -mx-1 cursor-pointer" : ""}`}
+                                title={
+                                  clickable
+                                    ? `Clique para descontar do colaborador${descGeralPerPerson > 0 ? ` (inclui ${brl(descGeralPerPerson)} de material perdido rateado)` : ""}`
+                                    : ""
+                                }
+                              >
+                                {total > 0 ? `− ${brl(total)}` : "—"}
+                              </button>
+                            );
+                          })()}
                         </td>
                         {/* Adiant. — desconto de vale neste navio. Clicar abre o
                             seletor com os vales em aberto do colaborador. */}
@@ -5520,7 +5564,8 @@ function JobDetailModal({
                           const heads = new Set(
                             totalAllocs.map((a) => a.employee_id).filter((id): id is number => id != null),
                           ).size;
-                          const t = +(descGeralPerPerson * heads).toFixed(2);
+                          const manualTotal = totalAllocs.reduce((s, a) => s + Number(a.general_discount || 0), 0);
+                          const t = +(descGeralPerPerson * heads + manualTotal).toFixed(2);
                           return (
                             <td className="px-2 py-2 text-right text-red-700 whitespace-nowrap">
                               {t > 0 ? `− ${brl(t)}` : "—"}
@@ -5671,6 +5716,26 @@ function JobDetailModal({
               )}
             </div>
           )}
+
+          {/* Descontos manuais dos colaboradores (Desc. Geral clicável) — abatidos do líquido. */}
+          {(() => {
+            const discounts = allocations
+              .filter((a) => Number(a.general_discount || 0) > 0 && a.employee_id != null)
+              .map((a) => ({
+                name: employees.find((e) => e.id === a.employee_id)?.name || `#${a.employee_id}`,
+                amount: Number(a.general_discount),
+              }));
+            if (discounts.length === 0) return null;
+            const total = discounts.reduce((s, d) => s + d.amount, 0);
+            return (
+              <div className="mb-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs space-y-0.5">
+                <p className="font-semibold text-red-800">➖ Descontos dos colaboradores (Desc. Geral) · − {brl(total)}</p>
+                {discounts.map((d, i) => (
+                  <p key={i} className="text-red-700">{d.name}: − {brl(d.amount)}</p>
+                ))}
+              </div>
+            );
+          })()}
 
           {showAddAdj && (
             <form onSubmit={handleAddAdj} className="bg-amber-50 rounded-lg p-3 mb-2 border border-amber-200 space-y-2">
@@ -7228,7 +7293,7 @@ interface EmployeeStats {
   // fato é o Líquido.
   folha: number;
   pluxee: number;
-  descGeral: number;   // rateio de material perdido nos navios do período
+  descGeral: number;   // rateio de material perdido + desconto manual, nos navios do período
   adiant: number;      // vales descontados nesses navios
   liquido: number;     // Ganho − Desc. Geral − Adiant.
   valeBalance: number; // saldo devedor de vales do colaborador (independe do período)
@@ -7362,6 +7427,8 @@ function ControleTab({
       headcountPorJob.set(a.job_id, set);
     }
     const descGeralPorJob = new Map<string, number>();
+    // Desconto manual (Desc. Geral clicável) somado por colaborador no período.
+    const manualDescByEmp = new Map<number, number>();
     for (const [jobId, perda] of perdaPorJob) {
       const heads = headcountPorJob.get(jobId)?.size || 0;
       if (perda > 0 && heads > 0) descGeralPorJob.set(jobId, +(perda / heads).toFixed(2));
@@ -7402,6 +7469,10 @@ function ControleTab({
       // Líquidos). O que sobra é o que sai na folha — mesma conta do modal.
       const pluxee = Number(a.pluxee_value || 0);
       s.jobIds.add(a.job_id);
+      if (a.employee_id != null) {
+        const md = Number(a.general_discount || 0);
+        if (md) manualDescByEmp.set(a.employee_id, (manualDescByEmp.get(a.employee_id) || 0) + md);
+      }
 
       if (kind === "EMBARQUE") {
         const holds = Math.max(1, Number(job?.holds_count || 1));
@@ -7474,6 +7545,7 @@ function ControleTab({
         descGeral += descGeralPorJob.get(jobId) || 0;
         adiant += jobDiscountFor(jobId, s.employee.id, advDiscounts);
       }
+      descGeral += manualDescByEmp.get(s.employee.id) || 0;
       s.descGeral = +descGeral.toFixed(2);
       s.adiant = +adiant.toFixed(2);
       s.liquido = +(s.totalEarnings - s.descGeral - s.adiant).toFixed(2);

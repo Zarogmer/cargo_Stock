@@ -366,6 +366,9 @@ export interface JobAllocation {
   // Valor extra de rateio (quando faltou alguém da função e o valor foi dividido).
   extra_value: string | number | null;
   extra_reason: string | null;
+  // Desconto manual do colaborador neste navio (Desc. Geral clicável). Soma ao
+  // rateio automático de material perdido; abatido do líquido. Opcional (0/null).
+  general_discount?: string | number | null;
   // Serviço extra do navio (Raspagem/Pintura) somado por porão à limpeza de TODO
   // o operacional. NÃO é coluna do banco — é enriquecido em memória no Financeiro
   // a partir de ships.services (soma dos default_rate das funções RASPAGEM/PINTURA
