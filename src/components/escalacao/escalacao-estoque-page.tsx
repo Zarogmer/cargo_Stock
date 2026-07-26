@@ -1446,7 +1446,7 @@ function RetornoSection({
   history: MaterialReturn[];
   editing: boolean;
 }) {
-  const numCls = "w-16 px-2 py-1 border border-border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40";
+  const numCls = "w-full sm:w-16 px-2 py-1 border border-border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40";
   // Campos travados: sem permissão OU navio já concluído (um retorno por navio).
   const locked = !canEdit || concluded;
   // Listas recolhíveis: materiais e rancho.
@@ -1459,82 +1459,92 @@ function RetornoSection({
   // Três destinos possíveis pro que foi: VOLTOU (bom, credita o estoque),
   // AVARIADO (voltou quebrado — a equipe trouxe, não custa ao navio) e PERDIDO
   // (não voltou — vira despesa do navio, dividida pela equipe).
+  // Linha por material. Desktop (sm+) alinha em colunas (grid); no celular vira
+  // um cartão: nome em cima, os números numa linha com rótulo, e a Observação em
+  // largura total embaixo (antes ficava espremida na rolagem horizontal).
+  const gridCols =
+    "sm:grid sm:grid-cols-[minmax(0,1fr)_3rem_4.5rem_4.5rem_4.5rem_minmax(7rem,1.5fr)] sm:items-center sm:gap-2";
   const renderKitTable = (
     kit: ReturnKitRow[],
     labels: { item: string; broken: string; obsPlaceholder: string; empty: string; emptyIcon: string },
   ) => (
     <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 border-b border-border">
-            <tr>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">{labels.item}</th>
-              <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Quanto a equipe leva (referência)">Foi</th>
-              <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Voltou em bom estado — credita o estoque de volta">Voltou</th>
-              <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Voltou, mas quebrado/estragado — a equipe trouxe de volta; não custa nada ao navio">{labels.broken}</th>
-              <th className="px-4 py-3 text-center text-xs font-semibold text-text-light uppercase" title="Não voltou — vira despesa do navio, dividida pela equipe no Pagamento de Navios">Perdido</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-text-light uppercase">Obs.</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {kit.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-text-light">
-                  <span className="text-3xl block mb-2">{labels.emptyIcon}</span>
-                  {labels.empty}
-                </td>
-              </tr>
-            ) : (
-              kit.map((k) => {
-                const d = draft[k.stock_item_id] || { returned: "", broken: "", lost: "", note: "" };
-                return (
-                  <tr key={k.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-2.5 font-medium">{k.estName}</td>
-                    <td className="px-4 py-2.5 text-center text-text-light">{k.need}</td>
-                    <td className="px-4 py-2.5 text-center">
-                      <input type="number" min={0} step={1} value={d.returned} disabled={locked}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          const ret = parseInt(v);
-                          // O que não voltou nem foi marcado como avariado cai
-                          // em PERDIDO (Foi − Voltou − Avariado) — é o que custa
-                          // ao navio. Dá pra corrigir na mão depois.
-                          const bro = parseInt(d.broken) || 0;
-                          const lost = v === "" || isNaN(ret) ? "" : String(Math.max(0, k.need - ret - bro));
-                          setDraft(k.stock_item_id, { returned: v, lost });
-                        }}
-                        className={numCls} placeholder="0" />
-                    </td>
-                    <td className="px-4 py-2.5 text-center">
-                      <input type="number" min={0} step={1} value={d.broken} disabled={locked}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          const bro = parseInt(v) || 0;
-                          const ret = parseInt(d.returned);
-                          // Marcar avariado tira do perdido (o item apareceu).
-                          const lost = d.returned === "" || isNaN(ret) ? d.lost : String(Math.max(0, k.need - ret - bro));
-                          setDraft(k.stock_item_id, { broken: v, lost });
-                        }}
-                        className={`${numCls} ${(parseInt(d.broken) || 0) > 0 ? "border-amber-300 text-amber-700" : ""}`} placeholder="0" />
-                    </td>
-                    <td className="px-4 py-2.5 text-center">
-                      <input type="number" min={0} step={1} value={d.lost} disabled={locked}
-                        onChange={(e) => setDraft(k.stock_item_id, { lost: e.target.value })}
-                        className={`${numCls} ${(parseInt(d.lost) || 0) > 0 ? "border-red-300 text-red-700 font-semibold" : ""}`} placeholder="0" />
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <input type="text" value={d.note} disabled={locked}
-                        onChange={(e) => setDraft(k.stock_item_id, { note: e.target.value })}
-                        placeholder={labels.obsPlaceholder}
-                        className="w-full px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+      {/* Cabeçalho só no desktop */}
+      <div className={`${gridCols} bg-gray-50 border-b border-border px-4 py-3 text-xs font-semibold text-text-light uppercase hidden`}>
+        <span>{labels.item}</span>
+        <span className="text-center" title="Quanto a equipe leva (referência)">Foi</span>
+        <span className="text-center" title="Voltou em bom estado — credita o estoque de volta">Voltou</span>
+        <span className="text-center" title="Voltou, mas quebrado/estragado — a equipe trouxe de volta; não custa nada ao navio">{labels.broken}</span>
+        <span className="text-center" title="Não voltou — vira despesa do navio, dividida pela equipe no Pagamento de Navios">Perdido</span>
+        <span>Obs.</span>
       </div>
+
+      {kit.length === 0 ? (
+        <div className="px-4 py-10 text-center text-text-light">
+          <span className="text-3xl block mb-2">{labels.emptyIcon}</span>
+          {labels.empty}
+        </div>
+      ) : (
+        <div className="divide-y divide-border">
+          {kit.map((k) => {
+            const d = draft[k.stock_item_id] || { returned: "", broken: "", lost: "", note: "" };
+            return (
+              <div key={k.id} className={`px-4 py-3 sm:py-2.5 hover:bg-gray-50 flex flex-col gap-2 ${gridCols}`}>
+                {/* Nome */}
+                <div className="font-medium sm:truncate">{k.estName}</div>
+
+                {/* Números — no celular viram uma linha com rótulos; no desktop, células */}
+                <div className="grid grid-cols-4 gap-2 sm:contents">
+                  <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
+                    <span className="text-[10px] text-text-light uppercase sm:hidden">Foi</span>
+                    <span className="text-text-light">{k.need}</span>
+                  </div>
+                  <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
+                    <span className="text-[10px] text-text-light uppercase sm:hidden">Voltou</span>
+                    <input type="number" min={0} step={1} value={d.returned} disabled={locked}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        const ret = parseInt(v);
+                        // O que não voltou nem foi marcado como avariado cai em
+                        // PERDIDO (Foi − Voltou − Avariado) — é o que custa ao
+                        // navio. Dá pra corrigir na mão depois.
+                        const bro = parseInt(d.broken) || 0;
+                        const lost = v === "" || isNaN(ret) ? "" : String(Math.max(0, k.need - ret - bro));
+                        setDraft(k.stock_item_id, { returned: v, lost });
+                      }}
+                      className={numCls} placeholder="0" />
+                  </div>
+                  <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
+                    <span className="text-[10px] text-text-light uppercase sm:hidden">{labels.broken}</span>
+                    <input type="number" min={0} step={1} value={d.broken} disabled={locked}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        const bro = parseInt(v) || 0;
+                        const ret = parseInt(d.returned);
+                        // Marcar avariado tira do perdido (o item apareceu).
+                        const lost = d.returned === "" || isNaN(ret) ? d.lost : String(Math.max(0, k.need - ret - bro));
+                        setDraft(k.stock_item_id, { broken: v, lost });
+                      }}
+                      className={`${numCls} ${(parseInt(d.broken) || 0) > 0 ? "border-amber-300 text-amber-700" : ""}`} placeholder="0" />
+                  </div>
+                  <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
+                    <span className="text-[10px] text-text-light uppercase sm:hidden">Perdido</span>
+                    <input type="number" min={0} step={1} value={d.lost} disabled={locked}
+                      onChange={(e) => setDraft(k.stock_item_id, { lost: e.target.value })}
+                      className={`${numCls} ${(parseInt(d.lost) || 0) > 0 ? "border-red-300 text-red-700 font-semibold" : ""}`} placeholder="0" />
+                  </div>
+                </div>
+
+                {/* Observação — largura total no celular */}
+                <input type="text" value={d.note} disabled={locked}
+                  onChange={(e) => setDraft(k.stock_item_id, { note: e.target.value })}
+                  placeholder={labels.obsPlaceholder}
+                  className="w-full px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 
