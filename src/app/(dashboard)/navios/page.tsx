@@ -1933,7 +1933,7 @@ export default function NaviosPage() {
                     🏁 Registra a saída, marca como <strong>Concluído</strong> e libera o navio pro <strong>Financeiro</strong>. Puxe as compras acima antes, se precisar.
                   </p>
                   {shipHasReturn === false && (
-                    <p className="text-xs text-amber-800 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2">
+                    <p className="text-xs text-red-700 bg-red-50 border border-red-300 rounded-lg px-3 py-2">
                       ⚠️ Este navio ainda não tem <strong>Retorno</strong> registrado. Faça o Retorno em{" "}
                       <strong>Controle › Embarque/Retorno</strong> antes de fechar (ao confirmar o retorno o navio já fecha sozinho).
                     </p>

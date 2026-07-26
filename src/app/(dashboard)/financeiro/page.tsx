@@ -368,12 +368,22 @@ function CloseShipModal({
   const [contractValue, setContractValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Mesma trava da aba Navios: só fecha se o navio já tiver Retorno registrado.
+  // null = carregando/desconhecido; false = sem Retorno; true = ok.
+  const [shipHasReturn, setShipHasReturn] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (job) {
       setCloseDate(job.end_date?.slice(0, 10) || isoDate(new Date()));
       setContractValue(job.contract_value != null ? formatAmountBR(Number(job.contract_value)) : "");
       setErr(null);
+      setShipHasReturn(null);
+      if (job.ship_id) {
+        (async () => {
+          const { data } = await db.from("material_returns").select("id").eq("ship_id", job.ship_id);
+          setShipHasReturn(Array.isArray(data) && data.length > 0);
+        })().catch(() => setShipHasReturn(null));
+      }
     }
   }, [job]);
 
@@ -381,6 +391,14 @@ function CloseShipModal({
 
   async function handleConfirm() {
     if (!job!.ship_id) { setErr("Este pagamento não está ligado a um navio."); return; }
+    // Trava: sem Retorno registrado, o fechamento tem que ser feito na aba
+    // Embarque/Retorno (ao confirmar o retorno o navio fecha sozinho).
+    const { data: rets } = await db.from("material_returns").select("id").eq("ship_id", job!.ship_id);
+    if (!Array.isArray(rets) || rets.length === 0) {
+      setShipHasReturn(false);
+      setErr("Este navio ainda não tem Retorno. Faça o Retorno em Controle › Embarque/Retorno antes de fechar (ao confirmar o retorno o navio já fecha sozinho).");
+      return;
+    }
     setSaving(true);
     setErr(null);
     try {
@@ -413,6 +431,12 @@ function CloseShipModal({
           Marca o navio como <strong>Concluído</strong> e registra a Data de Término (igual ao botão da aba
           Navios). A diferença aqui é que você também grava o <strong>Valor do Contrato</strong> deste pagamento.
         </p>
+        {shipHasReturn === false && (
+          <p className="text-xs text-red-700 bg-red-50 border border-red-300 rounded-lg px-3 py-2">
+            ⚠️ Este navio ainda não tem <strong>Retorno</strong> registrado. Faça o Retorno em{" "}
+            <strong>Controle › Embarque/Retorno</strong> antes de fechar (ao confirmar o retorno o navio já fecha sozinho).
+          </p>
+        )}
         <div>
           <label className="block text-sm font-medium mb-1">Data de Término *</label>
           <input type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} className={inputCls} />
@@ -433,7 +457,12 @@ function CloseShipModal({
         {err && <p className="text-xs text-danger bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</p>}
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button type="button" onClick={handleConfirm} disabled={saving || !closeDate}>
+          <Button
+            type="button"
+            onClick={handleConfirm}
+            disabled={saving || !closeDate || shipHasReturn === false}
+            title={shipHasReturn === false ? "Faça o Retorno em Embarque/Retorno antes de fechar" : undefined}
+          >
             {saving ? "Fechando..." : "🏁 Fechar Navio"}
           </Button>
         </div>
