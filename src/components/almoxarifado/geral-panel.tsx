@@ -91,6 +91,7 @@ interface Row {
   setor: string;      // sentinela (GALPAO/.../RANCHO)
   setorLabel: string;
   unit: string | null;
+  unitValue: number;  // valor unitário (R$) — pra mostrar valor por equipe
   total: number;
   disp: number;
   teams: Record<TeamKey, number>;
@@ -185,7 +186,7 @@ export function GeralPanel() {
       out.push({
         key: `mat-${it.id}`, name: it.name, setor: it.team as string,
         setorLabel: SETOR_INFO.get(it.team as string)?.label || (it.team as string),
-        unit: it.unit, total, disp, teams: { EQUIPE_1: e1, EQUIPE_2: e2, EQUIPE_4: e4 },
+        unit: it.unit, unitValue: Number(it.unit_value) || 0, total, disp, teams: { EQUIPE_1: e1, EQUIPE_2: e2, EQUIPE_4: e4 },
         kind: "MAT", matItem: it,
       });
     }
@@ -207,7 +208,7 @@ export function GeralPanel() {
       const e4 = Number(group.EQUIPE_4?.quantity) || 0;
       out.push({
         key: `rancho-${rep.id}`, name: rep.name, setor: "RANCHO", setorLabel: "Rancho",
-        unit: rep.unit, total: +(disp + e1 + e2 + e4).toFixed(3), disp,
+        unit: rep.unit, unitValue: Number(rep.unit_value) || 0, total: +(disp + e1 + e2 + e4).toFixed(3), disp,
         teams: { EQUIPE_1: e1, EQUIPE_2: e2, EQUIPE_4: e4 },
         kind: "RANCHO", ranchoRows: group,
       });
@@ -557,10 +558,24 @@ export function GeralPanel() {
   };
 
   const cell = (row: Row, col: ColKey, value: number, strong = false) => {
+    // R$ da quantidade daquela coluna (valor do material naquela equipe/visão).
+    const money = row.unitValue > 0 && value > 0
+      ? <span className="block text-[10px] text-emerald-700/80 tabular-nums mt-0.5">{formatCurrency(value * row.unitValue)}</span>
+      : null;
     if (!editable(row, col)) {
-      return <span className={`tabular-nums ${strong ? "font-semibold text-text" : "text-text-light"}`}>{formatQty(value)}</span>;
+      return (
+        <div>
+          <span className={`tabular-nums ${strong ? "font-semibold text-text" : "text-text-light"}`}>{formatQty(value)}</span>
+          {money}
+        </div>
+      );
     }
-    return <EditableNum value={value} onCommit={(v) => commitEdit(row, col, v)} disabled={saving} strong={strong} />;
+    return (
+      <div>
+        <EditableNum value={value} onCommit={(v) => commitEdit(row, col, v)} disabled={saving} strong={strong} />
+        {money}
+      </div>
+    );
   };
 
   // Colunas fixas + colunas de quantidade que dependem da aba: em "Todos" mostra
@@ -575,6 +590,12 @@ export function GeralPanel() {
         const chip = SETOR_INFO.get(r.setor)?.chip || "bg-gray-100 text-gray-700";
         return <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${chip}`}>{r.setorLabel}</span>;
       },
+    },
+    {
+      key: "valorun", label: "Valor Un.",
+      render: (r: Row) => r.unitValue > 0
+        ? <span className="tabular-nums text-text-light text-xs">{formatCurrency(r.unitValue)}</span>
+        : <span className="text-text-light/40">—</span>,
     },
   ];
   const qtyCols =
