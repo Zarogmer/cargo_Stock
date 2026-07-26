@@ -435,6 +435,7 @@ export default function SolicitacoesPage() {
   const [filterSupplier, setFilterSupplier] = useState("");
   const [filterPayment, setFilterPayment] = useState("");
   const [filterShip, setFilterShip] = useState("");
+  const [filterTeam, setFilterTeam] = useState("");
   const [generatingReport, setGeneratingReport] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
 
@@ -1231,6 +1232,7 @@ export default function SolicitacoesPage() {
     if (filterSupplier && (p.supplier || "") !== filterSupplier) return false;
     if (filterPayment && (p.payment_method || "") !== filterPayment) return false;
     if (filterShip && (p.ship_name || "") !== filterShip) return false;
+    if (filterTeam && (p.team || "") !== filterTeam) return false;
     return true;
   });
   const filteredTotal = filteredPurchases.reduce((sum, p) => sum + (p.total_value || 0), 0);
@@ -1249,6 +1251,9 @@ export default function SolicitacoesPage() {
   const purchasePayments = Array.from(new Set(purchases.map((p) => p.payment_method).filter(Boolean) as string[])).sort();
   const purchaseShips = Array.from(new Set(purchases.map((p) => p.ship_name).filter(Boolean) as string[]))
     .sort((a, b) => a.localeCompare(b, "pt-BR"));
+  // Equipes presentes nas compras (pra montar o filtro). Rótulo via MATERIAL_CREW_TEAMS.
+  const purchaseTeams = Array.from(new Set(purchases.map((p) => p.team).filter(Boolean) as string[])).sort();
+  const teamLabel = (t: string) => MATERIAL_CREW_TEAMS.find((x) => x.value === t)?.label || t;
   const selCls = "px-3 py-2 border border-border rounded-lg text-sm bg-card focus:ring-2 focus:ring-primary outline-none";
 
   // Baixa o relatório em Excel do período/filtros atuais (layout da planilha oficial).
@@ -1512,10 +1517,19 @@ export default function SolicitacoesPage() {
                   </select>
                 </label>
               )}
-              {(filterMonth || filterDept || filterSupplier || filterPayment || filterShip) && (
+              {purchaseTeams.length > 0 && (
+                <label className="flex flex-col gap-1 text-xs">
+                  <span className="text-text-light font-medium uppercase tracking-wide">Equipe</span>
+                  <select value={filterTeam} onChange={(e) => setFilterTeam(e.target.value)} className={`${selCls} max-w-[200px]`}>
+                    <option value="">Todas</option>
+                    {purchaseTeams.map((t) => <option key={t} value={t}>{teamLabel(t)}</option>)}
+                  </select>
+                </label>
+              )}
+              {(filterMonth || filterDept || filterSupplier || filterPayment || filterShip || filterTeam) && (
                 <button
                   type="button"
-                  onClick={() => { setFilterMonth(""); setFilterDept(""); setFilterSupplier(""); setFilterPayment(""); setFilterShip(""); }}
+                  onClick={() => { setFilterMonth(""); setFilterDept(""); setFilterSupplier(""); setFilterPayment(""); setFilterShip(""); setFilterTeam(""); }}
                   className="text-xs text-text-light underline hover:text-text pb-2.5"
                 >
                   Limpar filtros
