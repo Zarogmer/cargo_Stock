@@ -5004,29 +5004,6 @@ function JobDetailModal({
                 </div>
               )}
 
-            {/* Total gasto com Raspagem/Pintura (mão de obra) — só Embarque com
-                serviço extra. Soma service_extra_rate × porões de quem recebe. */}
-            {showServiceExtraColumn && (() => {
-              const rows = allocations.filter((a) => fnFilter === "ALL" || allocFnName(a) === fnFilter);
-              const heads = rows.filter((a) => Number(a.service_extra_rate || 0) > 0).length;
-              if (heads === 0) return null;
-              const spend = rows.reduce((s, a) => s + Number(a.service_extra_rate || 0) * holdsMultiplier, 0);
-              return (
-                <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  <span className="font-semibold text-amber-900">🪓 {serviceExtraLabel} (mão de obra):</span>
-                  <span className="font-bold text-amber-800">{brl(spend)}</span>
-                  {extraServices.length > 1 && (
-                    <span className="text-amber-700">
-                      ({extraServices.map((s) => `${s.label} ${brl(s.rate * holdsMultiplier * heads)}`).join(" · ")})
-                    </span>
-                  )}
-                  <span className="text-amber-700/80">
-                    — {heads} {heads === 1 ? "pessoa" : "pessoas"} × {holdsMultiplier} {holdsMultiplier === 1 ? "porão" : "porões"}
-                  </span>
-                </div>
-              );
-            })()}
-
             <div className="bg-card border border-border rounded-lg overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-border">
@@ -5441,15 +5418,24 @@ function JobDetailModal({
                       return s + rateio;
                     }, 0);
                     const pluxeeTotal = totalAllocs.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
-                    // colSpan = "#" + nome + (data+periodo?) + (qty?) + rate = 3 base, +1 cada coluna opcional
+                    // Total gasto com o serviço extra (Raspagem/Pintura): service_extra_rate × porões.
+                    const serviceExtraTotal = isEmbarque
+                      ? totalAllocs.reduce((s, a) => s + Number(a.service_extra_rate || 0) * holdsMultiplier, 0)
+                      : 0;
+                    // colSpan = "#" + nome + (data+periodo?) + (qty?) + rate = 3 base.
+                    // Raspagem e Porões têm célula própria no rodapé (não entram no label).
                     const labelColSpan = 3
                       + (showCostadoShiftColumns ? 2 : 0)  // Data + Período
-                      + (showQtyColumn ? 1 : 0)            // Turnos/Qtd
-                      + (showServiceExtraColumn ? 1 : 0)   // Raspagem/Pintura (só Embarque c/ serviço)
-                      + (multiplierLabel ? 1 : 0);          // Porões (só Embarque)
+                      + (showQtyColumn ? 1 : 0);           // Turnos/Qtd
                     return (
                       <tr>
                         <td colSpan={labelColSpan} className="px-2 py-2 text-text-light text-right">TOTAL</td>
+                        {showServiceExtraColumn && (
+                          <td className="px-2 py-2 text-right whitespace-nowrap text-amber-700">
+                            {serviceExtraTotal > 0 ? `+ ${brl(serviceExtraTotal)}` : "—"}
+                          </td>
+                        )}
+                        {multiplierLabel && <td className="px-2 py-2"></td>}
                         <td className="px-2 py-2 text-right whitespace-nowrap">{brl(baseTotal)}</td>
                         <td className={`px-2 py-2 text-right whitespace-nowrap ${extraTotal < 0 ? "text-red-700" : "text-amber-700"}`}>
                           {extraTotal === 0 ? "—" : `${extraTotal > 0 ? "+ " : "− "}${brl(Math.abs(extraTotal))}`}
