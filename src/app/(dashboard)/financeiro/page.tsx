@@ -720,24 +720,9 @@ export default function FinanceiroPage() {
       db.from("advance_discounts").select("*"),
     ]);
     let allFunctions = (fnRes.data as JobFunction[]) || [];
-    // Auto-cria a função COSTADO (valor fixo por turno) na primeira vez que
-    // a aba carrega — Costado é pago por turno de 6h, valor único pra todos.
-    // R$ 100 é o default; o usuário ajusta inline depois.
-    const hasCostado = allFunctions.some((f) => f.name.trim().toUpperCase() === "COSTADO");
-    if (!hasCostado) {
-      const created = await db.from("job_functions").insert({
-        name: "COSTADO",
-        description: "Limpeza em costado — pago por turno de 6h. Valor fixo, igual pra todos os colaboradores.",
-        default_rate: 100,
-        unit: "TURNO",
-        active: true,
-      } as Record<string, unknown>);
-      if (!created.error) {
-        // Re-busca pra pegar o id real do registro inserido.
-        const re = await db.from("job_functions").select("*").order("name");
-        allFunctions = (re.data as JobFunction[]) || allFunctions;
-      }
-    }
+    // Costado NÃO tem mais função própria "COSTADO": a função principal da
+    // unidade Costado é AUXILIAR OPERACIONAL (ver pickCostadoFunction em
+    // src/lib/jobUnits.ts). Não recriar COSTADO aqui.
     // Auto-cria a função ADMINISTRATIVO (valor fixo por operação) — pessoal de
     // escritório que entra no custo de cada navio. default_rate 0: o valor de
     // cada pessoa é definido em Valores › 👤 (valor especial por colaborador).
