@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
 import { PdfPreview } from "./pdf-preview";
+import { isDocEligibleEmployee } from "@/lib/utils";
 import type { Employee } from "@/types/database";
 
 type Variant = "SANTOS" | "FORA";
@@ -23,10 +24,11 @@ export function ListagemSubTab({ employees }: { employees: Employee[] }) {
 
   // Só quem embarca: ativos do operacional. Administrativo (RH, financeiro…)
   // não vai na listagem de embarque. Sem setor definido é tratado como
-  // operacional para não sumir com quem esqueceram de categorizar.
+  // operacional para não sumir com quem esqueceram de categorizar. Demitidos e
+  // inativos na escalação ficam de fora (isDocEligibleEmployee).
   const sortedEmployees = useMemo(() => {
     return [...employees]
-      .filter((e) => e.status !== "INATIVO" && e.sector !== "ADMINISTRATIVO")
+      .filter((e) => isDocEligibleEmployee(e) && e.sector !== "ADMINISTRATIVO")
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [employees]);
 

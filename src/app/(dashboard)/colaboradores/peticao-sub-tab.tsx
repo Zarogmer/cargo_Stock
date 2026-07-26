@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
 import { PdfPreview } from "./pdf-preview";
 import { db } from "@/lib/db";
+import { isDocEligibleEmployee } from "@/lib/utils";
 import type { Employee } from "@/types/database";
 
 // Documento "AUTORIZAÇÃO PARA ACESSO À BARRA": emitido por navio. O usuário
@@ -141,7 +142,7 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
   const sortedEmployees = useMemo(
     () =>
       [...employees]
-        .filter((e) => e.status !== "INATIVO" && e.sector !== "ADMINISTRATIVO")
+        .filter((e) => isDocEligibleEmployee(e) && e.sector !== "ADMINISTRATIVO")
         .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
     [employees]
   );

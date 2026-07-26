@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { AllocInput, JornadaFilter, WorkedMap, countWorkedKind, expandWorkedDates, periodoFileLabel, rangeDayCount } from "@/lib/folha-ponto";
 import { allocCountsAsWorked } from "@/lib/alloc-worked";
 import { FolhaPontoPreview } from "./folha-ponto-preview";
+import { isDocEligibleEmployee } from "@/lib/utils";
 import type { Employee } from "@/types/database";
 
 // Período máximo da folha — igual ao limite da API (~4 meses).
@@ -96,7 +97,7 @@ export function FolhaPontoSubTab({ employees }: { employees: Employee[] }) {
 
   const sortedEmployees = useMemo(() => {
     return [...employees]
-      .filter((e) => e.status !== "INATIVO")
+      .filter(isDocEligibleEmployee)
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [employees]);
 

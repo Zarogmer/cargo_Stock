@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
 import { PdfPreview } from "./pdf-preview";
+import { isDocEligibleEmployee } from "@/lib/utils";
 import type { Employee } from "@/types/database";
 
 function todayInput(): string {
@@ -32,10 +33,10 @@ export function FichaEpiSubTab({ employees }: { employees: Employee[] }) {
 
   const regMissing = !!employeeId && !reg.trim();
 
-  // Active employees first, sorted by name.
+  // Fora demitidos e inativos na escalação; ordenado por nome.
   const sortedEmployees = useMemo(() => {
     return [...employees]
-      .filter((e) => e.status !== "INATIVO")
+      .filter(isDocEligibleEmployee)
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [employees]);
 

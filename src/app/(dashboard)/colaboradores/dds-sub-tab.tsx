@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
 import { PdfPreview } from "./pdf-preview";
 import { SearchIcon, PlusIcon, TrashIcon } from "@/components/icons";
+import { isDocEligibleEmployee } from "@/lib/utils";
 import type { Employee } from "@/types/database";
 
 interface Ship {
@@ -102,7 +103,7 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
       if (s.departure_date) setPeriodEnd(toInputDate(s.departure_date));
       if (s.assigned_team) {
         const teamMembers = employees
-          .filter((e) => e.team === s.assigned_team && e.status !== "INATIVO")
+          .filter((e) => e.team === s.assigned_team && isDocEligibleEmployee(e))
           .map<SelectedEmployee>((e) => ({ id: e.id, name: e.name, cpf: e.cpf || "" }));
         setPicked(teamMembers);
       }
@@ -114,6 +115,7 @@ export function DdsSubTab({ employees }: { employees: Employee[] }) {
     const pickedIds = new Set(picked.map((p) => p.id).filter((i): i is number => i !== null));
     const q = search.trim().toLowerCase();
     return employees
+      .filter(isDocEligibleEmployee)
       .filter((e) => !pickedIds.has(e.id))
       .filter((e) => {
         if (!q) return true;

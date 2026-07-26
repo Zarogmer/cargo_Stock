@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
 import { PdfPreview } from "./pdf-preview";
 import { db } from "@/lib/db";
-import { parseDecimalBR } from "@/lib/utils";
+import { parseDecimalBR, isDocEligibleEmployee } from "@/lib/utils";
 import {
   valorPorExtenso,
   formatDataExtenso,
@@ -79,7 +79,7 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
 
   const sortedEmployees = useMemo(() => {
     return [...employees]
-      .filter((e) => e.status !== "INATIVO")
+      .filter(isDocEligibleEmployee)
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [employees]);
 

@@ -287,6 +287,17 @@ export function effectiveEmployeeStatus(
   return "ATIVO";
 }
 
+// Colaboradores elegíveis para geração de documentos (Listagem, Ficha de EPI,
+// Aviso Médico, Folha de Ponto, Recibo, DDS, Petição): fora os demitidos
+// (status INATIVO) e os inativos na escalação (escala_unavailable —
+// indisponíveis, sem demissão). Cada documento ainda pode restringir por
+// setor/equipe à parte.
+export function isDocEligibleEmployee(
+  e: { status: string | null; escala_unavailable?: boolean | null }
+): boolean {
+  return e.status !== "INATIVO" && !e.escala_unavailable;
+}
+
 // Visual label only — the internal DB value stays "INATIVO" so existing
 // filters, RBAC and queries keep working. We just present it as "Demitido"
 // to end users.
