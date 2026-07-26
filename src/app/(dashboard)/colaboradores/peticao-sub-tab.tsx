@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
 import { PdfPreview } from "./pdf-preview";
@@ -28,10 +28,6 @@ const DEFAULT_AGENCIES = ["Deep", "Transatlântica", "Continental", "Wilson"];
 // Navios que ainda aparecem na sugestão do campo Navio: só os no ciclo de vida
 // ativo (Agendado / Em Operação). Finalizados e cancelados ficam de fora.
 const ACTIVE_SHIP_STATUSES = new Set(["AGENDADO", "EM_OPERACAO"]);
-
-// Valor sentinela da opção "➕ Outro (digitar)…" no dropdown (mesmo padrão do
-// campo Navio do Recibo de Pagamento).
-const OTHER = "__outro__";
 
 interface KitRow {
   team: string;
@@ -533,11 +529,11 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
   );
 }
 
-// ─── Lista cadastrável em formato dropdown (igual ao campo Navio do Recibo) ───
-// Escolha por menu suspenso; a última opção "➕ Outro (digitar)…" troca o
-// dropdown por um campo de texto pra cadastrar uma opção nova (que fica salva e
-// já entra selecionada). Único (Agência/Gate) grava a escolha; múltiplo
-// (Transporte) soma os selecionados em chips com × pra tirar da seleção.
+// ─── Lista cadastrável em dropdown customizado ───────────────────────────────
+// Menu suspenso próprio (não é <select> nativo) pra cada item ter um × vermelho
+// que remove do cadastro, com "Cadastrar novo" no rodapé da lista. Único
+// (Agência/Gate) grava a escolha; múltiplo (Transporte) marca vários (check na
+// lista) e mostra chips com × pra tirar só da seleção.
 function OptionsManager({
   label,
   hint,
@@ -565,6 +561,22 @@ function OptionsManager({
 }) {
   const [novo, setNovo] = useState("");
   const [typing, setTyping] = useState(false);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Fecha o menu (e o modo digitar) ao clicar fora.
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+        setTyping(false);
+        setNovo("");
+      }
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
 
   function submitAdd() {
     const v = novo.trim();
@@ -574,68 +586,119 @@ function OptionsManager({
     setTyping(false);
   }
 
-  // No múltiplo, o dropdown serve só pra ADICIONAR — some as já escolhidas.
-  const pickerOptions = multi ? options.filter((o) => !selectedMulti?.has(o)) : options;
+  function handlePick(opt: string) {
+    if (multi) {
+      onToggleMulti?.(opt);
+    } else {
+      onPickSingle?.(opt);
+      setOpen(false);
+    }
+  }
+
+  const triggerIsPlaceholder = multi || !selectedSingle?.trim();
+  const triggerLabel = multi ? "Selecionar…" : selectedSingle?.trim() || "— Selecione —";
 
   return (
     <div>
       <label className="text-xs font-semibold text-text-light uppercase tracking-wider">{label}</label>
       {hint && <p className="text-[11px] text-text-light">{hint}</p>}
 
-      {typing ? (
-        // Modo "digitar novo" — só aparece ao escolher "➕ Outro (digitar)…".
-        <div className="mt-1 flex gap-2">
-          <input
-            type="text"
-            value={novo}
-            autoFocus
-            onChange={(e) => setNovo(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                submitAdd();
-              }
-            }}
-            placeholder={addPlaceholder || "Adicionar…"}
-            className={`${fieldCls} flex-1`}
-          />
-          <button
-            type="button"
-            onClick={submitAdd}
-            className="mt-1 px-3 text-sm font-medium text-primary border border-primary/40 rounded-lg hover:bg-primary/5 whitespace-nowrap"
-          >
-            Cadastrar
-          </button>
-          <button
-            type="button"
-            onClick={() => { setTyping(false); setNovo(""); }}
-            className="mt-1 px-3 text-sm font-medium text-text-light hover:text-text border border-border rounded-lg whitespace-nowrap"
-          >
-            Lista
-          </button>
-        </div>
-      ) : (
-        // Dropdown de escolha — mesmo estilo/comportamento do campo Navio do Recibo.
-        <select
-          value={multi ? "" : selectedSingle || ""}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v === OTHER) { setTyping(true); return; }
-            if (multi) {
-              if (v) onToggleMulti?.(v);
-            } else {
-              onPickSingle?.(v);
-            }
-          }}
-          className={fieldCls}
+      {/* Dropdown customizado: cada item tem × vermelho pra remover do cadastro,
+          e "Cadastrar novo" no rodapé da própria lista. */}
+      <div className="relative mt-1" ref={ref}>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30 flex items-center justify-between text-left"
         >
-          <option value="">{multi ? "Adicionar…" : "— Selecione —"}</option>
-          {pickerOptions.map((opt) => (
-            <option key={opt} value={opt}>{opt}</option>
-          ))}
-          <option value={OTHER}>➕ Outro (digitar)…</option>
-        </select>
-      )}
+          <span className={triggerIsPlaceholder ? "text-text-light" : "text-text"}>{triggerLabel}</span>
+          <svg
+            className={`w-4 h-4 shrink-0 text-text-light transition-transform ${open ? "rotate-180" : ""}`}
+            viewBox="0 0 20 20"
+            fill="currentColor"
+          >
+            <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+          </svg>
+        </button>
+
+        {open && (
+          <div className="absolute left-0 right-0 top-full z-30 mt-1 bg-card border border-border rounded-lg shadow-lg overflow-hidden">
+            <div className="max-h-56 overflow-y-auto">
+              {options.length === 0 ? (
+                <p className="px-3 py-2 text-xs text-text-light">Nada cadastrado ainda.</p>
+              ) : (
+                options.map((opt) => {
+                  const selected = multi ? !!selectedMulti?.has(opt) : selectedSingle === opt;
+                  return (
+                    <div
+                      key={opt}
+                      className={`flex items-center ${selected ? "bg-primary/10" : "hover:bg-gray-50"}`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handlePick(opt)}
+                        className="flex-1 flex items-center gap-2 px-3 py-2 text-sm text-left text-text"
+                      >
+                        {multi && (
+                          <span
+                            className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] ${
+                              selected ? "bg-primary border-primary text-white" : "border-border"
+                            }`}
+                          >
+                            {selected ? "✓" : ""}
+                          </span>
+                        )}
+                        <span className={selected && !multi ? "font-medium" : ""}>{opt}</span>
+                      </button>
+                      <button
+                        type="button"
+                        title="Remover do cadastro"
+                        onClick={() => onRemove(opt)}
+                        className="mr-1.5 w-6 h-6 shrink-0 rounded flex items-center justify-center text-base leading-none text-red-500 hover:bg-red-100"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Cadastrar novo — no rodapé da lista */}
+            {typing ? (
+              <div className="flex gap-1 p-2 border-t border-border">
+                <input
+                  type="text"
+                  value={novo}
+                  autoFocus
+                  onChange={(e) => setNovo(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") { e.preventDefault(); submitAdd(); }
+                    if (e.key === "Escape") { setTyping(false); setNovo(""); }
+                  }}
+                  placeholder={addPlaceholder || "Adicionar…"}
+                  className="flex-1 px-2 py-1.5 text-sm border border-border rounded-md bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+                <button
+                  type="button"
+                  onClick={submitAdd}
+                  className="px-3 text-sm font-medium text-primary border border-primary/40 rounded-md hover:bg-primary/5 whitespace-nowrap"
+                >
+                  Cadastrar
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setTyping(true)}
+                className="w-full flex items-center gap-1 px-3 py-2 text-sm font-medium text-primary border-t border-border hover:bg-primary/5"
+              >
+                ➕ Cadastrar novo…
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Selecionados (múltiplo) — chips com × que tiram só da seleção */}
       {multi && (selectedMulti?.size ?? 0) > 0 && (
@@ -656,33 +719,6 @@ function OptionsManager({
               </button>
             </span>
           ))}
-        </div>
-      )}
-
-      {/* Cadastrados — sempre visíveis, cada um com × pra remover do cadastro.
-          Fica fora do dropdown (um <select> nativo não aceita botão dentro das
-          opções), então o × é sempre alcançável sem abrir o menu. */}
-      {!typing && options.length > 0 && (
-        <div className="mt-1.5">
-          <p className="text-[11px] text-text-light mb-1">Cadastrados — clique no × para remover:</p>
-          <div className="flex flex-wrap gap-1.5">
-            {options.map((opt) => (
-              <span
-                key={opt}
-                className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full text-xs bg-card text-text border border-border"
-              >
-                <span className="font-medium">{opt}</span>
-                <button
-                  type="button"
-                  title="Remover do cadastro"
-                  onClick={() => onRemove(opt)}
-                  className="w-4 h-4 rounded-full flex items-center justify-center text-[10px] text-text-light hover:bg-red-100 hover:text-red-600"
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
         </div>
       )}
     </div>
