@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
 import { PdfPreview } from "./pdf-preview";
@@ -28,6 +28,10 @@ const DEFAULT_AGENCIES = ["Deep", "Transatlântica", "Continental", "Wilson"];
 // Navios que ainda aparecem na sugestão do campo Navio: só os no ciclo de vida
 // ativo (Agendado / Em Operação). Finalizados e cancelados ficam de fora.
 const ACTIVE_SHIP_STATUSES = new Set(["AGENDADO", "EM_OPERACAO"]);
+
+// Valor sentinela da opção "➕ Outro (digitar)…" no dropdown (mesmo padrão do
+// campo Navio do Recibo de Pagamento).
+const OTHER = "__outro__";
 
 interface KitRow {
   team: string;
@@ -523,11 +527,11 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
   );
 }
 
-// ─── Lista cadastrável em formato dropdown (igual ao campo Equipe) ────────────
-// Escolha por menu suspenso. Único (Agência/Gate) grava a opção; múltiplo
-// (Transporte) vai somando os selecionados em chips com × pra tirar da seleção.
-// O "+ Cadastrar" adiciona ao cadastro e "Remover do cadastro" abre a lista
-// pra apagar opções — nenhuma funcionalidade dos antigos chips se perde.
+// ─── Lista cadastrável em formato dropdown (igual ao campo Navio do Recibo) ───
+// Escolha por menu suspenso; a última opção "➕ Outro (digitar)…" troca o
+// dropdown por um campo de texto pra cadastrar uma opção nova (que fica salva e
+// já entra selecionada). Único (Agência/Gate) grava a escolha; múltiplo
+// (Transporte) soma os selecionados em chips com × pra tirar da seleção.
 function OptionsManager({
   label,
   hint,
@@ -554,15 +558,15 @@ function OptionsManager({
   addPlaceholder?: string;
 }) {
   const [novo, setNovo] = useState("");
+  const [typing, setTyping] = useState(false);
   const [managing, setManaging] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   function submitAdd() {
     const v = novo.trim();
     if (!v) return;
     onAdd(v);
     setNovo("");
-    inputRef.current?.focus();
+    setTyping(false);
   }
 
   // No múltiplo, o dropdown serve só pra ADICIONAR — some as já escolhidas.
@@ -573,31 +577,60 @@ function OptionsManager({
       <label className="text-xs font-semibold text-text-light uppercase tracking-wider">{label}</label>
       {hint && <p className="text-[11px] text-text-light">{hint}</p>}
 
-      {/* Dropdown de escolha — mesmo estilo do campo Equipe */}
-      <select
-        value={multi ? "" : selectedSingle || ""}
-        onChange={(e) => {
-          const v = e.target.value;
-          if (multi) {
-            if (v) onToggleMulti?.(v);
-          } else {
-            onPickSingle?.(v);
-          }
-        }}
-        className={fieldCls}
-        disabled={options.length === 0}
-      >
-        <option value="">
-          {options.length === 0
-            ? "Nada cadastrado — adicione abaixo"
-            : multi
-              ? "Adicionar…"
-              : "— Selecione —"}
-        </option>
-        {pickerOptions.map((opt) => (
-          <option key={opt} value={opt}>{opt}</option>
-        ))}
-      </select>
+      {typing ? (
+        // Modo "digitar novo" — só aparece ao escolher "➕ Outro (digitar)…".
+        <div className="mt-1 flex gap-2">
+          <input
+            type="text"
+            value={novo}
+            autoFocus
+            onChange={(e) => setNovo(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submitAdd();
+              }
+            }}
+            placeholder={addPlaceholder || "Adicionar…"}
+            className={`${fieldCls} flex-1`}
+          />
+          <button
+            type="button"
+            onClick={submitAdd}
+            className="mt-1 px-3 text-sm font-medium text-primary border border-primary/40 rounded-lg hover:bg-primary/5 whitespace-nowrap"
+          >
+            Cadastrar
+          </button>
+          <button
+            type="button"
+            onClick={() => { setTyping(false); setNovo(""); }}
+            className="mt-1 px-3 text-sm font-medium text-text-light hover:text-text border border-border rounded-lg whitespace-nowrap"
+          >
+            Lista
+          </button>
+        </div>
+      ) : (
+        // Dropdown de escolha — mesmo estilo/comportamento do campo Navio do Recibo.
+        <select
+          value={multi ? "" : selectedSingle || ""}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === OTHER) { setTyping(true); return; }
+            if (multi) {
+              if (v) onToggleMulti?.(v);
+            } else {
+              onPickSingle?.(v);
+            }
+          }}
+          className={fieldCls}
+        >
+          <option value="">{multi ? "Adicionar…" : "— Selecione —"}</option>
+          {pickerOptions.map((opt) => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+          <option value={OTHER}>➕ Outro (digitar)…</option>
+        </select>
+      )}
 
       {/* Selecionados (múltiplo) — chips com × que tiram só da seleção */}
       {multi && (selectedMulti?.size ?? 0) > 0 && (
@@ -621,33 +654,8 @@ function OptionsManager({
         </div>
       )}
 
-      {/* Cadastrar nova opção */}
-      <div className="mt-1.5 flex gap-2">
-        <input
-          ref={inputRef}
-          type="text"
-          value={novo}
-          onChange={(e) => setNovo(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              submitAdd();
-            }
-          }}
-          placeholder={addPlaceholder || "Adicionar…"}
-          className="flex-1 px-3 py-1.5 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
-        />
-        <button
-          type="button"
-          onClick={submitAdd}
-          className="px-3 py-1.5 text-sm font-medium text-primary border border-primary/40 rounded-lg hover:bg-primary/5 whitespace-nowrap"
-        >
-          + Cadastrar
-        </button>
-      </div>
-
       {/* Remover do cadastro — recolhido por padrão pra manter o form limpo */}
-      {options.length > 0 && (
+      {!typing && options.length > 0 && (
         <>
           <button
             type="button"
