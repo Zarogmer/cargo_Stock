@@ -595,8 +595,11 @@ function OptionsManager({
     }
   }
 
-  const triggerIsPlaceholder = multi || !selectedSingle?.trim();
-  const triggerLabel = multi ? "Selecionar…" : selectedSingle?.trim() || "— Selecione —";
+  const multiSelected = multi ? Array.from(selectedMulti ?? []) : [];
+  const triggerIsPlaceholder = multi ? multiSelected.length === 0 : !selectedSingle?.trim();
+  const triggerLabel = multi
+    ? (multiSelected.length > 0 ? multiSelected.join(" / ") : "Selecionar…")
+    : selectedSingle?.trim() || "— Selecione —";
 
   return (
     <div>
@@ -700,27 +703,6 @@ function OptionsManager({
         )}
       </div>
 
-      {/* Selecionados (múltiplo) — chips com × que tiram só da seleção */}
-      {multi && (selectedMulti?.size ?? 0) > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
-          {Array.from(selectedMulti!).map((opt) => (
-            <span
-              key={opt}
-              className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full text-xs bg-primary text-white border border-primary"
-            >
-              <span className="font-medium">{opt}</span>
-              <button
-                type="button"
-                title="Tirar da seleção"
-                onClick={() => onToggleMulti?.(opt)}
-                className="w-4 h-4 rounded-full flex items-center justify-center text-[10px] hover:bg-white/25"
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

@@ -30,8 +30,6 @@ function todayInput(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-const OTHER = "__outro__";
-
 // Extrai o nome do arquivo do header Content-Disposition (filename*=UTF-8''...),
 // com fallback montado no cliente.
 function filenameFromResponse(res: Response, count: number, format: "docx" | "pdf", fallbackNome: string): string {
@@ -55,7 +53,6 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
   const [data, setData] = useState<string>(todayInput);
   const [valor, setValor] = useState("");
   const [navio, setNavio] = useState("");
-  const [navioTyping, setNavioTyping] = useState(false);
   const [tipo, setTipo] = useState<"COSTADO" | "POROES">("COSTADO");
   const [poroes, setPoroes] = useState(1);
 
@@ -112,7 +109,6 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
   }, [selectedIds, employees]);
 
   const navioShip = ships.find((s) => s.name === navio) || null;
-  const shipKnown = !!navioShip;
   const valorNum = parseDecimalBR(valor);
   const extensoPreview = valorNum > 0 ? valorPorExtenso(valorNum) : "";
   const periodoPreview = formatPeriodoAnterior(data);
@@ -340,45 +336,24 @@ export function ReciboPagamentoSubTab({ employees }: { employees: Employee[] }) 
 
           <div>
             <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Navio</label>
-            {navioTyping ? (
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={navio}
-                  onChange={(e) => setNavio(e.target.value)}
-                  autoFocus
-                  placeholder="Nome do navio"
-                  className={`${fieldCls} flex-1`}
-                />
-                <button
-                  type="button"
-                  onClick={() => { setNavioTyping(false); setNavio(""); }}
-                  className="mt-1 px-3 text-sm font-medium text-text-light hover:text-text border border-border rounded-lg whitespace-nowrap"
-                >
-                  Lista
-                </button>
-              </div>
-            ) : (
-              <select
-                value={navio}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v === OTHER) { setNavio(""); setNavioTyping(true); return; }
-                  setNavio(v);
-                  // Puxa a quantidade de porões do navio (qtd cadastrada no navio).
-                  const ship = ships.find((s) => s.name === v);
-                  if (ship && ship.holds_count && ship.holds_count > 0) setPoroes(ship.holds_count);
-                }}
-                className={fieldCls}
-              >
-                <option value="">— Selecionar navio —</option>
-                {navio && !shipKnown && <option value={navio}>{navio}</option>}
-                {ships.map((s) => (
-                  <option key={s.id} value={s.name}>{s.name}</option>
-                ))}
-                <option value={OTHER}>➕ Outro (digitar)…</option>
-              </select>
-            )}
+            {/* Só navios cadastrados na aba Navios — sem digitar avulso, pra não
+                gerar recibo com navio que não existe. */}
+            <select
+              value={navio}
+              onChange={(e) => {
+                const v = e.target.value;
+                setNavio(v);
+                // Puxa a quantidade de porões do navio (qtd cadastrada no navio).
+                const ship = ships.find((s) => s.name === v);
+                if (ship && ship.holds_count && ship.holds_count > 0) setPoroes(ship.holds_count);
+              }}
+              className={fieldCls}
+            >
+              <option value="">— Selecionar navio —</option>
+              {ships.map((s) => (
+                <option key={s.id} value={s.name}>{s.name}</option>
+              ))}
+            </select>
           </div>
 
           <div>
