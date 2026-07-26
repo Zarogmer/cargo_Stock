@@ -2244,7 +2244,7 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
           </select>
           <p className="text-[10px] text-text-light mt-1">Sugestão de onde guardar — o gestor confirma ao aprovar.</p>
         </div>
-        <CodeField dest={dest} team="EQUIPE_1" value={code} name={toolName} onChange={setCode} onResolveName={setToolName} open={open} />
+        <CodeField dest={dest} team="EQUIPE_1" value={code} name={toolName} onChange={setCode} onResolveName={setToolName} open={open} auto />
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium mb-1">Quantidade</label>
