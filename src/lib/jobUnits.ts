@@ -136,6 +136,25 @@ export function pickFunctionByName<
   return matches.find((f) => f.active !== false) || matches[0];
 }
 
+// Função "principal" do Costado — todos os escalados de Costado entram nela.
+// Depois de aposentar a antiga função COSTADO (valor fixo, sem rosto), passa a ser
+// a função ATIVA da seção SERVICOS (ex.: AUXILIAR OPERACIONAL), que aceita valor
+// por pessoa. Prefere uma que NÃO seja a própria "COSTADO"; cai nela só como
+// fallback, pra não quebrar antes da migração.
+export function pickCostadoFunction<
+  F extends { name: string; unit?: string | null; active?: boolean | null },
+>(functions: F[]): F | undefined {
+  const servicos = functions.filter((f) => sectionKeyOfUnit(f.unit) === "SERVICOS");
+  const active = servicos.filter((f) => f.active !== false);
+  const isCostadoName = (f: F) => (f.name || "").trim().toUpperCase() === "COSTADO";
+  return (
+    active.find((f) => !isCostadoName(f)) ||
+    active[0] ||
+    servicos.find(isCostadoName) ||
+    servicos[0]
+  );
+}
+
 // Monta as seções a partir das UNIDADES cadastradas (job_units) + as funções.
 // Cada unidade vira uma seção (na ordem sort_order → nome), mesmo vazia, pra o
 // usuário poder adicionar funções nela. Funções apontando pra uma unidade sem

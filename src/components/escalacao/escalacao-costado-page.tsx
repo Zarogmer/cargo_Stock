@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { hasPermission } from "@/lib/rbac";
 import { countsAsWorked } from "@/lib/release-finished-ships";
+import { pickCostadoFunction } from "@/lib/jobUnits";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { TrashIcon } from "@/components/icons";
@@ -801,7 +802,7 @@ function FragmentRow({
 // ─── Add Crew to Period Modal ───────────────────────────────────────────────
 
 function AddCostadoCrewModal({
-  open, period, date, ship, ensureJob, employees, existingForPeriod, otherJobOccupiedKind, profileName, onClose, onSaved,
+  open, period, date, ship, ensureJob, employees, functions, existingForPeriod, otherJobOccupiedKind, profileName, onClose, onSaved,
 }: {
   open: boolean;
   period: ShiftPeriod | null;
@@ -882,37 +883,14 @@ function AddCostadoCrewModal({
     try {
       const jobId = await ensureJob();
       const now = new Date().toISOString();
-      // Costado é pago por TURNO, valor único (não tem distinção por função
-      // como Embarque tem). Pegamos a função "COSTADO" cadastrada em
-      // Financeiro > Valores e usamos pra todo mundo. O rate sai do
-      // default_rate dela (default R$ 100/turno, editável inline).
-      const { data: costadoFnData } = await db
-        .from("job_functions")
-        .select("id, default_rate")
-        .eq("name", "COSTADO")
-        .limit(1);
-      let costadoFn = (costadoFnData || [])[0] as { id: number; default_rate: string | number } | undefined;
-      // Self-heal: se ninguém ainda abriu a aba Valores, cria a função na hora.
+      // Costado: todos entram na função PRINCIPAL da unidade Costado (ex.:
+      // AUXILIAR OPERACIONAL), resolvida por pickCostadoFunction. O valor sai do
+      // default_rate dela (editável inline em Valores; valor por pessoa no 👤).
+      const costadoFn = pickCostadoFunction(functions);
       if (!costadoFn) {
-        const created = await db.from("job_functions").insert({
-          name: "COSTADO",
-          description: "Limpeza em costado — pago por turno de 6h. Valor fixo, igual pra todos os colaboradores.",
-          default_rate: 100,
-          unit: "TURNO",
-          active: true,
-        } as Record<string, unknown>);
-        if (created.error) {
-          setError(`Não consegui criar a função COSTADO automaticamente: ${created.error.message}`);
-          setSaving(false);
-          return;
-        }
-        const re = await db.from("job_functions").select("id, default_rate").eq("name", "COSTADO").limit(1);
-        costadoFn = (re.data || [])[0] as { id: number; default_rate: string | number };
-        if (!costadoFn) {
-          setError("Função COSTADO foi criada mas não consegui ler — tente de novo.");
-          setSaving(false);
-          return;
-        }
+        setError("Nenhuma função de Costado cadastrada. Cadastre uma na unidade Costado em Financeiro › Valores.");
+        setSaving(false);
+        return;
       }
       const ratePerTurno = Number(costadoFn.default_rate);
       for (const id of selectedIds) {

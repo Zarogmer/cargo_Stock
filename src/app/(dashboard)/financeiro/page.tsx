@@ -69,7 +69,7 @@ import {
 } from "@/lib/vales";
 import {
   unitLabel, normalizeUnit, unitToOption, unitEmoji, unitHint, buildUnitSections,
-  pickFunctionByName,
+  pickFunctionByName, pickCostadoFunction,
 } from "@/lib/jobUnits";
 import type {
   JobFunction,
@@ -3361,7 +3361,7 @@ function JobDetailModal({
       pluxee: number;
       folha: number;
     }>;
-    const costadoFnLocal = pickFunctionByName(functions, "COSTADO", "SERVICOS");
+    const costadoFnLocal = pickCostadoFunction(functions);
     const costadoRateLocal = costadoFnLocal ? Number(costadoFnLocal.default_rate) : 0;
     type Row = {
       employeeId: number | null;
@@ -4304,7 +4304,7 @@ function JobDetailModal({
   // exibimos o valor atual da função COSTADO — assim o financeiro vê o que
   // VAI pagar com base na configuração de hoje, não no que ficou salvo.
   const costadoFn = kindFilter === "COSTADO"
-    ? pickFunctionByName(functions, "COSTADO", "SERVICOS")
+    ? pickCostadoFunction(functions)
     : null;
   const costadoRate = costadoFn ? Number(costadoFn.default_rate) : 0;
   function effectiveQty(a: JobAllocation): number {
@@ -6940,7 +6940,7 @@ function CostadoTab({
   // Para os cards de Costado, o rate canônico é o default_rate da função
   // COSTADO (configurada em Valores). O rate stored na alocação pode ser
   // legado errado (ex.: R$ 400 vindo do default_rate da role de Embarque).
-  const costadoFnDef = pickFunctionByName(functions, "COSTADO", "SERVICOS");
+  const costadoFnDef = pickCostadoFunction(functions);
   const costadoRateDef = costadoFnDef ? Number(costadoFnDef.default_rate) : 0;
   // Administrativo do Costado: pessoal do setor Administrativo entra como custo
   // fixo POR NAVIO. Reconhecido pela CATEGORIA — funções marcadas como
@@ -7319,7 +7319,7 @@ function ControleTab({
 
     // Costado: rate canônico vem da função COSTADO em Valores (não do stored
     // rate da alocação, que pode ser legado errado).
-    const ctrlCostadoFn = pickFunctionByName(functions, "COSTADO", "SERVICOS");
+    const ctrlCostadoFn = pickCostadoFunction(functions);
     const ctrlCostadoRate = ctrlCostadoFn ? Number(ctrlCostadoFn.default_rate) : 0;
 
     // Toda escalação trabalhada conta — não filtramos por pagamento/status do
@@ -7456,7 +7456,7 @@ function ControleTab({
   // inteiro selecionado (independe do mês/atividade/navio filtrados).
   const yearSummary = useMemo(() => {
     if (employeeFilter === "TODOS") return null;
-    const costadoFn = pickFunctionByName(functions, "COSTADO", "SERVICOS");
+    const costadoFn = pickCostadoFunction(functions);
     const costadoRate = costadoFn ? Number(costadoFn.default_rate) : 0;
     let embarque = 0, costado = 0, poroes = 0, turnos = 0;
     const shipsEmb = new Set<string>();
