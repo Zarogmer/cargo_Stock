@@ -27,7 +27,7 @@ export default function LoginPage() {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const saved = JSON.parse(raw) as { username?: string; password?: string };
-      if (saved.username) setUsername(saved.username);
+      if (saved.username) setUsername(saved.username.toLowerCase());
       if (saved.password) {
         try {
           setPassword(atob(saved.password));
@@ -64,7 +64,7 @@ export default function LoginPage() {
         if (rememberMe) {
           localStorage.setItem(
             STORAGE_KEY,
-            JSON.stringify({ username, password: btoa(password) })
+            JSON.stringify({ username: username.toLowerCase(), password: btoa(password) })
           );
         } else {
           localStorage.removeItem(STORAGE_KEY);
@@ -111,12 +111,12 @@ export default function LoginPage() {
               id="username"
               type="text"
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              onChange={(e) => setUsername(e.target.value.toLowerCase())}
               required
               autoComplete="username"
               autoCapitalize="none"
               placeholder="seu usuário"
-              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition text-sm"
+              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition text-sm lowercase"
             />
           </div>
 
