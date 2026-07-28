@@ -355,14 +355,14 @@ export function EscalacaoEstoquePage() {
   }
 
   // Candidatos do modal "Adicionar item": tudo que está no Estoque (materiais)
-  // ou no Rancho da equipe e ainda não aparece na lista deste navio. Material
-  // SEM disponível (tudo alocado pra outra equipe ou zerado no galpão) nem
-  // aparece — só dá pra puxar o que sobra livre pra equipe que vai embarcar.
+  // ou no Rancho da equipe e ainda não aparece na lista deste navio. Item SEM
+  // disponível nem aparece — só dá pra puxar o que sobra livre pra equipe que
+  // vai embarcar (material: total − alocado; rancho: o que a equipe tem em mão).
   const listedIds = new Set([...teamKit.map((k) => k.stock_item_id), ...itemsWithStatus.map((i) => i.id)]);
   const addCandidates = addKind === "MATERIAL"
     ? stockItems.filter((i) => MATERIAL_TEAMS.has(String((i as any).team)) && !listedIds.has(i.id) && (availById.get(i.id) ?? 0) > 0)
     : addKind === "RANCHO"
-      ? stockItems.filter((i) => (i as any).team === selectedTeam && !listedIds.has(i.id))
+      ? stockItems.filter((i) => (i as any).team === selectedTeam && !listedIds.has(i.id) && i.quantity > 0)
       : [];
 
   // Comida do Rancho também entra na conferência de retorno — mesma mecânica
