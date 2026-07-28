@@ -5094,6 +5094,7 @@ function JobDetailModal({
                     <th className="px-2 py-2 text-right text-xs font-semibold text-purple-700 whitespace-nowrap" title="PAGTO NA FOLHA — líquido do Relatório de Líquidos. Sem import, igual ao Total.">Folha</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap" title="DESCONTO GERAL — material perdido no navio (Embarque/Retorno › Perdido) dividido pela equipe. Avariado que a equipe trouxe de volta não entra aqui.">Desc. Geral</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-amber-700 whitespace-nowrap" title="ADIANTAMENTO — vale que o colaborador já pegou e está sendo descontado neste navio. Não muda o custo do navio, só o que ele recebe agora.">Adiant.</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-emerald-800 whitespace-nowrap" title="LÍQUIDO — o que o colaborador realmente recebe: Total − Desc. Geral − Adiantamento. Não altera o custo do navio.">Líquido</th>
                     {canEdit && !isReadOnly && !peopleReadOnly && <th className="w-14"></th>}
                   </tr>
                 </thead>
@@ -5463,6 +5464,14 @@ function JobDetailModal({
                             );
                           })()}
                         </td>
+                        {/* Líquido — o que a pessoa recebe: Total − Desc. Geral − Adiant. */}
+                        <td className="px-2 py-2 text-right whitespace-nowrap font-semibold text-emerald-800">
+                          {(() => {
+                            const descGeralRow = descGeralPerPerson + Number(a.general_discount || 0);
+                            const adiantRow = jobDiscountFor(job!.id, a.employee_id ?? null, advDiscounts);
+                            return brl(base + extra - descGeralRow - adiantRow);
+                          })()}
+                        </td>
                         {canEdit && !isReadOnly && !peopleReadOnly && (
                           <td className="px-2 py-2">
                             <div className="flex gap-1 justify-end">
@@ -5575,6 +5584,26 @@ function JobDetailModal({
                             <td className="px-2 py-2 text-right text-amber-700 whitespace-nowrap">
                               {descTotal > 0 ? `− ${brl(descTotal)}` : "—"}
                             </td>
+                          );
+                        })()}
+                        {(() => {
+                          // Líquido total = Total − Desc. Geral − Adiant., cada
+                          // colaborador contado uma vez (igual às colunas acima).
+                          const heads = new Set(
+                            totalAllocs.map((a) => a.employee_id).filter((id): id is number => id != null),
+                          ).size;
+                          const manualTotal = totalAllocs.reduce((s, a) => s + Number(a.general_discount || 0), 0);
+                          const descGeralT = +(descGeralPerPerson * heads + manualTotal).toFixed(2);
+                          const seen = new Set<number>();
+                          let adiantT = 0;
+                          for (const a of totalAllocs) {
+                            if (a.employee_id == null || seen.has(a.employee_id)) continue;
+                            seen.add(a.employee_id);
+                            adiantT += jobDiscountFor(job!.id, a.employee_id, advDiscounts);
+                          }
+                          const liquidoT = +(baseTotal + extraTotal - descGeralT - adiantT).toFixed(2);
+                          return (
+                            <td className="px-2 py-2 text-right text-emerald-800 whitespace-nowrap">{brl(liquidoT)}</td>
                           );
                         })()}
                         {canEdit && !isReadOnly && !peopleReadOnly && <td></td>}
