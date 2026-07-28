@@ -308,6 +308,8 @@ export function ContasAPagarPage() {
   const [paymentFilter, setPaymentFilter] = useState<string>("ALL");
   // Filtro por equipe ("ALL" = todas).
   const [teamFilter, setTeamFilter] = useState<string>("ALL");
+  // Ordenação da lista: por vencimento (padrão) ou pelos últimos adicionados.
+  const [sortBy, setSortBy] = useState<"VENCIMENTO" | "RECENTES">("VENCIMENTO");
 
   // "Conta única" x "Conta mensal" no modal de criação + campos da recorrência.
   const [billKind, setBillKind] = useState<"UNICA" | "MENSAL">("UNICA");
@@ -499,6 +501,13 @@ export function ContasAPagarPage() {
       return true;
     });
   }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter, sectionFilter, recurrenceFilter, paymentFilter, teamFilter, merged]);
+
+  // Ordena a lista já filtrada: "Últimos adicionados" = created_at desc; caso
+  // contrário mantém a ordem que vem da API (por vencimento).
+  const sorted = useMemo(() => {
+    if (sortBy !== "RECENTES") return filtered;
+    return [...filtered].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+  }, [filtered, sortBy]);
 
   // RESUMO do mês selecionado (ou de tudo), no espírito da aba RESUMO da
   // planilha: Falta pagar / Pago / Despesas (total) + contagem de vencidas.
@@ -1258,6 +1267,15 @@ export function ContasAPagarPage() {
             ))}
           </select>
         )}
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as "VENCIMENTO" | "RECENTES")}
+          className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
+          title="Ordem da lista"
+        >
+          <option value="VENCIMENTO">Por vencimento</option>
+          <option value="RECENTES">Últimos adicionados</option>
+        </select>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -1270,7 +1288,7 @@ export function ContasAPagarPage() {
       <div className="bg-card border border-border rounded-xl overflow-x-auto">
         {loading ? (
           <p className="p-8 text-center text-text-light text-sm">Carregando...</p>
-        ) : filtered.length === 0 ? (
+        ) : sorted.length === 0 ? (
           <p className="p-8 text-center text-text-light text-sm">Nenhum título encontrado.</p>
         ) : (
           <table className="w-full text-sm">
@@ -1289,7 +1307,7 @@ export function ContasAPagarPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((inv) => {
+              {sorted.map((inv) => {
                 const overdue =
                   !isPaid(inv) && !!inv.due_date && inv.due_date.slice(0, 10) < todayStr();
                 return (
