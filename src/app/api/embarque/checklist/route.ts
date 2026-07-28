@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { promises as fs } from "fs";
+import path from "path";
 import { auth } from "@/lib/auth";
 import { xlsxToPdf } from "@/lib/docx-to-pdf";
 import {
@@ -67,7 +69,15 @@ export async function POST(request: NextRequest) {
     dateIso: typeof body.dateIso === "string" ? body.dateIso : null,
   };
 
-  const xlsxBuf = buildEmbarkChecklistXlsx(info, materials, rancho);
+  // Logo do timbrado (best-effort: sem ela o documento sai só com o endereço).
+  let logoPng: Buffer | null = null;
+  try {
+    logoPng = await fs.readFile(path.join(process.cwd(), "public", "cargo-logo.png"));
+  } catch {
+    logoPng = null;
+  }
+
+  const xlsxBuf = buildEmbarkChecklistXlsx(info, materials, rancho, logoPng);
   const format = request.nextUrl.searchParams.get("format") === "pdf" ? "pdf" : "xlsx";
 
   if (format === "pdf") {

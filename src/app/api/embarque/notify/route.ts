@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { promises as fs } from "fs";
+import path from "path";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import {
@@ -35,6 +37,14 @@ interface NotifyBody {
 const TEAM_LABEL: Record<string, string> = {
   EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3", EQUIPE_4: "Equipe Turbo",
 };
+
+// Grupo de Manutenção recebe só os materiais — sem a seção de Rancho no texto e
+// sem a aba de Rancho no PDF. Identificado pelo nome salvo na config (o rótulo
+// que veio do WhatsApp), ignorando acentos/maiúsculas.
+function isManutencaoGroup(label: string | null): boolean {
+  // "manuten" pega Manutencao com ou sem acento (prefixo puro ASCII).
+  return !!label && label.toLowerCase().includes("manuten");
+}
 
 // Lista de embarque da equipe: materiais do kit + comida do Rancho, com as
 // quantidades que vão pro navio. Vai pro grupo escolhido em Mensagens.
@@ -102,15 +112,25 @@ export async function POST(request: NextRequest) {
     }, { status: 200 });
   }
 
+  // Mensagem completa (materiais + Rancho) e a variante sem Rancho pros grupos
+  // de Manutenção — eles só cuidam do material.
   const message = buildMessage(body);
+  const hasRancho = Array.isArray(body.rancho) && body.rancho.length > 0;
+  const messageSemRancho = hasRancho ? buildMessage({ ...body, rancho: [] }) : message;
   const senderId = session.user.id || null;
 
-  // Lista preenchida em PDF (layout do Check List) pra ir como documento junto
-  // do texto. Best-effort: sem LibreOffice no servidor, segue só o texto.
-  let pdfBase64: string | null = null;
-  let pdfFileName = "";
-  let pdfCaption = "";
+  // Lista preenchida em PDF (layout da Relação, com timbrado) pra ir como
+  // documento junto do texto. Pros grupos de Manutenção sai uma versão só com a
+  // aba de materiais. Best-effort: sem LibreOffice no servidor, segue só o texto.
+  interface PdfDoc {
+    base64: string;
+    fileName: string;
+    caption: string;
+  }
+  let pdfFull: PdfDoc | null = null;
+  let pdfSemRancho: PdfDoc | null = null;
   let pdfError: string | null = null;
+  const algumaManutencao = cfg.groups.some((g) => isManutencaoGroup(g.label));
   if (body.attachPdf) {
     try {
       const info = {
@@ -121,20 +141,31 @@ export async function POST(request: NextRequest) {
         cargoType: body.cargoType ?? null,
         dateIso: body.dateIso ?? new Date().toISOString().slice(0, 10),
       };
-      const xlsxBuf = buildEmbarkChecklistXlsx(info, body.materials || [], body.rancho || []);
-      const pdfBuf = await xlsxToPdf(xlsxBuf);
-      pdfBase64 = pdfBuf.toString("base64");
-      pdfFileName = checklistFileName(info, "pdf");
+      // Logo do timbrado (best-effort: sem ela o documento sai só com o endereço).
+      let logoPng: Buffer | null = null;
+      try {
+        logoPng = await fs.readFile(path.join(process.cwd(), "public", "cargo-logo.png"));
+      } catch {
+        logoPng = null;
+      }
+      const fileName = checklistFileName(info, "pdf");
       const team = body.team ? ` · ${TEAM_LABEL[body.team] || body.team}` : "";
-      pdfCaption = `📎 Lista de materiais — ${body.shipName}${team}`;
+      const caption = `📎 Lista de materiais — ${body.shipName}${team}`;
+      const xlsxBuf = buildEmbarkChecklistXlsx(info, body.materials || [], body.rancho || [], logoPng);
+      pdfFull = { base64: (await xlsxToPdf(xlsxBuf)).toString("base64"), fileName, caption };
+      if (hasRancho && algumaManutencao && body.materials.length > 0) {
+        const xlsxMat = buildEmbarkChecklistXlsx(info, body.materials, [], logoPng);
+        pdfSemRancho = { base64: (await xlsxToPdf(xlsxMat)).toString("base64"), fileName, caption };
+      }
     } catch (err) {
       pdfError = (err as Error).message;
       console.warn("[embarque/notify] PDF generation failed (segue só o texto):", pdfError);
     }
   }
+  if (!hasRancho) pdfSemRancho = pdfFull;
 
   // Registra o envio no histórico da aba Conversas (texto e, se houver, o PDF).
-  async function recordStub(jid: string, pushName: string, sentResult: unknown, kind: "text" | "document") {
+  async function recordStub(jid: string, pushName: string, sentResult: unknown, kind: "text" | "document", text: string) {
     try {
       await prisma.whatsappMessage.create({
         data: {
@@ -144,7 +175,7 @@ export async function POST(request: NextRequest) {
           from_me: true,
           push_name: pushName,
           message_type: kind === "document" ? "documentMessage" : "conversation",
-          text: kind === "document" ? pdfCaption : message,
+          text,
           timestamp_ms: BigInt(Date.now()),
           sent_by_user_id: senderId,
           raw_event: { source: "embarque-lista", event: body.event || "lista", shipName: body.shipName },
@@ -158,14 +189,22 @@ export async function POST(request: NextRequest) {
   const groupResults: { name: string; ok: boolean; error?: string }[] = [];
   for (const g of cfg.groups) {
     const groupName = g.label || g.jid;
+    const semRancho = isManutencaoGroup(g.label);
+    if (semRancho && body.materials.length === 0) {
+      // Lista só de Rancho: Manutenção não recebe nada.
+      groupResults.push({ name: groupName, ok: false, error: "lista só de Rancho — grupo de Manutenção não recebe" });
+      continue;
+    }
+    const groupMsg = semRancho ? messageSemRancho : message;
+    const groupPdf = semRancho ? pdfSemRancho : pdfFull;
     try {
-      const sentResult = await sendWhatsappTextToGroup(g.jid, message);
+      const sentResult = await sendWhatsappTextToGroup(g.jid, groupMsg);
       groupResults.push({ name: groupName, ok: true });
-      await recordStub(g.jid, groupName, sentResult, "text");
-      if (pdfBase64) {
+      await recordStub(g.jid, groupName, sentResult, "text", groupMsg);
+      if (groupPdf) {
         try {
-          const docResult = await sendWhatsappDocumentToGroup(g.jid, pdfBase64, pdfCaption, pdfFileName);
-          await recordStub(g.jid, groupName, docResult, "document");
+          const docResult = await sendWhatsappDocumentToGroup(g.jid, groupPdf.base64, groupPdf.caption, groupPdf.fileName);
+          await recordStub(g.jid, groupName, docResult, "document", groupPdf.caption);
         } catch (docErr) {
           pdfError = (docErr as Error).message;
           console.warn("[embarque/notify] PDF send to group failed:", pdfError);
@@ -196,9 +235,9 @@ export async function POST(request: NextRequest) {
     try {
       await sendWhatsappText(emp.phone, message);
       dmResults.push({ target: `dm:${emp.name}`, ok: true });
-      if (pdfBase64) {
+      if (pdfFull) {
         try {
-          await sendWhatsappDocumentToNumber(emp.phone, pdfBase64, pdfCaption, pdfFileName);
+          await sendWhatsappDocumentToNumber(emp.phone, pdfFull.base64, pdfFull.caption, pdfFull.fileName);
         } catch (docErr) {
           console.warn(`[embarque/notify] PDF send to dm:${emp.name} failed:`, (docErr as Error).message);
         }
@@ -211,7 +250,7 @@ export async function POST(request: NextRequest) {
 
   const sent = groupResults.filter((r) => r.ok).length;
   // pdf: "sent" = anexado; "failed" = pedido mas não rolou (segue só o texto).
-  const pdfStatus = body.attachPdf ? (pdfBase64 && !pdfError ? "sent" : "failed") : undefined;
+  const pdfStatus = body.attachPdf ? (pdfFull && !pdfError ? "sent" : "failed") : undefined;
   if (sent === 0 && dmSent === 0) {
     return NextResponse.json({
       status: "error",

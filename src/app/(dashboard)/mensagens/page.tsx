@@ -1122,7 +1122,8 @@ export default function MensagensPage() {
                 <p className="text-sm font-semibold">📦 Lista de embarque</p>
                 <p className="text-[11px] text-text-light">
                   Disparado pelo botão &ldquo;Enviar lista pro WhatsApp&rdquo; da aba Embarque — posta os
-                  materiais + rancho da equipe, com as quantidades que vão pro navio.
+                  materiais + rancho da equipe, com as quantidades que vão pro navio. Grupos com
+                  &ldquo;Manutenção&rdquo; no nome recebem só os materiais (sem o Rancho, no texto e no PDF).
                 </p>
               </div>
 
