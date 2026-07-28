@@ -44,6 +44,9 @@ interface ReturnItemRow {
   broken_qty: number;
   // PERDIDO: não voltou — vira despesa do navio, dividida pela equipe.
   lost_qty: number;
+  // INSUMO: consumido de propósito (graxa, química...). Sai do estoque, mas não
+  // custa nada ao navio — é consumo normal, não perda.
+  consumed_qty: number;
   note: string | null;
 }
 interface MaterialReturn {
@@ -56,8 +59,8 @@ interface MaterialReturn {
   material_return_items: ReturnItemRow[];
 }
 
-// Rascunho por material na tela de Retorno (voltou / avariado / perdido / obs).
-interface ReturnDraft { returned: string; broken: string; lost: string; note: string }
+// Rascunho por material na tela de Retorno (voltou / avariado / perdido / insumo / obs).
+interface ReturnDraft { returned: string; broken: string; lost: string; consumed: string; note: string }
 
 // Ajuste da lista POR NAVIO (embark_list_overrides): muda quanto vai de um item
 // do kit/rancho só neste navio, ou adiciona um item extra do Estoque/Rancho.
@@ -138,6 +141,10 @@ export function EscalacaoEstoquePage() {
   // (grava no blur) e modal de "Adicionar item" (materiais ou rancho).
   const [qtyDraft, setQtyDraft] = useState<Record<number, string>>({});
   const [addKind, setAddKind] = useState<"MATERIAL" | "RANCHO" | null>(null);
+  // Renomear o produto do Estoque direto da lista (muda o nome no Estoque todo).
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [savingRename, setSavingRename] = useState(false);
 
   // Aba Embarque (preparar/baixar) x Retorno (conferir o que voltou).
   const [tab, setTab] = useState<"embarque" | "retorno">("embarque");
@@ -165,7 +172,7 @@ export function EscalacaoEstoquePage() {
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]).order("arrival_date"),
         db.from("stock_items").select("*").order("name"),
         db.from("embark_kit_items").select("*, stock_items(id, name, quantity, location, unit)"),
-        db.from("material_returns").select("*, material_return_items(id, return_id, stock_item_id, item_name, went_qty, returned_qty, broken_qty, lost_qty, note)").order("created_at", { ascending: false }),
+        db.from("material_returns").select("*, material_return_items(id, return_id, stock_item_id, item_name, went_qty, returned_qty, broken_qty, lost_qty, consumed_qty, note)").order("created_at", { ascending: false }),
         db.from("embark_list_overrides").select("*"),
         db.from("material_team_allocations").select("*"),
       ]);
@@ -428,6 +435,27 @@ export function EscalacaoEstoquePage() {
     void saveOverride(kind, stockItemId, parsed, baseQty);
   }
 
+  // Renomeia o produto no Estoque (stock_items.name) — reflete em todos os
+  // navios/telas, é o mesmo produto. Editável direto da lista de embarque.
+  async function handleRenameStock(stockItemId: number) {
+    const name = renameValue.trim();
+    const current = stockItems.find((i) => i.id === stockItemId)?.name || "";
+    if (!name || name === current) { setRenamingId(null); return; }
+    setSavingRename(true);
+    try {
+      const res: any = await db.from("stock_items")
+        .update({ name, updated_by: profile?.full_name || "Sistema" } as any)
+        .eq("id", stockItemId);
+      if (res?.error) throw new Error(res.error.message);
+      setRenamingId(null);
+      await loadData();
+    } catch (err) {
+      setEmbarkMsg(`Erro ao renomear: ${(err as Error).message}`);
+    } finally {
+      setSavingRename(false);
+    }
+  }
+
   // Baixa a lista no layout do Check List: Embarque = preenchida (navio, porto,
   // equipe, produto, data); Retorno = só a lista, cabeçalho em branco.
   async function handleDownloadChecklist(mode: "embarque" | "retorno", format: "pdf" | "xlsx") {
@@ -604,6 +632,7 @@ export function EscalacaoEstoquePage() {
         returned: it.returned_qty > 0 ? String(it.returned_qty) : "",
         broken: it.broken_qty > 0 ? String(it.broken_qty) : "",
         lost: (it.lost_qty || 0) > 0 ? String(it.lost_qty) : "",
+        consumed: (it.consumed_qty || 0) > 0 ? String(it.consumed_qty) : "",
         note: it.note || "",
       };
     }
@@ -614,7 +643,7 @@ export function EscalacaoEstoquePage() {
 
   function setDraft(stockItemId: number, patch: Partial<ReturnDraft>) {
     setReturnDraft((prev) => {
-      const base: ReturnDraft = prev[stockItemId] ?? { returned: "", broken: "", lost: "", note: "" };
+      const base: ReturnDraft = prev[stockItemId] ?? { returned: "", broken: "", lost: "", consumed: "", note: "" };
       return { ...prev, [stockItemId]: { ...base, ...patch } };
     });
   }
@@ -624,14 +653,15 @@ export function EscalacaoEstoquePage() {
   function buildReturnRows() {
     return [...teamKit, ...ranchoReturnables]
       .map((k) => {
-        const d = returnDraft[k.stock_item_id] || { returned: "", broken: "", lost: "", note: "" };
+        const d = returnDraft[k.stock_item_id] || { returned: "", broken: "", lost: "", consumed: "", note: "" };
         const returned = Math.max(0, Math.floor(parseFloat(d.returned) || 0));
         const broken = Math.max(0, Math.floor(parseFloat(d.broken) || 0));
         const lost = Math.max(0, Math.floor(parseFloat(d.lost) || 0));
+        const consumed = Math.max(0, Math.floor(parseFloat(d.consumed) || 0));
         const note = d.note.trim();
-        return { k, returned, broken, lost, note };
+        return { k, returned, broken, lost, consumed, note };
       })
-      .filter((r) => r.returned > 0 || r.broken > 0 || r.lost > 0 || r.note);
+      .filter((r) => r.returned > 0 || r.broken > 0 || r.lost > 0 || r.consumed > 0 || r.note);
   }
 
   // Ocorrências do retorno (avariado + perdido) pro aviso no WhatsApp. A API
@@ -673,11 +703,13 @@ export function EscalacaoEstoquePage() {
       const oldReturned = new Map<number, number>();
       const oldBroken = new Map<number, number>();
       const oldLost = new Map<number, number>();
+      const oldConsumed = new Map<number, number>();
       for (const it of existingReturn?.material_return_items || []) {
         if (it.stock_item_id == null) continue;
         oldReturned.set(it.stock_item_id, it.returned_qty);
         oldBroken.set(it.stock_item_id, it.broken_qty);
         oldLost.set(it.stock_item_id, it.lost_qty || 0);
+        oldConsumed.set(it.stock_item_id, it.consumed_qty || 0);
       }
 
       // Itens cuja baixa de embarque deste navio/equipe JÁ aconteceu: a quebra
@@ -731,15 +763,18 @@ export function EscalacaoEstoquePage() {
           returned_qty: r.returned,
           broken_qty: r.broken,
           lost_qty: r.lost,
+          consumed_qty: r.consumed,
           note: r.note || null,
         });
         const itemId = r.k.stock_item_id;
         const returnedDelta = r.returned - (oldReturned.get(itemId) || 0);
         const brokenDelta = r.broken - (oldBroken.get(itemId) || 0);
         const lostDelta = r.lost - (oldLost.get(itemId) || 0);
+        const consumedDelta = r.consumed - (oldConsumed.get(itemId) || 0);
         oldReturned.delete(itemId);
         oldBroken.delete(itemId);
         oldLost.delete(itemId);
+        oldConsumed.delete(itemId);
         const embarked = embarkedIds.has(itemId);
 
         // O que voltou em bom estado credita o Estoque pela diferença contra o
@@ -787,10 +822,14 @@ export function EscalacaoEstoquePage() {
         };
         await registerLoss(brokenDelta, "Avaria");
         await registerLoss(lostDelta, "Perda");
+        // Insumo sai do estoque igual ao avariado (não volta pra prateleira) e,
+        // como ele, NÃO custa nada ao navio — é consumo normal (ver despesa só
+        // conta o perdido).
+        await registerLoss(consumedDelta, "Insumo");
 
-        // Efeito líquido no estoque: crédito do que voltou bom − o que avariou
-        // e o que sumiu (quando o embarque ainda não tinha descontado).
-        const stockDelta = returnedDelta - (embarked ? 0 : brokenDelta + lostDelta);
+        // Efeito líquido no estoque: crédito do que voltou bom − o que avariou,
+        // sumiu e foi consumido (quando o embarque ainda não tinha descontado).
+        const stockDelta = returnedDelta - (embarked ? 0 : brokenDelta + lostDelta + consumedDelta);
         if (stockDelta !== 0) {
           await db.from("stock_items").update({
             quantity: Math.max(0, r.k.emEstoque + stockDelta),
@@ -801,13 +840,13 @@ export function EscalacaoEstoquePage() {
 
       // Itens que saíram da edição (zerados): estorna o crédito do "voltou" e a
       // baixa de avaria/perda (esta só quando tinha sido baixada aqui, sem embarque).
-      const leftoverIds = new Set([...oldReturned.keys(), ...oldBroken.keys(), ...oldLost.keys()]);
+      const leftoverIds = new Set([...oldReturned.keys(), ...oldBroken.keys(), ...oldLost.keys(), ...oldConsumed.keys()]);
       for (const stockItemId of leftoverIds) {
         const retQty = oldReturned.get(stockItemId) || 0;
         const brokeQty = embarkedIds.has(stockItemId)
           ? 0
-          : (oldBroken.get(stockItemId) || 0) + (oldLost.get(stockItemId) || 0);
-        const delta = brokeQty - retQty; // devolve avaria/perda, tira o crédito
+          : (oldBroken.get(stockItemId) || 0) + (oldLost.get(stockItemId) || 0) + (oldConsumed.get(stockItemId) || 0);
+        const delta = brokeQty - retQty; // devolve avaria/perda/insumo, tira o crédito
         if (delta === 0) continue;
         const current = stockItems.find((i) => i.id === stockItemId)?.quantity ?? 0;
         await db.from("stock_movements").insert({
@@ -1228,12 +1267,43 @@ export function EscalacaoEstoquePage() {
                 <div key={k.id} className={`px-4 py-3 sm:py-2.5 hover:bg-gray-50 flex flex-col gap-2 ${embarkGrid} ${!k.ready ? "bg-red-50/40" : ""}`}>
                   {/* Nome + categoria — juntos no topo no celular; viram colunas no desktop */}
                   <div className="flex items-center justify-between gap-2 sm:contents">
-                    <span className="font-medium sm:truncate">
-                      {k.estName}
-                      {k.added && (
-                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold uppercase" title="Item extra — só na lista deste navio">extra</span>
-                      )}
-                    </span>
+                    {renamingId === k.stock_item_id ? (
+                      <span className="flex items-center gap-1 min-w-0">
+                        <input
+                          type="text"
+                          autoFocus
+                          value={renameValue}
+                          disabled={savingRename}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void handleRenameStock(k.stock_item_id);
+                            if (e.key === "Escape") setRenamingId(null);
+                          }}
+                          className="min-w-0 flex-1 px-2 py-1 border border-primary rounded text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/40"
+                        />
+                        <button type="button" onClick={() => void handleRenameStock(k.stock_item_id)} disabled={savingRename}
+                          className="text-xs text-success hover:opacity-70 transition px-1" title="Salvar novo nome">
+                          {savingRename ? "…" : "✓"}
+                        </button>
+                        <button type="button" onClick={() => setRenamingId(null)} disabled={savingRename}
+                          className="text-xs text-text-light hover:text-danger transition px-1" title="Cancelar">✕</button>
+                      </span>
+                    ) : (
+                      <span className="font-medium sm:truncate inline-flex items-center gap-1.5 min-w-0">
+                        <span className="sm:truncate">{k.estName}</span>
+                        {k.added && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold uppercase whitespace-nowrap" title="Item extra — só na lista deste navio">extra</span>
+                        )}
+                        {canEmbarcar && (
+                          <button
+                            type="button"
+                            onClick={() => { setRenamingId(k.stock_item_id); setRenameValue(k.estName); }}
+                            className="text-xs text-text-light hover:text-primary transition shrink-0"
+                            title="Renomear este produto no Estoque (muda em todos os navios)"
+                          >✏️</button>
+                        )}
+                      </span>
+                    )}
                     <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium whitespace-nowrap sm:justify-self-center">{k.location}</span>
                   </div>
 
@@ -1485,7 +1555,7 @@ function RetornoSection({
   // um cartão: nome em cima, os números numa linha com rótulo, e a Observação em
   // largura total embaixo (antes ficava espremida na rolagem horizontal).
   const gridCols =
-    "sm:grid sm:grid-cols-[minmax(0,1fr)_3rem_4.5rem_4.5rem_4.5rem_minmax(7rem,1.5fr)] sm:items-center sm:gap-2";
+    "sm:grid sm:grid-cols-[minmax(0,1fr)_3rem_4.5rem_4.5rem_4.5rem_4.5rem_minmax(7rem,1.5fr)] sm:items-center sm:gap-2";
   const renderKitTable = (
     kit: ReturnKitRow[],
     labels: { item: string; broken: string; obsPlaceholder: string; empty: string; emptyIcon: string },
@@ -1498,6 +1568,7 @@ function RetornoSection({
         <span className="text-center" title="Voltou em bom estado — credita o estoque de volta">Voltou</span>
         <span className="text-center" title="Voltou, mas quebrado/estragado — a equipe trouxe de volta; não custa nada ao navio">{labels.broken}</span>
         <span className="text-center" title="Não voltou — vira despesa do navio, dividida pela equipe no Pagamento de Navios">Perdido</span>
+        <span className="text-center" title="Consumido de propósito (graxa, química...) — sai do estoque, mas não custa nada ao navio">Insumo</span>
         <span>Obs.</span>
       </div>
 
@@ -1509,14 +1580,14 @@ function RetornoSection({
       ) : (
         <div className="divide-y divide-border">
           {kit.map((k) => {
-            const d = draft[k.stock_item_id] || { returned: "", broken: "", lost: "", note: "" };
+            const d = draft[k.stock_item_id] || { returned: "", broken: "", lost: "", consumed: "", note: "" };
             return (
               <div key={k.id} className={`px-4 py-3 sm:py-2.5 hover:bg-gray-50 flex flex-col gap-2 ${gridCols}`}>
                 {/* Nome */}
                 <div className="font-medium sm:truncate">{k.estName}</div>
 
                 {/* Números — no celular viram uma linha com rótulos; no desktop, células */}
-                <div className="grid grid-cols-4 gap-2 sm:contents">
+                <div className="grid grid-cols-5 gap-2 sm:contents">
                   <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
                     <span className="text-[10px] text-text-light uppercase sm:hidden">Foi</span>
                     <span className="text-text-light">{k.need}</span>
@@ -1527,11 +1598,12 @@ function RetornoSection({
                       onChange={(e) => {
                         const v = e.target.value;
                         const ret = parseInt(v);
-                        // O que não voltou nem foi marcado como avariado cai em
-                        // PERDIDO (Foi − Voltou − Avariado) — é o que custa ao
-                        // navio. Dá pra corrigir na mão depois.
+                        // O que não voltou nem foi marcado como avariado/insumo cai
+                        // em PERDIDO (Foi − Voltou − Avariado − Insumo) — é o que
+                        // custa ao navio. Dá pra corrigir na mão depois.
                         const bro = parseInt(d.broken) || 0;
-                        const lost = v === "" || isNaN(ret) ? "" : String(Math.max(0, k.need - ret - bro));
+                        const con = parseInt(d.consumed) || 0;
+                        const lost = v === "" || isNaN(ret) ? "" : String(Math.max(0, k.need - ret - bro - con));
                         setDraft(k.stock_item_id, { returned: v, lost });
                       }}
                       className={numCls} placeholder="0" />
@@ -1542,9 +1614,10 @@ function RetornoSection({
                       onChange={(e) => {
                         const v = e.target.value;
                         const bro = parseInt(v) || 0;
+                        const con = parseInt(d.consumed) || 0;
                         const ret = parseInt(d.returned);
                         // Marcar avariado tira do perdido (o item apareceu).
-                        const lost = d.returned === "" || isNaN(ret) ? d.lost : String(Math.max(0, k.need - ret - bro));
+                        const lost = d.returned === "" || isNaN(ret) ? d.lost : String(Math.max(0, k.need - ret - bro - con));
                         setDraft(k.stock_item_id, { broken: v, lost });
                       }}
                       className={`${numCls} ${(parseInt(d.broken) || 0) > 0 ? "border-amber-300 text-amber-700" : ""}`} placeholder="0" />
@@ -1554,6 +1627,20 @@ function RetornoSection({
                     <input type="number" min={0} step={1} value={d.lost} disabled={locked}
                       onChange={(e) => setDraft(k.stock_item_id, { lost: e.target.value })}
                       className={`${numCls} ${(parseInt(d.lost) || 0) > 0 ? "border-red-300 text-red-700 font-semibold" : ""}`} placeholder="0" />
+                  </div>
+                  <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
+                    <span className="text-[10px] text-text-light uppercase sm:hidden">Insumo</span>
+                    <input type="number" min={0} step={1} value={d.consumed} disabled={locked}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        const con = parseInt(v) || 0;
+                        const bro = parseInt(d.broken) || 0;
+                        const ret = parseInt(d.returned);
+                        // Marcar insumo (consumido) também tira do perdido.
+                        const lost = d.returned === "" || isNaN(ret) ? d.lost : String(Math.max(0, k.need - ret - bro - con));
+                        setDraft(k.stock_item_id, { consumed: v, lost });
+                      }}
+                      className={`${numCls} ${(parseInt(d.consumed) || 0) > 0 ? "border-sky-300 text-sky-700" : ""}`} placeholder="0" />
                   </div>
                 </div>
 
@@ -1666,10 +1753,11 @@ function RetornoSection({
               const items = r.material_return_items || [];
               const broken = items.filter((it) => it.broken_qty > 0);
               const lost = items.filter((it) => (it.lost_qty || 0) > 0);
-              // Observação solta (nada voltou, nada avariou/sumiu) entra junto
-              // dos avariados pra não sumir do resumo.
+              const consumed = items.filter((it) => (it.consumed_qty || 0) > 0);
+              // Observação solta (nada voltou, nada avariou/sumiu/consumiu) entra
+              // junto dos avariados pra não sumir do resumo.
               const noteOnly = items.filter(
-                (it) => it.broken_qty === 0 && (it.lost_qty || 0) === 0 && it.returned_qty === 0 && it.note,
+                (it) => it.broken_qty === 0 && (it.lost_qty || 0) === 0 && (it.consumed_qty || 0) === 0 && it.returned_qty === 0 && it.note,
               );
               const returned = items.filter((it) => it.returned_qty > 0);
               return (
@@ -1704,6 +1792,15 @@ function RetornoSection({
                       {lost.map((it) => (
                         <li key={`l${it.id}`} className="text-xs text-red-700 font-medium">
                           ❌ Perdido: {it.item_name} ({it.lost_qty}){it.note ? ` — ${it.note}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {consumed.length > 0 && (
+                    <ul className="mt-1 space-y-0.5">
+                      {consumed.map((it) => (
+                        <li key={`c${it.id}`} className="text-xs text-sky-700">
+                          🛢️ Insumo: {it.item_name} ({it.consumed_qty}){it.note ? ` — ${it.note}` : ""}
                         </li>
                       ))}
                     </ul>

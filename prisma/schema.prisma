@@ -560,7 +560,10 @@ model MaterialReturnItem {
   // PERDIDO: não voltou. Vira despesa do navio (Pagamento de Navios) e o valor
   // é dividido pela equipe como Desconto Geral. Ver /api/retorno/despesa.
   lost_qty        Int    @default(0)
-  note            String? // o que avariou/sumiu — observação da conferência
+  // INSUMO: consumido de propósito (graxa, química, etc). Não volta pra
+  // prateleira, mas NÃO custa nada ao navio — é consumo normal, não perda.
+  consumed_qty    Int    @default(0)
+  note            String? // o que avariou/sumiu/consumiu — observação da conferência
 
   @@index([return_id])
   @@map("material_return_items")
