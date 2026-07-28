@@ -155,6 +155,9 @@ export function EscalacaoEstoquePage() {
   const [savingReturn, setSavingReturn] = useState(false);
   const [sendingWhats, setSendingWhats] = useState(false);
   const [returnMsg, setReturnMsg] = useState<string | null>(null);
+  // Ao confirmar o retorno, pergunta a data de saída do navio pra fechar ele.
+  const [confirmReturnOpen, setConfirmReturnOpen] = useState(false);
+  const [closeDateDraft, setCloseDateDraft] = useState("");
 
   // Envio da lista de embarque pro grupo do WhatsApp (aba Embarque).
   const [sendingEmbarkList, setSendingEmbarkList] = useState(false);
@@ -686,13 +689,32 @@ export function EscalacaoEstoquePage() {
     return out;
   }
 
-  async function handleSaveReturn() {
+  // Abre o diálogo que pergunta a data de saída do navio antes de confirmar o
+  // retorno (é essa data que fecha o navio). Pré-preenche com a saída já
+  // cadastrada, ou a data de hoje.
+  function openConfirmReturn() {
     if (!currentShip || !selectedTeam) return;
     const rows = buildReturnRows();
     if (rows.length === 0 && !existingReturn) {
       setReturnMsg("Preencha quanto voltou ou quebrou em pelo menos um item.");
       return;
     }
+    const today = new Date().toISOString().split("T")[0];
+    setCloseDateDraft(
+      currentShip.departure_date ? String(currentShip.departure_date).slice(0, 10) : today,
+    );
+    setReturnMsg(null);
+    setConfirmReturnOpen(true);
+  }
+
+  async function handleSaveReturn(overrideCloseDate?: string) {
+    if (!currentShip || !selectedTeam) return;
+    const rows = buildReturnRows();
+    if (rows.length === 0 && !existingReturn) {
+      setReturnMsg("Preencha quanto voltou ou quebrou em pelo menos um item.");
+      return;
+    }
+    setConfirmReturnOpen(false);
     setSavingReturn(true);
     setReturnMsg(null);
     const actor = profile?.full_name || "Sistema";
@@ -929,9 +951,8 @@ export function EscalacaoEstoquePage() {
       //   • solta a tripulação na hora (senão fica "Embarcado" o resto do dia).
       // Também garante que não haja um 2º retorno (navio sai da lista ativa).
       if (currentShip.status !== "CONCLUIDO") {
-        const closeDate = currentShip.departure_date
-          ? String(currentShip.departure_date).slice(0, 10)
-          : today;
+        const closeDate = (overrideCloseDate && overrideCloseDate.slice(0, 10))
+          || (currentShip.departure_date ? String(currentShip.departure_date).slice(0, 10) : today);
         // Confere o resultado do fechamento: se um update falhar (ex.: bloqueio
         // de permissão no /api/db), o navio NÃO fecha — avisa em vez de dizer
         // "concluído" sem ter fechado.
@@ -1206,7 +1227,7 @@ export function EscalacaoEstoquePage() {
           setDraft={setDraft}
           notes={returnNotes}
           setNotes={setReturnNotes}
-          onSave={handleSaveReturn}
+          onSave={openConfirmReturn}
           onSend={handleSendBroken}
           onDownload={(format) => handleDownloadChecklist("retorno", format)}
           downloading={downloading}
@@ -1502,6 +1523,35 @@ export function EscalacaoEstoquePage() {
         variant="warning"
         loading={embarking}
       />
+
+      {/* Confirmar retorno: pede a data de saída do navio, que fecha ele. */}
+      <Modal open={confirmReturnOpen} onClose={() => setConfirmReturnOpen(false)} title="Confirmar Retorno" maxWidth="max-w-md">
+        <div className="space-y-4">
+          <p className="text-sm text-text-light">
+            Confirmar o retorno de <strong>{selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"}</strong> no
+            navio <strong>{currentShip?.name}</strong>. O que voltou bom volta pro Estoque e o navio é
+            <strong> fechado (Concluído)</strong> com a data abaixo.
+          </p>
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Data de saída do navio</label>
+            <input
+              type="date"
+              value={closeDateDraft}
+              onChange={(e) => setCloseDateDraft(e.target.value)}
+              className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+            <p className="text-xs text-text-light mt-1">É essa a data que fecha o navio, entra no Financeiro e solta a tripulação.</p>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button size="sm" variant="secondary" onClick={() => setConfirmReturnOpen(false)} disabled={savingReturn}>
+              Cancelar
+            </Button>
+            <Button size="sm" onClick={() => handleSaveReturn(closeDateDraft)} disabled={savingReturn || !closeDateDraft}>
+              {savingReturn ? "Fechando..." : "✅ Confirmar e fechar navio"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
