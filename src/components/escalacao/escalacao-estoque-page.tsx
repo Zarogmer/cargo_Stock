@@ -346,6 +346,14 @@ export function EscalacaoEstoquePage() {
       ? stockItems.filter((i) => (i as any).team === selectedTeam && !listedIds.has(i.id))
       : [];
 
+  // Disponível de cada material = Total do galpão − o que já está alocado pras
+  // equipes (material_team_allocations). É esse número que o modal "Adicionar
+  // material do Estoque" mostra (o que sobra livre pra puxar), não o Total.
+  const availById = new Map<number, number>(stockItems.map((s) => [s.id, s.quantity]));
+  for (const a of allocs) {
+    availById.set(a.stock_item_id, (availById.get(a.stock_item_id) ?? 0) - a.quantity);
+  }
+
   // Comida do Rancho também entra na conferência de retorno — mesma mecânica
   // dos materiais (rascunho por stock_item_id; Rancho e materiais são todos
   // stock_items, então os ids não colidem). O que volta bom credita o Rancho.
@@ -1507,6 +1515,7 @@ export function EscalacaoEstoquePage() {
         <AddItemModal
           kind={addKind}
           candidates={addCandidates}
+          availById={availById}
           shipName={currentShip?.name || ""}
           onAdd={(stockItemId, qty) => saveOverride(addKind, stockItemId, qty, 0)}
           onClose={() => setAddKind(null)}
@@ -2037,10 +2046,12 @@ function ShipSelector({
 // O modal fica aberto depois de adicionar, pra incluir vários de uma vez (o
 // item some da busca porque entrou na lista).
 function AddItemModal({
-  kind, candidates, shipName, onAdd, onClose,
+  kind, candidates, availById, shipName, onAdd, onClose,
 }: {
   kind: "MATERIAL" | "RANCHO";
   candidates: StockItem[];
+  // Disponível por material (Total − alocado às equipes). Só usado no MATERIAL.
+  availById: Map<number, number>;
   shipName: string;
   onAdd: (stockItemId: number, qty: number) => Promise<void>;
   onClose: () => void;
@@ -2108,7 +2119,7 @@ function AddItemModal({
                     <p className="text-sm font-medium truncate">{c.name}</p>
                     <p className="text-[11px] text-text-light">
                       <span className="px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium mr-1.5">{badgeOf(c)}</span>
-                      {kind === "MATERIAL" ? "em estoque" : "no rancho"}: {formatQty(c.quantity)} {unitSuffix(c.unit)}
+                      {kind === "MATERIAL" ? "disponível" : "no rancho"}: {formatQty(kind === "MATERIAL" ? Math.max(0, availById.get(c.id) ?? c.quantity) : c.quantity)} {unitSuffix(c.unit)}
                     </p>
                   </div>
                   <input
