@@ -214,6 +214,15 @@ export function EscalacaoEstoquePage() {
     ? currentShip.assigned_team
     : null) as "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "EQUIPE_4" | null;
 
+  // Navio já EM OPERAÇÃO (embarque feito) abre direto na aba Retorno; agendado
+  // abre no Embarque. Só troca ao MUDAR de navio — respeita o clique manual.
+  const lastTabShipRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!currentShip || lastTabShipRef.current === currentShip.id) return;
+    lastTabShipRef.current = currentShip.id;
+    setTab(currentShip.status === "EM_OPERACAO" ? "retorno" : "embarque");
+  }, [currentShip]);
+
   // Ajustes deste navio (e desta equipe — trocando a equipe do navio, os
   // ajustes antigos ficam dormentes). Chave: stock_item_id.
   const overrideByItem = new Map(
@@ -675,22 +684,21 @@ export function EscalacaoEstoquePage() {
       .filter((r) => r.returned > 0 || r.broken > 0 || r.lost > 0 || r.consumed > 0 || r.note);
   }
 
-  // Ocorrências do retorno (avariado + perdido) pro aviso no WhatsApp. A API
-  // recebe tudo em `brokenItems`; a etiqueta na observação separa os dois —
-  // avariado a equipe trouxe de volta, perdido virou custo do navio.
+  // Ocorrências do retorno pro aviso no WhatsApp. A API recebe tudo em
+  // `brokenItems` com o `kind` de cada uma (perdido/insumo/avariado) e agrupa
+  // em seções — a observação fica só com o texto livre.
   function buildIncidentItems(rows: ReturnType<typeof buildReturnRows>) {
-    const out: Array<{ name: string; qty: number; unit: string | null; note: string | null }> = [];
+    type Kind = "perdido" | "insumo" | "avariado";
+    const out: Array<{ name: string; qty: number; unit: string | null; note: string | null; kind?: Kind }> = [];
     for (const r of rows) {
       const unit = r.k.unit ?? null;
-      if (r.broken > 0) {
-        out.push({ name: r.k.estName, qty: r.broken, unit, note: r.note ? `avariado — ${r.note}` : "avariado" });
-      }
-      if (r.lost > 0) {
-        out.push({ name: r.k.estName, qty: r.lost, unit, note: r.note ? `PERDIDO — ${r.note}` : "PERDIDO" });
-      }
-      // Observação solta (sem avaria/perda e sem nada de volta) segue valendo
-      // como ocorrência — é o jeito de registrar um caso sem quantidade.
-      if (r.broken === 0 && r.lost === 0 && r.returned === 0 && r.note) {
+      const note = r.note || null;
+      if (r.lost > 0) out.push({ name: r.k.estName, qty: r.lost, unit, note, kind: "perdido" });
+      if (r.consumed > 0) out.push({ name: r.k.estName, qty: r.consumed, unit, note, kind: "insumo" });
+      if (r.broken > 0) out.push({ name: r.k.estName, qty: r.broken, unit, note, kind: "avariado" });
+      // Observação solta (sem quantidade e sem nada de volta) segue valendo como
+      // ocorrência — é o jeito de registrar um caso sem número.
+      if (r.broken === 0 && r.lost === 0 && r.consumed === 0 && r.returned === 0 && r.note) {
         out.push({ name: r.k.estName, qty: 0, unit, note: r.note });
       }
     }
@@ -998,20 +1006,20 @@ export function EscalacaoEstoquePage() {
     if (brokenItems.length === 0) {
       const last = shipReturns.find((r) => r.team === selectedTeam);
       const lastRows = (last?.material_return_items || [])
-        .filter((it) => it.broken_qty > 0 || (it.lost_qty || 0) > 0 || (it.note && it.returned_qty === 0));
+        .filter((it) => it.broken_qty > 0 || (it.lost_qty || 0) > 0 || (it.consumed_qty || 0) > 0 || (it.note && it.returned_qty === 0));
       if (lastRows.length > 0) {
         // Unidade não fica gravada no retorno — busca no cadastro do material.
         const unitOf = (id: number | null) => stockItems.find((s) => s.id === id)?.unit || null;
+        type Kind = "perdido" | "insumo" | "avariado";
         brokenItems = lastRows.flatMap((it) => {
-          const out: Array<{ name: string; qty: number; unit: string | null; note: string | null }> = [];
-          if (it.broken_qty > 0) {
-            out.push({ name: it.item_name, qty: it.broken_qty, unit: unitOf(it.stock_item_id), note: it.note ? `avariado — ${it.note}` : "avariado" });
-          }
-          if ((it.lost_qty || 0) > 0) {
-            out.push({ name: it.item_name, qty: it.lost_qty, unit: unitOf(it.stock_item_id), note: it.note ? `PERDIDO — ${it.note}` : "PERDIDO" });
-          }
-          if (it.broken_qty === 0 && (it.lost_qty || 0) === 0 && it.note) {
-            out.push({ name: it.item_name, qty: 0, unit: unitOf(it.stock_item_id), note: it.note });
+          const out: Array<{ name: string; qty: number; unit: string | null; note: string | null; kind?: Kind }> = [];
+          const unit = unitOf(it.stock_item_id);
+          const note = it.note || null;
+          if ((it.lost_qty || 0) > 0) out.push({ name: it.item_name, qty: it.lost_qty, unit, note, kind: "perdido" });
+          if ((it.consumed_qty || 0) > 0) out.push({ name: it.item_name, qty: it.consumed_qty, unit, note, kind: "insumo" });
+          if (it.broken_qty > 0) out.push({ name: it.item_name, qty: it.broken_qty, unit, note, kind: "avariado" });
+          if (it.broken_qty === 0 && (it.lost_qty || 0) === 0 && (it.consumed_qty || 0) === 0 && it.note) {
+            out.push({ name: it.item_name, qty: 0, unit, note: it.note });
           }
           return out;
         });
@@ -1019,7 +1027,7 @@ export function EscalacaoEstoquePage() {
       }
     }
     if (brokenItems.length === 0) {
-      setReturnMsg("Nada de avariado ou perdido pra enviar — preencha as colunas Avariado/Perdido (ou uma observação), ou salve um retorno com ocorrências.");
+      setReturnMsg("Nada de perdido, insumo ou avariado pra enviar — preencha as colunas (ou uma observação), ou salve um retorno com ocorrências.");
       return;
     }
     setSendingWhats(true);
@@ -1246,6 +1254,13 @@ export function EscalacaoEstoquePage() {
           message={returnMsg}
           history={existingReturn ? [existingReturn] : []}
           editing={!!existingReturn}
+          renamingId={renamingId}
+          renameValue={renameValue}
+          savingRename={savingRename}
+          onStartRename={(id, name) => { setRenamingId(id); setRenameValue(name); }}
+          onChangeRename={setRenameValue}
+          onCancelRename={() => setRenamingId(null)}
+          onSaveRename={(id) => void handleRenameStock(id)}
         />
       )}
 
@@ -1574,6 +1589,7 @@ interface ReturnKitRow { id: number; stock_item_id: number; estName: string; nee
 function RetornoSection({
   shipName, team, teamKit, ranchoKit, draft, setDraft, notes, setNotes,
   onSave, onSend, onDownload, downloading, saving, sending, canEdit, concluded, message, history, editing,
+  renamingId, renameValue, savingRename, onStartRename, onChangeRename, onCancelRename, onSaveRename,
 }: {
   shipName: string;
   team: string;
@@ -1596,6 +1612,14 @@ function RetornoSection({
   message: string | null;
   history: MaterialReturn[];
   editing: boolean;
+  // Renomear o produto no Estoque direto da lista (igual ao Embarque).
+  renamingId: number | null;
+  renameValue: string;
+  savingRename: boolean;
+  onStartRename: (stockItemId: number, name: string) => void;
+  onChangeRename: (v: string) => void;
+  onCancelRename: () => void;
+  onSaveRename: (stockItemId: number) => void;
 }) {
   const numCls = "w-full sm:w-16 px-2 py-1 border border-border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40";
   // Campos travados: sem permissão OU navio já concluído (um retorno por navio).
@@ -1642,8 +1666,41 @@ function RetornoSection({
             const d = draft[k.stock_item_id] || { returned: "", broken: "", lost: "", consumed: "", note: "" };
             return (
               <div key={k.id} className={`px-4 py-3 sm:py-2.5 hover:bg-gray-50 flex flex-col gap-2 ${gridCols}`}>
-                {/* Nome */}
-                <div className="font-medium sm:truncate">{k.estName}</div>
+                {/* Nome — renomeável (muda o produto no Estoque, igual no Embarque) */}
+                {renamingId === k.stock_item_id ? (
+                  <span className="flex items-center gap-1 min-w-0">
+                    <input
+                      type="text"
+                      autoFocus
+                      value={renameValue}
+                      disabled={savingRename}
+                      onChange={(e) => onChangeRename(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") onSaveRename(k.stock_item_id);
+                        if (e.key === "Escape") onCancelRename();
+                      }}
+                      className="min-w-0 flex-1 px-2 py-1 border border-primary rounded text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    />
+                    <button type="button" onClick={() => onSaveRename(k.stock_item_id)} disabled={savingRename}
+                      className="text-xs text-success hover:opacity-70 transition px-1" title="Salvar novo nome">
+                      {savingRename ? "…" : "✓"}
+                    </button>
+                    <button type="button" onClick={onCancelRename} disabled={savingRename}
+                      className="text-xs text-text-light hover:text-danger transition px-1" title="Cancelar">✕</button>
+                  </span>
+                ) : (
+                  <span className="font-medium sm:truncate inline-flex items-center gap-1.5 min-w-0">
+                    <span className="sm:truncate">{k.estName}</span>
+                    {canEdit && !concluded && (
+                      <button
+                        type="button"
+                        onClick={() => onStartRename(k.stock_item_id, k.estName)}
+                        className="text-xs text-text-light hover:text-primary transition shrink-0"
+                        title="Renomear este produto no Estoque (muda em todos os navios)"
+                      >✏️</button>
+                    )}
+                  </span>
+                )}
 
                 {/* Números — no celular viram uma linha com rótulos; no desktop, células */}
                 <div className="grid grid-cols-5 gap-2 sm:contents">
@@ -1657,13 +1714,13 @@ function RetornoSection({
                       onChange={(e) => {
                         const v = e.target.value;
                         const ret = parseInt(v);
-                        // O que não voltou nem foi marcado como avariado/insumo cai
-                        // em PERDIDO (Foi − Voltou − Avariado − Insumo) — é o que
-                        // custa ao navio. Dá pra corrigir na mão depois.
+                        // O que não voltou (e não foi marcado avariado/perdido) cai
+                        // em INSUMO (Foi − Voltou − Avariado − Perdido) — consumo
+                        // normal, não custa ao navio. Perdido/Avariado à mão.
                         const bro = parseInt(d.broken) || 0;
-                        const con = parseInt(d.consumed) || 0;
-                        const lost = v === "" || isNaN(ret) ? "" : String(Math.max(0, k.need - ret - bro - con));
-                        setDraft(k.stock_item_id, { returned: v, lost });
+                        const lost = parseInt(d.lost) || 0;
+                        const consumed = v === "" || isNaN(ret) ? "" : String(Math.max(0, k.need - ret - bro - lost));
+                        setDraft(k.stock_item_id, { returned: v, consumed });
                       }}
                       className={numCls} placeholder="0" />
                   </div>
@@ -1673,32 +1730,34 @@ function RetornoSection({
                       onChange={(e) => {
                         const v = e.target.value;
                         const bro = parseInt(v) || 0;
-                        const con = parseInt(d.consumed) || 0;
+                        const lost = parseInt(d.lost) || 0;
                         const ret = parseInt(d.returned);
-                        // Marcar avariado tira do perdido (o item apareceu).
-                        const lost = d.returned === "" || isNaN(ret) ? d.lost : String(Math.max(0, k.need - ret - bro - con));
-                        setDraft(k.stock_item_id, { broken: v, lost });
+                        // Marcar avariado tira do INSUMO (o item apareceu, quebrado).
+                        const consumed = d.returned === "" || isNaN(ret) ? d.consumed : String(Math.max(0, k.need - ret - bro - lost));
+                        setDraft(k.stock_item_id, { broken: v, consumed });
                       }}
                       className={`${numCls} ${(parseInt(d.broken) || 0) > 0 ? "border-amber-300 text-amber-700" : ""}`} placeholder="0" />
                   </div>
                   <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
                     <span className="text-[10px] text-text-light uppercase sm:hidden">Perdido</span>
                     <input type="number" min={0} step={1} value={d.lost} disabled={locked}
-                      onChange={(e) => setDraft(k.stock_item_id, { lost: e.target.value })}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        const lost = parseInt(v) || 0;
+                        const bro = parseInt(d.broken) || 0;
+                        const ret = parseInt(d.returned);
+                        // Marcar perdido tira do INSUMO (o que sumiu não foi consumo).
+                        const consumed = d.returned === "" || isNaN(ret) ? d.consumed : String(Math.max(0, k.need - ret - bro - lost));
+                        setDraft(k.stock_item_id, { lost: v, consumed });
+                      }}
                       className={`${numCls} ${(parseInt(d.lost) || 0) > 0 ? "border-red-300 text-red-700 font-semibold" : ""}`} placeholder="0" />
                   </div>
                   <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
                     <span className="text-[10px] text-text-light uppercase sm:hidden">Insumo</span>
                     <input type="number" min={0} step={1} value={d.consumed} disabled={locked}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        const con = parseInt(v) || 0;
-                        const bro = parseInt(d.broken) || 0;
-                        const ret = parseInt(d.returned);
-                        // Marcar insumo (consumido) também tira do perdido.
-                        const lost = d.returned === "" || isNaN(ret) ? d.lost : String(Math.max(0, k.need - ret - bro - con));
-                        setDraft(k.stock_item_id, { consumed: v, lost });
-                      }}
+                      // INSUMO é o balde padrão do que não voltou — edição livre
+                      // aqui só ajusta na mão (não recalcula os outros).
+                      onChange={(e) => setDraft(k.stock_item_id, { consumed: e.target.value })}
                       className={`${numCls} ${(parseInt(d.consumed) || 0) > 0 ? "border-sky-300 text-sky-700" : ""}`} placeholder="0" />
                   </div>
                 </div>
@@ -1722,7 +1781,8 @@ function RetornoSection({
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="text-sm font-bold text-text uppercase tracking-wider">🛠️ Retorno de material — {TEAM_LABELS[team] || team}</h2>
           <span className="text-xs text-text-light">
-            Bom volta pro estoque · <span className="text-amber-700">avariado</span> a equipe trouxe (não custa) ·{" "}
+            Bom volta pro estoque · o resto vira <span className="text-sky-700">insumo</span> (consumido, não custa) ·{" "}
+            <span className="text-amber-700">avariado</span> a equipe trouxe (não custa) ·{" "}
             <span className="text-red-700">perdido</span> vira custo do navio, dividido pela equipe.
           </span>
         </div>

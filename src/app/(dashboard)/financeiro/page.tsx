@@ -3206,32 +3206,58 @@ function JobDetailModal({
   // mostrados nas Despesas. Avariado a equipe trouxe (não custa); perdido vira
   // custo do navio (já lançado como MATERIAL_PERDIDO). Aqui é o registro do que
   // aconteceu com o kit, pra ficar visível no financeiro.
+  type ReturnLine = { name: string; qty: number; value: number };
+  const EMPTY_RET_SUMMARY = { lost: [] as ReturnLine[], consumed: [] as ReturnLine[], broken: [] as ReturnLine[] };
   const [returnSummary, setReturnSummary] = useState<{
-    broken: { name: string; qty: number }[];
-    lost: { name: string; qty: number }[];
-  }>({ broken: [], lost: [] });
+    lost: ReturnLine[];
+    consumed: ReturnLine[];
+    broken: ReturnLine[];
+  }>(EMPTY_RET_SUMMARY);
   useEffect(() => {
-    if (!open || !job?.ship_id) { setReturnSummary({ broken: [], lost: [] }); return; }
+    if (!open || !job?.ship_id) { setReturnSummary(EMPTY_RET_SUMMARY); return; }
     let active = true;
     (async () => {
       const { data } = await db
         .from("material_returns")
-        .select("material_return_items(item_name, broken_qty, lost_qty)")
+        .select("material_return_items(item_name, stock_item_id, broken_qty, lost_qty, consumed_qty)")
         .eq("ship_id", job.ship_id);
       if (!active) return;
-      const brokenMap = new Map<string, number>();
-      const lostMap = new Map<string, number>();
-      const rows = (data as { material_return_items?: { item_name: string; broken_qty: number; lost_qty: number }[] }[] | null) || [];
-      for (const r of rows) {
-        for (const it of r.material_return_items || []) {
-          if (it.broken_qty > 0) brokenMap.set(it.item_name, (brokenMap.get(it.item_name) || 0) + it.broken_qty);
-          if ((it.lost_qty || 0) > 0) lostMap.set(it.item_name, (lostMap.get(it.item_name) || 0) + it.lost_qty);
+      type RI = { item_name: string; stock_item_id: number | null; broken_qty: number; lost_qty: number; consumed_qty: number };
+      const rows = (data as { material_return_items?: RI[] }[] | null) || [];
+      const items = rows.flatMap((r) => r.material_return_items || []);
+      // Valor unitário do estoque (coluna sensível — o /api/db só entrega pra
+      // gestão; sem acesso vem 0, e aí o valor mostrado é 0 mesmo).
+      const ids = Array.from(new Set(items.map((it) => it.stock_item_id).filter((x): x is number => x != null)));
+      const valueById = new Map<number, number>();
+      if (ids.length) {
+        const { data: sdata } = await db.from("stock_items").select("id, unit_value").in("id", ids);
+        for (const s of (sdata as { id: number; unit_value: number | null }[] | null) || []) {
+          valueById.set(s.id, Number(s.unit_value || 0));
         }
       }
-      const toArr = (m: Map<string, number>) =>
-        Array.from(m.entries()).map(([name, qty]) => ({ name, qty })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
-      setReturnSummary({ broken: toArr(brokenMap), lost: toArr(lostMap) });
-    })().catch(() => { if (active) setReturnSummary({ broken: [], lost: [] }); });
+      if (!active) return;
+      // Agrupa por nome do item, somando qtd e valor (unit_value × qtd).
+      const acc = (pick: (it: RI) => number): ReturnLine[] => {
+        const m = new Map<string, { qty: number; value: number }>();
+        for (const it of items) {
+          const q = pick(it) || 0;
+          if (q <= 0) continue;
+          const unit = it.stock_item_id != null ? (valueById.get(it.stock_item_id) || 0) : 0;
+          const cur = m.get(it.item_name) || { qty: 0, value: 0 };
+          cur.qty += q;
+          cur.value += unit * q;
+          m.set(it.item_name, cur);
+        }
+        return Array.from(m.entries())
+          .map(([name, v]) => ({ name, qty: v.qty, value: +v.value.toFixed(2) }))
+          .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+      };
+      setReturnSummary({
+        lost: acc((it) => it.lost_qty),
+        consumed: acc((it) => it.consumed_qty),
+        broken: acc((it) => it.broken_qty),
+      });
+    })().catch(() => { if (active) setReturnSummary(EMPTY_RET_SUMMARY); });
     return () => { active = false; };
   }, [open, job?.ship_id]);
 
@@ -5713,26 +5739,39 @@ function JobDetailModal({
             )}
           </div>
 
-          {/* Retorno de material — o que foi avariado/perdido no kit (Embarque/Retorno). */}
-          {(returnSummary.broken.length > 0 || returnSummary.lost.length > 0) && (
-            <div className="mb-2 rounded-lg border border-border bg-gray-50 p-3 text-xs space-y-1">
-              <p className="font-semibold text-text">🔧 Retorno de material</p>
-              {returnSummary.lost.length > 0 && (
-                <p>
-                  <span className="font-medium text-red-700">Perdido</span>
-                  <span className="text-text-light"> (custo do navio, rateado pela equipe): </span>
-                  {returnSummary.lost.map((it) => `${it.name} ×${it.qty}`).join(" · ")}
-                </p>
-              )}
-              {returnSummary.broken.length > 0 && (
-                <p>
-                  <span className="font-medium text-amber-700">Avariado</span>
-                  <span className="text-text-light"> (a equipe trouxe — não custa ao navio): </span>
-                  {returnSummary.broken.map((it) => `${it.name} ×${it.qty}`).join(" · ")}
-                </p>
-              )}
-            </div>
-          )}
+          {/* Retorno de material — perdido/insumo/avariado do kit, com o valor de
+              estoque de cada categoria (Embarque/Retorno). Só o perdido custa. */}
+          {(returnSummary.lost.length > 0 || returnSummary.consumed.length > 0 || returnSummary.broken.length > 0) && (() => {
+            const sum = (arr: { value: number }[]) => arr.reduce((s, it) => s + it.value, 0);
+            const fmtItems = (arr: { name: string; qty: number; value: number }[]) =>
+              arr.map((it) => `${it.name} ×${it.qty}${it.value > 0 ? ` (${brl(it.value)})` : ""}`).join(" · ");
+            return (
+              <div className="mb-2 rounded-lg border border-border bg-gray-50 p-3 text-xs space-y-1">
+                <p className="font-semibold text-text">🔧 Retorno de material <span className="font-normal text-text-light">(valor de estoque)</span></p>
+                {returnSummary.lost.length > 0 && (
+                  <p>
+                    <span className="font-medium text-red-700">❌ Perdido{sum(returnSummary.lost) > 0 ? ` · ${brl(sum(returnSummary.lost))}` : ""}</span>
+                    <span className="text-text-light"> (custo do navio, rateado pela equipe): </span>
+                    {fmtItems(returnSummary.lost)}
+                  </p>
+                )}
+                {returnSummary.consumed.length > 0 && (
+                  <p>
+                    <span className="font-medium text-sky-700">🛢️ Insumo{sum(returnSummary.consumed) > 0 ? ` · ${brl(sum(returnSummary.consumed))}` : ""}</span>
+                    <span className="text-text-light"> (consumido — não custa ao navio): </span>
+                    {fmtItems(returnSummary.consumed)}
+                  </p>
+                )}
+                {returnSummary.broken.length > 0 && (
+                  <p>
+                    <span className="font-medium text-amber-700">🔧 Avariado{sum(returnSummary.broken) > 0 ? ` · ${brl(sum(returnSummary.broken))}` : ""}</span>
+                    <span className="text-text-light"> (a equipe trouxe — não custa ao navio): </span>
+                    {fmtItems(returnSummary.broken)}
+                  </p>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Descontos manuais dos colaboradores (Desc. Geral clicável) — abatidos do líquido. */}
           {(() => {

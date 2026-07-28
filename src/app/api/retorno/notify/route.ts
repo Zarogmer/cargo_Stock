@@ -10,7 +10,16 @@ import {
 import { readNotifyConfig } from "@/lib/services/solicitacoes-notify-config";
 import { unitShort } from "@/lib/stock-units";
 
-interface BrokenItem { name: string; qty: number; unit?: string | null; note?: string | null }
+type IncidentKind = "perdido" | "insumo" | "avariado";
+interface BrokenItem {
+  name: string;
+  qty: number;
+  unit?: string | null;
+  note?: string | null;
+  // A tela manda a categoria de cada ocorrência. Legado (sem kind) é inferido
+  // da observação, que antigamente carregava a etiqueta ("PERDIDO — ...").
+  kind?: IncidentKind;
+}
 interface NotifyBody {
   shipName: string;
   team?: string | null;
@@ -33,40 +42,83 @@ function qtyLabel(it: BrokenItem): string {
   return it.qty > 0 ? `${it.qty}${u ? ` ${u}` : ""}` : "";
 }
 
-// Mensagem do retorno. "quebrados": lista as ocorrências do material, pra
-// manutenção/compras reporem. "resumo": retorno confirmado — o que voltou bom
-// (compacto) + as ocorrências. Vai por DM pro Administrativo e/ou pro grupo.
+// Categoria de uma ocorrência do legado (sem `kind`): a etiqueta vinha no
+// começo da observação ("PERDIDO — ...", "avariado — ...").
+function inferKind(note?: string | null): IncidentKind | null {
+  const n = (note || "").trim().toLowerCase();
+  if (n.startsWith("perdido")) return "perdido";
+  if (n.startsWith("insumo")) return "insumo";
+  if (n.startsWith("avariado")) return "avariado";
+  return null;
+}
+
+// Tira a etiqueta do começo da observação legada, deixando só o texto livre.
+function cleanNote(note?: string | null): string | null {
+  if (!note) return null;
+  const stripped = note.replace(/^\s*(perdido|insumo|avariado)\s*(—|-|:)?\s*/i, "").trim();
+  return stripped || null;
+}
+
+// "• *ITEM* — 2 un — obs" (a categoria já é o título da seção).
+function fmtLine(it: BrokenItem): string {
+  const qty = qtyLabel(it);
+  const note = it.note?.trim() ? ` — ${it.note.trim()}` : "";
+  return `• *${it.name}*${qty ? ` — ${qty}` : ""}${note}`;
+}
+
+// Ocorrências agrupadas em seções: ❌ Perdido, 🛢️ Insumo, 🔧 Avariado (nessa
+// ordem — perdido é o que custa ao navio). Cada linha fica curta; a etiqueta
+// que antes ia em toda linha virou o título da seção.
+function incidentSections(items: BrokenItem[]): string {
+  const groups: Record<IncidentKind, BrokenItem[]> = { perdido: [], insumo: [], avariado: [] };
+  const outros: BrokenItem[] = [];
+  for (const it of items) {
+    const kind = it.kind || inferKind(it.note);
+    // Sem kind é legado: a observação carregava a etiqueta — limpa pra não repetir.
+    const line = it.kind ? it : { ...it, note: cleanNote(it.note) };
+    if (kind === "perdido") groups.perdido.push(line);
+    else if (kind === "insumo") groups.insumo.push(line);
+    else if (kind === "avariado") groups.avariado.push(line);
+    else outros.push(it);
+  }
+  const blocks: string[] = [];
+  if (groups.perdido.length) blocks.push(`❌ *Perdido (${groups.perdido.length})*\n${groups.perdido.map(fmtLine).join("\n")}`);
+  if (groups.insumo.length) blocks.push(`🛢️ *Insumo (${groups.insumo.length})*\n${groups.insumo.map(fmtLine).join("\n")}`);
+  if (groups.avariado.length) blocks.push(`🔧 *Avariado (${groups.avariado.length})*\n${groups.avariado.map(fmtLine).join("\n")}`);
+  if (outros.length) blocks.push(`⚠️ *Ocorrências (${outros.length})*\n${outros.map(fmtLine).join("\n")}`);
+  return blocks.join("\n\n");
+}
+
+// Mensagem do retorno. "quebrados": só as ocorrências, pra manutenção/compras
+// reporem. "resumo": retorno confirmado — quantos voltaram bem (só a contagem,
+// pra não estourar o texto) + as ocorrências. Vai por DM pro Administrativo
+// e/ou pro grupo.
 //
-// Desde 2026-07-21 a ocorrência pode ser AVARIADO (voltou quebrado — a equipe
-// trouxe) ou PERDIDO (não voltou — vira custo do navio). A tela manda as duas
-// em `brokenItems`, etiquetadas na observação de cada linha.
+// As ocorrências saem SEPARADAS em ❌ Perdido / 🛢️ Insumo / 🔧 Avariado:
+// perdido não voltou (vira custo do navio), insumo foi consumido de propósito,
+// avariado voltou quebrado (a equipe trouxe).
 function buildMessage(b: NotifyBody): string {
   const team = b.team ? ` · ${TEAM_LABEL[b.team] || b.team}` : "";
-  const lines = b.brokenItems.map((it) => {
-    const qty = qtyLabel(it);
-    const note = it.note?.trim() ? ` — ${it.note.trim()}` : "";
-    return `• *${it.name}*${qty ? ` — ${qty}` : ""}${note}`;
-  });
   const extra = b.notes?.trim() ? `\n📝 ${b.notes.trim()}\n` : "";
   const by = b.checkedBy?.trim() ? `\n👤 Conferido por: ${b.checkedBy.trim()}` : "";
+  const sections = incidentSections(b.brokenItems);
 
   if (b.event === "resumo") {
-    const returned = (b.returnedItems || [])
-      .map((it) => `${it.name}${qtyLabel(it) ? ` (${qtyLabel(it)})` : ""}`)
-      .join(", ");
+    const n = (b.returnedItems || []).length;
+    const returnedLine = n ? `✔️ Voltou em bom estado: ${n} ${n === 1 ? "item" : "itens"}\n\n` : "";
     return (
       `✅ *Retorno confirmado*\n\n` +
       `🚢 Navio: *${b.shipName}*${team}\n\n` +
-      (returned ? `✔️ Voltou em bom estado: ${returned}\n` : "") +
-      (lines.length ? `\n⚠️ *Avariado / perdido (${lines.length})*\n${lines.join("\n")}\n` : "\n✅ Nada avariado nem perdido.\n") +
+      returnedLine +
+      (sections ? sections + "\n" : "✅ Nada perdido, consumido ou avariado.\n") +
       extra + by
     );
   }
 
   return (
-    `🛠️ *Retorno de material — avariado/perdido*\n\n` +
+    `🛠️ *Retorno de material*\n\n` +
     `🚢 Navio: *${b.shipName}*${team}\n\n` +
-    (lines.length ? lines.join("\n") : "Nada avariado nem perdido.") +
+    (sections || "Nada perdido, consumido ou avariado.") +
     "\n" + extra + by
   );
 }
