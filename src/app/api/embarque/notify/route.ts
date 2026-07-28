@@ -36,8 +36,10 @@ const TEAM_LABEL: Record<string, string> = {
   EQUIPE_1: "Equipe 1", EQUIPE_2: "Equipe 2", EQUIPE_3: "Equipe 3", EQUIPE_4: "Equipe Turbo",
 };
 
-// Lista de embarque da equipe: materiais do kit + comida do Rancho, com as
-// quantidades que vão pro navio. Vai pro grupo escolhido em Mensagens.
+// Lista de embarque da equipe pro grupo do WhatsApp: SÓ os materiais do kit no
+// texto (o Rancho/comida vem no PDF anexo, não no texto — pedido do Guilherme,
+// pra mensagem não estourar com o que tem no estoque). O documento (Check List
+// em PDF) continua completo, com materiais + rancho.
 function buildMessage(b: NotifyBody): string {
   const team = b.team ? ` · ${TEAM_LABEL[b.team] || b.team}` : "";
   const fmtQty = (q: number) => (Number.isInteger(q) ? String(q) : String(q).replace(".", ","));
@@ -47,7 +49,6 @@ function buildMessage(b: NotifyBody): string {
     return `• ${i.name} — ${fmtQty(i.qty)}${u ? ` ${u}` : ""}`;
   };
   const mat = (b.materials || []).map(line);
-  const ran = (b.rancho || []).map(line);
   const isEmbark = b.event === "embarque";
   const header = isEmbark ? `⚓ *Embarque confirmado*` : `📦 *Lista de embarque*`;
   const by = b.sentBy?.trim()
@@ -57,7 +58,6 @@ function buildMessage(b: NotifyBody): string {
     `${header}\n\n` +
     `🚢 Navio: *${b.shipName}*${team}\n` +
     (mat.length ? `\n🧰 *Materiais (${mat.length})*\n${mat.join("\n")}\n` : "") +
-    (ran.length ? `\n🛒 *Rancho (${ran.length})*\n${ran.join("\n")}\n` : "") +
     by
   );
 }

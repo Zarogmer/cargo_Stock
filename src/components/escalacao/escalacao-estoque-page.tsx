@@ -346,15 +346,6 @@ export function EscalacaoEstoquePage() {
   const missingSummary = missingNames.slice(0, 6).join(", ")
     + (missingNames.length > 6 ? ` e mais ${missingNames.length - 6}` : "");
 
-  // Candidatos do modal "Adicionar item": tudo que está no Estoque (materiais)
-  // ou no Rancho da equipe e ainda não aparece na lista deste navio.
-  const listedIds = new Set([...teamKit.map((k) => k.stock_item_id), ...itemsWithStatus.map((i) => i.id)]);
-  const addCandidates = addKind === "MATERIAL"
-    ? stockItems.filter((i) => MATERIAL_TEAMS.has(String((i as any).team)) && !listedIds.has(i.id))
-    : addKind === "RANCHO"
-      ? stockItems.filter((i) => (i as any).team === selectedTeam && !listedIds.has(i.id))
-      : [];
-
   // Disponível de cada material = Total do galpão − o que já está alocado pras
   // equipes (material_team_allocations). É esse número que o modal "Adicionar
   // material do Estoque" mostra (o que sobra livre pra puxar), não o Total.
@@ -362,6 +353,17 @@ export function EscalacaoEstoquePage() {
   for (const a of allocs) {
     availById.set(a.stock_item_id, (availById.get(a.stock_item_id) ?? 0) - a.quantity);
   }
+
+  // Candidatos do modal "Adicionar item": tudo que está no Estoque (materiais)
+  // ou no Rancho da equipe e ainda não aparece na lista deste navio. Material
+  // SEM disponível (tudo alocado pra outra equipe ou zerado no galpão) nem
+  // aparece — só dá pra puxar o que sobra livre pra equipe que vai embarcar.
+  const listedIds = new Set([...teamKit.map((k) => k.stock_item_id), ...itemsWithStatus.map((i) => i.id)]);
+  const addCandidates = addKind === "MATERIAL"
+    ? stockItems.filter((i) => MATERIAL_TEAMS.has(String((i as any).team)) && !listedIds.has(i.id) && (availById.get(i.id) ?? 0) > 0)
+    : addKind === "RANCHO"
+      ? stockItems.filter((i) => (i as any).team === selectedTeam && !listedIds.has(i.id))
+      : [];
 
   // Comida do Rancho também entra na conferência de retorno — mesma mecânica
   // dos materiais (rascunho por stock_item_id; Rancho e materiais são todos
@@ -529,17 +531,9 @@ export function EscalacaoEstoquePage() {
       );
       return;
     }
-    // Trava de controle: com item faltando, não baixa nada. Vale mesmo se o
-    // botão for burlado (estado antigo, clique duplo) — a baixa parcial é o
-    // que deixava o Estoque mentindo.
-    if (hasMissing) {
-      setConfirmEmbark(false);
-      setEmbarkMsg(
-        `🚫 Não dá pra embarcar: ${missingNames.length} item(ns) sem quantidade pra equipe — ${missingSummary}. ` +
-          `Transfira o material pra equipe no Almoxarifado (ou reponha o Rancho), ou ajuste o "Leva" deste navio antes de embarcar.`,
-      );
-      return;
-    }
+    // Pode embarcar com pendências: baixa só o que a equipe tem (min entre o que
+    // vai e o disponível). O que faltar simplesmente não é baixado — o navio
+    // segue e a equipe se vira, é a flexibilidade que o operacional pediu.
     setEmbarking(true);
     const actor = profile?.full_name || "Sistema";
 
@@ -1187,18 +1181,17 @@ export function EscalacaoEstoquePage() {
             <Button size="sm" variant="secondary" onClick={handleSendEmbarkList} disabled={sendingEmbarkList || embarking} title="Manda a lista no grupo do WhatsApp com o PDF anexado">
               {sendingEmbarkList ? "Enviando..." : "📨 Enviar lista pro WhatsApp"}
             </Button>
-            {/* Com item faltando o Embarcar fica travado: embarque é controle,
-                não dá pra "tirar do estoque" o que não tem. Só embarca AGENDADO
+            {/* Dá pra embarcar mesmo com item faltando (o operacional pediu essa
+                flexibilidade): baixa só o que a equipe tem. Só embarca AGENDADO
                 (um embarque por navio); depois vira Em Operação/Concluído. */}
             {currentShip?.status === "AGENDADO" ? (
               <Button
                 size="sm"
                 variant="warning"
                 onClick={() => setConfirmEmbark(true)}
-                disabled={hasMissing}
                 title={
                   hasMissing
-                    ? `Faltam ${missingNames.length} item(ns) no Estoque: ${missingSummary}`
+                    ? `Faltam ${missingNames.length} item(ns) — embarca baixando só o que a equipe tem`
                     : "Baixa o kit e o rancho do Estoque e avisa o grupo no WhatsApp"
                 }
               >
@@ -1221,14 +1214,15 @@ export function EscalacaoEstoquePage() {
         <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5 text-sm text-blue-800">{embarkMsg}</div>
       )}
 
-      {/* Aviso fixo enquanto faltar item: explica por que o Embarcar está
-          travado e o que fazer, sem obrigar a caçar as linhas vermelhas. */}
+      {/* Aviso enquanto faltar item: agora é só um alerta (não trava mais o
+          Embarcar). Mostra o que falta pra decisão consciente. */}
       {tab === "embarque" && canEmbarcar && selectedTeam && hasMissing && (
-        <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-800">
-          <p className="font-semibold">🚫 Embarque bloqueado — {missingNames.length} item(ns) sem quantidade pra equipe</p>
+        <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-900">
+          <p className="font-semibold">⚠️ {missingNames.length} item(ns) sem quantidade pra equipe</p>
           <p className="mt-1 text-xs">{missingSummary}</p>
-          <p className="mt-1.5 text-xs text-red-700">
-            <strong>Transfira</strong> o material pra equipe no Almoxarifado (ou reponha o Rancho), ou ajuste o <strong>Leva</strong> deste navio (pode zerar o que não vai) para liberar o embarque.
+          <p className="mt-1.5 text-xs text-amber-800">
+            Dá pra embarcar assim mesmo — só o que a equipe tem é baixado. Se preferir completar antes,{" "}
+            <strong>transfira</strong> o material pra equipe no Almoxarifado (ou reponha o Rancho), ou ajuste o <strong>Leva</strong> deste navio.
           </p>
         </div>
       )}
@@ -1363,8 +1357,8 @@ export function EscalacaoEstoquePage() {
                             onChange={(e) => setQtyDraft((d) => ({ ...d, [k.stock_item_id]: e.target.value }))}
                             onBlur={() => commitQty("MATERIAL", k.stock_item_id, k.baseNeed)}
                             onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                            title={k.added ? "Item extra deste navio" : `Padrão do kit: ${k.baseNeed} — o ajuste vale só pra este navio`}
-                            className={`w-16 px-2 py-1 border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 ${k.overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-800" : "border-border"}`}
+                            title={k.added ? "Item extra deste navio" : "Quanto vai deste material neste navio"}
+                            className="w-16 px-2 py-1 border border-border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
                           />
                           {k.overridden && (
                             <button
@@ -1478,8 +1472,8 @@ export function EscalacaoEstoquePage() {
                             onChange={(e) => setQtyDraft((d) => ({ ...d, [item.id]: e.target.value }))}
                             onBlur={() => commitQty("RANCHO", item.id, item.base_default)}
                             onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                            title={item.added ? "Item extra deste navio" : `Padrão do Rancho: ${item.base_default} — o ajuste vale só pra este navio`}
-                            className={`w-16 px-2 py-1 border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 ${item.overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-800" : "border-border"}`}
+                            title={item.added ? "Item extra deste navio" : "Quanto vai deste item neste navio"}
+                            className="w-16 px-2 py-1 border border-border rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
                           />
                           {item.overridden && (
                             <button
@@ -1542,7 +1536,7 @@ export function EscalacaoEstoquePage() {
         onClose={() => setConfirmEmbark(false)}
         onConfirm={handleEmbarcar}
         title="Confirmar Embarque"
-        message={`Embarcar ${selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"} no navio "${currentShip?.name}"? Os materiais do kit serão baixados do Estoque e a comida do Rancho desta equipe. O aviso de embarque (com a lista em PDF) vai automático pro grupo do WhatsApp.`}
+        message={`Embarcar ${selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"} no navio "${currentShip?.name}"? Os materiais do kit serão baixados do Estoque e a comida do Rancho desta equipe. O aviso de embarque (com a lista em PDF) vai automático pro grupo do WhatsApp.${hasMissing ? ` ⚠️ Atenção: ${missingNames.length} item(ns) sem quantidade pra equipe (${missingSummary}) — só o que a equipe tem será baixado.` : ""}`}
         confirmLabel="⚓ Confirmar Embarque"
         variant="warning"
         loading={embarking}
