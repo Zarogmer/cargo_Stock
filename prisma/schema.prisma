@@ -173,6 +173,10 @@ model EmbarkListOverride {
   stock_item_id Int
   stock_items   StockItem @relation(fields: [stock_item_id], references: [id], onDelete: Cascade)
   quantity      Float     @default(0)
+  // Observação por item na lista de embarque (igual à aba Retorno). Um item sem
+  // ajuste de quantidade também pode ter só a observação (o override existe só
+  // por causa dela).
+  note          String?
   created_at    DateTime  @default(now()) @db.Timestamptz()
   updated_at    DateTime  @default(now()) @updatedAt @db.Timestamptz()
 

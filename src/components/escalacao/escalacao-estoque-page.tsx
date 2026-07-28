@@ -71,6 +71,7 @@ interface ListOverride {
   kind: "MATERIAL" | "RANCHO";
   stock_item_id: number;
   quantity: number;
+  note?: string | null;
 }
 
 // EQUIPE_4 = "Equipe Turbo" (mesma chave do Rancho; EQUIPE_3 segue como legado).
@@ -140,6 +141,8 @@ export function EscalacaoEstoquePage() {
   // Edição do "Leva"/"Padrão" por navio: rascunho do input por stock_item_id
   // (grava no blur) e modal de "Adicionar item" (materiais ou rancho).
   const [qtyDraft, setQtyDraft] = useState<Record<number, string>>({});
+  // Rascunho da observação por item (Obs. da aba Embarque), por stock_item_id.
+  const [noteDraft, setNoteDraft] = useState<Record<number, string>>({});
   const [addKind, setAddKind] = useState<"MATERIAL" | "RANCHO" | null>(null);
   // Renomear o produto do Estoque direto da lista (muda o nome no Estoque todo).
   const [renamingId, setRenamingId] = useState<number | null>(null);
@@ -246,7 +249,7 @@ export function EscalacaoEstoquePage() {
         ...item,
         default_quantity: def,
         base_default: baseDef,
-        overridden: !!ovr && baseDef > 0,
+        overridden: !!ovr && baseDef > 0 && ovr.quantity !== baseDef,
         added: !!ovr && baseDef <= 0,
         falta: Math.max(0, def - current),
         ready: current >= def,
@@ -286,7 +289,7 @@ export function EscalacaoEstoquePage() {
         emEstoque,
         need,
         baseNeed: k.quantity,
-        overridden: !!ovr,
+        overridden: !!ovr && ovr.quantity !== k.quantity,
         added: false,
         ready: emEstoque >= need,
         falta: Math.max(0, need - emEstoque),
@@ -335,7 +338,7 @@ export function EscalacaoEstoquePage() {
   // sem a rolagem horizontal que cortava os nomes. 5 colunas:
   // Item · Categoria · Quantidade · Em estoque/rancho · Status.
   const embarkGrid =
-    "sm:grid sm:grid-cols-[minmax(0,1fr)_7rem_8rem_6rem_6rem] sm:items-center sm:gap-2";
+    "sm:grid sm:grid-cols-[minmax(0,1fr)_7rem_8rem_6rem_6rem_minmax(7rem,1.3fr)] sm:items-center sm:gap-2";
 
   // ── Trava do Embarcar ────────────────────────────────────────────────────
   // Faltou qualquer coisa (material ou rancho), não embarca. Antes o Embarcar
@@ -413,22 +416,27 @@ export function EscalacaoEstoquePage() {
   // Grava o "leva" de um item SÓ neste navio (embark_list_overrides). Igual ao
   // padrão → remove o ajuste (volta ao kit oficial); item extra zerado some da
   // lista. Atualiza o estado local direto, sem recarregar a tela toda.
-  async function saveOverride(kind: "MATERIAL" | "RANCHO", stockItemId: number, qty: number, baseQty: number) {
+  // Upsert do ajuste por navio+item (quantidade E observação). O override só é
+  // apagado quando NÃO há nada a lembrar: quantidade no padrão E sem observação.
+  async function saveOverrideFull(
+    kind: "MATERIAL" | "RANCHO", stockItemId: number, qty: number, note: string, baseQty: number,
+  ) {
     if (!currentShip || !selectedTeam) return;
     // O único ajuste possível pro par navio+item (unique no banco) — pode ser
     // de outra equipe (navio trocou de equipe): aí é atualizado e "adotado".
     const existing = overrides.find((o) => o.ship_id === selectedShip && o.stock_item_id === stockItemId);
+    const cleanNote = note.trim() || null;
     try {
-      if (qty === baseQty) {
+      if (qty === baseQty && !cleanNote) {
         if (!existing) return;
         const res = await db.from("embark_list_overrides").delete().eq("id", existing.id);
         if (res.error) throw new Error(res.error.message);
         setOverrides((prev) => prev.filter((o) => o.id !== existing.id));
       } else if (existing) {
-        if (existing.quantity === qty && existing.team === selectedTeam && existing.kind === kind) return;
-        const res = await db.from("embark_list_overrides").update({ quantity: qty, team: selectedTeam, kind }).eq("id", existing.id);
+        if (existing.quantity === qty && (existing.note ?? null) === cleanNote && existing.team === selectedTeam && existing.kind === kind) return;
+        const res = await db.from("embark_list_overrides").update({ quantity: qty, note: cleanNote, team: selectedTeam, kind }).eq("id", existing.id);
         if (res.error) throw new Error(res.error.message);
-        setOverrides((prev) => prev.map((o) => (o.id === existing.id ? { ...o, quantity: qty, team: selectedTeam, kind } : o)));
+        setOverrides((prev) => prev.map((o) => (o.id === existing.id ? { ...o, quantity: qty, note: cleanNote, team: selectedTeam, kind } : o)));
       } else {
         const res: any = await db.from("embark_list_overrides").insert({
           ship_id: selectedShip,
@@ -436,6 +444,7 @@ export function EscalacaoEstoquePage() {
           kind,
           stock_item_id: stockItemId,
           quantity: qty,
+          note: cleanNote,
         });
         if (res.error) throw new Error(res.error.message);
         const created = Array.isArray(res.data) ? res.data[0] : res.data;
@@ -445,6 +454,18 @@ export function EscalacaoEstoquePage() {
     } catch (err) {
       setEmbarkMsg(`Erro ao salvar o ajuste da lista: ${(err as Error).message}`);
     }
+  }
+
+  // Grava o "leva" de um item SÓ neste navio, preservando a observação atual.
+  function saveOverride(kind: "MATERIAL" | "RANCHO", stockItemId: number, qty: number, baseQty: number) {
+    const existing = overrides.find((o) => o.ship_id === selectedShip && o.stock_item_id === stockItemId);
+    return saveOverrideFull(kind, stockItemId, qty, existing?.note ?? "", baseQty);
+  }
+
+  // Grava a observação de um item SÓ neste navio, preservando a quantidade atual.
+  function saveOverrideNote(kind: "MATERIAL" | "RANCHO", stockItemId: number, note: string, baseQty: number) {
+    const existing = overrides.find((o) => o.ship_id === selectedShip && o.stock_item_id === stockItemId);
+    return saveOverrideFull(kind, stockItemId, existing ? existing.quantity : baseQty, note, baseQty);
   }
 
   // Blur do input "Leva"/"Padrão": aplica o rascunho digitado. Valor inválido
@@ -461,6 +482,22 @@ export function EscalacaoEstoquePage() {
     if (!Number.isFinite(parsed) || parsed < 0) return;
     void saveOverride(kind, stockItemId, parsed, baseQty);
   }
+
+  // Blur do campo "Obs." de um item: grava a observação (só neste navio).
+  function commitNote(kind: "MATERIAL" | "RANCHO", stockItemId: number, baseQty: number) {
+    const raw = noteDraft[stockItemId];
+    if (raw == null) return;
+    setNoteDraft((d) => {
+      const nd = { ...d };
+      delete nd[stockItemId];
+      return nd;
+    });
+    void saveOverrideNote(kind, stockItemId, raw, baseQty);
+  }
+
+  // Observação salva de um item (do override do navio) — valor exibido no campo.
+  const noteOf = (stockItemId: number) =>
+    overrideByItem.get(stockItemId)?.note ?? "";
 
   // Renomeia o produto no Estoque (stock_items.name) — reflete em todos os
   // navios/telas, é o mesmo produto. Editável direto da lista de embarque.
@@ -1296,6 +1333,7 @@ export function EscalacaoEstoquePage() {
             <span className="text-center" title="Quanto vai neste navio — editável, sem mexer no kit padrão da equipe">Materiais</span>
             <span className="text-center" title="Quanto deste material está separado pra esta equipe (transferido no Almoxarifado)">{selectedTeam ? TEAM_LABELS[selectedTeam] : "Separado"}</span>
             <span className="text-center">Status</span>
+            <span>Obs.</span>
           </div>
 
           {teamKitActive.length === 0 ? (
@@ -1406,6 +1444,20 @@ export function EscalacaoEstoquePage() {
                       )}
                     </div>
                   </div>
+                  {/* Observação por item (igual à aba Retorno) */}
+                  {canEmbarcar ? (
+                    <input
+                      type="text"
+                      value={noteDraft[k.stock_item_id] ?? noteOf(k.stock_item_id)}
+                      onChange={(e) => setNoteDraft((d) => ({ ...d, [k.stock_item_id]: e.target.value }))}
+                      onBlur={() => commitNote("MATERIAL", k.stock_item_id, k.baseNeed)}
+                      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                      placeholder="Obs.: ..."
+                      className="w-full px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    />
+                  ) : noteOf(k.stock_item_id) ? (
+                    <span className="text-xs text-text-light">{noteOf(k.stock_item_id)}</span>
+                  ) : <span />}
                 </div>
               ))}
             </div>
@@ -1468,6 +1520,7 @@ export function EscalacaoEstoquePage() {
             <span className="text-center" title="Quanto vai neste navio — editável, sem mexer no padrão do Rancho">Padrão</span>
             <span className="text-center">Em Rancho</span>
             <span className="text-center">Status</span>
+            <span>Obs.</span>
           </div>
 
           {itemsWithStatus.length === 0 ? (
@@ -1542,6 +1595,20 @@ export function EscalacaoEstoquePage() {
                       )}
                     </div>
                   </div>
+                  {/* Observação por item (igual à aba Retorno) */}
+                  {canEmbarcar ? (
+                    <input
+                      type="text"
+                      value={noteDraft[item.id] ?? noteOf(item.id)}
+                      onChange={(e) => setNoteDraft((d) => ({ ...d, [item.id]: e.target.value }))}
+                      onBlur={() => commitNote("RANCHO", item.id, item.base_default)}
+                      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                      placeholder="Obs.: ..."
+                      className="w-full px-2 py-1 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    />
+                  ) : noteOf(item.id) ? (
+                    <span className="text-xs text-text-light">{noteOf(item.id)}</span>
+                  ) : <span />}
                 </div>
               ))}
             </div>
