@@ -1377,14 +1377,14 @@ export function EscalacaoEstoquePage() {
                             <button
                               type="button"
                               onClick={() => saveOverride("MATERIAL", k.stock_item_id, 0, 0)}
-                              className="text-xs text-text-light hover:text-danger transition"
+                              className="text-lg font-bold leading-none text-danger hover:text-red-700 transition px-1"
                               title="Tirar este item extra da lista do navio"
                             >✕</button>
                           ) : (
                             <button
                               type="button"
                               onClick={() => saveOverride("MATERIAL", k.stock_item_id, 0, k.baseNeed)}
-                              className="text-xs text-text-light hover:text-danger transition"
+                              className="text-lg font-bold leading-none text-danger hover:text-red-700 transition px-1"
                               title="Tirar este material da lista deste navio (não vai neste embarque)"
                             >✕</button>
                           )}
@@ -1520,7 +1520,7 @@ export function EscalacaoEstoquePage() {
                             <button
                               type="button"
                               onClick={() => saveOverride("RANCHO", item.id, 0, 0)}
-                              className="text-xs text-text-light hover:text-danger transition"
+                              className="text-lg font-bold leading-none text-danger hover:text-red-700 transition px-1"
                               title="Tirar este item extra da lista do navio"
                             >✕</button>
                           )}
