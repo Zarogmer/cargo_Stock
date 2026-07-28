@@ -434,95 +434,73 @@ export function GeralPanel() {
     }
   }
 
-  // Quantidade "de galpão" da linha (o que as setinhas ↑/↓ e o campo Quantidade
-  // da edição mexem): Total no material, Disponível no rancho.
-  const warehouseQty = (row: Row) => (row.kind === "MAT" ? row.total : row.disp);
+  // Quantidade/coluna "de galpão" da linha: Total no material, Disponível no
+  // rancho (as duas sempre editáveis).
   const warehouseCol = (row: Row): ColKey => (row.kind === "MAT" ? "TOTAL" : "DISP");
+  const valueOfCol = (row: Row, col: ColKey): number =>
+    col === "TOTAL" ? row.total : col === "DISP" ? row.disp : row.teams[col as TeamKey];
+  const colLabel = (col: ColKey): string =>
+    col === "TOTAL" ? "Total" : col === "DISP" ? "Disponível"
+      : TEAM_COLS.find((t) => t.key === col)?.label || col;
+  // Coluna que as setinhas ↑/↓ e o lápis mexem = a que está EM VISTA (aba
+  // atual): no "Todos" é a de galpão (Total/Disponível); numa aba de equipe é a
+  // daquela equipe; na aba Disponível é o Disponível. Se a da aba for calculada
+  // (ex.: Disponível de material), cai na de galpão pra não travar a edição.
+  const activeCol = (row: Row): ColKey => {
+    const col: ColKey = teamView === "TODOS" ? warehouseCol(row)
+      : teamView === "DISP" ? "DISP"
+      : teamView;
+    return editable(row, col) ? col : warehouseCol(row);
+  };
 
-  // ── Setinhas ↑/↓ (±1 no galpão) ───────────────────────────────────────────
+  // ── Setinhas ↑/↓ (±1 na coluna em vista) ──────────────────────────────────
   // Reaproveita o commitEdit (grava valor absoluto e já registra o movimento no
-  // histórico). Material mexe no Total; rancho na linha Disponível (EQUIPE_3).
+  // histórico). Mexe na MESMA coluna que aparece na aba atual — antes mexia
+  // sempre no Total/Disponível e parecia "não mudar" quando via-se a equipe.
   async function handleQuickAdjust(row: Row, delta: 1 | -1) {
-    const cur = warehouseQty(row);
+    const col = activeCol(row);
+    const cur = valueOfCol(row, col);
     const next = Math.max(0, Math.round((cur + delta) * 1000) / 1000);
     if (next === cur) return;
-    await commitEdit(row, warehouseCol(row), next);
+    await commitEdit(row, col, next);
   }
 
   // ── Edição do item (nome / padrão / quantidade / valor / obs) ─────────────
-  // Material: 1 linha stock_items — edita direto. Rancho: nome e padrão valem pro
-  // alimento todo (propaga pras linhas das equipes); a quantidade edita só o
-  // Disponível (linha EQUIPE_3). Mudança de quantidade registra movimento.
+  // Nome/padrão/valor/obs são do item (no rancho, propaga pro alimento todo). A
+  // QUANTIDADE vai pra coluna que está EM VISTA (Total/Disponível/equipe) via
+  // commitEdit — antes ia sempre pro Total/Disponível, o que confundia quem
+  // editava olhando a coluna de uma equipe.
   async function handleEditSave(data: { name: string; padrao: number; quantity: number; unitValue: number; notes: string | null }) {
     if (!editRow) return;
     const actor = profile?.full_name || "Sistema";
-    const today = new Date().toISOString().split("T")[0];
     const name = data.name.trim() || editRow.name;
+    const qCol = activeCol(editRow);
     setSaving(true);
     try {
       if (editRow.kind === "MAT" && editRow.matItem) {
-        const it = editRow.matItem;
         const payload: Record<string, unknown> = {
           name,
           min_quantity: Math.round(data.padrao),
-          quantity: data.quantity,
           notes: data.notes,
           updated_by: actor,
         };
         if (canSeeValue) payload.unit_value = data.unitValue;
-        await db.from("stock_items").update(payload).eq("id", it.id);
-        const diff = +(data.quantity - editRow.total).toFixed(3);
-        if (diff !== 0) {
-          await db.from("stock_movements").insert({
-            stock_item_id: it.id,
-            movement_type: diff > 0 ? "AJUSTE" : "BAIXA",
-            quantity: Math.abs(diff),
-            movement_date: today,
-            notes: `Aba Geral: edição do item ${editRow.total} → ${data.quantity}`,
-            created_by: actor,
-          } as Record<string, unknown>);
-        }
+        await db.from("stock_items").update(payload).eq("id", editRow.matItem.id);
       } else if (editRow.kind === "RANCHO" && editRow.ranchoRows) {
-        const group = editRow.ranchoRows;
-        const lines = Object.values(group).filter(Boolean) as StockItem[];
+        const lines = Object.values(editRow.ranchoRows).filter(Boolean) as StockItem[];
         // Nome e padrão são do alimento inteiro: propaga pras linhas por equipe.
         for (const line of lines) {
           await db.from("stock_items")
             .update({ name, default_quantity: data.padrao, updated_by: actor } as Record<string, unknown>)
             .eq("id", line.id);
         }
-        // Quantidade edita o Disponível (linha EQUIPE_3), logando o movimento.
-        const dispLine = group[DISPONIVEL_RANCHO];
-        if (dispLine) {
-          const diff = +(data.quantity - (Number(dispLine.quantity) || 0)).toFixed(3);
-          if (diff !== 0) {
-            await db.from("stock_items")
-              .update({ quantity: data.quantity, updated_by: actor } as Record<string, unknown>)
-              .eq("id", dispLine.id);
-            await db.from("stock_movements").insert({
-              stock_item_id: dispLine.id,
-              movement_type: diff > 0 ? "AJUSTE" : "BAIXA",
-              quantity: Math.abs(diff),
-              movement_date: today,
-              notes: `Aba Geral: edição do Disponível ${Number(dispLine.quantity) || 0} → ${data.quantity}`,
-              created_by: actor,
-            } as Record<string, unknown>);
-          }
-        } else if (data.quantity > 0) {
-          const mother = lines[0];
-          await db.from("stock_items").insert({
-            name,
-            category: mother?.category ?? "SUPRIMENTOS",
-            unit: mother?.unit ?? "UN",
-            quantity: data.quantity,
-            default_quantity: data.padrao,
-            min_quantity: 0,
-            team: DISPONIVEL_RANCHO,
-            updated_by: actor,
-          } as Record<string, unknown>);
-        }
       }
-      await loadItems();
+      // Quantidade da coluna em vista (grava o absoluto + registra o movimento).
+      if (data.quantity !== valueOfCol(editRow, qCol)) {
+        await commitEdit(editRow, qCol, data.quantity);
+      } else {
+        await loadItems();
+      }
     } finally {
       setSaving(false);
       setEditRow(null);
@@ -643,7 +621,7 @@ export function GeralPanel() {
             onClick={(e) => { e.stopPropagation(); handleQuickAdjust(r, 1); }}
             disabled={saving}
             className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-            title={r.kind === "MAT" ? "Aumentar 1 no Total" : "Aumentar 1 no Disponível"}
+            title={`Aumentar 1 em ${colLabel(activeCol(r))}`}
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
@@ -653,9 +631,9 @@ export function GeralPanel() {
         {canBaixarSetor(r.setor) && (
           <button
             onClick={(e) => { e.stopPropagation(); handleQuickAdjust(r, -1); }}
-            disabled={saving || warehouseQty(r) <= 0}
+            disabled={saving || valueOfCol(r, activeCol(r)) <= 0}
             className="p-1.5 text-amber-600 hover:bg-amber-50 rounded disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-            title={r.kind === "MAT" ? "Baixar 1 do Total" : "Baixar 1 do Disponível"}
+            title={`Baixar 1 de ${colLabel(activeCol(r))}`}
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
@@ -751,6 +729,8 @@ export function GeralPanel() {
 
       <GeralEditModal
         row={editRow}
+        qtyValue={editRow ? valueOfCol(editRow, activeCol(editRow)) : 0}
+        qtyLabel={editRow ? colLabel(activeCol(editRow)) : ""}
         showValue={canSeeValue}
         onClose={() => setEditRow(null)}
         onSave={handleEditSave}
@@ -984,8 +964,12 @@ function GeralAddModal({ open, setores, showValue, allNames, onClose, onSave, sa
 // pros dois modelos; Valor unitário e Observações só aparecem pra material (o
 // rancho não guarda esses campos aqui). A Quantidade é a "de galpão": Total no
 // material, Disponível no rancho.
-function GeralEditModal({ row, showValue, onClose, onSave, saving }: {
+function GeralEditModal({ row, qtyValue, qtyLabel, showValue, onClose, onSave, saving }: {
   row: Row | null;
+  // Quantidade/rótulo da coluna EM VISTA (Total/Disponível/equipe) — é essa que
+  // o campo Quantidade edita, pra bater com o que o usuário está olhando.
+  qtyValue: number;
+  qtyLabel: string;
   showValue: boolean;
   onClose: () => void;
   onSave: (data: { name: string; padrao: number; quantity: number; unitValue: number; notes: string | null }) => void;
@@ -1000,10 +984,10 @@ function GeralEditModal({ row, showValue, onClose, onSave, saving }: {
   useEffect(() => {
     if (!row) return;
     setName(row.name);
+    setQuantity(formatQty(qtyValue));
     if (row.kind === "MAT") {
       const it = row.matItem;
       setPadrao(it?.min_quantity ? formatQty(it.min_quantity) : "");
-      setQuantity(formatQty(row.total));
       setUnitValue(it?.unit_value ? formatQty(it.unit_value) : "");
       setNotes(it?.notes || "");
     } else {
@@ -1011,11 +995,10 @@ function GeralEditModal({ row, showValue, onClose, onSave, saving }: {
       const anyLine = rr[DISPONIVEL_RANCHO] || rr.EQUIPE_1 || rr.EQUIPE_2 || rr.EQUIPE_4;
       const pad = Number(anyLine?.default_quantity) || 0;
       setPadrao(pad ? formatQty(pad) : "");
-      setQuantity(formatQty(row.disp));
       setUnitValue("");
       setNotes("");
     }
-  }, [row]);
+  }, [row, qtyValue]);
 
   if (!row) return null;
   const isMat = row.kind === "MAT";
@@ -1050,7 +1033,7 @@ function GeralEditModal({ row, showValue, onClose, onSave, saving }: {
           </div>
           <div>
             <label className="block text-sm font-medium text-text mb-1">
-              {isMat ? "Quantidade (Total)" : "Quantidade (Disponível)"}
+              Quantidade{qtyLabel ? ` (${qtyLabel})` : ""}
             </label>
             <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 8" className={inputCls} />
           </div>
