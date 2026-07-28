@@ -1731,20 +1731,27 @@ function RetornoSection({
   // Linha por material. Desktop (sm+) alinha em colunas (grid); no celular vira
   // um cartão: nome em cima, os números numa linha com rótulo, e a Observação em
   // largura total embaixo (antes ficava espremida na rolagem horizontal).
-  const gridCols =
-    "sm:grid sm:grid-cols-[minmax(0,1fr)_3rem_4.5rem_4.5rem_4.5rem_4.5rem_minmax(7rem,1.5fr)] sm:items-center sm:gap-2";
   const renderKitTable = (
     kit: ReturnKitRow[],
     labels: { item: string; broken: string; obsPlaceholder: string; empty: string; emptyIcon: string },
-  ) => (
+    opts?: { showBrokenLost?: boolean },
+  ) => {
+    // Rancho (comida) só tem VOLTOU e INSUMO — não faz sentido "estragou"/"perdido"
+    // no alimento; o que não voltou foi consumido. Material mantém as 4 colunas.
+    const showBL = opts?.showBrokenLost !== false;
+    const gridCols = showBL
+      ? "sm:grid sm:grid-cols-[minmax(0,1fr)_3rem_4.5rem_4.5rem_4.5rem_4.5rem_minmax(7rem,1.5fr)] sm:items-center sm:gap-2"
+      : "sm:grid sm:grid-cols-[minmax(0,1fr)_3rem_4.5rem_4.5rem_minmax(7rem,1.5fr)] sm:items-center sm:gap-2";
+    const numGrid = showBL ? "grid grid-cols-5 gap-2 sm:contents" : "grid grid-cols-3 gap-2 sm:contents";
+    return (
     <div className="bg-card rounded-xl shadow-sm border border-border overflow-hidden">
       {/* Cabeçalho só no desktop */}
       <div className={`${gridCols} bg-gray-50 border-b border-border px-4 py-3 text-xs font-semibold text-text-light uppercase hidden`}>
         <span>{labels.item}</span>
         <span className="text-center" title="Quanto a equipe leva (referência)">Foi</span>
         <span className="text-center" title="Voltou em bom estado — credita o estoque de volta">Voltou</span>
-        <span className="text-center" title="Voltou, mas quebrado/estragado — a equipe trouxe de volta; não custa nada ao navio">{labels.broken}</span>
-        <span className="text-center" title="Não voltou — vira despesa do navio, dividida pela equipe no Pagamento de Navios">Perdido</span>
+        {showBL && <span className="text-center" title="Voltou, mas quebrado/estragado — a equipe trouxe de volta; não custa nada ao navio">{labels.broken}</span>}
+        {showBL && <span className="text-center" title="Não voltou — vira despesa do navio, dividida pela equipe no Pagamento de Navios">Perdido</span>}
         <span className="text-center" title="Consumido de propósito (graxa, química...) — sai do estoque, mas não custa nada ao navio">Insumo</span>
         <span>Obs.</span>
       </div>
@@ -1797,7 +1804,7 @@ function RetornoSection({
                 )}
 
                 {/* Números — no celular viram uma linha com rótulos; no desktop, células */}
-                <div className="grid grid-cols-5 gap-2 sm:contents">
+                <div className={numGrid}>
                   <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
                     <span className="text-[10px] text-text-light uppercase sm:hidden">Foi</span>
                     <span className="text-text-light">{k.need}</span>
@@ -1818,6 +1825,7 @@ function RetornoSection({
                       }}
                       className={numCls} placeholder="0" />
                   </div>
+                  {showBL && (
                   <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
                     <span className="text-[10px] text-text-light uppercase sm:hidden">{labels.broken}</span>
                     <input type="number" min={0} step={1} value={d.broken} disabled={locked}
@@ -1832,6 +1840,8 @@ function RetornoSection({
                       }}
                       className={`${numCls} ${(parseInt(d.broken) || 0) > 0 ? "border-amber-300 text-amber-700" : ""}`} placeholder="0" />
                   </div>
+                  )}
+                  {showBL && (
                   <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
                     <span className="text-[10px] text-text-light uppercase sm:hidden">Perdido</span>
                     <input type="number" min={0} step={1} value={d.lost} disabled={locked}
@@ -1846,6 +1856,7 @@ function RetornoSection({
                       }}
                       className={`${numCls} ${(parseInt(d.lost) || 0) > 0 ? "border-red-300 text-red-700 font-semibold" : ""}`} placeholder="0" />
                   </div>
+                  )}
                   <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center">
                     <span className="text-[10px] text-text-light uppercase sm:hidden">Insumo</span>
                     <input type="number" min={0} step={1} value={d.consumed} disabled={locked}
@@ -1867,7 +1878,8 @@ function RetornoSection({
         </div>
       )}
     </div>
-  );
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -1927,7 +1939,7 @@ function RetornoSection({
           item: "Item", broken: "Estragou",
           obsPlaceholder: "Ex.: estragou no calor, embalagem rasgada...",
           empty: "Nenhum alimento cadastrado no Rancho desta equipe", emptyIcon: "🛒",
-        })}
+        }, { showBrokenLost: false })}
 
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} disabled={locked} rows={2}
           placeholder="Observações gerais do retorno (opcional)..."
@@ -2091,6 +2103,11 @@ function ShipSelector({
                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${statusBadge(current.status).cls}`}>
                   {statusBadge(current.status).label}
                 </span>
+                {current.assigned_team && TEAM_LABELS[current.assigned_team] && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider bg-primary/10 text-primary" title="Equipe do navio (aba Navios)">
+                    👥 {TEAM_LABELS[current.assigned_team]}
+                  </span>
+                )}
               </div>
               <div className="flex flex-wrap gap-3 mt-1 text-xs text-text-light">
                 {current.port && (
@@ -2163,6 +2180,9 @@ function ShipSelector({
                         )}
                       </div>
                       <div className="flex flex-wrap gap-2 mt-0.5 text-[11px] text-text-light">
+                        {s.assigned_team && TEAM_LABELS[s.assigned_team] && (
+                          <span className="text-primary font-medium">👥 {TEAM_LABELS[s.assigned_team]}</span>
+                        )}
                         {s.port && <span>📍 {s.port}</span>}
                         {s.arrival_date && <span>🛬 {formatDate(s.arrival_date)}</span>}
                         {s.departure_date && <span>🛫 {formatDate(s.departure_date)}</span>}
