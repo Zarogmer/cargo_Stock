@@ -321,8 +321,13 @@ export function EscalacaoEstoquePage() {
     const d = embarkSeq(a.estName) - embarkSeq(b.estName);
     return d !== 0 ? d : a.estName.localeCompare(b.estName, "pt-BR");
   });
-  const matReady = teamKit.filter((k) => k.ready).length;
-  const matMissing = teamKit.length - matReady;
+  // Leva 0 = material tirado deste navio: some da lista principal e vai pra
+  // seção "Removidos" (dá pra restaurar). Não conta como falta nem entra no
+  // PDF/WhatsApp (buildListPayload já filtra need > 0).
+  const teamKitActive = teamKit.filter((k) => k.need > 0);
+  const teamKitRemoved = teamKit.filter((k) => k.need <= 0);
+  const matReady = teamKitActive.filter((k) => k.ready).length;
+  const matMissing = teamKitActive.length - matReady;
 
   // Layout responsivo das listas de Embarque (Materiais e Rancho), no mesmo
   // molde do Retorno: no desktop (sm+) alinha em colunas (grid); no celular
@@ -1274,7 +1279,7 @@ export function EscalacaoEstoquePage() {
             🧰 Materiais (do Estoque)
           </button>
           <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-xs text-text-light">{matReady} ok · {matMissing} com falta · {teamKit.length} itens</span>
+            <span className="text-xs text-text-light">{matReady} ok · {matMissing} com falta · {teamKitActive.length} itens{teamKitRemoved.length > 0 ? ` · ${teamKitRemoved.length} removido(s)` : ""}</span>
             {canEmbarcar && (
               <Button size="sm" variant="secondary" onClick={() => setAddKind("MATERIAL")} title="Adicionar um item do Estoque só na lista deste navio">
                 ➕ Adicionar item
@@ -1293,15 +1298,15 @@ export function EscalacaoEstoquePage() {
             <span className="text-center">Status</span>
           </div>
 
-          {teamKit.length === 0 ? (
+          {teamKitActive.length === 0 ? (
             <div className="px-4 py-10 text-center text-text-light">
               <span className="text-3xl block mb-2">🧰</span>
-              Sem kit de materiais para esta equipe
+              {teamKit.length === 0 ? "Sem kit de materiais para esta equipe" : "Nenhum material vai neste navio (todos removidos)"}
               {canEmbarcar && <span className="block text-xs mt-1">Use o ➕ Adicionar item pra montar a lista deste navio.</span>}
             </div>
           ) : (
             <div className="divide-y divide-border">
-              {teamKit.map((k) => (
+              {teamKitActive.map((k) => (
                 <div key={k.id} className={`px-4 py-3 sm:py-2.5 hover:bg-gray-50 flex flex-col gap-2 ${embarkGrid} ${!k.ready ? "bg-red-50/40" : ""}`}>
                   {/* Nome + categoria — juntos no topo no celular; viram colunas no desktop */}
                   <div className="flex items-center justify-between gap-2 sm:contents">
@@ -1368,12 +1373,19 @@ export function EscalacaoEstoquePage() {
                               title={`Voltar ao padrão do kit (${k.baseNeed})`}
                             >↺</button>
                           )}
-                          {k.added && (
+                          {k.added ? (
                             <button
                               type="button"
                               onClick={() => saveOverride("MATERIAL", k.stock_item_id, 0, 0)}
                               className="text-xs text-text-light hover:text-danger transition"
                               title="Tirar este item extra da lista do navio"
+                            >✕</button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => saveOverride("MATERIAL", k.stock_item_id, 0, k.baseNeed)}
+                              className="text-xs text-text-light hover:text-danger transition"
+                              title="Tirar este material da lista deste navio (não vai neste embarque)"
                             >✕</button>
                           )}
                         </span>
@@ -1399,6 +1411,27 @@ export function EscalacaoEstoquePage() {
             </div>
           )}
         </div>
+        )}
+        {/* Removidos deste navio — materiais tirados da lista (Leva 0). Ficam
+            aqui pra restaurar com um clique, mesmo quando não têm disponível
+            livre (aí não voltariam pelo "Adicionar item"). */}
+        {showMat && canEmbarcar && teamKitRemoved.length > 0 && (
+          <div className="rounded-xl border border-dashed border-border bg-gray-50 px-4 py-3">
+            <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-2">🗑️ Removidos deste navio ({teamKitRemoved.length})</p>
+            <div className="flex flex-wrap gap-2">
+              {teamKitRemoved.map((k) => (
+                <button
+                  key={k.id}
+                  type="button"
+                  onClick={() => saveOverride("MATERIAL", k.stock_item_id, k.added ? 0 : k.baseNeed, k.added ? 0 : k.baseNeed)}
+                  className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-white border border-border text-text-light hover:text-primary hover:border-primary transition"
+                  title={k.added ? "Restaurar este item extra" : `Restaurar (volta ao padrão do kit: ${k.baseNeed})`}
+                >
+                  ↺ {k.estName}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
       </section>
 
