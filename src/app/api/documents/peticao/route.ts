@@ -80,9 +80,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Informe o navio (Navio / Bandeira / IMO)." }, { status: 400 });
   }
 
-  const equipamentos = (Array.isArray(body.equipamentos) ? body.equipamentos : [])
-    .map((q) => ({ ITEM: safe(q.item), QTD: safe(q.qtd), DESC: safe(q.desc) }))
-    .filter((q) => q.DESC);
+  // Relação em folha única, duas colunas lado a lado (Quant. | Lista ×2):
+  // metade de cima da lista na esquerda, metade de baixo na direita.
+  const flat = (Array.isArray(body.equipamentos) ? body.equipamentos : [])
+    .map((q) => ({ qtd: safe(q.qtd).replace(/^0+(?=\d)/, ""), desc: safe(q.desc) }))
+    .filter((q) => q.desc);
+  const half = Math.ceil(flat.length / 2);
+  const equipamentos = Array.from({ length: half }, (_, i) => ({
+    QTD_L: flat[i]?.qtd ?? "",
+    DESC_L: flat[i]?.desc ?? "",
+    QTD_R: flat[i + half]?.qtd ?? "",
+    DESC_R: flat[i + half]?.desc ?? "",
+  }));
 
   let templateBuffer: Buffer;
   try {
