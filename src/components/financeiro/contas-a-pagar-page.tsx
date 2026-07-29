@@ -308,8 +308,6 @@ export function ContasAPagarPage() {
   const [paymentFilter, setPaymentFilter] = useState<string>("ALL");
   // Filtro por equipe ("ALL" = todas).
   const [teamFilter, setTeamFilter] = useState<string>("ALL");
-  // Ordenação da lista: últimos adicionados (padrão) ou por vencimento.
-  const [sortBy, setSortBy] = useState<"VENCIMENTO" | "RECENTES">("RECENTES");
 
   // "Conta única" x "Conta mensal" no modal de criação + campos da recorrência.
   const [billKind, setBillKind] = useState<"UNICA" | "MENSAL">("UNICA");
@@ -502,12 +500,11 @@ export function ContasAPagarPage() {
     });
   }, [invoices, statusFilter, search, monthFilter, supplierFilter, bankFilter, sectionFilter, recurrenceFilter, paymentFilter, teamFilter, merged]);
 
-  // Ordena a lista já filtrada: "Últimos adicionados" = created_at desc; caso
-  // contrário mantém a ordem que vem da API (por vencimento).
+  // Lista sempre ordenada pelos últimos adicionados (created_at desc); para
+  // ver um mês específico o usuário usa o filtro de meses.
   const sorted = useMemo(() => {
-    if (sortBy !== "RECENTES") return filtered;
     return [...filtered].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
-  }, [filtered, sortBy]);
+  }, [filtered]);
 
   // RESUMO do mês selecionado (ou de tudo), no espírito da aba RESUMO da
   // planilha: Falta pagar / Pago / Despesas (total) + contagem de vencidas.
@@ -1267,15 +1264,6 @@ export function ContasAPagarPage() {
             ))}
           </select>
         )}
-        <select
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as "VENCIMENTO" | "RECENTES")}
-          className="text-sm border border-border rounded-lg px-3 py-2 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
-          title="Ordem da lista"
-        >
-          <option value="VENCIMENTO">Por vencimento</option>
-          <option value="RECENTES">Últimos adicionados</option>
-        </select>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
