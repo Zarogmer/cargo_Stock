@@ -308,8 +308,8 @@ export function ContasAPagarPage() {
   const [paymentFilter, setPaymentFilter] = useState<string>("ALL");
   // Filtro por equipe ("ALL" = todas).
   const [teamFilter, setTeamFilter] = useState<string>("ALL");
-  // Ordenação da lista: por vencimento (padrão) ou pelos últimos adicionados.
-  const [sortBy, setSortBy] = useState<"VENCIMENTO" | "RECENTES">("VENCIMENTO");
+  // Ordenação da lista: últimos adicionados (padrão) ou por vencimento.
+  const [sortBy, setSortBy] = useState<"VENCIMENTO" | "RECENTES">("RECENTES");
 
   // "Conta única" x "Conta mensal" no modal de criação + campos da recorrência.
   const [billKind, setBillKind] = useState<"UNICA" | "MENSAL">("UNICA");
