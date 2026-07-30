@@ -204,6 +204,10 @@ const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
   { value: "OUTROS", label: "— Outros (não lançar no estoque)" },
 ];
 
+// Nova Solicitação só oferece setores de estoque + "Outros" — Rancho e Escritório
+// são casos de compra direta (Controle de Compras), não de solicitação.
+const REQUEST_DESTINATIONS = WAREHOUSE_DESTINATIONS.filter((d) => d.value !== "RANCHO" && d.value !== "ESCRITORIO");
+
 // Destinos que NÃO mexem no Almoxarifado — só registram a compra/solicitação (não
 // há setor de estoque pra eles). Escritório é o caso típico. Rancho (card #46)
 // também entra aqui: a compra de comida só soma o gasto na aba de Compras, sem
@@ -2254,7 +2258,11 @@ function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
         <div>
           <label className="block text-sm font-medium mb-1">Destino no Almoxarifado</label>
           <select value={dest} onChange={(e) => { setDest(e.target.value as WarehouseDest); setCode(""); }} className={inputCls}>
-            {WAREHOUSE_DESTINATIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+            {/* Solicitação antiga pode apontar pra Rancho/Escritório — mantém a opção só nela. */}
+            {!REQUEST_DESTINATIONS.some((d) => d.value === dest) && dest && (
+              <option value={dest}>{DEST_SHORT_LABEL[dest] || dest} (legado)</option>
+            )}
+            {REQUEST_DESTINATIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
           </select>
           <p className="text-[10px] text-text-light mt-1">Sugestão de onde guardar — o gestor confirma ao aprovar.</p>
         </div>
