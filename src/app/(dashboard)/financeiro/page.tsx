@@ -69,7 +69,7 @@ import {
 } from "@/lib/vales";
 import {
   unitLabel, normalizeUnit, unitToOption, unitEmoji, unitHint, buildUnitSections,
-  pickFunctionByName, pickCostadoFunction,
+  pickFunctionByName, pickCostadoFunction, isAdminCarrierFn,
 } from "@/lib/jobUnits";
 import type {
   JobFunction,
@@ -714,7 +714,7 @@ export default function FinanceiroPage() {
       db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)"),
       db.from("job_adjustments").select("*").order("created_at", { ascending: false }),
       db.from("ships").select("id, name, status, services").order("arrival_date", { ascending: false }).limit(50),
-      db.from("employees").select("id, name, role, cpf, birth_date, bank_name, bank_agency, bank_account, bank_account_type, status, sector").order("name"),
+      db.from("employees").select("id, name, role, cpf, birth_date, bank_name, bank_agency, bank_account, bank_account_type, status, sector, admin_ship_rate").order("name"),
       db.from("employee_function_rates").select("employee_id, function_id, rate"),
       db.from("employee_advances").select("*"),
       db.from("advance_discounts").select("*"),
@@ -723,9 +723,11 @@ export default function FinanceiroPage() {
     // Costado NÃO tem mais função própria "COSTADO": a função principal da
     // unidade Costado é AUXILIAR OPERACIONAL (ver pickCostadoFunction em
     // src/lib/jobUnits.ts). Não recriar COSTADO aqui.
-    // Auto-cria a função ADMINISTRATIVO (valor fixo por operação) — pessoal de
-    // escritório que entra no custo de cada navio. default_rate 0: o valor de
-    // cada pessoa é definido em Valores › 👤 (valor especial por colaborador).
+    // Auto-cria a função ADMINISTRATIVO — função INTERNA que só existe porque
+    // job_allocations.function_id é obrigatório. Ela não aparece em nenhuma
+    // lista (Valores, RH › Funções, cargo): quem entra no custo vem do SETOR
+    // Administrativo e o valor de cada pessoa mora no colaborador
+    // (employees.admin_ship_rate), gravável no modal de Pagamento de Navios.
     const hasAdmin = allFunctions.some((f) => f.name.trim().toUpperCase() === "ADMINISTRATIVO");
     if (!hasAdmin) {
       const created = await db.from("job_functions").insert({
@@ -1608,8 +1610,10 @@ function FuncoesTab({
 
   // Seções = UNIDADES cadastradas (tabela job_units), na ordem sort_order/nome.
   // Cada unidade aparece mesmo vazia, pra o usuário adicionar funções nela. Fonte
-  // única em @/lib/jobUnits — iguais às da aba Funções do RH.
-  const sections = buildUnitSections(units, filtered).map((s) => ({
+  // única em @/lib/jobUnits — iguais às da aba Funções do RH. A função interna
+  // ADMINISTRATIVO fica de fora: administrativo é setor, não cargo (o valor por
+  // pessoa é gravado no Pagamento de Navios).
+  const sections = buildUnitSections(units, filtered.filter((f) => !isAdminCarrierFn(f))).map((s) => ({
     ...s,
     functions: [...s.functions].sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
   }));
@@ -2724,10 +2728,9 @@ function TrabalhosTab({
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
-  // Administrativo do Embarque = alocações kind=ADMINISTRATIVO ligadas à função
-  // ADMINISTRATIVO (o Costado usa AUXILIAR OPERACIONAL). Filtrar por função evita
-  // misturar os dois caso um mesmo job tenha ambos.
-  const embAdminFnId = pickFunctionByName(functions, "ADMINISTRATIVO")?.id ?? null;
+  // Administrativo = alocações kind=ADMINISTRATIVO do job, independente da
+  // função-carregador (houve duas ADMINISTRATIVO no banco — filtrar por uma id
+  // escondia as linhas da outra).
 
   // Embarque tab excludes Costado ships (those have services=["COSTADO"]).
   const costadoShipIds = new Set(
@@ -2932,7 +2935,7 @@ function TrabalhosTab({
         open={!!detailJob}
         job={detailJob}
         allocations={allocations.filter((a) => a.job_id === detailJob?.id && (a.kind || "EMBARQUE") === "EMBARQUE")}
-        adminAllocations={allocations.filter((a) => a.job_id === detailJob?.id && (a.kind || "EMBARQUE") === "ADMINISTRATIVO" && a.status === "ATIVO" && (embAdminFnId == null || a.function_id === embAdminFnId))}
+        adminAllocations={allocations.filter((a) => a.job_id === detailJob?.id && (a.kind || "EMBARQUE") === "ADMINISTRATIVO" && a.status === "ATIVO")}
         adjustments={adjustments.filter((a) => a.job_id === detailJob?.id)}
         functions={functions}
         employees={employees}
@@ -3188,16 +3191,13 @@ function JobDetailModal({
   // Costado é gerenciado exclusivamente pela Escalação de Costado. Embarque permite
   // adicionar/remover funcionários direto daqui também (além da Escalação).
   const peopleReadOnly = kindFilter === "COSTADO";
-  // Função que representa o "administrativo" (custo fixo POR NAVIO, fora de folha)
-  // conforme o tipo de navio. Embarque: função ADMINISTRATIVO (por nome). Costado:
-  // reconhecida pela CATEGORIA — qualquer função marcada como "Administrativo
-  // (Costado)" (unit ADMIN_COSTADO); assim dá pra renomear a função sem quebrar.
-  // Em ambos o valor por pessoa vem de Valores › 👤 dessa função.
-  const adminFn: JobFunction | null = kindFilter === "COSTADO"
-    ? (functions.find((f) => (f.unit || "").toUpperCase() === "ADMIN_COSTADO" && f.active)
-      || functions.find((f) => (f.unit || "").toUpperCase() === "ADMIN_COSTADO")
-      || null)
-    : (pickFunctionByName(functions, "ADMINISTRATIVO") || null);
+  // Função-carregador do administrativo (custo fixo POR NAVIO, fora de folha) —
+  // igual pra Embarque e Costado. Só serve de FK pras alocações; quem entra vem
+  // do SETOR Administrativo e o valor por pessoa mora no colaborador
+  // (employees.admin_ship_rate). preferSection EMBARQUE desempata determinístico
+  // caso exista mais de uma função com esse nome no banco.
+  const adminFn: JobFunction | null =
+    pickFunctionByName(functions, "ADMINISTRATIVO", "EMBARQUE") || null;
   const holdsMultiplier =
     kindFilter === "EMBARQUE" ? Math.max(1, Number(job?.holds_count || 1))
     : 1; // Costado: rate já é valor/turno, base = rate × qty.
@@ -3472,8 +3472,8 @@ function JobDetailModal({
   // navio de Embarque em aberto. Roda uma vez por abertura (adminAutoRef) e
   // COMPLETA quem está faltando — então um navio que já tinha parte do pessoal
   // (ex.: só a Camila) recebe os demais do setor sem precisar adicionar à mão.
-  // O valor inicial vem do valor especial por colaborador (Valores › 👤); sem
-  // valor configurado entra pelo default da função (ou 0) e o usuário ajusta.
+  // O valor inicial é o gravado no colaborador (employees.admin_ship_rate, o 💾
+  // da seção Administrativo); sem valor gravado entra 0 e o usuário ajusta.
   const adminAutoRef = useRef<string | null>(null);
   useEffect(() => {
     if (!open || !job || (kindFilter !== "EMBARQUE" && kindFilter !== "COSTADO") || !canEdit || job.status === "FECHADO") return;
@@ -3491,19 +3491,16 @@ function JobDetailModal({
     );
     if (adminEmps.length === 0) return;
     (async () => {
-      const rows = adminEmps.map((e) => {
-        const sr = specialRates.get(`${e.id}-${adminFnLocal.id}`);
-        return {
-          job_id: job.id,
-          function_id: adminFnLocal.id,
-          employee_id: e.id,
-          quantity: 1,
-          rate: sr != null ? sr : (Number(adminFnLocal.default_rate) || 0),
-          pluxee_value: 0,
-          status: "ATIVO",
-          kind: "ADMINISTRATIVO",
-        };
-      });
+      const rows = adminEmps.map((e) => ({
+        job_id: job.id,
+        function_id: adminFnLocal.id,
+        employee_id: e.id,
+        quantity: 1,
+        rate: Number(e.admin_ship_rate ?? 0) || 0,
+        pluxee_value: 0,
+        status: "ATIVO",
+        kind: "ADMINISTRATIVO",
+      }));
       const res = await db.from("job_allocations").insert(rows);
       if (!res.error) onChange();
     })();
@@ -3641,19 +3638,26 @@ function JobDetailModal({
     await db.from("job_allocations").update({ rate }).eq("id", allocId);
     onChange();
   }
+  // 💾 grava o valor da linha como padrão do colaborador — os PRÓXIMOS navios
+  // já entram com ele (o auto-add lê employees.admin_ship_rate).
+  async function handleSaveAdminDefault(a: JobAllocation) {
+    if (a.employee_id == null) return;
+    await db.from("employees").update({ admin_ship_rate: Number(a.rate) }).eq("id", a.employee_id);
+    onChange();
+  }
   async function handleRemoveAdmin(allocId: number) {
     await db.from("job_allocations").delete().eq("id", allocId);
     onChange();
   }
   async function handleAddAdmin(empId: number) {
     if (!job || !adminFn) return;
-    const sr = specialRates.get(`${empId}-${adminFn.id}`);
+    const emp = employees.find((e) => e.id === empId);
     await db.from("job_allocations").insert({
       job_id: job.id,
       function_id: adminFn.id,
       employee_id: empId,
       quantity: 1,
-      rate: sr != null ? sr : (Number(adminFn.default_rate) || 0),
+      rate: Number(emp?.admin_ship_rate ?? 0) || 0,
       pluxee_value: 0,
       status: "ATIVO",
       kind: "ADMINISTRATIVO",
@@ -5649,9 +5653,10 @@ function JobDetailModal({
             <div className="mb-2">
               <h3 className="text-sm font-semibold">🧑‍💼 Administrativo ({adminActive.length})</h3>
               <p className="text-[10px] text-text-light mt-0.5">
-                Valor fixo por navio — entra no custo, fora da folha. O valor padrão de
-                cada um vem de <a href="/financeiro?tab=funcoes" className="underline">Valores › 👤</a>{" "}
-                {adminFn ? ` (função ${adminFn.name})` : ""} e pode ser ajustado aqui só para este navio.
+                Valor fixo por navio — entra no custo, fora da folha. Quem aparece é o{" "}
+                <strong>setor Administrativo</strong> (RH › Colaboradores). Edite o valor na
+                linha: vale só neste navio; clique no 💾 pra gravar como padrão do
+                colaborador e entrar automático nos próximos navios.
               </p>
             </div>
             {adminActive.length === 0 ? (
@@ -5671,6 +5676,10 @@ function JobDetailModal({
                   <tbody>
                     {adminActive.map((a) => {
                       const emp = employees.find((e) => e.id === a.employee_id);
+                      // Valor da linha ≠ padrão gravado no colaborador → oferece o 💾
+                      // pra levar esse valor pros próximos navios.
+                      const savedDefault = Number(emp?.admin_ship_rate ?? 0) || 0;
+                      const differsFromSaved = emp != null && Number(a.rate) !== savedDefault;
                       return (
                         <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
                           <td className="px-3 py-2">
@@ -5678,7 +5687,18 @@ function JobDetailModal({
                             <span className="block text-[10px] text-text-light uppercase">{emp?.role || "Administrativo"}</span>
                           </td>
                           <td className="px-3 py-2 text-right">
-                            <InlineRateEditor value={Number(a.rate)} canEdit={canEdit && !isReadOnly} onSave={(v) => handleSetAdminRate(a.id, v)} />
+                            <span className="inline-flex items-center gap-1.5 justify-end">
+                              {canEdit && !isReadOnly && differsFromSaved && (
+                                <button
+                                  onClick={() => handleSaveAdminDefault(a)}
+                                  className="p-1 text-text-light hover:text-primary hover:bg-primary/10 rounded transition"
+                                  title={`Gravar ${brl(Number(a.rate))} como padrão de ${emp?.name?.split(" ")[0] || "colaborador"} pros próximos navios (hoje: ${brl(savedDefault)})`}
+                                >
+                                  💾
+                                </button>
+                              )}
+                              <InlineRateEditor value={Number(a.rate)} canEdit={canEdit && !isReadOnly} onSave={(v) => handleSetAdminRate(a.id, v)} />
+                            </span>
                           </td>
                           {canEdit && !isReadOnly && (
                             <td className="px-3 py-2 text-right">
@@ -7117,17 +7137,13 @@ function CostadoTab({
   // legado errado (ex.: R$ 400 vindo do default_rate da role de Embarque).
   const costadoFnDef = pickCostadoFunction(functions);
   const costadoRateDef = costadoFnDef ? Number(costadoFnDef.default_rate) : 0;
-  // Administrativo do Costado: pessoal do setor Administrativo entra como custo
-  // fixo POR NAVIO. Reconhecido pela CATEGORIA — funções marcadas como
-  // "Administrativo (Costado)" (unit ADMIN_COSTADO) — e não por um nome fixo. O
-  // valor por pessoa vem de Valores › 👤 dessa função.
-  const costadoAdminFnIds = new Set(
-    functions.filter((f) => (f.unit || "").toUpperCase() === "ADMIN_COSTADO").map((f) => f.id),
-  );
+  // Administrativo do Costado: pessoal do SETOR Administrativo entra como custo
+  // fixo POR NAVIO (kind=ADMINISTRATIVO, qualquer função-carregador). O valor
+  // por pessoa mora no colaborador (employees.admin_ship_rate) e a alocação
+  // guarda o aplicado no navio.
   const adminAllocsFor = (jobId: string) =>
     allocations.filter(
-      (a) => a.job_id === jobId && (a.kind || "") === "ADMINISTRATIVO" && a.status === "ATIVO"
-        && costadoAdminFnIds.has(a.function_id),
+      (a) => a.job_id === jobId && (a.kind || "") === "ADMINISTRATIVO" && a.status === "ATIVO",
     );
   function effectiveCostadoQty(a: JobAllocation): number {
     return Math.max(1, a.quantity);

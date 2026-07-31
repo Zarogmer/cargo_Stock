@@ -104,6 +104,9 @@ export interface Employee {
   sector: "OPERACIONAL" | "ADMINISTRATIVO" | null;
   role: string | null;
   salary: string | number | null;
+  // Valor fixo por navio do administrativo (setor ADMINISTRATIVO) — entra
+  // automático no custo de cada operação; gravado pelo 💾 do Pagamento de Navios.
+  admin_ship_rate: string | number | null;
   admission_date: string | null;
   // Data limite p/ gozo de férias (coluna "Limite p/ gozo" da Programação de
   // Férias). Prazo legal do período aquisitivo mais antigo em aberto.

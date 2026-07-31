@@ -136,15 +136,33 @@ export function pickFunctionByName<
   return matches.find((f) => f.active !== false) || matches[0];
 }
 
+// Função-carregador do ADMINISTRATIVO: o pessoal de escritório entra no custo
+// do navio pelo SETOR (RH › Colaboradores), com valor por pessoa gravado no
+// próprio colaborador (employees.admin_ship_rate). A função ADMINISTRATIVO
+// existe só porque job_allocations.function_id é obrigatório — ela NÃO aparece
+// nas listas de funções (Valores, RH › Funções, cargo do colaborador) nem pode
+// ser a função principal do Costado. Vale também pra categoria legada
+// ADMIN_COSTADO.
+export function isAdminCarrierFn(f: { name?: string | null; unit?: string | null }): boolean {
+  return (
+    (f.name || "").trim().toUpperCase() === "ADMINISTRATIVO" ||
+    (f.unit || "").trim().toUpperCase() === "ADMIN_COSTADO"
+  );
+}
+
 // Função "principal" do Costado — todos os escalados de Costado entram nela.
 // Depois de aposentar a antiga função COSTADO (valor fixo, sem rosto), passa a ser
 // a função ATIVA da seção SERVICOS (ex.: AUXILIAR OPERACIONAL), que aceita valor
 // por pessoa. Prefere uma que NÃO seja a própria "COSTADO"; cai nela só como
-// fallback, pra não quebrar antes da migração.
+// fallback, pra não quebrar antes da migração. A ADMINISTRATIVO nunca entra —
+// uma função de admin criada na seção Costado sombreava a real por ordem
+// alfabética e zerava o valor/turno dos cards.
 export function pickCostadoFunction<
   F extends { name: string; unit?: string | null; active?: boolean | null },
 >(functions: F[]): F | undefined {
-  const servicos = functions.filter((f) => sectionKeyOfUnit(f.unit) === "SERVICOS");
+  const servicos = functions.filter(
+    (f) => sectionKeyOfUnit(f.unit) === "SERVICOS" && !isAdminCarrierFn(f),
+  );
   const active = servicos.filter((f) => f.active !== false);
   const isCostadoName = (f: F) => (f.name || "").trim().toUpperCase() === "COSTADO";
   return (

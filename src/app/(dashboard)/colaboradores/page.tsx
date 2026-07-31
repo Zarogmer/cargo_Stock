@@ -14,7 +14,7 @@ import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatPhone, formatDateTime, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, MOVEMENT_TYPE_LABELS, type NrCode } from "@/lib/utils";
 import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
 import {
-  unitLabel, normalizeUnit, unitToOption, unitEmoji, unitHint, buildUnitSections,
+  unitLabel, normalizeUnit, unitToOption, unitEmoji, unitHint, buildUnitSections, isAdminCarrierFn,
   pickFunctionByName,
 } from "@/lib/jobUnits";
 import { UnitFormModal } from "@/components/job-unit-form-modal";
@@ -124,8 +124,11 @@ export default function ColaboradoresPage() {
       const fns = (fnRes.data as JobFunction[] | null) || [];
       setJobFunctions(fns);
       setWorkUnits((unitRes.data as WorkUnit[] | null) || []);
+      // ADMINISTRATIVO não é cargo escolhível: é função interna do custo por
+      // navio — o pessoal de escritório é marcado pelo SETOR e tem cargo real
+      // (ANALISTA RH etc.).
       setJobRoleOptions(
-        fns.map((f) => (f.name || "").trim()).filter(Boolean)
+        fns.filter((f) => !isAdminCarrierFn(f)).map((f) => (f.name || "").trim()).filter(Boolean)
       );
       // Mapa "empId-fnId" → valor especial. O modal/detalhe usam pra puxar a Paga.
       const ratesMap = new Map<string, number>();
@@ -928,7 +931,11 @@ function FuncoesRHTab({
   const [editUnit, setEditUnit] = useState<WorkUnit | null>(null);
   const [deleteUnit, setDeleteUnit] = useState<WorkUnit | null>(null);
 
-  const filtered = functions.filter((f) => f.name.toLowerCase().includes(search.toLowerCase()));
+  // A função interna ADMINISTRATIVO fica fora da lista: administrativo é SETOR
+  // (não cargo) e o valor por pessoa é gravado no Pagamento de Navios.
+  const filtered = functions.filter(
+    (f) => !isAdminCarrierFn(f) && f.name.toLowerCase().includes(search.toLowerCase()),
+  );
   // Seções = UNIDADES cadastradas (job_units) — mesma fonte da aba Valores.
   const sections = buildUnitSections(units, filtered).map((s) => ({
     ...s,

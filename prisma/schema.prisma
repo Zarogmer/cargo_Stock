@@ -231,6 +231,11 @@ model Employee {
   sector               String?                                // OPERACIONAL, ADMINISTRATIVO
   role                 String?                                // WAP, AJUDANTE, ESFREGAO, ANALISTA_RH, OPERACIONAL...
   salary               Decimal?  @db.Decimal(10, 2)           // futuro: cálculo de folha
+  // Valor fixo POR NAVIO do pessoal administrativo (setor ADMINISTRATIVO):
+  // entra automático no custo de cada operação (Embarque/Costado), fora da
+  // folha. Gravado direto do modal de Pagamento de Navios (💾) — substituiu o
+  // valor especial da antiga função ADMINISTRATIVO. null = 0.
+  admin_ship_rate      Decimal?  @db.Decimal(10, 2)
   admission_date       DateTime? @db.Date
   // Data limite p/ gozo de férias (coluna "Limite p/ gozo" da Programação de
   // Férias da contabilidade): prazo legal pra tirar as férias do período
