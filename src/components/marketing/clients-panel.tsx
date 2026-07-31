@@ -12,6 +12,7 @@ import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 interface MarketingClient {
   id: number;
   name: string;
+  client_type: string; // EMPRESA | NAVIO — navio não tem cidade/UF
   company: string | null;
   email: string | null;
   phone: string | null;
@@ -26,6 +27,7 @@ interface MarketingClient {
 
 const EMPTY_FORM = {
   name: "",
+  client_type: "EMPRESA",
   company: "",
   email: "",
   phone: "",
@@ -93,6 +95,7 @@ export function ClientsPanel() {
     setEditing(c);
     setForm({
       name: c.name || "",
+      client_type: c.client_type || "EMPRESA",
       company: c.company || "",
       email: c.email || "",
       phone: c.phone || "",
@@ -106,20 +109,23 @@ export function ClientsPanel() {
   }
 
   async function handleSave() {
+    const isNavio = form.client_type === "NAVIO";
     if (!form.name.trim()) {
-      setFormError("Empresa é obrigatória.");
+      setFormError(isNavio ? "Nome do navio é obrigatório." : "Empresa é obrigatória.");
       return;
     }
     setSaving(true);
     setFormError("");
+    // Navio não tem cidade/UF — zera mesmo se digitou antes de trocar o tipo.
     const payload = {
       name: form.name.trim(),
+      client_type: form.client_type,
       company: form.company.trim() || null,
       email: form.email.trim() || null,
       phone: form.phone.trim() || null,
       cnpj: form.cnpj.trim() || null,
-      city: form.city.trim() || null,
-      state: form.state.trim() || null,
+      city: isNavio ? null : form.city.trim() || null,
+      state: isNavio ? null : form.state.trim() || null,
       notes: form.notes.trim() || null,
     };
     try {
@@ -226,7 +232,14 @@ export function ClientsPanel() {
               {filtered.map((c) => (
                 <tr key={c.id} className="border-b border-border last:border-0 hover:bg-gray-50">
                   <td className="px-4 py-3">
-                    <p className="font-medium text-text">{c.name}</p>
+                    <p className="font-medium text-text">
+                      {c.client_type === "NAVIO" && (
+                        <span className="mr-1" title="Navio" aria-hidden>
+                          🚢
+                        </span>
+                      )}
+                      {c.name}
+                    </p>
                     {c.company && c.company !== c.name && (
                       <p className="text-xs text-text-light">{c.company}</p>
                     )}
@@ -288,13 +301,46 @@ export function ClientsPanel() {
         title={editing ? "Editar cliente" : "Novo cliente"}
       >
         <div className="space-y-4">
+          {/* Cliente pode ser empresa ou navio — a prospecção também manda o site
+              direto pro email de bordo. Navio não tem cidade/UF. */}
           <div>
-            <label className="block text-sm font-medium text-text mb-1">Empresa *</label>
+            <label className="block text-sm font-medium text-text mb-1">Tipo *</label>
+            <div className="flex gap-2">
+              {(
+                [
+                  { value: "EMPRESA", label: "🏢 Empresa" },
+                  { value: "NAVIO", label: "🚢 Navio" },
+                ] as const
+              ).map((t) => (
+                <button
+                  key={t.value}
+                  type="button"
+                  onClick={() => setForm({ ...form, client_type: t.value })}
+                  className={`px-4 py-2 rounded-lg border text-sm font-medium transition ${
+                    form.client_type === t.value
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border text-text-light hover:border-primary/50"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">
+              {form.client_type === "NAVIO" ? "Navio *" : "Empresa *"}
+            </label>
             <input
               type="text"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="Ex: Transatlântica Comércio Marítimo"
+              placeholder={
+                form.client_type === "NAVIO"
+                  ? "Ex: MV OCEAN HARMONY"
+                  : "Ex: Transatlântica Comércio Marítimo"
+              }
               className={inputClass}
             />
           </div>
@@ -324,28 +370,30 @@ export function ClientsPanel() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="sm:col-span-2">
-              <label className="block text-sm font-medium text-text mb-1">Cidade</label>
-              <input
-                type="text"
-                value={form.city}
-                onChange={(e) => setForm({ ...form, city: e.target.value })}
-                className={inputClass}
-              />
+          {form.client_type !== "NAVIO" && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="sm:col-span-2">
+                <label className="block text-sm font-medium text-text mb-1">Cidade</label>
+                <input
+                  type="text"
+                  value={form.city}
+                  onChange={(e) => setForm({ ...form, city: e.target.value })}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-text mb-1">Estado (UF)</label>
+                <input
+                  type="text"
+                  value={form.state}
+                  onChange={(e) => setForm({ ...form, state: e.target.value })}
+                  placeholder="SP"
+                  maxLength={2}
+                  className={`${inputClass} uppercase`}
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-text mb-1">Estado (UF)</label>
-              <input
-                type="text"
-                value={form.state}
-                onChange={(e) => setForm({ ...form, state: e.target.value })}
-                placeholder="SP"
-                maxLength={2}
-                className={`${inputClass} uppercase`}
-              />
-            </div>
-          </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-text mb-1">CNPJ</label>

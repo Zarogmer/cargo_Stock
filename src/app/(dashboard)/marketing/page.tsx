@@ -4,10 +4,12 @@ import { useSearchParams } from "next/navigation";
 import { Tabs } from "@/components/ui/tabs";
 import { EmailComposer } from "@/components/marketing/email-composer";
 import { ClientsPanel } from "@/components/marketing/clients-panel";
+import { WatermarkPanel } from "@/components/marketing/watermark-panel";
 
-// Marketing: duas abas dirigidas pelo submenu da sidebar via ?tab= (mesmo padrão
-// do Almoxarifado). "email" = compositor do email de prospecção; "clientes" =
-// cadastro de clientes reutilizável no envio.
+// Marketing: abas dirigidas pelo submenu da sidebar via ?tab= (mesmo padrão do
+// Almoxarifado). "email" = compositor do email de prospecção; "clientes" =
+// cadastro de clientes (empresas e navios) reutilizável no envio; "marca-dagua"
+// = aplica o logo da empresa como marca d'água em imagens.
 export default function MarketingPage() {
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") || "email";
@@ -15,6 +17,7 @@ export default function MarketingPage() {
   const tabs = [
     { key: "email", label: "Enviar email", content: <EmailComposer /> },
     { key: "clientes", label: "Clientes", content: <ClientsPanel /> },
+    { key: "marca-dagua", label: "Marca d'água", content: <WatermarkPanel /> },
   ];
 
   const activeTabLabel = tabs.find((t) => t.key === initialTab)?.label;

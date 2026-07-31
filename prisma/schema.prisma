@@ -1022,11 +1022,14 @@ model WhatsappLidAlias {
 
 // ── Marketing: cadastro de clientes para prospecção por email ─────────────────
 // Lista de clientes/contatos usada na aba Marketing para reaproveitar no envio
-// de email (selecionar um cliente preenche destinatário e saudação).
+// de email (selecionar um cliente preenche destinatário e saudação). Cliente
+// pode ser EMPRESA ou NAVIO — a prospecção também manda o site direto pro email
+// de bordo; navio não tem cidade/UF.
 model MarketingClient {
-  id         Int      @id @default(autoincrement())
-  name       String                                    // nome / razão social
-  company    String?                                   // empresa (se diferente do nome)
+  id          Int     @id @default(autoincrement())
+  name        String                                   // nome / razão social (empresa ou navio)
+  client_type String  @default("EMPRESA")              // EMPRESA | NAVIO
+  company     String?                                  // empresa (se diferente do nome)
   email      String?
   phone      String?
   cnpj       String?

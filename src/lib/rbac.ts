@@ -273,6 +273,7 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       { label: "Enviar email", href: "/marketing?tab=email" },
       { label: "Clientes", href: "/marketing?tab=clientes" },
+      { label: "Marca d'água", href: "/marketing?tab=marca-dagua" },
     ],
   },
   {
