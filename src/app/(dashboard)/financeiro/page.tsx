@@ -49,7 +49,7 @@ if (typeof window !== "undefined") {
   }
 }
 
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { Fragment, useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { releaseShipAllocationsNow } from "@/lib/release-finished-ships";
@@ -5641,36 +5641,59 @@ function JobDetailModal({
             )}
           </div>
 
-          {/* Retorno de material — perdido/insumo/avariado do kit, com o valor de
-              estoque de cada categoria (Embarque/Retorno). Só o perdido custa. */}
+          {/* Retorno de material — perdido/insumo/avariado do kit, item a item
+              com valor de estoque (qtd × unitário), subtotal por categoria e
+              total geral, pra empresa ver quanto foi gasto de material. Valor 0
+              aparece como R$ 0,00 (item sem valor cadastrado ou sem acesso à
+              coluna). Só o perdido custa ao navio. */}
           {(returnSummary.lost.length > 0 || returnSummary.consumed.length > 0 || returnSummary.broken.length > 0) && (() => {
             const sum = (arr: { value: number }[]) => arr.reduce((s, it) => s + it.value, 0);
-            const fmtItems = (arr: { name: string; qty: number; value: number }[]) =>
-              arr.map((it) => `${it.name} ×${it.qty}${it.value > 0 ? ` (${brl(it.value)})` : ""}`).join(" · ");
+            const sections = [
+              { key: "lost", icon: "❌", title: "Perdido", desc: "custo do navio, rateado pela equipe", cls: "text-red-700", items: returnSummary.lost },
+              { key: "consumed", icon: "🛢️", title: "Insumo", desc: "consumido — não custa ao navio", cls: "text-sky-700", items: returnSummary.consumed },
+              { key: "broken", icon: "🔧", title: "Avariado", desc: "a equipe trouxe — não custa ao navio", cls: "text-amber-700", items: returnSummary.broken },
+            ].filter((s) => s.items.length > 0);
+            const totalGeral = sum(returnSummary.lost) + sum(returnSummary.consumed) + sum(returnSummary.broken);
             return (
-              <div className="mb-2 rounded-lg border border-border bg-gray-50 p-3 text-xs space-y-1">
+              <div className="mb-2 rounded-lg border border-border bg-gray-50 p-3 text-xs">
                 <p className="font-semibold text-text">🔧 Retorno de material <span className="font-normal text-text-light">(valor de estoque)</span></p>
-                {returnSummary.lost.length > 0 && (
-                  <p>
-                    <span className="font-medium text-red-700">❌ Perdido{sum(returnSummary.lost) > 0 ? ` · ${brl(sum(returnSummary.lost))}` : ""}</span>
-                    <span className="text-text-light"> (custo do navio, rateado pela equipe): </span>
-                    {fmtItems(returnSummary.lost)}
-                  </p>
-                )}
-                {returnSummary.consumed.length > 0 && (
-                  <p>
-                    <span className="font-medium text-sky-700">🛢️ Insumo{sum(returnSummary.consumed) > 0 ? ` · ${brl(sum(returnSummary.consumed))}` : ""}</span>
-                    <span className="text-text-light"> (consumido — não custa ao navio): </span>
-                    {fmtItems(returnSummary.consumed)}
-                  </p>
-                )}
-                {returnSummary.broken.length > 0 && (
-                  <p>
-                    <span className="font-medium text-amber-700">🔧 Avariado{sum(returnSummary.broken) > 0 ? ` · ${brl(sum(returnSummary.broken))}` : ""}</span>
-                    <span className="text-text-light"> (a equipe trouxe — não custa ao navio): </span>
-                    {fmtItems(returnSummary.broken)}
-                  </p>
-                )}
+                <table className="w-full mt-1.5">
+                  <thead>
+                    <tr className="text-[10px] uppercase tracking-wide text-text-light border-b border-border">
+                      <th className="text-left font-medium pb-0.5">Item</th>
+                      <th className="text-right font-medium pb-0.5 w-12">Qtd</th>
+                      <th className="text-right font-medium pb-0.5 w-20">Unitário</th>
+                      <th className="text-right font-medium pb-0.5 w-24">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sections.map((s) => (
+                      <Fragment key={s.key}>
+                        <tr>
+                          <td colSpan={3} className="pt-1.5">
+                            <span className={`font-medium ${s.cls}`}>{s.icon} {s.title}</span>{" "}
+                            <span className="text-text-light">({s.desc})</span>
+                          </td>
+                          <td className={`pt-1.5 text-right font-semibold tabular-nums whitespace-nowrap ${s.cls}`}>{brl(sum(s.items))}</td>
+                        </tr>
+                        {s.items.map((it) => (
+                          <tr key={it.name} className="border-t border-border/60">
+                            <td className="py-0.5 pl-4 pr-2">{it.name}</td>
+                            <td className="py-0.5 text-right tabular-nums whitespace-nowrap">×{it.qty}</td>
+                            <td className="py-0.5 text-right tabular-nums whitespace-nowrap text-text-light">{brl(it.qty > 0 ? it.value / it.qty : 0)}</td>
+                            <td className="py-0.5 text-right tabular-nums whitespace-nowrap font-medium">{brl(it.value)}</td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t border-border">
+                      <td colSpan={3} className="pt-1.5 font-semibold text-text">💰 Total em materiais</td>
+                      <td className="pt-1.5 text-right font-semibold tabular-nums whitespace-nowrap text-text">{brl(totalGeral)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
               </div>
             );
           })()}
