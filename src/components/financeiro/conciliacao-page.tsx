@@ -116,6 +116,8 @@ export function ConciliacaoPage() {
   // Cartões de crédito por conta bancária (final 4 + dia de fechamento).
   const [cards, setCards] = useState<Card[]>([]);
   const [cardModalAccount, setCardModalAccount] = useState<BankAccount | null>(null);
+  // Cartão em edição no modal (null = cadastrando um novo).
+  const [editingCard, setEditingCard] = useState<Card | null>(null);
   const [newCard, setNewCard] = useState({ last4: "", closing_day: "", label: "" });
   const [savingCard, setSavingCard] = useState(false);
   const [deletingCardId, setDeletingCardId] = useState<number | null>(null);
@@ -217,10 +219,22 @@ export function ConciliacaoPage() {
   // ── Cartões (final 4 + dia de fechamento), vinculados a uma conta ──────────
   function openCardModal(account: BankAccount) {
     setCardModalAccount(account);
+    setEditingCard(null);
     setNewCard({ last4: "", closing_day: "", label: "" });
   }
 
-  async function handleCreateCard() {
+  function openEditCardModal(account: BankAccount, card: Card) {
+    setCardModalAccount(account);
+    setEditingCard(card);
+    setNewCard({ last4: card.last4, closing_day: String(card.closing_day), label: card.label || "" });
+  }
+
+  function closeCardModal() {
+    setCardModalAccount(null);
+    setEditingCard(null);
+  }
+
+  async function handleSaveCard() {
     if (!cardModalAccount) return;
     const last4 = newCard.last4.replace(/\D/g, "");
     const closing = Number(newCard.closing_day);
@@ -228,19 +242,20 @@ export function ConciliacaoPage() {
     if (!Number.isInteger(closing) || closing < 1 || closing > 31) return alert("Dia de fechamento inválido (1 a 31)");
     setSavingCard(true);
     try {
-      const { error } = await db.from("cards").insert({
-        bank_account_id: cardModalAccount.id,
-        last4,
-        closing_day: closing,
-        label: newCard.label.trim() || null,
-        created_by: profile?.full_name || "Sistema",
-      });
+      const payload = { last4, closing_day: closing, label: newCard.label.trim() || null };
+      const { error } = editingCard
+        ? await db.from("cards").update(payload).eq("id", editingCard.id)
+        : await db.from("cards").insert({
+            ...payload,
+            bank_account_id: cardModalAccount.id,
+            created_by: profile?.full_name || "Sistema",
+          });
       if (error) {
-        alert(error.message || "Erro ao cadastrar cartão");
+        alert(error.message || "Erro ao salvar cartão");
         return;
       }
       await loadCards();
-      setCardModalAccount(null);
+      closeCardModal();
     } finally {
       setSavingCard(false);
     }
@@ -545,14 +560,23 @@ export function ConciliacaoPage() {
                                 <span className="text-text-light"> · fecha dia {c.closing_day}</span>
                               </span>
                               {canEdit && (
-                                <button
-                                  onClick={() => handleDeleteCard(c)}
-                                  disabled={deletingCardId === c.id}
-                                  className="text-text-light hover:text-red-600 leading-none px-1"
-                                  title="Excluir cartão"
-                                >
-                                  ✕
-                                </button>
+                                <span className="flex items-center">
+                                  <button
+                                    onClick={() => openEditCardModal(a, c)}
+                                    className="text-text-light hover:text-primary leading-none px-1"
+                                    title="Editar cartão"
+                                  >
+                                    ✎
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteCard(c)}
+                                    disabled={deletingCardId === c.id}
+                                    className="text-text-light hover:text-red-600 leading-none px-1"
+                                    title="Excluir cartão"
+                                  >
+                                    ✕
+                                  </button>
+                                </span>
                               )}
                             </li>
                           ))}
@@ -936,11 +960,11 @@ export function ConciliacaoPage() {
         </div>
       </Modal>
 
-      {/* Modal novo cartão */}
+      {/* Modal novo/editar cartão */}
       <Modal
         open={!!cardModalAccount}
-        onClose={() => setCardModalAccount(null)}
-        title={`Novo cartão${cardModalAccount ? ` — ${cardModalAccount.nickname}` : ""}`}
+        onClose={closeCardModal}
+        title={`${editingCard ? "Editar" : "Novo"} cartão${cardModalAccount ? ` — ${cardModalAccount.nickname}` : ""}`}
       >
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
@@ -981,11 +1005,11 @@ export function ConciliacaoPage() {
             Aparece no Nova Compra como &quot;Cartão com Final {newCard.last4 || "xxxx"}&quot; pra você saber qual cartão usou e quando fecha.
           </p>
           <div className="flex justify-end gap-3 pt-2">
-            <Button variant="secondary" onClick={() => setCardModalAccount(null)}>
+            <Button variant="secondary" onClick={closeCardModal}>
               Cancelar
             </Button>
-            <Button onClick={handleCreateCard} disabled={savingCard}>
-              {savingCard ? "Salvando..." : "Adicionar cartão"}
+            <Button onClick={handleSaveCard} disabled={savingCard}>
+              {savingCard ? "Salvando..." : editingCard ? "Salvar" : "Adicionar cartão"}
             </Button>
           </div>
         </div>
