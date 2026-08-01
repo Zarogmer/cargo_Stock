@@ -12,6 +12,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ImagePicker, ImageLightbox } from "@/components/ui/image-picker";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatDateTime, matchSearch, parseDecimalBR, formatQty, formatCurrency, buildCodeMap, codeForName, normalize } from "@/lib/utils";
+import { STOCK_UNITS } from "@/lib/stock-units";
 import type { StockItem, MaterialTeamAllocation } from "@/types/database";
 
 // Inventário genérico do Almoxarifado: itens com QUANTIDADE, mínimo, setinhas
@@ -267,11 +268,12 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
     }
   }
 
-  async function handleSave(formData: { name: string; quantity: number; min_quantity: number; unit_value: number; image_url: string | null; notes: string | null }) {
+  async function handleSave(formData: { name: string; unit: string; quantity: number; min_quantity: number; unit_value: number; image_url: string | null; notes: string | null }) {
     setSaving(true);
     const actor = profile?.full_name || "Sistema";
     const payload = {
       name: formData.name,
+      unit: formData.unit || "UN",
       quantity: formData.quantity,
       category: "OUTROS",
       team: TEAM,
@@ -381,6 +383,18 @@ export function StockInventoryPanel({ kind }: { kind: InventoryKind }) {
       key: "code",
       label: "Código",
       render: (i: StockItem) => <span className="font-mono text-xs text-text-light">{codeMap.get(i.id) || "—"}</span>,
+    },
+    {
+      // Unidade de medida visível na lista (pacote, rolo, caixa...) sem abrir
+      // o item. "UN" fica discreto (é o default).
+      key: "unit",
+      label: "Un.",
+      render: (i: StockItem) => {
+        const u = (i.unit || "UN").trim().toUpperCase();
+        return u === "UN"
+          ? <span className="text-xs text-text-light/50">un</span>
+          : <span className="inline-block px-1.5 py-0.5 rounded bg-teal-50 border border-teal-200 text-teal-800 text-[11px] font-semibold">{u}</span>;
+      },
     },
     {
       // Quantidade NA VISÃO atual: no "Disponível" é o que sobra no galpão (total
@@ -715,7 +729,7 @@ function TransferModal({ item, source, code, alloc, disponivel, onClose, onTrans
 function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [], altNames = [], newTitle, editTitle, showValue, saving }: {
   open: boolean;
   onClose: () => void;
-  onSave: (data: { name: string; quantity: number; min_quantity: number; unit_value: number; image_url: string | null; notes: string | null }) => void;
+  onSave: (data: { name: string; unit: string; quantity: number; min_quantity: number; unit_value: number; image_url: string | null; notes: string | null }) => void;
   item: StockItem | null;
   itemCode?: string | null;
   // Itens do setor — base do código previsto no cadastro novo.
@@ -729,6 +743,7 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [
   saving: boolean;
 }) {
   const [name, setName] = useState("");
+  const [unit, setUnit] = useState("UN");
   // Strings para aceitar vírgula (ex.: "1,5"); convertidas no submit.
   const [quantity, setQuantity] = useState("");
   const [minQuantity, setMinQuantity] = useState("");
@@ -739,6 +754,7 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [
   useEffect(() => {
     if (item) {
       setName(item.name);
+      setUnit((item.unit || "UN").trim().toUpperCase());
       setQuantity(formatQty(item.quantity));
       setMinQuantity(item.min_quantity ? formatQty(item.min_quantity) : "");
       setUnitValue(item.unit_value ? formatQty(item.unit_value) : "");
@@ -746,6 +762,7 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [
       setNotes(item.notes || "");
     } else {
       setName("");
+      setUnit("UN");
       setQuantity("");
       setMinQuantity("");
       setUnitValue("");
@@ -758,6 +775,7 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [
     e.preventDefault();
     onSave({
       name,
+      unit,
       quantity: parseDecimalBR(quantity),
       // Mínimo é inteiro (coluna Int); arredonda caso digitem decimal.
       min_quantity: Math.round(parseDecimalBR(minQuantity)),
@@ -830,13 +848,22 @@ function MaterialFormModal({ open, onClose, onSave, item, itemCode, allItems = [
         )}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-text mb-1">Padrão <span className="text-text-light font-normal">(opcional)</span></label>
-            <input type="text" inputMode="numeric" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} placeholder="0 = sem padrão" className={inputCls} />
+            <label className="block text-sm font-medium text-text mb-1">Unidade de medida</label>
+            <select value={unit} onChange={(e) => setUnit(e.target.value)} className={inputCls}>
+              {unit && !STOCK_UNITS.some((u) => u.value === unit) && <option value={unit}>{unit}</option>}
+              {STOCK_UNITS.map((u) => (
+                <option key={u.value} value={u.value}>{u.label}</option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="block text-sm font-medium text-text mb-1">Quantidade Atual</label>
             <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 8" className={inputCls} />
           </div>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Padrão <span className="text-text-light font-normal">(opcional)</span></label>
+          <input type="text" inputMode="numeric" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} placeholder="0 = sem padrão" className={inputCls} />
         </div>
         {showValue && (
           <div>

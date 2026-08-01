@@ -11,6 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { matchSearch, parseDecimalBR, formatQty, formatCurrency, normalize, buildCodeMap } from "@/lib/utils";
+import { STOCK_UNITS } from "@/lib/stock-units";
 import type { StockItem, MaterialTeamAllocation } from "@/types/database";
 
 // Aba "Geral" do Almoxarifado: uma tabela única com TODOS os itens de todos os
@@ -390,7 +391,7 @@ export function GeralPanel() {
   // Material: 1 linha stock_items com team = setor; a quantidade entra no galpão
   // (Total, Disponível calculado). Rancho: 1 linha com team = EQUIPE_3 (a linha
   // Disponível/galpão do alimento). Registra ENTRADA no histórico.
-  async function handleAdd(data: { setor: string; name: string; quantity: number; padrao: number; unitValue: number; notes: string | null }) {
+  async function handleAdd(data: { setor: string; name: string; unit: string; quantity: number; padrao: number; unitValue: number; notes: string | null }) {
     const actor = profile?.full_name || "Sistema";
     const today = new Date().toISOString().split("T")[0];
     setSaving(true);
@@ -398,13 +399,13 @@ export function GeralPanel() {
       const isRancho = data.setor === "RANCHO";
       const payload: Record<string, unknown> = {
         name: data.name,
+        unit: data.unit || "UN",
         quantity: data.quantity,
         notes: data.notes,
         updated_by: actor,
       };
       if (isRancho) {
         payload.category = "SUPRIMENTOS";
-        payload.unit = "UN";
         payload.team = DISPONIVEL_RANCHO;
         payload.default_quantity = data.padrao;
         payload.min_quantity = 0;
@@ -470,16 +471,18 @@ export function GeralPanel() {
   // QUANTIDADE vai pra coluna que está EM VISTA (Total/Disponível/equipe) via
   // commitEdit — antes ia sempre pro Total/Disponível, o que confundia quem
   // editava olhando a coluna de uma equipe.
-  async function handleEditSave(data: { name: string; padrao: number; quantity: number; unitValue: number; notes: string | null }) {
+  async function handleEditSave(data: { name: string; unit: string; padrao: number; quantity: number; unitValue: number; notes: string | null }) {
     if (!editRow) return;
     const actor = profile?.full_name || "Sistema";
     const name = data.name.trim() || editRow.name;
+    const unit = data.unit || "UN";
     const qCol = activeCol(editRow);
     setSaving(true);
     try {
       if (editRow.kind === "MAT" && editRow.matItem) {
         const payload: Record<string, unknown> = {
           name,
+          unit,
           min_quantity: Math.round(data.padrao),
           notes: data.notes,
           updated_by: actor,
@@ -488,10 +491,11 @@ export function GeralPanel() {
         await db.from("stock_items").update(payload).eq("id", editRow.matItem.id);
       } else if (editRow.kind === "RANCHO" && editRow.ranchoRows) {
         const lines = Object.values(editRow.ranchoRows).filter(Boolean) as StockItem[];
-        // Nome e padrão são do alimento inteiro: propaga pras linhas por equipe.
+        // Nome, padrão e unidade são do alimento inteiro: propaga pras linhas
+        // por equipe.
         for (const line of lines) {
           await db.from("stock_items")
-            .update({ name, default_quantity: data.padrao, updated_by: actor } as Record<string, unknown>)
+            .update({ name, unit, default_quantity: data.padrao, updated_by: actor } as Record<string, unknown>)
             .eq("id", line.id);
         }
       }
@@ -562,6 +566,17 @@ export function GeralPanel() {
   const baseCols = [
     { key: "name", label: "Item", render: (r: Row) => <span className="font-medium">{r.name}</span> },
     { key: "code", label: "Código", render: (r: Row) => <span className="font-mono text-xs text-text-light">{codeOfRow(r)}</span> },
+    {
+      // Unidade de medida visível na lista (pedido de 2026-08-01): pacote,
+      // rolo, caixa... sem precisar abrir o item. "UN" fica discreto (default).
+      key: "unit", label: "Un.",
+      render: (r: Row) => {
+        const u = (r.unit || "UN").trim().toUpperCase();
+        return u === "UN"
+          ? <span className="text-xs text-text-light/50">un</span>
+          : <span className="inline-block px-1.5 py-0.5 rounded bg-teal-50 border border-teal-200 text-teal-800 text-[11px] font-semibold">{u}</span>;
+      },
+    },
     {
       key: "setor", label: "Setor",
       render: (r: Row) => {
@@ -869,11 +884,12 @@ function GeralAddModal({ open, setores, showValue, allNames, onClose, onSave, sa
   showValue: boolean;
   allNames: { name: string; setor: string }[];
   onClose: () => void;
-  onSave: (data: { setor: string; name: string; quantity: number; padrao: number; unitValue: number; notes: string | null }) => void;
+  onSave: (data: { setor: string; name: string; unit: string; quantity: number; padrao: number; unitValue: number; notes: string | null }) => void;
   saving: boolean;
 }) {
   const [setor, setSetor] = useState(setores[0]?.key || "GALPAO");
   const [name, setName] = useState("");
+  const [unit, setUnit] = useState("UN");
   const [quantity, setQuantity] = useState("");
   const [padrao, setPadrao] = useState("");
   const [unitValue, setUnitValue] = useState("");
@@ -882,7 +898,7 @@ function GeralAddModal({ open, setores, showValue, allNames, onClose, onSave, sa
   useEffect(() => {
     if (open) {
       setSetor(setores[0]?.key || "GALPAO");
-      setName(""); setQuantity(""); setPadrao(""); setUnitValue(""); setNotes("");
+      setName(""); setUnit("UN"); setQuantity(""); setPadrao(""); setUnitValue(""); setNotes("");
     }
   }, [open, setores]);
 
@@ -898,6 +914,7 @@ function GeralAddModal({ open, setores, showValue, allNames, onClose, onSave, sa
     onSave({
       setor,
       name: trimmed,
+      unit,
       quantity: parseDecimalBR(quantity),
       padrao: parseDecimalBR(padrao),
       unitValue: parseDecimalBR(unitValue),
@@ -928,13 +945,21 @@ function GeralAddModal({ open, setores, showValue, allNames, onClose, onSave, sa
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-text mb-1">Padrão <span className="text-text-light font-normal">(opcional)</span></label>
-            <input type="text" inputMode="decimal" value={padrao} onChange={(e) => setPadrao(e.target.value)} placeholder="0 = sem padrão" className={inputCls} />
+            <label className="block text-sm font-medium text-text mb-1">Unidade de medida</label>
+            <select value={unit} onChange={(e) => setUnit(e.target.value)} className={inputCls}>
+              {STOCK_UNITS.map((u) => (
+                <option key={u.value} value={u.value}>{u.label}</option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="block text-sm font-medium text-text mb-1">Quantidade Atual</label>
             <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 8" className={inputCls} />
           </div>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Padrão <span className="text-text-light font-normal">(opcional)</span></label>
+          <input type="text" inputMode="decimal" value={padrao} onChange={(e) => setPadrao(e.target.value)} placeholder="0 = sem padrão" className={inputCls} />
         </div>
         {showValue && (
           <div>
@@ -972,10 +997,11 @@ function GeralEditModal({ row, qtyValue, qtyLabel, showValue, onClose, onSave, s
   qtyLabel: string;
   showValue: boolean;
   onClose: () => void;
-  onSave: (data: { name: string; padrao: number; quantity: number; unitValue: number; notes: string | null }) => void;
+  onSave: (data: { name: string; unit: string; padrao: number; quantity: number; unitValue: number; notes: string | null }) => void;
   saving: boolean;
 }) {
   const [name, setName] = useState("");
+  const [unit, setUnit] = useState("UN");
   const [padrao, setPadrao] = useState("");
   const [quantity, setQuantity] = useState("");
   const [unitValue, setUnitValue] = useState("");
@@ -984,6 +1010,7 @@ function GeralEditModal({ row, qtyValue, qtyLabel, showValue, onClose, onSave, s
   useEffect(() => {
     if (!row) return;
     setName(row.name);
+    setUnit((row.unit || "UN").trim().toUpperCase());
     setQuantity(formatQty(qtyValue));
     if (row.kind === "MAT") {
       const it = row.matItem;
@@ -1009,12 +1036,16 @@ function GeralEditModal({ row, qtyValue, qtyLabel, showValue, onClose, onSave, s
     if (!name.trim()) return;
     onSave({
       name: name.trim(),
+      unit,
       padrao: parseDecimalBR(padrao),
       quantity: parseDecimalBR(quantity),
       unitValue: parseDecimalBR(unitValue),
       notes: notes.trim() || null,
     });
   }
+
+  // Unidade gravada antes desta lista existir (valor livre) continua visível.
+  const unknownUnit = unit && !STOCK_UNITS.some((u) => u.value === unit);
 
   return (
     <Modal open={!!row} onClose={onClose} title={`Editar item — ${row.setorLabel}`}>
@@ -1023,13 +1054,18 @@ function GeralEditModal({ row, qtyValue, qtyLabel, showValue, onClose, onSave, s
           <label className="block text-sm font-medium text-text mb-1">Nome *</label>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className={inputCls} />
           {!isMat && (
-            <p className="mt-1 text-[11px] text-text-light">Nome e Padrão valem pro alimento inteiro (Disponível + equipes).</p>
+            <p className="mt-1 text-[11px] text-text-light">Nome, Unidade e Padrão valem pro alimento inteiro (Disponível + equipes).</p>
           )}
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-text mb-1">Padrão <span className="text-text-light font-normal">(opcional)</span></label>
-            <input type="text" inputMode="decimal" value={padrao} onChange={(e) => setPadrao(e.target.value)} placeholder="0 = sem padrão" className={inputCls} />
+            <label className="block text-sm font-medium text-text mb-1">Unidade de medida</label>
+            <select value={unit} onChange={(e) => setUnit(e.target.value)} className={inputCls}>
+              {unknownUnit && <option value={unit}>{unit}</option>}
+              {STOCK_UNITS.map((u) => (
+                <option key={u.value} value={u.value}>{u.label}</option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="block text-sm font-medium text-text mb-1">
@@ -1037,6 +1073,10 @@ function GeralEditModal({ row, qtyValue, qtyLabel, showValue, onClose, onSave, s
             </label>
             <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="Ex: 8" className={inputCls} />
           </div>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-text mb-1">Padrão <span className="text-text-light font-normal">(opcional)</span></label>
+          <input type="text" inputMode="decimal" value={padrao} onChange={(e) => setPadrao(e.target.value)} placeholder="0 = sem padrão" className={inputCls} />
         </div>
         {isMat && showValue && (
           <div>

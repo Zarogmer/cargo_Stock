@@ -11,6 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { formatDate, formatDateTime, matchSearch, parseDecimalBR, formatQty, buildCodeMap, codeForName, normalize, unitSuffix } from "@/lib/utils";
+import { STOCK_UNITS } from "@/lib/stock-units";
 import type { StockItem } from "@/types/database";
 
 const STOCK_CATEGORIES = [
@@ -19,18 +20,8 @@ const STOCK_CATEGORIES = [
   { value: "FEIRA", label: "Feira" },
 ];
 
-// Unidades de medida do rancho. Carne normalmente é KG (peso), o resto varia
-// (un, fardo, litro, caixa, pacote, dúzia, saco).
-const STOCK_UNITS = [
-  { value: "UN", label: "Unidade (un)" },
-  { value: "KG", label: "Quilograma (kg)" },
-  { value: "FARDO", label: "Fardo" },
-  { value: "L", label: "Litro (L)" },
-  { value: "CX", label: "Caixa (cx)" },
-  { value: "PCT", label: "Pacote (pct)" },
-  { value: "DZ", label: "Dúzia (dz)" },
-  { value: "SACO", label: "Saco" },
-];
+// Unidades de medida — fonte única em @/lib/stock-units (o Rancho usa a mesma
+// lista dos materiais; carne normalmente é KG, o resto varia).
 
 // Abas do Rancho — mesmo modelo do resto do Almoxarifado (materiais-panel.tsx):
 // "Disponível" é o galpão (linha EQUIPE_3, o estoque não separado) e cada equipe

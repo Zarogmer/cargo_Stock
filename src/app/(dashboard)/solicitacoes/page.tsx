@@ -781,7 +781,10 @@ export default function SolicitacoesPage() {
         name,
         location: category,
         quantity: qty,
-        default_quantity: qty,
+        // Compra NÃO decide lista de embarque: item novo nasce com padrão 0 —
+        // quem define o "leva" é o usuário (kit oficial/extras na tela de
+        // Embarque). Pedido de 2026-08-01.
+        default_quantity: 0,
         category: "OUTROS",
         team,
         min_quantity: 0,
@@ -872,8 +875,11 @@ export default function SolicitacoesPage() {
         if (e) throw new Error(e.message);
       } else {
         created = true;
+        // default_quantity 0: comida nova comprada entra no rancho da equipe,
+        // mas NÃO entra sozinha na lista de embarque — o padrão quem define é
+        // o usuário (pedido de 2026-08-01).
         const { data: ins, error: e } = await db.from("stock_items").insert({
-          name, category, unit, quantity: qty, default_quantity: qty, team, min_quantity: 0, updated_by: actor,
+          name, category, unit, quantity: qty, default_quantity: 0, team, min_quantity: 0, updated_by: actor,
         } as any);
         if (e) throw new Error(e.message);
         id = (ins as any)?.id;
