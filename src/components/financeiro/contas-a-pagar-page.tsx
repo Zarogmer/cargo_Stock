@@ -296,7 +296,7 @@ export function ContasAPagarPage() {
   // Seções fixas (planilha) + personalizadas (banco) — pro seletor e os rótulos.
   const merged = useMemo(() => mergeSections(customSections), [customSections]);
 
-  const [statusFilter, setStatusFilter] = useState<"ABERTAS" | "VENCIDO" | "PAGO" | "TODAS">("ABERTAS");
+  const [statusFilter, setStatusFilter] = useState<"ABERTAS" | "VENCIDO" | "PROXIMAS" | "PAGO" | "TODAS">("ABERTAS");
   const [search, setSearch] = useState("");
 
   // Modal único (detalhe + edição na mesma tela).
@@ -482,6 +482,9 @@ export function ContasAPagarPage() {
       if (statusFilter === "PAGO" && !isPaid(inv)) return false;
       // Vencido = em aberto com o vencimento no passado (mesma regra do badge).
       if (statusFilter === "VENCIDO" && (isPaid(inv) || !inv.due_date || inv.due_date.slice(0, 10) >= todayStr())) return false;
+      // Próximas = em aberto com vencimento de hoje em diante (ainda vai vencer)
+      // — o mesmo recorte do bloco Contas a Pagar do Painel Financeiro.
+      if (statusFilter === "PROXIMAS" && (isPaid(inv) || !inv.due_date || inv.due_date.slice(0, 10) < todayStr())) return false;
       if (supplierFilter !== "ALL" && supplierNameOf(inv) !== supplierFilter) return false;
       if (bankFilter !== "ALL" && inv.bank !== bankFilter) return false;
       if (sectionFilter === "NONE" && inv.statement_section) return false;
@@ -1212,6 +1215,7 @@ export function ContasAPagarPage() {
         >
           <option value="ABERTAS">Em aberto</option>
           <option value="VENCIDO">Vencido</option>
+          <option value="PROXIMAS">Próximas (a vencer)</option>
           <option value="PAGO">Pago</option>
           <option value="TODAS">Todas</option>
         </select>
