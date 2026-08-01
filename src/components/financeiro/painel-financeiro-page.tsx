@@ -7,7 +7,7 @@
 //   📋 Contas a Pagar: vencidas, hoje e próximas, com filtro por forma de
 //      pagamento (faturado, cartão...).
 //   🧾 Vales solicitados com saldo a descontar.
-//   📑 Pra onde vai o dinheiro (seções da Demonstração Financeira).
+//   📑 Gasto por Seção (pra onde vai o dinheiro, seções da Demonstração).
 //   🎯 Funcionários: números do Controle (Ganho e Folha); clicar abre o
 //      Detalhamento completo — o mesmo modal do Controle de Funcionários.
 // Restrito a FINANCEIRO_BANCO_ROLES (mesma régua do módulo bancário) — mostra
@@ -649,9 +649,9 @@ export function PainelFinanceiroPage() {
             <div className="bg-card border border-border rounded-xl p-4">
               <div className="flex items-start justify-between gap-2 mb-3">
                 <div>
-                  <h2 className="text-sm font-semibold text-text">📑 Pra onde vai o dinheiro</h2>
+                  <h2 className="text-sm font-semibold text-text">📑 Gasto por Seção</h2>
                   <p className="text-[11px] text-text-light mt-0.5">
-                    Gasto por seção da Demonstração · total {formatCurrency(gasto.total)}
+                    Pra onde vai o dinheiro — seções da Demonstração · total {formatCurrency(gasto.total)}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 whitespace-nowrap">
