@@ -12,6 +12,10 @@ import { AUTO_APPROVE_SETTING_KEY, autoApproveReason } from "@/lib/services/paya
 // POST → cria os títulos por compra selecionada, com o vínculo purchase_order_id.
 // FATURADO parcelado (payment_terms) gera um título por parcela, com o valor
 // dividido igualmente entre elas.
+// TODA compra entra — inclusive cartão de crédito/débito (pedido de 2026-08:
+// o gestor lança a compra e o Financeiro confere no Contas a Pagar). O título
+// do cartão carrega o final/fechamento na observação pra conferir com a fatura,
+// que continua chegando como boleto à parte.
 
 // GET /api/financeiro/contas/from-compras — compras disponíveis pra puxar.
 export async function GET() {
@@ -21,9 +25,6 @@ export async function GET() {
   const purchases = await prisma.purchaseOrder.findMany({
     where: {
       payable_invoices: { none: {} },
-      // Compra no cartão só marca qual cartão foi usado — a fatura vira 1 boleto
-      // à parte, então não entra aqui como título individual.
-      payment_method: { notIn: ["CARTÃO DE CRÉDITO", "CARTÃO DE DÉBITO"] },
     },
     orderBy: [{ purchase_date: "desc" }, { created_at: "desc" }],
     take: 300,
@@ -86,16 +87,15 @@ export async function POST(request: NextRequest) {
   for (const id of ids) {
     const po = await prisma.purchaseOrder.findUnique({
       where: { id },
-      include: { payable_invoices: { select: { id: true } } },
+      include: {
+        payable_invoices: { select: { id: true } },
+        // Cartão usado na compra (final + fechamento) — vai pra observação do
+        // título, pro Financeiro conferir com a fatura.
+        card: { select: { last4: true, closing_day: true, label: true } },
+      },
     });
     // Já virou título ou sumiu — ignora (idempotente).
     if (!po || po.payable_invoices.length > 0) {
-      skipped++;
-      continue;
-    }
-    // Cartão (crédito/débito) nunca vira título individual — a fatura do cartão
-    // é lançada como um boleto à parte (senão o gasto contaria duas vezes).
-    if (po.payment_method === "CARTÃO DE CRÉDITO" || po.payment_method === "CARTÃO DE DÉBITO") {
       skipped++;
       continue;
     }
@@ -114,12 +114,17 @@ export async function POST(request: NextRequest) {
             : []
         : [];
 
-    // Observação: junta navio, forma de pagamento (+ prazos) e a nota original.
+    // Observação: junta navio, forma de pagamento (+ prazos/cartão) e a nota
+    // original. No cartão, o final + dia de fechamento ajudam a casar o título
+    // com a fatura quando ela chegar.
+    const cardLabel = po.card
+      ? ` (${po.card.label?.trim() || `final ${po.card.last4}`} · fecha dia ${po.card.closing_day})`
+      : "";
     const pgtoLabel =
       po.payment_method === "FATURADO" && terms.length > 0
         ? `Pagamento: FATURADO ${terms.join("/")} dias`
         : po.payment_method
-          ? `Pagamento: ${po.payment_method}`
+          ? `Pagamento: ${po.payment_method}${cardLabel}`
           : null;
     const noteParts = [
       po.ship_name ? `Navio: ${po.ship_name}` : null,

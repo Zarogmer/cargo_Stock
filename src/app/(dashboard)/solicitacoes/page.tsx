@@ -636,13 +636,12 @@ export default function SolicitacoesPage() {
       } as any);
       if (buyErr) throw buyErr;
 
-      // 1b) Lança a compra no Contas a Pagar (mesma regra do Nova Compra: toda
-      // compra vira título, menos cartão — a fatura entra como boleto à parte).
+      // 1b) Lança a compra no Contas a Pagar (mesma regra do Nova Compra: TODA
+      // compra vira título, inclusive cartão — o Financeiro confere lá).
       // Best-effort: falha não desfaz a aprovação.
       let contasMsg = "";
       const newPurchaseId = (createdPurchase as unknown as { id?: string } | null)?.id;
-      const isCard = data.paymentMethod === "CARTÃO DE CRÉDITO" || data.paymentMethod === "CARTÃO DE DÉBITO";
-      if (newPurchaseId && !isCard) {
+      if (newPurchaseId) {
         try {
           const r = await fetch("/api/financeiro/contas/from-compras", {
             method: "POST",
@@ -998,14 +997,14 @@ export default function SolicitacoesPage() {
           created_by: actor,
         } as any);
         if (error) throw error;
-        // Toda compra nova é lançada automaticamente no Contas a Pagar — exceto
-        // cartão (crédito/débito), cuja fatura entra como um boleto à parte.
+        // TODA compra nova é lançada automaticamente no Contas a Pagar —
+        // inclusive cartão (o gestor lança, o Financeiro confere lá; a nota do
+        // título leva o final/fechamento do cartão pra casar com a fatura).
         // FATURADO parcelado vira um título por parcela (vencimento = data +
         // dias); o resto vence na data da compra. Falha aqui é não-fatal: a
         // compra já foi salva.
         const newId = (createdPurchase as unknown as { id?: string } | null)?.id;
-        const isCard = data.payment_method === "CARTÃO DE CRÉDITO" || data.payment_method === "CARTÃO DE DÉBITO";
-        if (newId && !isCard) {
+        if (newId) {
           const nParcelas = data.payment_method === "FATURADO"
             ? data.payment_terms?.length || (data.payment_term_days ? 1 : 0)
             : 0;

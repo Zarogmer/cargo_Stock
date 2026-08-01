@@ -3,11 +3,13 @@
 // Painel Financeiro — a "página que mostra tudo" pedida pela diretoria: os
 // vencimentos num lugar só, sem precisar abrir aba por aba.
 //   🚢 Pagamento de navios: navio em aberto vence 20 dias após o fim da operação
-//      (mesmo padrão do modal Pagar em Pagamento de Navios).
-//   📋 Contas a Pagar: o que está vencido, vence hoje e nos próximos dias.
+//      (mesmo padrão do modal Pagar); filtro por mês e por Embarque/Costado.
+//   📋 Contas a Pagar: vencidas, hoje e próximas, com filtro por forma de
+//      pagamento (faturado, cartão...).
 //   🧾 Vales solicitados com saldo a descontar.
 //   📑 Pra onde vai o dinheiro (seções da Demonstração Financeira).
-//   🎯 Funcionários: digite o nome e veja os números do Controle de Funcionários.
+//   🎯 Funcionários: números do Controle (Ganho e Folha); clicar abre o
+//      Detalhamento completo — o mesmo modal do Controle de Funcionários.
 // Restrito a FINANCEIRO_BANCO_ROLES (mesma régua do módulo bancário) — mostra
 // contas, folha e gasto da empresa inteira.
 
@@ -17,11 +19,12 @@ import { useAuth } from "@/lib/auth-context";
 import { canAccessFinanceiroBanco } from "@/lib/rbac";
 import { db } from "@/lib/db";
 import { formatCurrency, matchSearch } from "@/lib/utils";
-import { allocCountsAsWorked } from "@/lib/alloc-worked";
-import { pickCostadoFunction } from "@/lib/jobUnits";
 import { calcJobCost, prepareFinanceAllocations } from "@/lib/job-cost";
-import { type Advance, type AdvanceDiscount, balanceOf, employeeBalance, openAdvances } from "@/lib/vales";
+import { computeEmployeeStats, type EmployeeStats } from "@/lib/employee-stats";
+import { EmployeeDetailDrawer } from "@/components/financeiro/employee-detail-modal";
+import { type Advance, type AdvanceDiscount, balanceOf, openAdvances } from "@/lib/vales";
 import { mergeSections, sectionShortLabel, type CustomSectionRow, type SectionOverrideRow } from "@/lib/statement-sections";
+import { PAYMENT_METHODS } from "@/lib/payment-methods";
 import type { Job, JobAllocation, JobAdjustment, JobFunction, Ship, Employee } from "@/types/database";
 import type { PayableStatus } from "@/types/financeiro";
 
@@ -35,6 +38,7 @@ interface InvoiceLite {
   due_date: string | null;
   status: PayableStatus;
   statement_section: string | null;
+  payment_method: string | null;
   payment_date: string | null;
   created_at: string;
   payee_name: string | null;
@@ -46,26 +50,10 @@ const SHIP_PAYMENT_DAYS = 20;
 
 const MONTHS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
-// Filtro Ano/Mês do painel ("ALL" = tudo). Mês em 1..12 pra casar direto com o
-// ISO ("YYYY-MM-DD") sem passar por Date/timezone.
-type PainelFilter = { year: number | "ALL"; month: number | "ALL" };
-
-function isoInFilter(iso: string | null | undefined, f: PainelFilter): boolean {
-  if (f.year === "ALL" && f.month === "ALL") return true;
-  if (!iso) return false;
-  const y = Number(iso.slice(0, 4));
-  const m = Number(iso.slice(5, 7));
-  if (f.year !== "ALL" && y !== f.year) return false;
-  if (f.month !== "ALL" && m !== f.month) return false;
-  return true;
-}
-
-// Rótulo do período filtrado: "Jul/2026", "2026", "Jul (todos os anos)", "Tudo".
-function filterLabel(f: PainelFilter): string {
-  if (f.year === "ALL" && f.month === "ALL") return "Tudo";
-  if (f.month === "ALL") return String(f.year);
-  const m = MONTHS_PT[f.month - 1] || String(f.month);
-  return f.year === "ALL" ? `${m} (todos os anos)` : `${m}/${f.year}`;
+// "2026-07" → "Jul/2026"
+function ymLabel(ym: string): string {
+  const [y, m] = ym.split("-");
+  return `${MONTHS_PT[Number(m) - 1] || m}/${y}`;
 }
 
 // ── Datas (strings YYYY-MM-DD, sem passar por timezone) ─────────────────────
@@ -140,6 +128,32 @@ function SectionHeader({ emoji, title, hint, href, linkLabel }: {
   );
 }
 
+// Botõezinhos de filtro dos blocos (chips exclusivos).
+function ChipGroup<T extends string>({ value, onChange, options }: {
+  value: T;
+  onChange: (v: T) => void;
+  options: Array<{ value: T; label: string }>;
+}) {
+  return (
+    <div className="flex rounded-lg border border-border overflow-hidden">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          onClick={() => onChange(o.value)}
+          className={`px-2 py-1 text-[11px] font-medium transition whitespace-nowrap ${
+            value === o.value ? "bg-primary text-white" : "bg-card text-text-light hover:text-text"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const selectCls =
+  "text-[11px] border border-border rounded-lg px-2 py-1 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40";
+
 export function PainelFinanceiroPage() {
   const { profile } = useAuth();
   const role = profile?.role || "FINANCEIRO";
@@ -158,12 +172,19 @@ export function PainelFinanceiroPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // ── Filtros por bloco (cada tabela filtra do seu jeito) ────────────────────
+  // Navios: mês da operação (início) + atividade Embarque/Costado.
+  const [naviosMes, setNaviosMes] = useState<string>("ALL"); // "YYYY-MM"
+  const [naviosTipo, setNaviosTipo] = useState<"TODOS" | "EMBARQUE" | "COSTADO">("TODOS");
+  // Contas: recorte de vencimento + forma de pagamento (faturado, cartão...).
+  const [contasView, setContasView] = useState<"TODAS" | "VENCIDAS" | "HOJE" | "PROXIMAS">("TODAS");
+  const [contasPag, setContasPag] = useState<string>("ALL");
+  // Gasto por seção: mês atual ou ano inteiro.
+  const [gastoPeriod, setGastoPeriod] = useState<"MES" | "ANO">("MES");
   // Busca do bloco Funcionários (o "digita o nome e vê o número").
   const [empSearch, setEmpSearch] = useState("");
-  // Filtro Ano/Mês — dirige todos os blocos (navios por início da operação,
-  // contas por vencimento, vales pela data, gasto pela referência da
-  // Demonstração, funcionários pelo período trabalhado). Padrão: tudo em aberto.
-  const [filter, setFilter] = useState<PainelFilter>({ year: "ALL", month: "ALL" });
+  // Colaborador com o Detalhamento aberto (mesmo modal do Controle).
+  const [detailEmp, setDetailEmp] = useState<Employee | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -175,7 +196,7 @@ export function PainelFinanceiroPage() {
         db.from("job_allocations").select("*, job_functions(name, unit)"),
         db.from("job_adjustments").select("*"),
         db.from("ships").select("id, name, status, services").order("arrival_date", { ascending: false }).limit(50),
-        db.from("employees").select("id, name, role, status, sector").order("name"),
+        db.from("employees").select("id, name, role, status, sector, team, phone, admission_date").order("name"),
         db.from("employee_function_rates").select("employee_id, function_id, rate"),
         db.from("employee_advances").select("*").order("advance_date", { ascending: false }),
         db.from("advance_discounts").select("*"),
@@ -217,81 +238,108 @@ export function PainelFinanceiroPage() {
   }, [canView, load]);
 
   const today = todayISO();
-
-  // Anos disponíveis pro filtro: tudo que aparece nos blocos + ano atual.
-  const filterYears = useMemo(() => {
-    const set = new Set<number>([new Date().getFullYear()]);
-    const add = (iso: string | null | undefined) => {
-      const y = Number((iso || "").slice(0, 4));
-      if (Number.isFinite(y) && y > 2000) set.add(y);
-    };
-    for (const j of jobs) add(j.start_date);
-    for (const i of invoices) add(i.due_date);
-    for (const a of advances) add(a.advance_date);
-    return [...set].sort((a, b) => b - a);
-  }, [jobs, invoices, advances]);
-
-  const filterActive = filter.year !== "ALL" || filter.month !== "ALL";
+  const currentYear = new Date().getFullYear();
 
   // ── 🚢 Navios em aberto com vencimento (fim da operação + 20 dias) ─────────
+  const openJobs = useMemo(
+    () => jobs.filter((j) => j.status !== "FECHADO" && j.status !== "CANCELADO"),
+    [jobs],
+  );
+
+  // Meses disponíveis no filtro (início da operação), mais recente primeiro.
+  const naviosMesOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const j of openJobs) {
+      const ym = (j.start_date || "").slice(0, 7);
+      if (ym.length === 7) set.add(ym);
+    }
+    return [...set].sort().reverse();
+  }, [openJobs]);
+
+  // Total geral (sem filtro) — alimenta o KPI lá de cima.
+  const shipsDueTotal = useMemo(
+    () => openJobs.reduce((s, j) => s + calcJobCost(j, allocations, adjustments).total, 0),
+    [openJobs, allocations, adjustments],
+  );
+
   const shipsDue = useMemo(() => {
-    const list = jobs
-      .filter((j) => j.status !== "FECHADO" && j.status !== "CANCELADO")
-      // Período pelo INÍCIO da operação — mesma âncora do Pagamento de Navios.
-      .filter((j) => isoInFilter(j.start_date, filter))
+    // Atividade: mesma leitura das abas do Pagamento de Navios — Embarque
+    // inclui o Administrativo (custo fixo por operação); Costado é só Costado.
+    const kindAllocs =
+      naviosTipo === "TODOS"
+        ? allocations
+        : allocations.filter((a) => {
+            const k = a.kind || "EMBARQUE";
+            return naviosTipo === "EMBARQUE" ? k === "EMBARQUE" || k === "ADMINISTRATIVO" : k === "COSTADO";
+          });
+    // Navio "de costado"/"de embarque" = tem pelo menos 1 escalação daquele tipo.
+    const jobHasKind = (jobId: string): boolean => {
+      if (naviosTipo === "TODOS") return true;
+      return kindAllocs.some((a) => a.job_id === jobId && (naviosTipo !== "EMBARQUE" || (a.kind || "EMBARQUE") === "EMBARQUE"));
+    };
+    const list = openJobs
+      .filter((j) => naviosMes === "ALL" || (j.start_date || "").slice(0, 7) === naviosMes)
+      .filter((j) => jobHasKind(j.id))
       .map((j) => {
         const end = j.end_date ? j.end_date.slice(0, 10) : null;
         const due = end ? addDaysISO(end, SHIP_PAYMENT_DAYS) : null;
         return {
           job: j,
           shipName: j.ships?.name || j.name,
-          cost: calcJobCost(j, allocations, adjustments).total,
+          cost: calcJobCost(j, kindAllocs, adjustments).total,
           due,
           days: due ? daysFromToday(due) : null,
         };
       })
       // Vencimento mais apertado primeiro; sem data de fim vai pro final.
       .sort((a, b) => (a.due || "9999-99-99").localeCompare(b.due || "9999-99-99"));
-    return {
-      list,
-      total: list.reduce((s, x) => s + x.cost, 0),
-      overdue: list.filter((x) => x.days != null && x.days < 0),
-    };
-  }, [jobs, allocations, adjustments, filter]);
+    return { list, total: list.reduce((s, x) => s + x.cost, 0) };
+  }, [openJobs, allocations, adjustments, naviosMes, naviosTipo]);
 
   // ── 📋 Contas a Pagar por vencimento ───────────────────────────────────────
   const contas = useMemo(() => {
     const open = invoices.filter((i) => i.status !== "PAGO" && i.status !== "CANCELADO");
-    // Período pelo VENCIMENTO — "o que tenho que pagar em tal mês".
-    const withDue = open.filter((i) => i.due_date && isoInFilter(i.due_date, filter));
+    const withDueAll = open.filter((i) => i.due_date);
+    // KPIs (globais, sem filtro de forma de pagamento).
+    const sum = (l: InvoiceLite[]) => l.reduce((s, i) => s + Number(i.amount), 0);
+    const overdueAll = withDueAll.filter((i) => i.due_date!.slice(0, 10) < today);
+    const dueTodayAll = withDueAll.filter((i) => i.due_date!.slice(0, 10) === today);
+    // Listas exibidas (obedecem a forma de pagamento).
+    const withDue = contasPag === "ALL" ? withDueAll : withDueAll.filter((i) => (i.payment_method || "") === contasPag);
     const sortAsc = (a: InvoiceLite, b: InvoiceLite) => (a.due_date || "").localeCompare(b.due_date || "");
     const overdue = withDue.filter((i) => i.due_date!.slice(0, 10) < today).sort(sortAsc);
     const dueToday = withDue.filter((i) => i.due_date!.slice(0, 10) === today).sort(sortAsc);
     const upcoming = withDue.filter((i) => i.due_date!.slice(0, 10) > today).sort(sortAsc);
     const noDue = open.filter((i) => !i.due_date);
-    const sum = (l: InvoiceLite[]) => l.reduce((s, i) => s + Number(i.amount), 0);
     return {
       overdue, dueToday, upcoming, noDue,
       overdueTotal: sum(overdue), todayTotal: sum(dueToday), upcomingTotal: sum(upcoming),
-      openTotal: sum(open),
+      kpiOverdue: { count: overdueAll.length, total: sum(overdueAll) },
+      kpiToday: { count: dueTodayAll.length, total: sum(dueTodayAll) },
     };
-  }, [invoices, today, filter]);
+  }, [invoices, today, contasPag]);
+
+  // Formas de pagamento presentes nos títulos em aberto (canônicas primeiro).
+  const contasPagOptions = useMemo(() => {
+    const open = invoices.filter((i) => i.status !== "PAGO" && i.status !== "CANCELADO");
+    const present = [...new Set(open.map((i) => i.payment_method).filter(Boolean) as string[])];
+    const canonical = (PAYMENT_METHODS as readonly string[]).filter((m) => present.includes(m));
+    const custom = present.filter((m) => !(PAYMENT_METHODS as readonly string[]).includes(m)).sort((a, b) => a.localeCompare(b, "pt-BR"));
+    return [...canonical, ...custom];
+  }, [invoices]);
 
   // ── 🧾 Vales com saldo a descontar ─────────────────────────────────────────
   const vales = useMemo(() => {
     const empName = new Map(employees.map((e) => [e.id, e.name]));
-    const open = openAdvances(advances, advDiscounts)
-      // Período pela data do adiantamento (quando a pessoa pegou o vale).
-      .filter((a) => isoInFilter(a.advance_date, filter))
-      .map((a) => ({
-        adv: a,
-        name: empName.get(a.employee_id) || `#${a.employee_id}`,
-        saldo: balanceOf(a, advDiscounts),
-      }));
+    const open = openAdvances(advances, advDiscounts).map((a) => ({
+      adv: a,
+      name: empName.get(a.employee_id) || `#${a.employee_id}`,
+      saldo: balanceOf(a, advDiscounts),
+    }));
     const totalSaldo = open.reduce((s, x) => s + x.saldo, 0);
     const pessoas = new Set(open.map((x) => x.adv.employee_id)).size;
     return { open, totalSaldo, pessoas };
-  }, [advances, advDiscounts, employees, filter]);
+  }, [advances, advDiscounts, employees]);
 
   // ── 📑 Pra onde vai o dinheiro (seções da Demonstração) ────────────────────
   const mergedSections = useMemo(
@@ -300,18 +348,15 @@ export function PainelFinanceiroPage() {
   );
 
   const gasto = useMemo(() => {
-    // Sem filtro, mostra o ano atual (o "pra onde foi o dinheiro" deste ano);
-    // com filtro, obedece Ano/Mês igual aos outros blocos.
-    const effective: PainelFilter = filter.year === "ALL" && filter.month === "ALL"
-      ? { year: Number(today.slice(0, 4)), month: "ALL" }
-      : filter;
+    const ymNow = today.slice(0, 7);
+    const yearNow = today.slice(0, 4);
     const bySection = new Map<string, number>();
     let total = 0;
     for (const inv of invoices) {
       if (!inv.statement_section || inv.status === "CANCELADO") continue;
       // Mesma referência da Demonstração: pagamento > vencimento > criação.
       const ref = (inv.payment_date || inv.due_date || inv.created_at).slice(0, 10);
-      if (!isoInFilter(ref, effective)) continue;
+      if (gastoPeriod === "MES" ? ref.slice(0, 7) !== ymNow : ref.slice(0, 4) !== yearNow) continue;
       const v = Number(inv.amount);
       bySection.set(inv.statement_section, (bySection.get(inv.statement_section) || 0) + v);
       total += v;
@@ -319,69 +364,35 @@ export function PainelFinanceiroPage() {
     const rows = [...bySection.entries()]
       .map(([key, value]) => ({ key, label: sectionShortLabel(key, mergedSections.byKey) || key, value }))
       .sort((a, b) => b.value - a.value);
-    return { rows, total, max: rows[0]?.value || 0, label: filterLabel(effective) };
-  }, [invoices, filter, today, mergedSections]);
+    return { rows, total, max: rows[0]?.value || 0 };
+  }, [invoices, gastoPeriod, today, mergedSections]);
 
-  // ── 🎯 Funcionários (números do Controle no período filtrado) ──────────────
-  // Sem filtro = ano atual (a visão de sempre); Ano/Mês do filtro estreitam,
-  // igual aos filtros do Controle de Funcionários.
-  const empYear = filter.year === "ALL" ? new Date().getFullYear() : filter.year;
-  const empStats = useMemo(() => {
-    const costadoFn = pickCostadoFunction(functions);
-    const costadoRate = costadoFn ? Number(costadoFn.default_rate) : 0;
-    const jobById = new Map(jobs.map((j) => [j.id, j]));
-    interface Row {
-      emp: Employee; ganho: number; poroes: number; turnos: number;
-      ships: Set<string>; vale: number;
-    }
-    const map = new Map<number, Row>();
-    for (const e of employees) {
-      if ((e.status ?? "ATIVO") !== "ATIVO") continue;
-      map.set(e.id, { emp: e, ganho: 0, poroes: 0, turnos: 0, ships: new Set(), vale: employeeBalance(e.id, advances, advDiscounts) });
-    }
-    const embarqueJobSeen = new Map<number, Set<string>>();
-    for (const a of allocations) {
-      if (!allocCountsAsWorked(a)) continue;
-      if (a.employee_id == null) continue;
-      if ((a.kind || "EMBARQUE") === "ADMINISTRATIVO") continue;
-      const s = map.get(a.employee_id);
-      if (!s) continue;
-      const job = jobById.get(a.job_id);
-      const dateStr = a.shift_date || job?.start_date || null;
-      if (!dateStr) continue;
-      const d = new Date(dateStr);
-      if (d.getFullYear() !== empYear) continue;
-      if (filter.month !== "ALL" && d.getMonth() + 1 !== filter.month) continue;
-      const shipName = job?.ships?.name || job?.name || null;
-      const extra = Number(a.extra_value || 0);
-      if (a.kind === "COSTADO") {
-        // Valor canônico do turno vem da função principal do Costado (Valores).
-        const qty = Math.max(1, a.quantity);
-        s.ganho += costadoRate * qty + extra;
-        s.turnos += qty;
-        if (shipName) s.ships.add(shipName);
-      } else {
-        const holds = Math.max(1, Number(job?.holds_count || 1));
-        s.ganho += (Number(a.rate) + Number(a.service_extra_rate || 0)) * holds + extra;
-        const seen = embarqueJobSeen.get(a.employee_id) || new Set<string>();
-        if (!seen.has(a.job_id)) {
-          s.poroes += holds;
-          seen.add(a.job_id);
-          embarqueJobSeen.set(a.employee_id, seen);
-          if (shipName) s.ships.add(shipName);
-        }
-      }
-    }
-    return [...map.values()].sort((a, b) => b.ganho - a.ganho);
-  }, [allocations, jobs, employees, functions, advances, advDiscounts, empYear, filter.month]);
+  // ── 🎯 Funcionários — motor do Controle (ano atual), com Ganho E Folha ─────
+  const empStats = useMemo(
+    () =>
+      computeEmployeeStats(
+        {
+          employees, allocations, adjustments, advances, advDiscounts,
+          jobs, ships: jobs.map((j) => ({ id: j.ship_id || "", name: j.ships?.name || j.name })).filter((s) => s.id),
+          functions,
+        },
+        { year: currentYear, month: "TODOS" },
+      ).sort((a, b) => b.totalEarnings - a.totalEarnings),
+    [employees, allocations, adjustments, advances, advDiscounts, jobs, functions, currentYear],
+  );
 
   const empVisible = useMemo(() => {
     const q = empSearch.trim();
-    if (!q) return empStats.filter((s) => s.ganho > 0 || s.vale > 0).slice(0, 8);
+    if (!q) return empStats.filter((s) => s.totalEarnings > 0 || s.valeBalance > 0).slice(0, 8);
     return empStats
-      .filter((s) => matchSearch(s.emp.name, q) || matchSearch(s.emp.role || "", q))
+      .filter((s) => matchSearch(s.employee.name, q) || matchSearch(s.employee.role || "", q))
       .slice(0, 30);
   }, [empStats, empSearch]);
+
+  const detailStat: EmployeeStats | null = useMemo(
+    () => (detailEmp ? empStats.find((s) => s.employee.id === detailEmp.id) || null : null),
+    [detailEmp, empStats],
+  );
 
   if (!canView) {
     return (
@@ -395,6 +406,23 @@ export function PainelFinanceiroPage() {
   const valesShown = vales.open.slice(0, 12);
   const gastoShown = gasto.rows.slice(0, 9);
   const gastoOutras = gasto.rows.slice(9);
+
+  const contaRow = (i: InvoiceLite, valueCls: string, showChip = true) => (
+    <li key={i.id} className="py-1.5 flex items-center justify-between gap-3">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-text truncate">{i.description}</span>
+          {showChip && <DueChip due={i.due_date} />}
+        </div>
+        <p className="text-[11px] text-text-light truncate">
+          {fmtBR(i.due_date)}
+          {i.suppliers?.name || i.payee_name ? ` · ${i.suppliers?.name || i.payee_name}` : ""}
+          {i.payment_method ? ` · ${i.payment_method}` : ""}
+        </p>
+      </div>
+      <span className={`text-sm font-semibold whitespace-nowrap ${valueCls}`}>{formatCurrency(Number(i.amount))}</span>
+    </li>
+  );
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -421,63 +449,22 @@ export function PainelFinanceiroPage() {
         </div>
       ) : (
         <>
-          {/* Filtro Ano/Mês — dirige todos os blocos do painel. Padrão "tudo":
-              mostra o que está em aberto, seja de quando for. */}
-          <div className="flex flex-wrap items-center gap-2 bg-card border border-border rounded-xl p-2">
-            <span className="text-xs font-semibold text-text-light px-1">🔎 Filtrar:</span>
-            <select
-              className="text-xs border border-border rounded-lg px-2 py-1.5 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
-              value={filter.year === "ALL" ? "ALL" : String(filter.year)}
-              onChange={(e) => setFilter((f) => ({ ...f, year: e.target.value === "ALL" ? "ALL" : parseInt(e.target.value, 10) }))}
-              title="Ano"
-            >
-              <option value="ALL">Todos os anos</option>
-              {filterYears.map((y) => (
-                <option key={y} value={y}>{y}</option>
-              ))}
-            </select>
-            <select
-              className="text-xs border border-border rounded-lg px-2 py-1.5 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
-              value={filter.month === "ALL" ? "ALL" : String(filter.month)}
-              onChange={(e) => setFilter((f) => ({ ...f, month: e.target.value === "ALL" ? "ALL" : parseInt(e.target.value, 10) }))}
-              title="Mês"
-            >
-              <option value="ALL">Todos os meses</option>
-              {MONTHS_PT.map((m, i) => (
-                <option key={m} value={i + 1}>{m}</option>
-              ))}
-            </select>
-            {filterActive && (
-              <>
-                <button
-                  onClick={() => setFilter({ year: "ALL", month: "ALL" })}
-                  className="text-xs text-text-light hover:text-text px-2 py-1.5 rounded-lg hover:bg-gray-100 transition"
-                >
-                  ✕ Limpar
-                </button>
-                <span className="text-[11px] text-text-light ml-auto px-1">
-                  Mostrando: <b className="text-text">{filterLabel(filter)}</b> · navios pelo início da operação, contas pelo vencimento
-                </span>
-              </>
-            )}
-          </div>
-
-          {/* KPIs */}
+          {/* KPIs (sempre globais — os filtros dos blocos não mexem aqui) */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
               <p className="text-[10px] font-semibold text-blue-900 uppercase tracking-wider">🚢 Navios a pagar</p>
-              <p className="text-xl font-bold text-blue-900 mt-1">{formatCurrency(shipsDue.total)}</p>
-              <p className="text-[11px] text-blue-800 mt-0.5">{shipsDue.list.length} navio(s) em aberto</p>
+              <p className="text-xl font-bold text-blue-900 mt-1">{formatCurrency(shipsDueTotal)}</p>
+              <p className="text-[11px] text-blue-800 mt-0.5">{openJobs.length} navio(s) em aberto</p>
             </div>
             <div className="bg-red-50 border border-red-100 rounded-xl p-4">
               <p className="text-[10px] font-semibold text-red-900 uppercase tracking-wider">⏰ Contas vencidas</p>
-              <p className="text-xl font-bold text-red-700 mt-1">{formatCurrency(contas.overdueTotal)}</p>
-              <p className="text-[11px] text-red-800 mt-0.5">{contas.overdue.length} título(s) atrasado(s)</p>
+              <p className="text-xl font-bold text-red-700 mt-1">{formatCurrency(contas.kpiOverdue.total)}</p>
+              <p className="text-[11px] text-red-800 mt-0.5">{contas.kpiOverdue.count} título(s) atrasado(s)</p>
             </div>
             <div className="bg-amber-50 border border-amber-100 rounded-xl p-4">
               <p className="text-[10px] font-semibold text-amber-900 uppercase tracking-wider">📅 Vence hoje</p>
-              <p className="text-xl font-bold text-amber-700 mt-1">{formatCurrency(contas.todayTotal)}</p>
-              <p className="text-[11px] text-amber-800 mt-0.5">{contas.dueToday.length} título(s) hoje · {fmtBR(today)}</p>
+              <p className="text-xl font-bold text-amber-700 mt-1">{formatCurrency(contas.kpiToday.total)}</p>
+              <p className="text-[11px] text-amber-800 mt-0.5">{contas.kpiToday.count} título(s) hoje · {fmtBR(today)}</p>
             </div>
             <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4">
               <p className="text-[10px] font-semibold text-emerald-900 uppercase tracking-wider">🧾 Vales em aberto</p>
@@ -496,10 +483,31 @@ export function PainelFinanceiroPage() {
                 href="/financeiro?tab=navios"
                 linkLabel="Pagamento de Navios"
               />
+              {/* Filtros do bloco: mês da operação + Embarque/Costado */}
+              <div className="flex items-center gap-2 flex-wrap mb-2">
+                <ChipGroup
+                  value={naviosTipo}
+                  onChange={setNaviosTipo}
+                  options={[
+                    { value: "TODOS", label: "Todos" },
+                    { value: "EMBARQUE", label: "🚢 Embarque" },
+                    { value: "COSTADO", label: "⚓ Costado" },
+                  ]}
+                />
+                <select className={selectCls} value={naviosMes} onChange={(e) => setNaviosMes(e.target.value)} title="Mês do início da operação">
+                  <option value="ALL">Todos os meses</option>
+                  {naviosMesOptions.map((ym) => (
+                    <option key={ym} value={ym}>{ymLabel(ym)}</option>
+                  ))}
+                </select>
+                {(naviosTipo !== "TODOS" || naviosMes !== "ALL") && (
+                  <span className="text-[11px] text-text-light ml-auto">
+                    {shipsDue.list.length} navio(s) · {formatCurrency(shipsDue.total)}
+                  </span>
+                )}
+              </div>
               {shipsDue.list.length === 0 ? (
-                <p className="text-sm text-text-light">
-                  Nenhum navio com pagamento em aberto{filterActive ? " no período filtrado" : ""}. 🎉
-                </p>
+                <p className="text-sm text-text-light">Nenhum navio com pagamento em aberto nesse recorte. 🎉</p>
               ) : (
                 <ul className="divide-y divide-border">
                   {shipsDue.list.map(({ job, shipName, cost, due }) => (
@@ -530,86 +538,69 @@ export function PainelFinanceiroPage() {
                 href="/financeiro/contas"
                 linkLabel="Contas a Pagar"
               />
+              {/* Filtros do bloco: recorte do vencimento + forma de pagamento */}
+              <div className="flex items-center gap-2 flex-wrap mb-2">
+                <ChipGroup
+                  value={contasView}
+                  onChange={setContasView}
+                  options={[
+                    { value: "TODAS", label: "Todas" },
+                    { value: "VENCIDAS", label: "Vencidas" },
+                    { value: "HOJE", label: "Hoje" },
+                    { value: "PROXIMAS", label: "Próximas" },
+                  ]}
+                />
+                <select className={selectCls} value={contasPag} onChange={(e) => setContasPag(e.target.value)} title="Forma de pagamento">
+                  <option value="ALL">Toda forma de pagamento</option>
+                  {contasPagOptions.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
               {contas.overdue.length + contas.dueToday.length + contas.upcoming.length === 0 ? (
-                <p className="text-sm text-text-light">
-                  Nenhum título em aberto com vencimento{filterActive ? " no período filtrado" : ""}. 🎉
-                </p>
+                <p className="text-sm text-text-light">Nenhum título em aberto nesse recorte. 🎉</p>
               ) : (
                 <div className="space-y-3">
-                  {contas.overdue.length > 0 && (
+                  {(contasView === "TODAS" || contasView === "VENCIDAS") && contas.overdue.length > 0 && (
                     <div>
                       <p className="text-[10px] font-semibold text-red-700 uppercase tracking-wider mb-1">
-                        Vencidas · {formatCurrency(contas.overdueTotal)}
+                        Vencidas · {contas.overdue.length} · {formatCurrency(contas.overdueTotal)}
                       </p>
                       <ul className="divide-y divide-border">
-                        {contas.overdue.map((i) => (
-                          <li key={i.id} className="py-1.5 flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm text-text truncate">{i.description}</span>
-                                <DueChip due={i.due_date} />
-                              </div>
-                              <p className="text-[11px] text-text-light truncate">
-                                {fmtBR(i.due_date)}{i.suppliers?.name || i.payee_name ? ` · ${i.suppliers?.name || i.payee_name}` : ""}
-                              </p>
-                            </div>
-                            <span className="text-sm font-semibold text-red-700 whitespace-nowrap">{formatCurrency(Number(i.amount))}</span>
-                          </li>
-                        ))}
+                        {contas.overdue.map((i) => contaRow(i, "text-red-700"))}
                       </ul>
                     </div>
                   )}
-                  {contas.dueToday.length > 0 && (
-                    <div>
-                      <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wider mb-1">
-                        Hoje · {formatCurrency(contas.todayTotal)}
-                      </p>
-                      <ul className="divide-y divide-border">
-                        {contas.dueToday.map((i) => (
-                          <li key={i.id} className="py-1.5 flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <span className="text-sm text-text truncate block">{i.description}</span>
-                              {(i.suppliers?.name || i.payee_name) && (
-                                <p className="text-[11px] text-text-light truncate">{i.suppliers?.name || i.payee_name}</p>
-                              )}
-                            </div>
-                            <span className="text-sm font-semibold text-amber-700 whitespace-nowrap">{formatCurrency(Number(i.amount))}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                  {(contasView === "TODAS" || contasView === "HOJE") && (
+                    contas.dueToday.length > 0 ? (
+                      <div>
+                        <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wider mb-1">
+                          Hoje · {contas.dueToday.length} · {formatCurrency(contas.todayTotal)}
+                        </p>
+                        <ul className="divide-y divide-border">
+                          {contas.dueToday.map((i) => contaRow(i, "text-amber-700", false))}
+                        </ul>
+                      </div>
+                    ) : contasView === "HOJE" ? (
+                      <p className="text-sm text-text-light">Nada vencendo hoje nesse recorte. 🎉</p>
+                    ) : null
                   )}
-                  {contas.upcoming.length > 0 && (
+                  {(contasView === "TODAS" || contasView === "PROXIMAS") && contas.upcoming.length > 0 && (
                     <div>
                       <p className="text-[10px] font-semibold text-text-light uppercase tracking-wider mb-1">
-                        Próximos vencimentos · {formatCurrency(contas.upcomingTotal)}
+                        Próximos vencimentos · {contas.upcoming.length} · {formatCurrency(contas.upcomingTotal)}
                       </p>
                       <ul className="divide-y divide-border">
-                        {upcomingShown.map((i) => (
-                          <li key={i.id} className="py-1.5 flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm text-text truncate">{i.description}</span>
-                                <DueChip due={i.due_date} />
-                              </div>
-                              <p className="text-[11px] text-text-light truncate">
-                                {fmtBR(i.due_date)}{i.suppliers?.name || i.payee_name ? ` · ${i.suppliers?.name || i.payee_name}` : ""}
-                              </p>
-                            </div>
-                            <span className="text-sm font-semibold text-text whitespace-nowrap">{formatCurrency(Number(i.amount))}</span>
-                          </li>
-                        ))}
+                        {(contasView === "PROXIMAS" ? contas.upcoming.slice(0, 25) : upcomingShown).map((i) => contaRow(i, "text-text"))}
                       </ul>
-                      {contas.upcoming.length > upcomingShown.length && (
+                      {contas.upcoming.length > (contasView === "PROXIMAS" ? 25 : upcomingShown.length) && (
                         <p className="text-[11px] text-text-light mt-1">
-                          + {contas.upcoming.length - upcomingShown.length} título(s) mais adiante — veja no Contas a Pagar.
+                          + {contas.upcoming.length - (contasView === "PROXIMAS" ? 25 : upcomingShown.length)} título(s) mais adiante — veja no Contas a Pagar.
                         </p>
                       )}
                     </div>
                   )}
-                  {/* Título sem vencimento não entra em período nenhum — o aviso
-                      só faz sentido na visão "Tudo". */}
-                  {!filterActive && contas.noDue.length > 0 && (
+                  {contasView === "TODAS" && contas.noDue.length > 0 && (
                     <p className="text-[11px] text-text-light">
                       ⚠️ {contas.noDue.length} título(s) em aberto sem data de vencimento.
                     </p>
@@ -628,9 +619,7 @@ export function PainelFinanceiroPage() {
                 linkLabel="Relatório de Vales"
               />
               {valesShown.length === 0 ? (
-                <p className="text-sm text-text-light">
-                  Nenhum vale com saldo em aberto{filterActive ? " no período filtrado" : ""}. 🎉
-                </p>
+                <p className="text-sm text-text-light">Nenhum vale com saldo em aberto. 🎉</p>
               ) : (
                 <>
                   <ul className="divide-y divide-border">
@@ -658,16 +647,30 @@ export function PainelFinanceiroPage() {
 
             {/* 📑 Pra onde vai o dinheiro */}
             <div className="bg-card border border-border rounded-xl p-4">
-              <SectionHeader
-                emoji="📑"
-                title="Pra onde vai o dinheiro"
-                hint={`Gasto por seção da Demonstração · ${gasto.label} · total ${formatCurrency(gasto.total)}`}
-                href="/financeiro?tab=demonstracao"
-                linkLabel="Demonstração"
-              />
+              <div className="flex items-start justify-between gap-2 mb-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-text">📑 Pra onde vai o dinheiro</h2>
+                  <p className="text-[11px] text-text-light mt-0.5">
+                    Gasto por seção da Demonstração · total {formatCurrency(gasto.total)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 whitespace-nowrap">
+                  <ChipGroup
+                    value={gastoPeriod}
+                    onChange={setGastoPeriod}
+                    options={[
+                      { value: "MES", label: "Mês atual" },
+                      { value: "ANO", label: "Ano" },
+                    ]}
+                  />
+                  <Link href="/financeiro?tab=demonstracao" className="text-xs text-primary hover:underline">
+                    Demonstração →
+                  </Link>
+                </div>
+              </div>
               {gastoShown.length === 0 ? (
                 <p className="text-sm text-text-light">
-                  Nenhum gasto classificado em seção no período ({gasto.label}).
+                  Nenhum gasto classificado em seção {gastoPeriod === "MES" ? "neste mês" : "neste ano"}.
                 </p>
               ) : (
                 <ul className="space-y-1.5">
@@ -700,8 +703,8 @@ export function PainelFinanceiroPage() {
           <div className="bg-card border border-border rounded-xl p-4">
             <SectionHeader
               emoji="🎯"
-              title={`Funcionários — números de ${filterLabel({ year: empYear, month: filter.month })}`}
-              hint="Digite o nome pra puxar o resumo do Controle de Funcionários"
+              title={`Funcionários — números de ${currentYear}`}
+              hint="Digite o nome pra puxar o resumo; clique na linha pra abrir o Detalhamento completo"
               href="/financeiro?tab=controle"
               linkLabel="Controle completo"
             />
@@ -723,6 +726,7 @@ export function PainelFinanceiroPage() {
                       <th className="py-2 pr-3 font-semibold">Colaborador</th>
                       <th className="py-2 pr-3 font-semibold">Cargo</th>
                       <th className="py-2 pr-3 font-semibold text-right">Ganho no ano</th>
+                      <th className="py-2 pr-3 font-semibold text-right" title="PAGTO NA FOLHA — Ganho menos a parte paga no cartão Pluxee, igual ao Pagamento de Navios">Folha</th>
                       <th className="py-2 pr-3 font-semibold text-right">Porões</th>
                       <th className="py-2 pr-3 font-semibold text-right">Turnos</th>
                       <th className="py-2 pr-3 font-semibold text-right">Navios</th>
@@ -731,15 +735,21 @@ export function PainelFinanceiroPage() {
                   </thead>
                   <tbody className="divide-y divide-border">
                     {empVisible.map((s) => (
-                      <tr key={s.emp.id}>
-                        <td className="py-2 pr-3 font-medium text-text whitespace-nowrap">{s.emp.name}</td>
-                        <td className="py-2 pr-3 text-text-light whitespace-nowrap">{s.emp.role || "—"}</td>
-                        <td className="py-2 pr-3 text-right font-semibold text-emerald-700 whitespace-nowrap">{formatCurrency(s.ganho)}</td>
-                        <td className="py-2 pr-3 text-right text-text">{s.poroes || "—"}</td>
-                        <td className="py-2 pr-3 text-right text-text">{s.turnos || "—"}</td>
-                        <td className="py-2 pr-3 text-right text-text">{s.ships.size || "—"}</td>
-                        <td className={`py-2 text-right font-semibold whitespace-nowrap ${s.vale > 0 ? "text-red-700" : "text-text-light"}`}>
-                          {s.vale > 0 ? formatCurrency(s.vale) : "—"}
+                      <tr
+                        key={s.employee.id}
+                        onClick={() => setDetailEmp(s.employee)}
+                        className="cursor-pointer hover:bg-gray-50 transition"
+                        title="Clique pra ver o detalhamento completo"
+                      >
+                        <td className="py-2 pr-3 font-medium text-text whitespace-nowrap">{s.employee.name}</td>
+                        <td className="py-2 pr-3 text-text-light whitespace-nowrap">{s.employee.role || "—"}</td>
+                        <td className="py-2 pr-3 text-right font-semibold text-emerald-700 whitespace-nowrap">{formatCurrency(s.totalEarnings)}</td>
+                        <td className="py-2 pr-3 text-right font-semibold text-purple-700 whitespace-nowrap">{formatCurrency(s.folha)}</td>
+                        <td className="py-2 pr-3 text-right text-text">{s.embarque.poroes || "—"}</td>
+                        <td className="py-2 pr-3 text-right text-text">{s.costado.turnos || "—"}</td>
+                        <td className="py-2 pr-3 text-right text-text">{(s.embarque.ships.size + s.costado.ships.size) || "—"}</td>
+                        <td className={`py-2 text-right font-semibold whitespace-nowrap ${s.valeBalance > 0 ? "text-red-700" : "text-text-light"}`}>
+                          {s.valeBalance > 0 ? formatCurrency(s.valeBalance) : "—"}
                         </td>
                       </tr>
                     ))}
@@ -747,12 +757,20 @@ export function PainelFinanceiroPage() {
                 </table>
                 {!empSearch.trim() && (
                   <p className="text-[11px] text-text-light mt-2">
-                    Mostrando os {empVisible.length} maiores ganhos do período — use a busca pra achar qualquer um.
+                    Mostrando os {empVisible.length} maiores ganhos do ano — use a busca pra achar qualquer um.
                   </p>
                 )}
               </div>
             )}
           </div>
+
+          {/* Detalhamento do colaborador — o MESMO modal do Controle de Funcionários */}
+          <EmployeeDetailDrawer
+            employee={detailEmp}
+            stat={detailStat}
+            periodLabel={`Ano ${currentYear}`}
+            onClose={() => setDetailEmp(null)}
+          />
         </>
       )}
     </div>

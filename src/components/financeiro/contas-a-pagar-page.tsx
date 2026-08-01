@@ -115,6 +115,12 @@ interface RecurringBillRow {
   created_by: string;
 }
 
+// Meses por extenso pro filtro ("Julho/2026" em vez de "07/2026").
+const MONTH_NAMES_PT = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+
 // "2027-01" → "01/2027" (rótulo dos meses da conta mensal).
 function fmtMonthKey(m: string): string {
   const [y, mo] = m.split("-");
@@ -354,8 +360,10 @@ export function ContasAPagarPage() {
   // ainda não virou título. O lançamento na hora da compra é best-effort (uma
   // falha de rede não desfaz a compra), então sem isto uma compra podia ficar
   // órfã pra sempre — foi o que aconteceu com uma de R$ 10.298. Idempotente: o
-  // endpoint ignora quem já tem título, e cartão nunca entra (a fatura vira um
-  // boleto à parte). Silencioso: é manutenção, não ação do usuário.
+  // endpoint ignora quem já tem título. Cartão TAMBÉM entra (desde 2026-08 —
+  // gestor lança, Financeiro confere; a fatura segue como boleto à parte, e a
+  // observação do título traz o final do cartão pra conferência). Silencioso:
+  // é manutenção, não ação do usuário.
   const reconcileCompras = useCallback(async () => {
     try {
       const res = await fetch("/api/financeiro/contas/from-compras");
@@ -1192,7 +1200,7 @@ export function ContasAPagarPage() {
             const [y, mo] = m.split("-");
             return (
               <option key={m} value={m}>
-                {mo}/{y}
+                {MONTH_NAMES_PT[Number(mo) - 1] || mo}/{y}
               </option>
             );
           })}
