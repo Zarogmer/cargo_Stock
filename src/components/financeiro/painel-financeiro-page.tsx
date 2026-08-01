@@ -44,6 +44,30 @@ interface InvoiceLite {
 // Pagamento do navio vence 20 dias após o fim da operação (padrão do PayShipModal).
 const SHIP_PAYMENT_DAYS = 20;
 
+const MONTHS_PT = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+
+// Filtro Ano/Mês do painel ("ALL" = tudo). Mês em 1..12 pra casar direto com o
+// ISO ("YYYY-MM-DD") sem passar por Date/timezone.
+type PainelFilter = { year: number | "ALL"; month: number | "ALL" };
+
+function isoInFilter(iso: string | null | undefined, f: PainelFilter): boolean {
+  if (f.year === "ALL" && f.month === "ALL") return true;
+  if (!iso) return false;
+  const y = Number(iso.slice(0, 4));
+  const m = Number(iso.slice(5, 7));
+  if (f.year !== "ALL" && y !== f.year) return false;
+  if (f.month !== "ALL" && m !== f.month) return false;
+  return true;
+}
+
+// Rótulo do período filtrado: "Jul/2026", "2026", "Jul (todos os anos)", "Tudo".
+function filterLabel(f: PainelFilter): string {
+  if (f.year === "ALL" && f.month === "ALL") return "Tudo";
+  if (f.month === "ALL") return String(f.year);
+  const m = MONTHS_PT[f.month - 1] || String(f.month);
+  return f.year === "ALL" ? `${m} (todos os anos)` : `${m}/${f.year}`;
+}
+
 // ── Datas (strings YYYY-MM-DD, sem passar por timezone) ─────────────────────
 
 function todayISO(): string {
@@ -136,8 +160,10 @@ export function PainelFinanceiroPage() {
 
   // Busca do bloco Funcionários (o "digita o nome e vê o número").
   const [empSearch, setEmpSearch] = useState("");
-  // Gasto por seção: mês atual ou ano inteiro.
-  const [gastoPeriod, setGastoPeriod] = useState<"MES" | "ANO">("MES");
+  // Filtro Ano/Mês — dirige todos os blocos (navios por início da operação,
+  // contas por vencimento, vales pela data, gasto pela referência da
+  // Demonstração, funcionários pelo período trabalhado). Padrão: tudo em aberto.
+  const [filter, setFilter] = useState<PainelFilter>({ year: "ALL", month: "ALL" });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -192,10 +218,27 @@ export function PainelFinanceiroPage() {
 
   const today = todayISO();
 
+  // Anos disponíveis pro filtro: tudo que aparece nos blocos + ano atual.
+  const filterYears = useMemo(() => {
+    const set = new Set<number>([new Date().getFullYear()]);
+    const add = (iso: string | null | undefined) => {
+      const y = Number((iso || "").slice(0, 4));
+      if (Number.isFinite(y) && y > 2000) set.add(y);
+    };
+    for (const j of jobs) add(j.start_date);
+    for (const i of invoices) add(i.due_date);
+    for (const a of advances) add(a.advance_date);
+    return [...set].sort((a, b) => b - a);
+  }, [jobs, invoices, advances]);
+
+  const filterActive = filter.year !== "ALL" || filter.month !== "ALL";
+
   // ── 🚢 Navios em aberto com vencimento (fim da operação + 20 dias) ─────────
   const shipsDue = useMemo(() => {
     const list = jobs
       .filter((j) => j.status !== "FECHADO" && j.status !== "CANCELADO")
+      // Período pelo INÍCIO da operação — mesma âncora do Pagamento de Navios.
+      .filter((j) => isoInFilter(j.start_date, filter))
       .map((j) => {
         const end = j.end_date ? j.end_date.slice(0, 10) : null;
         const due = end ? addDaysISO(end, SHIP_PAYMENT_DAYS) : null;
@@ -214,12 +257,13 @@ export function PainelFinanceiroPage() {
       total: list.reduce((s, x) => s + x.cost, 0),
       overdue: list.filter((x) => x.days != null && x.days < 0),
     };
-  }, [jobs, allocations, adjustments]);
+  }, [jobs, allocations, adjustments, filter]);
 
   // ── 📋 Contas a Pagar por vencimento ───────────────────────────────────────
   const contas = useMemo(() => {
     const open = invoices.filter((i) => i.status !== "PAGO" && i.status !== "CANCELADO");
-    const withDue = open.filter((i) => i.due_date);
+    // Período pelo VENCIMENTO — "o que tenho que pagar em tal mês".
+    const withDue = open.filter((i) => i.due_date && isoInFilter(i.due_date, filter));
     const sortAsc = (a: InvoiceLite, b: InvoiceLite) => (a.due_date || "").localeCompare(b.due_date || "");
     const overdue = withDue.filter((i) => i.due_date!.slice(0, 10) < today).sort(sortAsc);
     const dueToday = withDue.filter((i) => i.due_date!.slice(0, 10) === today).sort(sortAsc);
@@ -231,20 +275,23 @@ export function PainelFinanceiroPage() {
       overdueTotal: sum(overdue), todayTotal: sum(dueToday), upcomingTotal: sum(upcoming),
       openTotal: sum(open),
     };
-  }, [invoices, today]);
+  }, [invoices, today, filter]);
 
   // ── 🧾 Vales com saldo a descontar ─────────────────────────────────────────
   const vales = useMemo(() => {
     const empName = new Map(employees.map((e) => [e.id, e.name]));
-    const open = openAdvances(advances, advDiscounts).map((a) => ({
-      adv: a,
-      name: empName.get(a.employee_id) || `#${a.employee_id}`,
-      saldo: balanceOf(a, advDiscounts),
-    }));
+    const open = openAdvances(advances, advDiscounts)
+      // Período pela data do adiantamento (quando a pessoa pegou o vale).
+      .filter((a) => isoInFilter(a.advance_date, filter))
+      .map((a) => ({
+        adv: a,
+        name: empName.get(a.employee_id) || `#${a.employee_id}`,
+        saldo: balanceOf(a, advDiscounts),
+      }));
     const totalSaldo = open.reduce((s, x) => s + x.saldo, 0);
     const pessoas = new Set(open.map((x) => x.adv.employee_id)).size;
     return { open, totalSaldo, pessoas };
-  }, [advances, advDiscounts, employees]);
+  }, [advances, advDiscounts, employees, filter]);
 
   // ── 📑 Pra onde vai o dinheiro (seções da Demonstração) ────────────────────
   const mergedSections = useMemo(
@@ -253,15 +300,18 @@ export function PainelFinanceiroPage() {
   );
 
   const gasto = useMemo(() => {
-    const ymNow = today.slice(0, 7);
-    const yearNow = today.slice(0, 4);
+    // Sem filtro, mostra o ano atual (o "pra onde foi o dinheiro" deste ano);
+    // com filtro, obedece Ano/Mês igual aos outros blocos.
+    const effective: PainelFilter = filter.year === "ALL" && filter.month === "ALL"
+      ? { year: Number(today.slice(0, 4)), month: "ALL" }
+      : filter;
     const bySection = new Map<string, number>();
     let total = 0;
     for (const inv of invoices) {
       if (!inv.statement_section || inv.status === "CANCELADO") continue;
       // Mesma referência da Demonstração: pagamento > vencimento > criação.
       const ref = (inv.payment_date || inv.due_date || inv.created_at).slice(0, 10);
-      if (gastoPeriod === "MES" ? ref.slice(0, 7) !== ymNow : ref.slice(0, 4) !== yearNow) continue;
+      if (!isoInFilter(ref, effective)) continue;
       const v = Number(inv.amount);
       bySection.set(inv.statement_section, (bySection.get(inv.statement_section) || 0) + v);
       total += v;
@@ -269,12 +319,14 @@ export function PainelFinanceiroPage() {
     const rows = [...bySection.entries()]
       .map(([key, value]) => ({ key, label: sectionShortLabel(key, mergedSections.byKey) || key, value }))
       .sort((a, b) => b.value - a.value);
-    return { rows, total, max: rows[0]?.value || 0 };
-  }, [invoices, gastoPeriod, today, mergedSections]);
+    return { rows, total, max: rows[0]?.value || 0, label: filterLabel(effective) };
+  }, [invoices, filter, today, mergedSections]);
 
-  // ── 🎯 Funcionários (números do Controle, ano atual) ───────────────────────
+  // ── 🎯 Funcionários (números do Controle no período filtrado) ──────────────
+  // Sem filtro = ano atual (a visão de sempre); Ano/Mês do filtro estreitam,
+  // igual aos filtros do Controle de Funcionários.
+  const empYear = filter.year === "ALL" ? new Date().getFullYear() : filter.year;
   const empStats = useMemo(() => {
-    const yearNow = new Date().getFullYear();
     const costadoFn = pickCostadoFunction(functions);
     const costadoRate = costadoFn ? Number(costadoFn.default_rate) : 0;
     const jobById = new Map(jobs.map((j) => [j.id, j]));
@@ -296,7 +348,10 @@ export function PainelFinanceiroPage() {
       if (!s) continue;
       const job = jobById.get(a.job_id);
       const dateStr = a.shift_date || job?.start_date || null;
-      if (!dateStr || new Date(dateStr).getFullYear() !== yearNow) continue;
+      if (!dateStr) continue;
+      const d = new Date(dateStr);
+      if (d.getFullYear() !== empYear) continue;
+      if (filter.month !== "ALL" && d.getMonth() + 1 !== filter.month) continue;
       const shipName = job?.ships?.name || job?.name || null;
       const extra = Number(a.extra_value || 0);
       if (a.kind === "COSTADO") {
@@ -318,7 +373,7 @@ export function PainelFinanceiroPage() {
       }
     }
     return [...map.values()].sort((a, b) => b.ganho - a.ganho);
-  }, [allocations, jobs, employees, functions, advances, advDiscounts]);
+  }, [allocations, jobs, employees, functions, advances, advDiscounts, empYear, filter.month]);
 
   const empVisible = useMemo(() => {
     const q = empSearch.trim();
@@ -347,7 +402,7 @@ export function PainelFinanceiroPage() {
         <div className="flex items-baseline gap-2 flex-wrap">
           <h1 className="text-2xl font-bold text-text">Financeiro 💰</h1>
           <span className="text-text-light">›</span>
-          <span className="text-lg font-semibold text-text-light">📊 Painel</span>
+          <span className="text-lg font-semibold text-text-light">📊 Painel Financeiro</span>
         </div>
         <p className="text-text-light text-sm mt-0.5">
           Visão geral — o que vence, quando pagar e pra onde o dinheiro vai
@@ -366,6 +421,47 @@ export function PainelFinanceiroPage() {
         </div>
       ) : (
         <>
+          {/* Filtro Ano/Mês — dirige todos os blocos do painel. Padrão "tudo":
+              mostra o que está em aberto, seja de quando for. */}
+          <div className="flex flex-wrap items-center gap-2 bg-card border border-border rounded-xl p-2">
+            <span className="text-xs font-semibold text-text-light px-1">🔎 Filtrar:</span>
+            <select
+              className="text-xs border border-border rounded-lg px-2 py-1.5 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
+              value={filter.year === "ALL" ? "ALL" : String(filter.year)}
+              onChange={(e) => setFilter((f) => ({ ...f, year: e.target.value === "ALL" ? "ALL" : parseInt(e.target.value, 10) }))}
+              title="Ano"
+            >
+              <option value="ALL">Todos os anos</option>
+              {filterYears.map((y) => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+            <select
+              className="text-xs border border-border rounded-lg px-2 py-1.5 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40"
+              value={filter.month === "ALL" ? "ALL" : String(filter.month)}
+              onChange={(e) => setFilter((f) => ({ ...f, month: e.target.value === "ALL" ? "ALL" : parseInt(e.target.value, 10) }))}
+              title="Mês"
+            >
+              <option value="ALL">Todos os meses</option>
+              {MONTHS_PT.map((m, i) => (
+                <option key={m} value={i + 1}>{m}</option>
+              ))}
+            </select>
+            {filterActive && (
+              <>
+                <button
+                  onClick={() => setFilter({ year: "ALL", month: "ALL" })}
+                  className="text-xs text-text-light hover:text-text px-2 py-1.5 rounded-lg hover:bg-gray-100 transition"
+                >
+                  ✕ Limpar
+                </button>
+                <span className="text-[11px] text-text-light ml-auto px-1">
+                  Mostrando: <b className="text-text">{filterLabel(filter)}</b> · navios pelo início da operação, contas pelo vencimento
+                </span>
+              </>
+            )}
+          </div>
+
           {/* KPIs */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
@@ -401,7 +497,9 @@ export function PainelFinanceiroPage() {
                 linkLabel="Pagamento de Navios"
               />
               {shipsDue.list.length === 0 ? (
-                <p className="text-sm text-text-light">Nenhum navio com pagamento em aberto. 🎉</p>
+                <p className="text-sm text-text-light">
+                  Nenhum navio com pagamento em aberto{filterActive ? " no período filtrado" : ""}. 🎉
+                </p>
               ) : (
                 <ul className="divide-y divide-border">
                   {shipsDue.list.map(({ job, shipName, cost, due }) => (
@@ -433,7 +531,9 @@ export function PainelFinanceiroPage() {
                 linkLabel="Contas a Pagar"
               />
               {contas.overdue.length + contas.dueToday.length + contas.upcoming.length === 0 ? (
-                <p className="text-sm text-text-light">Nenhum título em aberto com vencimento. 🎉</p>
+                <p className="text-sm text-text-light">
+                  Nenhum título em aberto com vencimento{filterActive ? " no período filtrado" : ""}. 🎉
+                </p>
               ) : (
                 <div className="space-y-3">
                   {contas.overdue.length > 0 && (
@@ -507,7 +607,9 @@ export function PainelFinanceiroPage() {
                       )}
                     </div>
                   )}
-                  {contas.noDue.length > 0 && (
+                  {/* Título sem vencimento não entra em período nenhum — o aviso
+                      só faz sentido na visão "Tudo". */}
+                  {!filterActive && contas.noDue.length > 0 && (
                     <p className="text-[11px] text-text-light">
                       ⚠️ {contas.noDue.length} título(s) em aberto sem data de vencimento.
                     </p>
@@ -526,7 +628,9 @@ export function PainelFinanceiroPage() {
                 linkLabel="Relatório de Vales"
               />
               {valesShown.length === 0 ? (
-                <p className="text-sm text-text-light">Nenhum vale com saldo em aberto. 🎉</p>
+                <p className="text-sm text-text-light">
+                  Nenhum vale com saldo em aberto{filterActive ? " no período filtrado" : ""}. 🎉
+                </p>
               ) : (
                 <>
                   <ul className="divide-y divide-border">
@@ -554,35 +658,16 @@ export function PainelFinanceiroPage() {
 
             {/* 📑 Pra onde vai o dinheiro */}
             <div className="bg-card border border-border rounded-xl p-4">
-              <div className="flex items-start justify-between gap-2 mb-3">
-                <div>
-                  <h2 className="text-sm font-semibold text-text">📑 Pra onde vai o dinheiro</h2>
-                  <p className="text-[11px] text-text-light mt-0.5">
-                    Gasto por seção da Demonstração Financeira · total {formatCurrency(gasto.total)}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 whitespace-nowrap">
-                  <div className="flex rounded-lg border border-border overflow-hidden">
-                    {(["MES", "ANO"] as const).map((p) => (
-                      <button
-                        key={p}
-                        onClick={() => setGastoPeriod(p)}
-                        className={`px-2 py-1 text-[11px] font-medium transition ${
-                          gastoPeriod === p ? "bg-primary text-white" : "bg-card text-text-light hover:text-text"
-                        }`}
-                      >
-                        {p === "MES" ? "Mês atual" : "Ano"}
-                      </button>
-                    ))}
-                  </div>
-                  <Link href="/financeiro?tab=demonstracao" className="text-xs text-primary hover:underline">
-                    Demonstração →
-                  </Link>
-                </div>
-              </div>
+              <SectionHeader
+                emoji="📑"
+                title="Pra onde vai o dinheiro"
+                hint={`Gasto por seção da Demonstração · ${gasto.label} · total ${formatCurrency(gasto.total)}`}
+                href="/financeiro?tab=demonstracao"
+                linkLabel="Demonstração"
+              />
               {gastoShown.length === 0 ? (
                 <p className="text-sm text-text-light">
-                  Nenhum gasto classificado em seção {gastoPeriod === "MES" ? "neste mês" : "neste ano"}.
+                  Nenhum gasto classificado em seção no período ({gasto.label}).
                 </p>
               ) : (
                 <ul className="space-y-1.5">
@@ -615,7 +700,7 @@ export function PainelFinanceiroPage() {
           <div className="bg-card border border-border rounded-xl p-4">
             <SectionHeader
               emoji="🎯"
-              title="Funcionários — números do ano"
+              title={`Funcionários — números de ${filterLabel({ year: empYear, month: filter.month })}`}
               hint="Digite o nome pra puxar o resumo do Controle de Funcionários"
               href="/financeiro?tab=controle"
               linkLabel="Controle completo"
@@ -662,7 +747,7 @@ export function PainelFinanceiroPage() {
                 </table>
                 {!empSearch.trim() && (
                   <p className="text-[11px] text-text-light mt-2">
-                    Mostrando os {empVisible.length} maiores ganhos do ano — use a busca pra achar qualquer um.
+                    Mostrando os {empVisible.length} maiores ganhos do período — use a busca pra achar qualquer um.
                   </p>
                 )}
               </div>
