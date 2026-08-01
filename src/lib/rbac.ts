@@ -371,6 +371,9 @@ export const NAV_ITEMS: NavItem[] = [
     icon: "financeiro",
     module: "FINANCEIRO_MOD",
     children: [
+      // Painel: visão geral (vencimentos de navios/contas, vales, gasto por
+      // seção). Mesma régua do módulo bancário — mostra dados da empresa toda.
+      { label: "Painel", href: "/financeiro/painel", roles: FINANCEIRO_BANCO_ROLES },
       { label: "Valores", href: "/financeiro?tab=funcoes" },
       { label: "Pagamento de Navios", href: "/financeiro?tab=navios" },
       { label: "Controle de Funcionários", href: "/financeiro?tab=controle" },

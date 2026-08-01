@@ -17,6 +17,7 @@ import { stripSectionNum } from "@/lib/demonstracao-financeira";
 import { PAYMENT_METHODS } from "@/lib/payment-methods";
 import { mergeSections, sectionShortLabel, type CustomSectionRow } from "@/lib/statement-sections";
 import { BoletoScannerModal } from "@/components/financeiro/boleto-scanner";
+import { ContasBancariasTab } from "@/components/financeiro/contas-bancarias-tab";
 import type { BoletoParsed } from "@/lib/services/boleto/linha-digitavel";
 import type { PayableStatus } from "@/types/financeiro";
 
@@ -274,6 +275,10 @@ export function ContasAPagarPage() {
   const canView = canAccessFinanceiroBanco(role);
   const canEdit =
     canView && (hasPermission(role, "FINANCEIRO_MOD", "edit") || hasPermission(role, "FINANCEIRO_MOD", "create"));
+
+  // Aba da página: títulos (a lista de sempre) ou as contas bancárias da
+  // empresa + cartões de crédito (veio da Conciliação — é aqui que se cadastra).
+  const [pageTab, setPageTab] = useState<"titulos" | "bancos">("titulos");
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -1094,7 +1099,7 @@ export function ContasAPagarPage() {
             Controle de vencimentos — lançamento manual (dinheiro, pix, boletos, outros bancos)
           </p>
         </div>
-        {canEdit && (
+        {canEdit && pageTab === "titulos" && (
           <div className="flex gap-2 flex-wrap">
             {/* Atalho: escaneia o boleto e já abre a Nova conta preenchida.
                 Auxiliares em cinza (secondary), como no Controle de Compras —
@@ -1129,6 +1134,29 @@ export function ContasAPagarPage() {
         )}
       </div>
 
+      {/* Abas: Títulos (a lista de sempre) | Contas bancárias (contas + cartões,
+          veio da Conciliação — é aqui que se cadastra o cartão). */}
+      <div className="flex gap-1 border-b border-border">
+        {(["titulos", "bancos"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setPageTab(t)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
+              pageTab === t
+                ? "border-primary text-primary"
+                : "border-transparent text-text-light hover:text-text"
+            }`}
+          >
+            {t === "titulos" ? "Títulos" : "Contas bancárias"}
+          </button>
+        ))}
+      </div>
+
+      {pageTab === "bancos" && (
+        <ContasBancariasTab canEdit={canEdit} profileName={profile?.full_name || "Sistema"} />
+      )}
+
+      {pageTab === "titulos" && (<>
       {/* RESUMO (do mês selecionado, no espírito da aba RESUMO da planilha) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="bg-card border border-border rounded-xl p-4">
@@ -2097,6 +2125,7 @@ export function ContasAPagarPage() {
         variant="danger"
         loading={deleting}
       />
+      </>)}
     </div>
   );
 }
