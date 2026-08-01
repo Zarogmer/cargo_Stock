@@ -2807,6 +2807,7 @@ function TrabalhosTab({
         open={showJobForm}
         item={editJob}
         ships={ships}
+        functions={functions}
         profileName={profileName}
         rosterSupervisor={supervisorFromAllocations(allocations, editJob?.id)}
         onClose={() => { setShowJobForm(false); setEditJob(null); }}
@@ -2875,12 +2876,18 @@ function supervisorFromAllocations(allocs: JobAllocation[], jobId: string | null
   return a?.employees?.name || null;
 }
 
+// Serviços de Embarque editáveis daqui (ordem de exibição). COSTADO e qualquer
+// outro valor de ships.services são preservados no save.
+const EMBARQUE_SERVICE_KEYS = ["LAVAGEM_PORAO", "RASPAGEM", "PINTURA"] as const;
+
 function JobFormModal({
-  open, item, ships, profileName, rosterSupervisor, onClose, onSaved,
+  open, item, ships, functions, profileName, rosterSupervisor, onClose, onSaved,
 }: {
   open: boolean;
   item: Job | null;
   ships: Ship[];
+  // Pra mostrar o valor/porão da Raspagem/Pintura (default_rate das funções).
+  functions: JobFunction[];
   profileName: string;
   // Supervisor vindo da escala do navio (função SUPERVISOR) — null se ainda
   // não tem ninguém escalado nessa função.
@@ -2901,6 +2908,9 @@ function JobFormModal({
   const [cargoType, setCargoType] = useState("");
   const [holdsCount, setHoldsCount] = useState("");
   const [port, setPort] = useState("");
+  // Serviços de Embarque do navio (Lavagem/Raspagem/Pintura) — o Financeiro
+  // marca aqui mesmo, sem precisar da aba Navios. Salvos em ships.services.
+  const [services, setServices] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -2922,6 +2932,23 @@ function JobFormModal({
       setClient(""); setCargoType(""); setHoldsCount(""); setPort("SANTOS");
     }
   }, [item, open]);
+
+  // Serviços acompanham o navio escolhido (na edição, o navio do pagamento).
+  useEffect(() => {
+    const sid = item ? item.ship_id || "" : shipId;
+    const ship = ships.find((s) => s.id === sid);
+    setServices(((ship?.services || []) as string[]).filter((s) => (EMBARQUE_SERVICE_KEYS as readonly string[]).includes(s)));
+  }, [item, open, shipId, ships]);
+
+  function toggleService(key: string) {
+    setServices((prev) => (prev.includes(key) ? prev.filter((s) => s !== key) : [...prev, key]));
+  }
+
+  // Valor/porão de um serviço extra (default_rate da função RASPAGEM/PINTURA).
+  function serviceRate(key: string): number {
+    const f = pickFunctionByName(functions, key, "EMBARQUE");
+    return f ? Number(f.default_rate || 0) : 0;
+  }
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -2949,6 +2976,18 @@ function JobFormModal({
       await db.from("jobs").update(payload).eq("id", item.id);
     } else {
       await db.from("jobs").insert(payload);
+    }
+    // Serviços do navio: grava em ships.services preservando o que não é de
+    // Embarque (ex.: COSTADO). O custo recalcula sozinho no reload — Raspagem/
+    // Pintura entram por porão via prepareFinanceAllocations.
+    if (ship) {
+      const others = ((ship.services || []) as string[]).filter(
+        (s) => !(EMBARQUE_SERVICE_KEYS as readonly string[]).includes(s),
+      );
+      const next = [...others, ...EMBARQUE_SERVICE_KEYS.filter((k) => services.includes(k))];
+      const cur = (ship.services || []) as string[];
+      const changed = next.length !== cur.length || next.some((s) => !cur.includes(s));
+      if (changed) await db.from("ships").update({ services: next }).eq("id", ship.id);
     }
     setSaving(false);
     onSaved();
@@ -2997,6 +3036,39 @@ function JobFormModal({
             <div><label className="block text-sm font-medium mb-1">Nº Porões</label><input type="number" value={holdsCount} onChange={(e) => setHoldsCount(e.target.value)} className={inputCls} placeholder="5" /></div>
             <div><label className="block text-sm font-medium mb-1">Porto</label><input type="text" value={port} onChange={(e) => setPort(e.target.value.toUpperCase())} className={inputCls} placeholder="SANTOS" /></div>
           </div>
+        </div>
+
+        <div className="border-t border-border pt-3">
+          <p className={sectionTitle}>Serviços do navio</p>
+          {!shipId ? (
+            <p className="text-[11px] text-text-light">Escolha o navio pra marcar os serviços.</p>
+          ) : (
+            <>
+              <div className="flex gap-4 flex-wrap">
+                {EMBARQUE_SERVICE_KEYS.map((key) => {
+                  const extra = isServiceExtra(key) ? serviceRate(key) : 0;
+                  return (
+                    <label key={key} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={services.includes(key)}
+                        onChange={() => toggleService(key)}
+                        className="w-4 h-4 accent-primary"
+                      />
+                      <span className={isServiceExtra(key) ? "text-amber-800 font-medium" : ""}>
+                        {isServiceExtra(key) ? "✚ " : ""}{EMBARQUE_SERVICE_LABELS[key]}
+                        {extra > 0 && <span className="text-[10px] text-text-light"> (+{brl(extra)}/porão)</span>}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-text-light mt-1.5">
+                Salvo no cadastro do navio. Raspagem e Pintura somam o valor da função por porão na paga de todo o
+                operacional do Embarque — o custo recalcula na hora.
+              </p>
+            </>
+          )}
         </div>
 
         <div className="border-t border-border pt-3">
