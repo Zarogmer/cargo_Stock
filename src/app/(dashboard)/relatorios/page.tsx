@@ -9,6 +9,10 @@
 // login está escalado (Escalação de Embarque/Costado); o serviço escalado
 // define se ele vê o relatório de EMBARQUE, de COSTADO ou os dois. O escopo é
 // aplicado no servidor (/api/relatorios) — a tela só reflete.
+//
+// A aba Avaliações sincroniza sozinha (polling) enquanto está aberta: a gestão
+// vê ao vivo as notas que o supervisor salva de bordo — edições locais ainda
+// não salvas nunca são sobrescritas pelo refresh.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -67,6 +71,8 @@ interface EvaluationApi {
   punctuality: number;
   technical: number;
   comments: string | null;
+  evaluated_by?: string | null;
+  updated_at?: string;
 }
 
 interface ReportApi {
@@ -109,6 +115,15 @@ const EMPTY_EVAL: EvalDraft = {
   initiative: 0, punctuality: 0, technical: 0, comments: "",
 };
 
+function toDraft(e: EvaluationApi): EvalDraft {
+  return {
+    productivity: e.productivity, quality: e.quality,
+    teamwork: e.teamwork, safety: e.safety,
+    initiative: e.initiative, punctuality: e.punctuality,
+    technical: e.technical, comments: e.comments || "",
+  };
+}
+
 const SHIP_STATUS_CHIP: Record<string, { label: string; cls: string }> = {
   AGENDADO: { label: "Agendado", cls: "bg-blue-100 text-blue-700" },
   EM_OPERACAO: { label: "Em operação", cls: "bg-amber-100 text-amber-700" },
@@ -123,8 +138,8 @@ const STAGES = [
   { value: "DEPOIS", label: "Depois" },
 ];
 
-// Sugestões do Registro de atividades (datalist — dá pra escolher e completar,
-// ex.: "Parada por chuva"). "Parada" registra período sem operação.
+// Opções do Registro de atividades (select — "Parada" registra período sem
+// operação). "Outra..." abre texto livre, com estas mesmas sugestões no datalist.
 const ACTIVITY_SUGGESTIONS = [
   "Lavagem com água salgada",
   "Lavagem com água doce",
@@ -136,6 +151,32 @@ const ACTIVITY_SUGGESTIONS = [
   "Remoção de resíduos de carga",
   "Montagem de equipamentos",
 ];
+
+// Sentinela do select de atividade: troca a linha pra texto livre.
+const CUSTOM_ACTIVITY = "__outra__";
+
+// time_range é texto no banco ("22:00 - 01:40") — os pickers de hora convertem
+// pra lá e de volta. Valores legados que não parseiam aparecem vazios no picker
+// mas só são sobrescritos se o usuário mexer.
+function normalizeTime(v: string | null | undefined): string {
+  const m = String(v || "").trim().match(/^(\d{1,2})[:hH.](\d{2})$/);
+  if (!m) return "";
+  const h = Number(m[1]);
+  if (h > 23 || Number(m[2]) > 59) return "";
+  return `${String(h).padStart(2, "0")}:${m[2]}`;
+}
+
+function splitTimeRange(v: string | null | undefined): { start: string; end: string } {
+  const [a = "", b = ""] = String(v || "").split(/\s*[-–—]\s*/);
+  return { start: normalizeTime(a), end: normalizeTime(b) };
+}
+
+function joinTimeRange(start: string, end: string): string {
+  if (start && end) return `${start} - ${end}`;
+  if (start) return start; // atividade em aberto: só o início
+  if (end) return `- ${end}`; // só término — o "-" na frente preserva o lado no reload
+  return "";
+}
 
 function emptyHold(label: string): HoldRow {
   return {
@@ -348,12 +389,20 @@ function ReportDetail({
   });
   const [holds, setHolds] = useState<HoldRow[]>([]);
   const [activities, setActivities] = useState<ActivityRow[]>([]);
+  // Linhas de atividade em modo "Outra..." (texto livre) — por índice.
+  const [customActivityRows, setCustomActivityRows] = useState<Set<number>>(new Set());
   const [savingReport, setSavingReport] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
 
   // ── Avaliações ────────────────────────────────────────────────────────────
   const [evals, setEvals] = useState<Map<number, EvalDraft>>(new Map());
   const [savingEvals, setSavingEvals] = useState(false);
+  // Colaboradores com edição local ainda não salva — a sincronização automática
+  // não passa por cima deles. Limpa ao salvar/recarregar.
+  const dirtyEvalsRef = useRef<Set<number>>(new Set());
+  // Versão local das avaliações: salvar/recarregar invalida um refresh em voo
+  // (senão um GET disparado antes do PUT desfaria o que acabou de ser salvo).
+  const evalsSyncRef = useRef(0);
 
   // ── Fotos ─────────────────────────────────────────────────────────────────
   const [photos, setPhotos] = useState<(PhotoMeta & { created_by?: string })[]>([]);
@@ -403,16 +452,11 @@ function ReportDetail({
       const map = new Map<number, EvalDraft>();
       for (const member of d.team) {
         const existing = d.evaluations.find((e) => e.employee_id === member.employee_id);
-        map.set(member.employee_id, existing
-          ? {
-              productivity: existing.productivity, quality: existing.quality,
-              teamwork: existing.teamwork, safety: existing.safety,
-              initiative: existing.initiative, punctuality: existing.punctuality,
-              technical: existing.technical, comments: existing.comments || "",
-            }
-          : { ...EMPTY_EVAL });
+        map.set(member.employee_id, existing ? toDraft(existing) : { ...EMPTY_EVAL });
       }
       setEvals(map);
+      dirtyEvalsRef.current.clear();
+      evalsSyncRef.current++;
     } catch {
       setError("Erro ao conectar com o servidor.");
     } finally {
@@ -424,10 +468,61 @@ function ReportDetail({
     load();
   }, [load]);
 
+  // Sincronização das avaliações: enquanto a aba Avaliações está aberta, busca
+  // de tempos em tempos o que foi salvo por outra pessoa (ex.: a gestão vendo
+  // ao vivo as notas que o supervisor lança de bordo). Só atualiza quem não tem
+  // edição local pendente.
+  const refreshEvals = useCallback(async () => {
+    const ver = evalsSyncRef.current;
+    try {
+      const res = await fetch(`/api/relatorios/${jobId}?kind=${kind}`);
+      if (!res.ok) return;
+      const json = await res.json();
+      const d: DetailData | undefined = json.data;
+      if (!d || ver !== evalsSyncRef.current) return; // salvou/recarregou no meio
+      setData((prev) => (prev ? { ...prev, team: d.team, evaluations: d.evaluations, history: d.history } : prev));
+      setEvals((prev) => {
+        const next = new Map<number, EvalDraft>();
+        for (const member of d.team) {
+          const mine = dirtyEvalsRef.current.has(member.employee_id)
+            ? prev.get(member.employee_id)
+            : undefined;
+          if (mine) {
+            next.set(member.employee_id, mine);
+            continue;
+          }
+          const existing = d.evaluations.find((e) => e.employee_id === member.employee_id);
+          next.set(member.employee_id, existing ? toDraft(existing) : { ...EMPTY_EVAL });
+        }
+        return next;
+      });
+    } catch {
+      // refresh silencioso — a próxima rodada tenta de novo
+    }
+  }, [jobId, kind]);
+
+  useEffect(() => {
+    if (tab !== "avaliacoes") return;
+    refreshEvals();
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") refreshEvals();
+    }, 10_000);
+    return () => clearInterval(id);
+  }, [tab, refreshEvals]);
+
   const holdLabels = useMemo(
     () => holds.map((h) => h.label).filter(Boolean),
     [holds]
   );
+
+  // Preencheu horário de uma atividade/fase ligada a um porão pendente → o
+  // porão entra em "Em andamento" sozinho (Completo não é rebaixado).
+  const markHoldInProgress = useCallback((label: string | null | undefined) => {
+    if (!label) return;
+    setHolds((prev) =>
+      prev.map((h) => (h.label === label && h.status === "PENDENTE" ? { ...h, status: "EM_ANDAMENTO" } : h))
+    );
+  }, []);
 
   async function saveReport() {
     setSavingReport(true);
@@ -468,6 +563,9 @@ function ReportDetail({
         setSavedMsg(`⚠️ ${json.error || "Erro ao salvar."}`);
         return;
       }
+      dirtyEvalsRef.current.clear();
+      evalsSyncRef.current++;
+      refreshEvals(); // atualiza o "avaliado por" na hora
       setSavedMsg("✅ Avaliações salvas!");
       setTimeout(() => setSavedMsg(""), 3000);
     } catch {
@@ -681,6 +779,15 @@ function ReportDetail({
               {holds.map((h, i) => {
                 const patch = (p: Partial<HoldRow>) =>
                   setHolds((prev) => prev.map((x, j) => (j === i ? { ...x, ...p } : x)));
+                // Horário preenchido em porão pendente → "Em andamento" sozinho.
+                const patchTime = (
+                  field: "salt_start" | "salt_end" | "fresh_start" | "fresh_end",
+                  v: string
+                ) =>
+                  patch({
+                    [field]: v || null,
+                    ...(v && h.status === "PENDENTE" ? { status: "EM_ANDAMENTO" } : {}),
+                  } as Partial<HoldRow>);
                 return (
                   <div key={i} className="bg-gray-50 rounded-lg p-2.5 space-y-2">
                     <div className="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_150px_90px_36px] gap-2 items-center">
@@ -704,13 +811,15 @@ function ReportDetail({
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs text-text-light w-24 shrink-0">🌊 Água salgada</span>
-                        <input type="text" value={h.salt_start || ""} onChange={(e) => patch({ salt_start: e.target.value })} className={inputCls} placeholder="Início" />
-                        <input type="text" value={h.salt_end || ""} onChange={(e) => patch({ salt_end: e.target.value })} className={inputCls} placeholder="Término" />
+                        <input type="time" value={normalizeTime(h.salt_start)} onChange={(e) => patchTime("salt_start", e.target.value)} className={inputCls} title="Início" />
+                        <span className="text-xs text-text-light shrink-0">→</span>
+                        <input type="time" value={normalizeTime(h.salt_end)} onChange={(e) => patchTime("salt_end", e.target.value)} className={inputCls} title="Término" />
                       </div>
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs text-text-light w-24 shrink-0">💧 Água doce</span>
-                        <input type="text" value={h.fresh_start || ""} onChange={(e) => patch({ fresh_start: e.target.value })} className={inputCls} placeholder="Início" />
-                        <input type="text" value={h.fresh_end || ""} onChange={(e) => patch({ fresh_end: e.target.value })} className={inputCls} placeholder="Término" />
+                        <input type="time" value={normalizeTime(h.fresh_start)} onChange={(e) => patchTime("fresh_start", e.target.value)} className={inputCls} title="Início" />
+                        <span className="text-xs text-text-light shrink-0">→</span>
+                        <input type="time" value={normalizeTime(h.fresh_end)} onChange={(e) => patchTime("fresh_end", e.target.value)} className={inputCls} title="Término" />
                       </div>
                     </div>
                     {/* Horário geral legado (relatório salvo antes das fases):
@@ -741,7 +850,7 @@ function ReportDetail({
 
             {activities.length === 0 && <p className="text-sm text-text-light">Nenhuma atividade registrada.</p>}
 
-            {/* Sugestões do campo de atividade (inclui "Parada" e as fases de água) */}
+            {/* O modo texto livre ("Outra...") completa com as mesmas sugestões */}
             <datalist id="activity-suggestions">
               {ACTIVITY_SUGGESTIONS.map((s) => (
                 <option key={s} value={s} />
@@ -749,21 +858,96 @@ function ReportDetail({
             </datalist>
 
             <div className="space-y-2">
-              {activities.map((a, i) => (
-                <div key={i} className="grid grid-cols-2 md:grid-cols-[140px_1fr_150px_36px] gap-2 items-center bg-gray-50 rounded-lg p-2">
-                  <input type="text" value={a.time_range || ""} onChange={(e) => setActivities((prev) => prev.map((x, j) => (j === i ? { ...x, time_range: e.target.value } : x)))} className={inputCls} placeholder="22:00 - 01:40" />
-                  <input type="text" list="activity-suggestions" value={a.activity} onChange={(e) => setActivities((prev) => prev.map((x, j) => (j === i ? { ...x, activity: e.target.value } : x)))} className={inputCls} placeholder="Lavagem, parada, enxágue..." />
-                  <select value={a.hold_label || ""} onChange={(e) => setActivities((prev) => prev.map((x, j) => (j === i ? { ...x, hold_label: e.target.value || null } : x)))} className={inputCls}>
-                    <option value="">— {kind === "COSTADO" ? "área" : "porão"} —</option>
-                    {holdLabels.map((l) => (
-                      <option key={l} value={l}>{l}</option>
-                    ))}
-                  </select>
-                  <button onClick={() => setActivities((prev) => prev.filter((_, j) => j !== i))} title="Remover" className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition justify-self-end">
-                    <TrashIcon className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
+              {activities.map((a, i) => {
+                const patchAct = (p: Partial<ActivityRow>) =>
+                  setActivities((prev) => prev.map((x, j) => (j === i ? { ...x, ...p } : x)));
+                const { start, end } = splitTimeRange(a.time_range);
+                // Valor fora da lista (legado/texto livre) mantém a linha em modo texto.
+                const custom = customActivityRows.has(i) || (!!a.activity && !ACTIVITY_SUGGESTIONS.includes(a.activity));
+                const setTime = (which: "start" | "end", v: string) => {
+                  patchAct({ time_range: joinTimeRange(which === "start" ? v : start, which === "end" ? v : end) || null });
+                  if (v) markHoldInProgress(a.hold_label);
+                };
+                return (
+                  <div key={i} className="grid grid-cols-2 md:grid-cols-[220px_1fr_150px_36px] gap-2 items-center bg-gray-50 rounded-lg p-2">
+                    <div className="col-span-2 md:col-span-1 flex items-center gap-1">
+                      <input type="time" value={start} onChange={(e) => setTime("start", e.target.value)} className={inputCls} title="Início" />
+                      <span className="text-xs text-text-light shrink-0">→</span>
+                      <input type="time" value={end} onChange={(e) => setTime("end", e.target.value)} className={inputCls} title="Término" />
+                    </div>
+                    {custom ? (
+                      <div className="flex items-center gap-1">
+                        <input type="text" list="activity-suggestions" value={a.activity} onChange={(e) => patchAct({ activity: e.target.value })} className={inputCls} placeholder="Digite a atividade..." />
+                        <button
+                          onClick={() => {
+                            setCustomActivityRows((prev) => {
+                              const n = new Set(prev);
+                              n.delete(i);
+                              return n;
+                            });
+                            patchAct({ activity: "" });
+                          }}
+                          title="Voltar pra lista de atividades"
+                          className="px-2 py-1.5 text-text-light hover:text-text hover:bg-gray-200 rounded-lg transition shrink-0 text-sm"
+                        >
+                          ☰
+                        </button>
+                      </div>
+                    ) : (
+                      <select
+                        value={a.activity}
+                        onChange={(e) => {
+                          if (e.target.value === CUSTOM_ACTIVITY) {
+                            setCustomActivityRows((prev) => new Set(prev).add(i));
+                            patchAct({ activity: "" });
+                          } else {
+                            patchAct({ activity: e.target.value });
+                          }
+                        }}
+                        className={inputCls}
+                      >
+                        <option value="">— atividade —</option>
+                        {ACTIVITY_SUGGESTIONS.map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                        <option value={CUSTOM_ACTIVITY}>✏️ Outra (digitar)...</option>
+                      </select>
+                    )}
+                    <select
+                      value={a.hold_label || ""}
+                      onChange={(e) => {
+                        const label = e.target.value || null;
+                        patchAct({ hold_label: label });
+                        if (start || end) markHoldInProgress(label);
+                      }}
+                      className={inputCls}
+                    >
+                      <option value="">— {kind === "COSTADO" ? "área" : "porão"} —</option>
+                      {holdLabels.map((l) => (
+                        <option key={l} value={l}>{l}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => {
+                        setActivities((prev) => prev.filter((_, j) => j !== i));
+                        // Reindexa o modo texto das linhas seguintes.
+                        setCustomActivityRows((prev) => {
+                          const n = new Set<number>();
+                          for (const j of prev) {
+                            if (j === i) continue;
+                            n.add(j > i ? j - 1 : j);
+                          }
+                          return n;
+                        });
+                      }}
+                      title="Remover"
+                      className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition justify-self-end"
+                    >
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -790,11 +974,19 @@ function ReportDetail({
             </div>
           ) : (
             <>
+              <div className="flex items-center gap-2 bg-card border border-border rounded-lg px-3 py-2 text-xs text-text-light">
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                </span>
+                Sincronização automática ligada: avaliações salvas por outra pessoa (ex.: o supervisor a bordo) aparecem aqui sozinhas, sem recarregar a página.
+              </div>
               {data.team.map((m) => {
                 const e = evals.get(m.employee_id) || EMPTY_EVAL;
                 const rated = EVAL_CRITERIA.map((c) => e[c.key as keyof EvalDraft] as number).filter((v) => v > 0);
                 const avg = rated.length ? (rated.reduce((s, v) => s + v, 0) / rated.length).toFixed(1) : null;
                 const hist = data.history?.[m.employee_id];
+                const saved = data.evaluations.find((x) => x.employee_id === m.employee_id);
                 return (
                   <div key={m.employee_id} className="bg-card rounded-xl border border-border p-4 space-y-3">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -803,6 +995,14 @@ function ReportDetail({
                         <p className="text-xs text-text-light">{m.function_name || "Colaborador"}</p>
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
+                        {saved?.evaluated_by && (
+                          <span
+                            className="text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-700 font-medium"
+                            title={saved.updated_at ? `Última atualização: ${new Date(saved.updated_at).toLocaleString("pt-BR")}` : undefined}
+                          >
+                            ✍️ {saved.evaluated_by}
+                          </span>
+                        )}
                         {hist && (
                           <span
                             className="text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-800 font-medium"
@@ -826,13 +1026,14 @@ function ReportDetail({
                                 <button
                                   key={n}
                                   type="button"
-                                  onClick={() =>
+                                  onClick={() => {
+                                    dirtyEvalsRef.current.add(m.employee_id);
                                     setEvals((prev) => {
                                       const next = new Map(prev);
                                       next.set(m.employee_id, { ...e, [c.key]: value === n ? 0 : n });
                                       return next;
-                                    })
-                                  }
+                                    });
+                                  }}
                                   className={`text-xl leading-none transition ${n <= value ? "text-amber-500" : "text-gray-300 hover:text-amber-300"}`}
                                   title={`${n} estrela${n > 1 ? "s" : ""}`}
                                 >
@@ -848,13 +1049,14 @@ function ReportDetail({
 
                     <textarea
                       value={e.comments}
-                      onChange={(ev) =>
+                      onChange={(ev) => {
+                        dirtyEvalsRef.current.add(m.employee_id);
                         setEvals((prev) => {
                           const next = new Map(prev);
                           next.set(m.employee_id, { ...e, comments: ev.target.value });
                           return next;
-                        })
-                      }
+                        });
+                      }}
                       rows={2}
                       className={inputCls}
                       placeholder="Observações do supervisor sobre este colaborador..."
