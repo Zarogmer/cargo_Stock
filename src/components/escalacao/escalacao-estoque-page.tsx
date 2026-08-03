@@ -4,12 +4,13 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
-import { hasPermission } from "@/lib/rbac";
+import { hasPermission, canViewStockValue, type Module } from "@/lib/rbac";
 import { releaseShipAllocationsNow } from "@/lib/release-finished-ships";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { formatDate, matchSearch, formatQty, unitSuffix } from "@/lib/utils";
+import { formatDate, matchSearch, formatQty, unitSuffix, parseDecimalBR, normalize, formatCurrency } from "@/lib/utils";
+import { STOCK_UNITS } from "@/lib/stock-units";
 import type { StockItem } from "@/types/database";
 
 interface Ship {
@@ -86,6 +87,17 @@ const MATERIAL_TEAM_LABEL: Record<string, string> = {
   GALPAO: "Estoque", FERRAMENTA: "Ferramenta", ELETRICA: "Elétrica", FLUIDOS: "Fluídos", MAQUINARIO: "Maquinário",
 };
 
+// Setores onde a aba "✨ Novo item" do modal de adicionar pode CADASTRAR um
+// material (mesmos rótulos e módulos de permissão do Almoxarifado — ver
+// SETOR_MODULE em geral-panel.tsx). Rancho fica de fora: comida se cadastra lá.
+const CREATE_SETORES: { key: string; label: string; module: Module }[] = [
+  { key: "GALPAO", label: "Utensílios", module: "ESTOQUE" },
+  { key: "FLUIDOS", label: "Fluídos", module: "ESTOQUE" },
+  { key: "MAQUINARIO", label: "Maquinário", module: "MAQUINARIO" },
+  { key: "FERRAMENTA", label: "Ferramenta", module: "FERRAMENTAS" },
+  { key: "ELETRICA", label: "Elétrica", module: "ELETRICA" },
+];
+
 // Ordem oficial da lista de embarque (formulário de papel do Josué), pra criar
 // familiaridade com o maquinista: a lista na tela (Embarque e Retorno) segue
 // ESTA sequência, não a ordem alfabética. Nome = stock_items.name exato. Item
@@ -122,6 +134,10 @@ export function EscalacaoEstoquePage() {
   const pathname = usePathname();
   const role = profile?.role || "RH";
   const canEmbarcar = hasPermission(role, "EMBARQUE", "embarcar");
+  const canSeeValue = canViewStockValue(role);
+  // Setores em que este papel pode criar item novo (alimenta a aba "Novo item"
+  // do modal de adicionar material — vazio esconde a aba).
+  const createSetores = CREATE_SETORES.filter((s) => hasPermission(role, s.module, "create"));
 
   const [ships, setShips] = useState<Ship[]>([]);
   const [selectedShip, setSelectedShip] = useState<string>("");
@@ -498,6 +514,63 @@ export function EscalacaoEstoquePage() {
   // Observação salva de um item (do override do navio) — valor exibido no campo.
   const noteOf = (stockItemId: number) =>
     overrideByItem.get(stockItemId)?.note ?? "";
+
+  // Aba "✨ Novo item" do modal de adicionar material: o mesmo cadastro do
+  // Almoxarifado, mas que faz as duas coisas de uma vez — cria o item no
+  // Estoque (Total + ENTRADA no histórico) E coloca na lista deste navio. A
+  // parte que vai a bordo é separada pra equipe (material_team_allocations),
+  // senão o item nasceria "com falta" e não seria baixado no Embarcar; o que
+  // sobrar (quantidade − leva) fica no Disponível do galpão. O kit padrão da
+  // equipe continua intacto (a lista ganha só o extra deste navio).
+  async function handleCreateStockItem(data: {
+    setor: string; name: string; unit: string; quantity: number; leva: number; unitValue: number; notes: string | null;
+  }) {
+    if (!currentShip || !selectedTeam) return;
+    const actor = profile?.full_name || "Sistema";
+    const today = new Date().toISOString().split("T")[0];
+
+    const payload: Record<string, unknown> = {
+      name: data.name,
+      category: "OUTROS",
+      team: data.setor,
+      unit: data.unit || "UN",
+      quantity: data.quantity,
+      min_quantity: 0,
+      notes: data.notes,
+      updated_by: actor,
+    };
+    if (canSeeValue && data.unitValue > 0) payload.unit_value = data.unitValue;
+    const insRes: any = await db.from("stock_items").insert(payload);
+    if (insRes?.error) throw new Error(insRes.error.message);
+    const created = (Array.isArray(insRes.data) ? insRes.data[0] : insRes.data) as StockItem | null;
+    if (!created?.id) throw new Error("O item foi salvo mas a resposta veio vazia — recarregue a página.");
+
+    if (data.quantity > 0) {
+      await db.from("stock_movements").insert({
+        stock_item_id: created.id,
+        movement_type: "ENTRADA",
+        quantity: data.quantity,
+        movement_date: today,
+        notes: `Cadastro via Embarque: ${currentShip.name} (${TEAM_LABELS[selectedTeam]})`,
+        created_by: actor,
+      } as any);
+    }
+
+    if (data.leva > 0) {
+      const allocRes: any = await db.from("material_team_allocations").insert({
+        stock_item_id: created.id, team: selectedTeam, quantity: data.leva, updated_by: actor,
+      } as any);
+      if (allocRes?.error) throw new Error(allocRes.error.message);
+      const alloc = Array.isArray(allocRes.data) ? allocRes.data[0] : allocRes.data;
+      if (alloc?.id) setAllocs((prev) => [...prev, alloc]);
+    }
+
+    // Atualiza o estado local direto (loadData desmontaria o modal aberto).
+    setStockItems((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, "pt-BR")));
+
+    // Entra na lista deste navio como extra (embark_list_overrides).
+    await saveOverride("MATERIAL", created.id, data.leva, 0);
+  }
 
   // Renomeia o produto no Estoque (stock_items.name) — reflete em todos os
   // navios/telas, é o mesmo produto. Editável direto da lista de embarque.
@@ -1626,7 +1699,14 @@ export function EscalacaoEstoquePage() {
           candidates={addCandidates}
           availById={availById}
           shipName={currentShip?.name || ""}
+          teamLabel={TEAM_LABELS[selectedTeam] || selectedTeam}
+          createSetores={addKind === "MATERIAL" ? createSetores : []}
+          showValue={canSeeValue}
+          allMaterials={stockItems
+            .filter((i) => MATERIAL_TEAMS.has(String((i as any).team)))
+            .map((i) => ({ name: i.name, team: String((i as any).team) }))}
           onAdd={(stockItemId, qty) => saveOverride(addKind, stockItemId, qty, 0)}
+          onCreate={handleCreateStockItem}
           onClose={() => setAddKind(null)}
         />
       )}
@@ -2219,15 +2299,25 @@ function ShipSelector({
 // (item extra) só deste navio — o kit oficial e o padrão do Rancho não mudam.
 // O modal fica aberto depois de adicionar, pra incluir vários de uma vez (o
 // item some da busca porque entrou na lista).
+// Materiais têm ainda a aba "✨ Novo item": o mesmo cadastro do Almoxarifado
+// (setor, nome, unidade, quantidade, valor...), só que além de criar o item no
+// Estoque ele já entra na lista deste navio (onCreate faz as duas coisas).
 function AddItemModal({
-  kind, candidates, availById, shipName, onAdd, onClose,
+  kind, candidates, availById, shipName, teamLabel, createSetores, showValue, allMaterials, onAdd, onCreate, onClose,
 }: {
   kind: "MATERIAL" | "RANCHO";
   candidates: StockItem[];
   // Disponível por material (Total − alocado às equipes). Só usado no MATERIAL.
   availById: Map<number, number>;
   shipName: string;
+  teamLabel: string;
+  // Setores em que o papel pode CRIAR item (vazio = aba "Novo item" escondida).
+  createSetores: { key: string; label: string }[];
+  showValue: boolean;
+  // Nome+setor de TODOS os materiais do Estoque — aviso de duplicado no cadastro.
+  allMaterials: { name: string; team: string }[];
   onAdd: (stockItemId: number, qty: number) => Promise<void>;
+  onCreate: (data: { setor: string; name: string; unit: string; quantity: number; leva: number; unitValue: number; notes: string | null }) => Promise<void>;
   onClose: () => void;
 }) {
   const [search, setSearch] = useState("");
@@ -2236,7 +2326,65 @@ function AddItemModal({
   const [addingId, setAddingId] = useState<number | null>(null);
   const [addedCount, setAddedCount] = useState(0);
 
+  // Aba "Novo item" (só materiais, e só pra quem pode criar item no Almoxarifado).
+  const canCreate = kind === "MATERIAL" && createSetores.length > 0;
+  const [mode, setMode] = useState<"SEARCH" | "NEW">("SEARCH");
+  const [newSetor, setNewSetor] = useState(createSetores[0]?.key || "GALPAO");
+  const [newName, setNewName] = useState("");
+  const [newUnit, setNewUnit] = useState("UN");
+  const [newQty, setNewQty] = useState("");
+  // O "Leva" espelha a Quantidade até a pessoa mexer nele (o normal é a compra
+  // ir inteira pro navio); mexeu, vale o que foi digitado.
+  const [newLeva, setNewLeva] = useState("");
+  const [levaTouched, setLevaTouched] = useState(false);
+  const [newValue, setNewValue] = useState("");
+  const [newNotes, setNewNotes] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createMsg, setCreateMsg] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
+
   const filtered = candidates.filter((c) => matchSearch(c.name, search));
+  const showNew = canCreate && mode === "NEW";
+
+  const nameTrim = newName.trim();
+  const qtyNum = parseDecimalBR(newQty);
+  const levaStr = levaTouched ? newLeva : newQty;
+  const levaNum = parseDecimalBR(levaStr);
+  const valueNum = parseDecimalBR(newValue);
+  const duplicate = nameTrim
+    ? allMaterials.find((m) => normalize(m.name) === normalize(nameTrim)) || null
+    : null;
+  const levaOk = levaNum > 0 && levaNum <= qtyNum + 1e-9;
+  const createValid = !!nameTrim && qtyNum > 0 && levaOk;
+  const setorLabelOf = (team: string) =>
+    createSetores.find((s) => s.key === team)?.label || MATERIAL_TEAM_LABEL[team] || team;
+  const newInputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none";
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!createValid || creating) return;
+    setCreating(true);
+    setCreateError(null);
+    setCreateMsg(null);
+    try {
+      await onCreate({
+        setor: newSetor,
+        name: nameTrim,
+        unit: newUnit,
+        quantity: qtyNum,
+        leva: levaNum,
+        unitValue: valueNum,
+        notes: newNotes.trim() || null,
+      });
+      setAddedCount((n) => n + 1);
+      setCreateMsg(`✅ ${nameTrim} entrou no Estoque (${setorLabelOf(newSetor)}) e na lista deste navio.`);
+      setNewName(""); setNewQty(""); setNewLeva(""); setLevaTouched(false); setNewValue(""); setNewNotes("");
+    } catch (err) {
+      setCreateError(`Erro ao criar o item: ${(err as Error).message}`);
+    } finally {
+      setCreating(false);
+    }
+  }
 
   function badgeOf(c: StockItem): string {
     if (kind === "RANCHO") {
@@ -2267,9 +2415,32 @@ function AddItemModal({
     >
       <div className="space-y-3">
         <p className="text-xs text-text-light">
-          O item entra como <strong>extra</strong> só na lista do navio <strong>{shipName}</strong> — o
-          {kind === "MATERIAL" ? " kit padrão da equipe" : " padrão do Rancho"} não muda.
+          {showNew ? (
+            <>O item novo é cadastrado no <strong>Estoque do Almoxarifado</strong> e já entra como <strong>extra</strong> na lista do navio <strong>{shipName}</strong> — o kit padrão da equipe não muda.</>
+          ) : (
+            <>O item entra como <strong>extra</strong> só na lista do navio <strong>{shipName}</strong> — o
+            {kind === "MATERIAL" ? " kit padrão da equipe" : " padrão do Rancho"} não muda.</>
+          )}
         </p>
+        {canCreate && (
+          <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+            <button
+              type="button"
+              onClick={() => setMode("SEARCH")}
+              className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold transition ${!showNew ? "bg-white text-primary shadow-sm" : "text-text-light hover:text-text"}`}
+            >
+              🔍 Do Estoque
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("NEW")}
+              className={`flex-1 px-3 py-1.5 rounded-md text-xs font-semibold transition ${showNew ? "bg-white text-primary shadow-sm" : "text-text-light hover:text-text"}`}
+            >
+              ✨ Novo item
+            </button>
+          </div>
+        )}
+        {!showNew ? (<>
         <input
           type="text"
           value={search}
@@ -2285,6 +2456,15 @@ function AddItemModal({
                 {candidates.length === 0
                   ? "Tudo que existe aqui já está na lista deste navio."
                   : "Nenhum item encontrado com essa busca."}
+                {canCreate && (
+                  <button
+                    type="button"
+                    onClick={() => { setMode("NEW"); if (search.trim()) setNewName(search.trim()); }}
+                    className="block mx-auto mt-2 text-xs font-medium text-primary hover:underline"
+                  >
+                    ➕ Cadastrar {search.trim() ? `"${search.trim()}"` : "um item novo"} no Estoque e já colocar na lista
+                  </button>
+                )}
               </div>
             ) : (
               filtered.map((c) => (
@@ -2312,6 +2492,80 @@ function AddItemModal({
             )}
           </div>
         </div>
+        </>) : (
+        <form onSubmit={handleCreate} className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Setor *</label>
+            <select value={newSetor} onChange={(e) => setNewSetor(e.target.value)} className={newInputCls}>
+              {createSetores.map((s) => (
+                <option key={s.key} value={s.key}>{s.label}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-[11px] text-text-light">Onde o item fica guardado no Almoxarifado.</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Nome *</label>
+            <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} required className={newInputCls} />
+            {duplicate && (
+              <p className="mt-1 text-[11px] text-amber-700">
+                ⚠️ Já existe <strong>{duplicate.name}</strong> em {setorLabelOf(duplicate.team)} — se for o mesmo produto, use a aba «Do Estoque» pra não duplicar.
+              </p>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-text mb-1">Unidade de medida</label>
+              <select value={newUnit} onChange={(e) => setNewUnit(e.target.value)} className={newInputCls}>
+                {STOCK_UNITS.map((u) => (
+                  <option key={u.value} value={u.value}>{u.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-text mb-1">Quantidade Atual *</label>
+              <input type="text" inputMode="decimal" value={newQty} onChange={(e) => setNewQty(e.target.value)} placeholder="Ex: 8" className={newInputCls} />
+              <p className="mt-1 text-[11px] text-text-light">Entra no Total do Estoque.</p>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Leva neste navio *</label>
+            <input
+              type="text" inputMode="decimal"
+              value={levaStr}
+              onChange={(e) => { setNewLeva(e.target.value); setLevaTouched(true); }}
+              placeholder="Ex: 8"
+              className={newInputCls}
+            />
+            <p className={`mt-1 text-[11px] ${qtyNum > 0 && !levaOk ? "text-amber-700" : "text-text-light"}`}>
+              {qtyNum > 0 && !levaOk
+                ? `O Leva precisa ser maior que 0 e no máximo ${formatQty(qtyNum)} (a Quantidade).`
+                : <>Vai separado pra <strong>{teamLabel}</strong> e entra na lista deste navio; o que sobrar fica no Disponível.</>}
+            </p>
+          </div>
+          {showValue && (
+            <div>
+              <label className="block text-sm font-medium text-text mb-1">Valor Unitário <span className="text-text-light font-normal">(R$, opcional)</span></label>
+              <input type="text" inputMode="decimal" value={newValue} onChange={(e) => setNewValue(e.target.value)} placeholder="Ex: 24,90" className={newInputCls} />
+              {valueNum > 0 && qtyNum > 0 && (
+                <p className="text-xs text-text-light mt-1">
+                  Total em estoque: <strong>{formatCurrency(valueNum * qtyNum)}</strong>
+                </p>
+              )}
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-text mb-1">Observações <span className="text-text-light font-normal">(opcional)</span></label>
+            <textarea value={newNotes} onChange={(e) => setNewNotes(e.target.value)} rows={2} className={`${newInputCls} resize-none`} />
+          </div>
+          {createError && <p className="text-xs text-red-600">{createError}</p>}
+          {createMsg && !createError && <p className="text-xs text-emerald-700">{createMsg}</p>}
+          <div className="flex justify-end">
+            <Button type="submit" disabled={creating || !createValid}>
+              {creating ? "Salvando..." : "Salvar e adicionar à lista"}
+            </Button>
+          </div>
+        </form>
+        )}
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-text-light">
             {addedCount > 0 ? `✅ ${addedCount} item(ns) adicionado(s) à lista.` : ""}
