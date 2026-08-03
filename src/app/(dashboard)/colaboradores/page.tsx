@@ -21,6 +21,7 @@ import { UnitFormModal } from "@/components/job-unit-form-modal";
 import type { Employee, JobFunction, WorkUnit } from "@/types/database";
 import { DocumentosTab } from "./documentos-tab";
 import { UsuariosTab } from "./usuarios-tab";
+import { EmployeeEvaluations } from "./employee-evaluations";
 
 export default function ColaboradoresPage() {
   const { profile } = useAuth();
@@ -789,6 +790,9 @@ export default function ColaboradoresPage() {
                 </div>
               </div>
             )}
+
+            {/* Avaliações de desempenho (Relatórios de Bordo) */}
+            <EmployeeEvaluations employeeId={selectedEmp.id} />
 
             {/* EPIs em posse */}
             <div className="border-t border-border pt-4">

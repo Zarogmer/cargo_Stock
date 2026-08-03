@@ -847,8 +847,15 @@ model ShipReportHold {
   reports        ShipReport @relation(fields: [report_id], references: [id], onDelete: Cascade)
   label          String // "Porão 1", "Costado BB"...
   status         String     @default("PENDENTE") // PENDENTE | EM_ANDAMENTO | COMPLETO
+  // Legado (relatórios de antes das fases): horário geral início/término.
   start_time     String?
   end_time       String?
+  // Fases da lavagem, com horários próprios: água salgada (lavagem) e água
+  // doce (enxágue). O PDF mostra as duas colunas quando preenchidas.
+  salt_start     String?
+  salt_end       String?
+  fresh_start    String?
+  fresh_end      String?
   completion_pct Int        @default(0)
   sort_order     Int        @default(0)
 

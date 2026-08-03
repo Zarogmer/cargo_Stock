@@ -89,6 +89,8 @@ interface DetailData {
   report: ReportApi | null;
   team: TeamMember[];
   evaluations: EvaluationApi[];
+  // Média histórica de cada membro nos outros navios (só vem pra gestão).
+  history?: Record<number, { avg: number; count: number }>;
 }
 
 interface EvalDraft {
@@ -120,6 +122,34 @@ const STAGES = [
   { value: "DURANTE", label: "Durante" },
   { value: "DEPOIS", label: "Depois" },
 ];
+
+// Sugestões do Registro de atividades (datalist — dá pra escolher e completar,
+// ex.: "Parada por chuva"). "Parada" registra período sem operação.
+const ACTIVITY_SUGGESTIONS = [
+  "Lavagem com água salgada",
+  "Lavagem com água doce",
+  "Parada",
+  "Parada por chuva",
+  "Parada — aguardando liberação do porão",
+  "Enxágue",
+  "Secagem do porão",
+  "Remoção de resíduos de carga",
+  "Montagem de equipamentos",
+];
+
+function emptyHold(label: string): HoldRow {
+  return {
+    label,
+    status: "PENDENTE",
+    start_time: null,
+    end_time: null,
+    salt_start: null,
+    salt_end: null,
+    fresh_start: null,
+    fresh_end: null,
+    completion_pct: 0,
+  };
+}
 
 function todayIso(): string {
   const d = new Date();
@@ -363,15 +393,7 @@ function ReportDetail({
         setHolds(r.holds.map((h) => ({ ...h })));
       } else if (kind === "EMBARQUE" && d.ship?.holds_count) {
         // Primeiro acesso: já monta a lista de porões do navio.
-        setHolds(
-          Array.from({ length: d.ship.holds_count }, (_, i) => ({
-            label: `Porão ${i + 1}`,
-            status: "PENDENTE",
-            start_time: "",
-            end_time: "",
-            completion_pct: 0,
-          }))
-        );
+        setHolds(Array.from({ length: d.ship.holds_count }, (_, i) => emptyHold(`Porão ${i + 1}`)));
       } else {
         setHolds([]);
       }
@@ -642,13 +664,7 @@ function ReportDetail({
                 onClick={() =>
                   setHolds((prev) => [
                     ...prev,
-                    {
-                      label: kind === "COSTADO" ? `Área ${prev.length + 1}` : `Porão ${prev.length + 1}`,
-                      status: "PENDENTE",
-                      start_time: "",
-                      end_time: "",
-                      completion_pct: 0,
-                    },
+                    emptyHold(kind === "COSTADO" ? `Área ${prev.length + 1}` : `Porão ${prev.length + 1}`),
                   ])
                 }
               >
@@ -662,25 +678,54 @@ function ReportDetail({
             )}
 
             <div className="space-y-2">
-              {holds.map((h, i) => (
-                <div key={i} className="grid grid-cols-2 md:grid-cols-[1fr_130px_90px_90px_80px_36px] gap-2 items-center bg-gray-50 rounded-lg p-2">
-                  <input type="text" value={h.label} onChange={(e) => setHolds((prev) => prev.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} className={inputCls} placeholder={kind === "COSTADO" ? "Área" : "Porão"} />
-                  <select value={h.status} onChange={(e) => setHolds((prev) => prev.map((x, j) => (j === i ? { ...x, status: e.target.value, completion_pct: e.target.value === "COMPLETO" ? 100 : x.completion_pct } : x)))} className={inputCls}>
-                    <option value="PENDENTE">Pendente</option>
-                    <option value="EM_ANDAMENTO">Em andamento</option>
-                    <option value="COMPLETO">Completo</option>
-                  </select>
-                  <input type="text" value={h.start_time || ""} onChange={(e) => setHolds((prev) => prev.map((x, j) => (j === i ? { ...x, start_time: e.target.value } : x)))} className={inputCls} placeholder="Início" />
-                  <input type="text" value={h.end_time || ""} onChange={(e) => setHolds((prev) => prev.map((x, j) => (j === i ? { ...x, end_time: e.target.value } : x)))} className={inputCls} placeholder="Término" />
-                  <div className="flex items-center gap-1">
-                    <input type="number" min={0} max={100} value={h.completion_pct} onChange={(e) => setHolds((prev) => prev.map((x, j) => (j === i ? { ...x, completion_pct: Math.max(0, Math.min(100, Number(e.target.value) || 0)) } : x)))} className={inputCls} />
-                    <span className="text-xs text-text-light">%</span>
+              {holds.map((h, i) => {
+                const patch = (p: Partial<HoldRow>) =>
+                  setHolds((prev) => prev.map((x, j) => (j === i ? { ...x, ...p } : x)));
+                return (
+                  <div key={i} className="bg-gray-50 rounded-lg p-2.5 space-y-2">
+                    <div className="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_150px_90px_36px] gap-2 items-center">
+                      <input type="text" value={h.label} onChange={(e) => patch({ label: e.target.value })} className={inputCls} placeholder={kind === "COSTADO" ? "Área" : "Porão"} />
+                      <select value={h.status} onChange={(e) => patch({ status: e.target.value, completion_pct: e.target.value === "COMPLETO" ? 100 : h.completion_pct })} className={inputCls}>
+                        <option value="PENDENTE">Pendente</option>
+                        <option value="EM_ANDAMENTO">Em andamento</option>
+                        <option value="COMPLETO">Completo</option>
+                      </select>
+                      <div className="flex items-center gap-1">
+                        <input type="number" min={0} max={100} value={h.completion_pct} onChange={(e) => patch({ completion_pct: Math.max(0, Math.min(100, Number(e.target.value) || 0)) })} className={inputCls} />
+                        <span className="text-xs text-text-light">%</span>
+                      </div>
+                      <button onClick={() => setHolds((prev) => prev.filter((_, j) => j !== i))} title="Remover" className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition justify-self-end">
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                    {/* Fases da lavagem: água salgada (lavagem) e doce (enxágue).
+                        Empilha até lg — em ~768-850px as metades espremiam os
+                        inputs de horário a ~40px (ilegível). */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-text-light w-24 shrink-0">🌊 Água salgada</span>
+                        <input type="text" value={h.salt_start || ""} onChange={(e) => patch({ salt_start: e.target.value })} className={inputCls} placeholder="Início" />
+                        <input type="text" value={h.salt_end || ""} onChange={(e) => patch({ salt_end: e.target.value })} className={inputCls} placeholder="Término" />
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-text-light w-24 shrink-0">💧 Água doce</span>
+                        <input type="text" value={h.fresh_start || ""} onChange={(e) => patch({ fresh_start: e.target.value })} className={inputCls} placeholder="Início" />
+                        <input type="text" value={h.fresh_end || ""} onChange={(e) => patch({ fresh_end: e.target.value })} className={inputCls} placeholder="Término" />
+                      </div>
+                    </div>
+                    {/* Horário geral legado (relatório salvo antes das fases):
+                        só aparece quando tem valor — dá pra ver, corrigir ou
+                        limpar (limpou e salvou → some de vez). */}
+                    {(h.start_time || h.end_time) && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-amber-700 w-24 shrink-0" title="Registrado antes da divisão por fases">🕐 Horário geral</span>
+                        <input type="text" value={h.start_time || ""} onChange={(e) => patch({ start_time: e.target.value })} className={inputCls} placeholder="Início" />
+                        <input type="text" value={h.end_time || ""} onChange={(e) => patch({ end_time: e.target.value })} className={inputCls} placeholder="Término" />
+                      </div>
+                    )}
                   </div>
-                  <button onClick={() => setHolds((prev) => prev.filter((_, j) => j !== i))} title="Remover" className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition justify-self-end">
-                    <TrashIcon className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -696,11 +741,18 @@ function ReportDetail({
 
             {activities.length === 0 && <p className="text-sm text-text-light">Nenhuma atividade registrada.</p>}
 
+            {/* Sugestões do campo de atividade (inclui "Parada" e as fases de água) */}
+            <datalist id="activity-suggestions">
+              {ACTIVITY_SUGGESTIONS.map((s) => (
+                <option key={s} value={s} />
+              ))}
+            </datalist>
+
             <div className="space-y-2">
               {activities.map((a, i) => (
                 <div key={i} className="grid grid-cols-2 md:grid-cols-[140px_1fr_150px_36px] gap-2 items-center bg-gray-50 rounded-lg p-2">
                   <input type="text" value={a.time_range || ""} onChange={(e) => setActivities((prev) => prev.map((x, j) => (j === i ? { ...x, time_range: e.target.value } : x)))} className={inputCls} placeholder="22:00 - 01:40" />
-                  <input type="text" value={a.activity} onChange={(e) => setActivities((prev) => prev.map((x, j) => (j === i ? { ...x, activity: e.target.value } : x)))} className={inputCls} placeholder="Lavagem com água doce" />
+                  <input type="text" list="activity-suggestions" value={a.activity} onChange={(e) => setActivities((prev) => prev.map((x, j) => (j === i ? { ...x, activity: e.target.value } : x)))} className={inputCls} placeholder="Lavagem, parada, enxágue..." />
                   <select value={a.hold_label || ""} onChange={(e) => setActivities((prev) => prev.map((x, j) => (j === i ? { ...x, hold_label: e.target.value || null } : x)))} className={inputCls}>
                     <option value="">— {kind === "COSTADO" ? "área" : "porão"} —</option>
                     {holdLabels.map((l) => (
@@ -742,6 +794,7 @@ function ReportDetail({
                 const e = evals.get(m.employee_id) || EMPTY_EVAL;
                 const rated = EVAL_CRITERIA.map((c) => e[c.key as keyof EvalDraft] as number).filter((v) => v > 0);
                 const avg = rated.length ? (rated.reduce((s, v) => s + v, 0) / rated.length).toFixed(1) : null;
+                const hist = data.history?.[m.employee_id];
                 return (
                   <div key={m.employee_id} className="bg-card rounded-xl border border-border p-4 space-y-3">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -749,7 +802,17 @@ function ReportDetail({
                         <p className="font-bold text-text">{m.name}</p>
                         <p className="text-xs text-text-light">{m.function_name || "Colaborador"}</p>
                       </div>
-                      {avg && <span className="text-sm font-bold text-primary">Média: {avg}</span>}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {hist && (
+                          <span
+                            className="text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-800 font-medium"
+                            title={`Média das avaliações que este colaborador recebeu em ${hist.count} outro(s) navio(s)`}
+                          >
+                            ⭐ Histórico: {hist.avg.toFixed(1)} ({hist.count} navio{hist.count > 1 ? "s" : ""})
+                          </span>
+                        )}
+                        {avg && <span className="text-sm font-bold text-primary">Média: {avg}</span>}
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-1.5">

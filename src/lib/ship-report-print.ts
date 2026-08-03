@@ -12,8 +12,14 @@
 export interface HoldRow {
   label: string;
   status: string; // PENDENTE | EM_ANDAMENTO | COMPLETO
+  // Legado: horário geral (relatórios de antes das fases de água).
   start_time: string | null;
   end_time: string | null;
+  // Fases da lavagem: água salgada (lavagem) e água doce (enxágue).
+  salt_start: string | null;
+  salt_end: string | null;
+  fresh_start: string | null;
+  fresh_end: string | null;
   completion_pct: number;
 }
 
@@ -156,14 +162,40 @@ export function printCleaningReport(opts: {
     ? `<span class="badge ok">✔</span> Complete`
     : `<span class="badge warn">…</span> In progress`;
 
+  // Com qualquer fase de água preenchida, a tabela mostra as duas colunas
+  // (salt water wash / fresh water rinse); senão mantém o formato legado
+  // START/COMPLETION dos relatórios antigos.
+  const hasPhases = opts.holds.some((h) => h.salt_start || h.salt_end || h.fresh_start || h.fresh_end);
+  const range = (a: string | null, b: string | null) =>
+    a || b ? `${esc(a || "…")} – ${esc(b || "…")}` : "—";
+
+  const holdsHead = hasPhases
+    ? `<tr><th>${esc(areaCol)}</th><th>STATUS</th><th class="c">SALT WATER WASH</th><th class="c">FRESH WATER RINSE</th><th class="c">COMPLETION %</th></tr>`
+    : `<tr><th>${esc(areaCol)}</th><th>STATUS</th><th class="c">START TIME</th><th class="c">COMPLETION TIME</th><th class="c">COMPLETION %</th></tr>`;
+
+  // No modo com fases, linha SEM fase mas COM horário legado não pode perder o
+  // registro: o intervalo legado sai atravessando as duas colunas ("overall").
+  const phaseCells = (h: HoldRow) => {
+    const hasOwnPhase = h.salt_start || h.salt_end || h.fresh_start || h.fresh_end;
+    if (!hasOwnPhase && (h.start_time || h.end_time)) {
+      return `<td class="c" colspan="2">${range(h.start_time, h.end_time)} <span class="muted">(overall)</span></td>`;
+    }
+    return `<td class="c">${range(h.salt_start, h.salt_end)}</td>
+            <td class="c">${range(h.fresh_start, h.fresh_end)}</td>`;
+  };
+
   const holdsRows = opts.holds.length
     ? opts.holds
         .map(
           (h) => `<tr>
             <td>${esc(h.label)}</td>
             <td>${esc(HOLD_STATUS_EN[h.status] || h.status)}</td>
-            <td class="c">${esc(h.start_time || "—")}</td>
-            <td class="c">${esc(h.end_time || "—")}</td>
+            ${
+              hasPhases
+                ? phaseCells(h)
+                : `<td class="c">${esc(h.start_time || "—")}</td>
+            <td class="c">${esc(h.end_time || "—")}</td>`
+            }
             <td class="c b">${esc(h.completion_pct)}%</td>
           </tr>`
         )
@@ -208,7 +240,7 @@ export function printCleaningReport(opts: {
   tbody tr:nth-child(odd) { background: #f4f6fa; }
   td.c, th.c { text-align: center; }
   td.b { font-weight: bold; }
-  td.muted { color: #8a94a6; }
+  .muted { color: #8a94a6; }
   .box { border: 1px solid #d8dee9; background: #f4f6fa; padding: 12px; min-height: 34px;
          font-size: 10.5px; }
   .badge { display: inline-block; width: 13px; height: 13px; border-radius: 3px; color: #fff;
@@ -232,7 +264,7 @@ ${watermarkImg()}
 
   <div class="bar">${esc(section1)}</div>
   <table>
-    <thead><tr><th>${esc(areaCol)}</th><th>STATUS</th><th class="c">START TIME</th><th class="c">COMPLETION TIME</th><th class="c">COMPLETION %</th></tr></thead>
+    <thead>${holdsHead}</thead>
     <tbody>${holdsRows}</tbody>
   </table>
 

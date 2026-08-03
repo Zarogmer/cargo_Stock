@@ -72,6 +72,38 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
     where: { job_id: jobId, kind },
   });
 
+  // Média histórica de cada membro nos OUTROS navios — só pra gestão (o
+  // supervisor avalia sem ver o que os colegas deram antes). Média das médias
+  // POR NAVIO (job): Embarque e Costado do mesmo navio são duas avaliações,
+  // mas contam como UM navio (senão o navio pesaria em dobro e o "N navios"
+  // do badge mentiria). Critérios 0 = não avaliado ficam de fora.
+  const CRITERIA = ["productivity", "quality", "teamwork", "safety", "initiative", "punctuality", "technical"] as const;
+  let history: Record<number, { avg: number; count: number }> | undefined;
+  if (!actor.isSupervisor && team.length > 0) {
+    const past = await prisma.performanceEvaluation.findMany({
+      where: { employee_id: { in: team.map((t) => t.employee_id) }, NOT: { job_id: jobId } },
+    });
+    // employee → job → soma/qtde das médias das avaliações daquele navio
+    const byEmp = new Map<number, Map<string, { sum: number; n: number }>>();
+    for (const e of past) {
+      const rated = CRITERIA.map((c) => e[c]).filter((v) => v > 0);
+      if (rated.length === 0) continue;
+      const avg = rated.reduce((s, v) => s + v, 0) / rated.length;
+      const jobs = byEmp.get(e.employee_id) || new Map<string, { sum: number; n: number }>();
+      byEmp.set(e.employee_id, jobs);
+      const j = jobs.get(e.job_id) || { sum: 0, n: 0 };
+      jobs.set(e.job_id, { sum: j.sum + avg, n: j.n + 1 });
+    }
+    history = {};
+    for (const [emp, jobs] of byEmp) {
+      const shipAvgs = [...jobs.values()].map((j) => j.sum / j.n);
+      history[emp] = {
+        avg: shipAvgs.reduce((s, v) => s + v, 0) / shipAvgs.length,
+        count: shipAvgs.length,
+      };
+    }
+  }
+
   return NextResponse.json({
     data: {
       job: { id: job.id, name: job.name, start_date: job.start_date, end_date: job.end_date },
@@ -80,6 +112,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
       report,
       team,
       evaluations,
+      history,
     },
   });
 }
@@ -99,16 +132,21 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
   }
 
   const r = (body.report || {}) as Record<string, unknown>;
-  const holds = Array.isArray(body.holds) ? body.holds : [];
-  const activities = Array.isArray(body.activities) ? body.activities : [];
+  // Limites de sanidade: o SUPERVISOR tem escrita aqui — sem teto, um payload
+  // gigante inflaria o Postgres e tornaria tela/PDF inutilizáveis. Navio real
+  // tem ≤ ~9 porões e algumas dezenas de atividades; 60 linhas sobra.
+  const MAX_ROWS = 60;
+  const clip = (v: unknown, max: number) => (v ? String(v).slice(0, max) : null);
+  const holds = (Array.isArray(body.holds) ? body.holds : []).slice(0, MAX_ROWS);
+  const activities = (Array.isArray(body.activities) ? body.activities : []).slice(0, MAX_ROWS);
 
   const headerData = {
     report_date: r.report_date ? new Date(String(r.report_date)) : null,
-    port: r.port ? String(r.port) : null,
+    port: clip(r.port, 120),
     status: r.status === "COMPLETO" ? "COMPLETO" : "EM_ANDAMENTO",
-    remarks: r.remarks ? String(r.remarks) : null,
-    etc_date: r.etc_date ? String(r.etc_date) : null,
-    etc_time: r.etc_time ? String(r.etc_time) : null,
+    remarks: clip(r.remarks, 4000),
+    etc_date: clip(r.etc_date, 60),
+    etc_time: clip(r.etc_time, 60),
   };
 
   const report = await prisma.shipReport.upsert({
@@ -124,12 +162,16 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
         .filter((h: Record<string, unknown>) => String(h.label || "").trim())
         .map((h: Record<string, unknown>, i: number) => ({
           report_id: report.id,
-          label: String(h.label).trim(),
+          label: String(h.label).trim().slice(0, 120),
           status: ["PENDENTE", "EM_ANDAMENTO", "COMPLETO"].includes(String(h.status))
             ? String(h.status)
             : "PENDENTE",
-          start_time: h.start_time ? String(h.start_time) : null,
-          end_time: h.end_time ? String(h.end_time) : null,
+          start_time: clip(h.start_time, 40),
+          end_time: clip(h.end_time, 40),
+          salt_start: clip(h.salt_start, 40),
+          salt_end: clip(h.salt_end, 40),
+          fresh_start: clip(h.fresh_start, 40),
+          fresh_end: clip(h.fresh_end, 40),
           completion_pct: Math.max(0, Math.min(100, Number(h.completion_pct) || 0)),
           sort_order: i,
         })),
@@ -140,9 +182,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
         .filter((a: Record<string, unknown>) => String(a.activity || "").trim())
         .map((a: Record<string, unknown>, i: number) => ({
           report_id: report.id,
-          time_range: a.time_range ? String(a.time_range) : null,
-          activity: String(a.activity).trim(),
-          hold_label: a.hold_label ? String(a.hold_label) : null,
+          time_range: clip(a.time_range, 40),
+          activity: String(a.activity).trim().slice(0, 300),
+          hold_label: clip(a.hold_label, 120),
           sort_order: i,
         })),
     }),
