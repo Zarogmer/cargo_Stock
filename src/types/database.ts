@@ -1,4 +1,4 @@
-export type Role = "GESTOR" | "EXECUTIVO" | "MANUTENCAO" | "FINANCEIRO" | "RH" | "TECNOLOGIA" | "ESTAGIO" | "COMERCIAL";
+export type Role = "GESTOR" | "EXECUTIVO" | "MANUTENCAO" | "FINANCEIRO" | "RH" | "TECNOLOGIA" | "ESTAGIO" | "COMERCIAL" | "SUPERVISOR";
 
 export type StockCategory = "COMPRAS" | "CARNES" | "FEIRA" | "OUTROS" | "CARNE" | "SUPRIMENTOS";
 

@@ -18,6 +18,9 @@ enum Role {
   TECNOLOGIA
   ESTAGIO // mesmas permissões de TECNOLOGIA (ver rbac); categoria "Estágio"
   COMERCIAL // mesmas permissões de EXECUTIVO (ver rbac); categoria "Comercial"
+  // Criado pelo RH, vinculado a um colaborador (users.employee_id). Só enxerga
+  // os Relatórios de Bordo dos navios em que o colaborador está escalado.
+  SUPERVISOR
 }
 
 enum StockCategory {
@@ -75,10 +78,16 @@ model User {
   password_hash String
   full_name     String
   role          Role       @default(RH)
+  // Colaborador vinculado (obrigatório na prática pros SUPERVISOR: é por ele
+  // que o sistema sabe em quais navios o usuário está escalado). SET NULL:
+  // apagar o colaborador não derruba o login.
+  employee_id   Int?
+  employees     Employee?  @relation(fields: [employee_id], references: [id], onDelete: SetNull)
   created_at    DateTime   @default(now()) @db.Timestamptz()
   updated_at    DateTime   @default(now()) @updatedAt @db.Timestamptz()
   login_logs    LoginLog[]
 
+  @@index([employee_id])
   @@map("users")
 }
 
@@ -270,6 +279,8 @@ model Employee {
   job_allocations      JobAllocation[]
   function_rates       EmployeeFunctionRate[]
   advances             EmployeeAdvance[]
+  users                User[]
+  evaluations          PerformanceEvaluation[]
 
   @@map("employees")
 }
@@ -702,6 +713,8 @@ model Job {
   allocations JobAllocation[]
   adjustments JobAdjustment[]
   advance_discounts AdvanceDiscount[]
+  ship_reports ShipReport[]
+  evaluations  PerformanceEvaluation[]
   created_at  DateTime        @default(now()) @db.Timestamptz()
   updated_at  DateTime        @updatedAt @db.Timestamptz()
   created_by  String
@@ -793,6 +806,113 @@ model JobAdjustment {
 
   @@index([job_id])
   @@map("job_adjustments")
+}
+
+// ── Relatórios de Bordo (supervisores) ───────────────────────────────────────
+// Preenchidos pelo supervisor escalado no navio (papel SUPERVISOR) ou pela
+// gestão. Um relatório por job+serviço: kind=EMBARQUE (lavagem de porão) ou
+// kind=COSTADO. Alimenta os 3 PDFs: Cleaning Report, Relatório Fotográfico e
+// Avaliação de Desempenho — todos com a marca d'água da Cargo.
+
+model ShipReport {
+  id          String    @id @default(uuid()) @db.Uuid
+  job_id      String
+  jobs        Job       @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  kind        String    @default("EMBARQUE") // EMBARQUE | COSTADO
+  report_date DateTime? @db.Date
+  port        String?
+  status      String    @default("EM_ANDAMENTO") // EM_ANDAMENTO | COMPLETO
+  remarks     String?
+  // ETC (Estimated Time of Completion) como texto livre, igual ao PDF de
+  // referência ("July, 21th" / "AM").
+  etc_date    String?
+  etc_time    String?
+  created_by  String
+  created_at  DateTime  @default(now()) @db.Timestamptz()
+  updated_at  DateTime  @default(now()) @updatedAt @db.Timestamptz()
+
+  holds      ShipReportHold[]
+  activities ShipReportActivity[]
+  photos     ShipReportPhoto[]
+
+  @@unique([job_id, kind])
+  @@map("ship_reports")
+}
+
+// Um porão (Embarque) ou área do costado, com status/horários da lavagem —
+// vira a tabela "Operational Status" do PDF.
+model ShipReportHold {
+  id             Int        @id @default(autoincrement())
+  report_id      String     @db.Uuid
+  reports        ShipReport @relation(fields: [report_id], references: [id], onDelete: Cascade)
+  label          String // "Porão 1", "Costado BB"...
+  status         String     @default("PENDENTE") // PENDENTE | EM_ANDAMENTO | COMPLETO
+  start_time     String?
+  end_time       String?
+  completion_pct Int        @default(0)
+  sort_order     Int        @default(0)
+
+  @@index([report_id])
+  @@map("ship_report_holds")
+}
+
+// Registro de atividades do dia (Daily Activities Log do PDF).
+model ShipReportActivity {
+  id         Int        @id @default(autoincrement())
+  report_id  String     @db.Uuid
+  reports    ShipReport @relation(fields: [report_id], references: [id], onDelete: Cascade)
+  time_range String? // "22:00 - 01:40"
+  activity   String
+  hold_label String?
+  sort_order Int        @default(0)
+
+  @@index([report_id])
+  @@map("ship_report_activities")
+}
+
+// Foto do relatório fotográfico. image_data = data URL JPEG comprimida com a
+// marca d'água da Cargo já queimada no cliente — inline no Postgres (infra só
+// Railway, sem storage externo; mesmo racional de stock_items.image_url).
+model ShipReportPhoto {
+  id         Int        @id @default(autoincrement())
+  report_id  String     @db.Uuid
+  reports    ShipReport @relation(fields: [report_id], references: [id], onDelete: Cascade)
+  hold_label String? // a qual porão/área a foto pertence
+  stage      String     @default("ANTES") // ANTES | DURANTE | DEPOIS
+  caption    String?
+  image_data String
+  sort_order Int        @default(0)
+  created_by String
+  created_at DateTime   @default(now()) @db.Timestamptz()
+
+  @@index([report_id])
+  @@map("ship_report_photos")
+}
+
+// Avaliação de desempenho de um colaborador num navio: 7 critérios de 1 a 5
+// (0 = ainda não avaliado). Uma por colaborador por job+serviço.
+model PerformanceEvaluation {
+  id           Int      @id @default(autoincrement())
+  job_id       String
+  jobs         Job      @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  kind         String   @default("EMBARQUE") // EMBARQUE | COSTADO
+  employee_id  Int
+  employees    Employee @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  productivity Int      @default(0)
+  quality      Int      @default(0)
+  teamwork     Int      @default(0)
+  safety       Int      @default(0)
+  initiative   Int      @default(0)
+  punctuality  Int      @default(0)
+  technical    Int      @default(0)
+  comments     String?
+  evaluated_by String
+  created_at   DateTime @default(now()) @db.Timestamptz()
+  updated_at   DateTime @default(now()) @updatedAt @db.Timestamptz()
+
+  @@unique([job_id, kind, employee_id])
+  @@index([employee_id])
+  @@map("performance_evaluations")
 }
 
 // ── External Ships (MarineTraffic cache) ─────────────────────────────────────

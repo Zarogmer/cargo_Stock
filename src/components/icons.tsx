@@ -23,6 +23,7 @@ import {
   Send,
   MessagesSquare,
   Megaphone,
+  FileText,
 } from "lucide-react";
 
 interface IconProps {
@@ -113,6 +114,10 @@ export function MarketingIcon({ className = "w-5 h-5" }: IconProps) {
   return <Megaphone className={className} />;
 }
 
+export function RelatoriosIcon({ className = "w-5 h-5" }: IconProps) {
+  return <FileText className={className} />;
+}
+
 const ICON_MAP: Record<string, React.FC<IconProps>> = {
   dashboard: DashboardIcon,
   embarque: EmbarqueIcon,
@@ -126,6 +131,7 @@ const ICON_MAP: Record<string, React.FC<IconProps>> = {
   mensagens: MensagensIcon,
   conversas: ConversasIcon,
   marketing: MarketingIcon,
+  relatorios: RelatoriosIcon,
 };
 
 export function NavIcon({ name, className }: { name: string; className?: string }) {

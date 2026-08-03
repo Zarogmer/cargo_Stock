@@ -530,14 +530,22 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // SUPERVISOR não tem Dashboard: a home dele são os Relatórios de Bordo.
+  // (Também evita a rajada de chamadas ao /api/db, que é bloqueado pro papel.)
+  const isSupervisor = profile?.role === "SUPERVISOR";
   useEffect(() => {
+    if (isSupervisor) window.location.replace("/relatorios");
+  }, [isSupervisor]);
+
+  useEffect(() => {
+    if (isSupervisor) return;
     loadDashboard();
     fetchDollar();
     // Refresh dollar every 5 minutes
     const interval = setInterval(fetchDollar, 5 * 60 * 1000);
     return () => clearInterval(interval);
     // pathname forces reload when navigating back to dashboard
-  }, [loadDashboard, fetchDollar, pathname]);
+  }, [loadDashboard, fetchDollar, pathname, isSupervisor]);
 
   if (loading) {
     return (

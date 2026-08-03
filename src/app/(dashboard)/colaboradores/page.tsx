@@ -20,6 +20,7 @@ import {
 import { UnitFormModal } from "@/components/job-unit-form-modal";
 import type { Employee, JobFunction, WorkUnit } from "@/types/database";
 import { DocumentosTab } from "./documentos-tab";
+import { UsuariosTab } from "./usuarios-tab";
 
 export default function ColaboradoresPage() {
   const { profile } = useAuth();
@@ -606,6 +607,11 @@ export default function ColaboradoresPage() {
           onChange={loadAll}
         />
       ),
+    },
+    {
+      // Logins de supervisor (papel SUPERVISOR) — criados e gerenciados pelo RH.
+      key: "usuarios", label: "Usuários",
+      content: <UsuariosTab employees={employees} canManage={canCreate} />,
     },
     {
       key: "documentos", label: "Documentos",

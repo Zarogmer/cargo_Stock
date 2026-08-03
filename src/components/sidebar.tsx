@@ -204,6 +204,7 @@ export function Sidebar({ open, onClose, collapsed = false }: SidebarProps) {
     RH: "RH",
     TECNOLOGIA: "Tecnologia",
     ESTAGIO: "Estágio",
+    SUPERVISOR: "Supervisor",
   };
 
   return (

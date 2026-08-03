@@ -17,7 +17,8 @@ export type Module =
   | "SOLICITACOES"
   | "WHATSAPP"
   | "MENSAGENS"
-  | "CONVERSAS";
+  | "CONVERSAS"
+  | "RELATORIOS";
 
 // Permission actions
 export type Permission =
@@ -56,6 +57,7 @@ const EXECUTIVO_PERMS: Partial<Record<Module, Permission[]>> = {
   SOLICITACOES: ["view", "create", "edit", "delete"],
   MENSAGENS: ["view", "create"],
   CONVERSAS: ["view", "create"],
+  RELATORIOS: ["view", "create", "edit", "delete"],
 };
 
 // RBAC matrix - same as your Python app
@@ -76,6 +78,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     // Mensagens fica restrito a Tecnologia, Executivo e Financeiro (pedido do
     // usuário) — Gestor e RH não enxergam mais a aba.
     CONVERSAS: ["view", "create"],
+    RELATORIOS: ["view", "create", "edit", "delete"],
   },
   EXECUTIVO: EXECUTIVO_PERMS,
   // COMERCIAL = mesma permissão de EXECUTIVO (ver EXECUTIVO_PERMS acima).
@@ -110,6 +113,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     SOLICITACOES: ["view", "create", "edit", "delete"],
     MENSAGENS: ["view", "create"],
     CONVERSAS: ["view", "create"],
+    RELATORIOS: ["view", "create", "edit", "delete"],
   },
   RH: {
     DASHBOARD: ["view"],
@@ -134,6 +138,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     // leitura que tinha sido dado em 2026-06).
     // Mensagens restrito a Tecnologia, Executivo e Financeiro — RH fica de fora.
     CONVERSAS: ["view", "create"],
+    RELATORIOS: ["view", "create", "edit", "delete"],
   },
   TECNOLOGIA: {
     DASHBOARD: ["view"],
@@ -152,6 +157,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     WHATSAPP: ["view", "edit"],
     MENSAGENS: ["view", "create"],
     CONVERSAS: ["view", "create"],
+    RELATORIOS: ["view", "create", "edit", "delete"],
   },
   // "Estágio" — mesmas permissões de TECNOLOGIA (pedido do Guilherme). Manter os
   // dois blocos em sincronia se as permissões da Tecnologia mudarem.
@@ -175,6 +181,14 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     WHATSAPP: ["view"],
     MENSAGENS: ["view", "create"],
     CONVERSAS: ["view", "create"],
+    RELATORIOS: ["view", "create", "edit", "delete"],
+  },
+  // Usuário criado pelo RH e vinculado a um colaborador (users.employee_id).
+  // Enxerga SÓ os Relatórios de Bordo — e, dentro deles, apenas os navios em
+  // que o colaborador está escalado (o escopo por navio é aplicado nas rotas
+  // /api/relatorios; o /api/db genérico é bloqueado pra este papel).
+  SUPERVISOR: {
+    RELATORIOS: ["view", "create", "edit"],
   },
 };
 
@@ -286,6 +300,10 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Escalação de Embarque", href: "/escalacao/embarque" },
     ],
   },
+  // Relatórios de Bordo: lavagem do porão/costado, avaliações e fotos por
+  // navio. É a ÚNICA aba do papel SUPERVISOR (que só vê os navios em que o
+  // colaborador vinculado está escalado); a gestão vê todos os navios.
+  { label: "Relatórios de Bordo", href: "/relatorios", icon: "relatorios", module: "RELATORIOS" },
   {
     label: "Almoxarifado",
     href: "/almoxarifado",
@@ -332,6 +350,9 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       { label: "Colaboradores", href: "/colaboradores?tab=colaboradores" },
       { label: "Funções", href: "/colaboradores?tab=funcoes" },
+      // Cadastro de logins de supervisor (papel SUPERVISOR, vinculado a um
+      // colaborador) — o RH cria/gerencia login e senha por aqui.
+      { label: "Usuários", href: "/colaboradores?tab=usuarios" },
       {
         label: "Documentos",
         href: "/colaboradores?tab=documentos",

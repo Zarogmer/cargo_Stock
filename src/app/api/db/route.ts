@@ -255,13 +255,24 @@ export async function POST(request: NextRequest) {
     }
 
     const spec: QuerySpec = await request.json();
+
+    // SUPERVISOR não usa o gateway genérico: todo o acesso dele passa pelas
+    // rotas /api/relatorios (com escopo por navio escalado). A única exceção é
+    // o log de login/logout que o AuthProvider grava pra todo mundo.
+    const userRole = (session.user as { role?: Role }).role as Role;
+    if (userRole === "SUPERVISOR" && !(spec.table === "login_logs" && spec.action === "insert")) {
+      return NextResponse.json(
+        { data: null, error: { message: "Sem permissão para este recurso", code: "403" }, count: null },
+        { status: 403 }
+      );
+    }
+
     const model = getModel(spec.table);
 
     // Valor do item: quem não é gestão não lê nem grava a coluna. `hideValue`
     // vale só para as tabelas do almoxarifado (UNIT_VALUE_TABLES).
     const hideValue =
-      UNIT_VALUE_TABLES.has(spec.table) &&
-      !canViewStockValue((session.user as { role?: Role }).role as Role);
+      UNIT_VALUE_TABLES.has(spec.table) && !canViewStockValue(userRole);
     // Silenciosamente descarta o campo em insert/update — assim um payload
     // adulterado não grava preço, sem quebrar o resto do save.
     if (hideValue && spec.data) delete spec.data.unit_value;
