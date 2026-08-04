@@ -1453,7 +1453,7 @@ function ReportDetail({
           </div>
 
           <div className="md:col-span-3 bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-900">
-            💡 O relatório abre numa nova janela já com o diálogo de impressão — escolha{" "}
+            💡 O relatório abre o diálogo de impressão (numa janela nova ou direto por aqui) — escolha{" "}
             <strong>&quot;Salvar como PDF&quot;</strong> pra baixar o arquivo. No celular, use o menu de
             compartilhar/imprimir do navegador. Gere o PDF <strong>depois de salvar</strong> as
             alterações, pra sair tudo atualizado.

@@ -95,15 +95,40 @@ function watermarkImg(): string {
   return `<img class="page-watermark" src="${logoUrl()}" alt="" />`;
 }
 
+// Primeiro tenta janela nova (navegador comum). Quando o pop-up é bloqueado —
+// caso do app desktop (o Electron nega janela filha de about:blank em builds
+// antigos) — cai pra um iframe invisível na própria página: o AUTO_PRINT do
+// html chama o window.print() do iframe e o diálogo de impressão (com "Salvar
+// como PDF") abre do mesmo jeito. O iframe fica montado até a próxima
+// impressão — remover cedo demais cancelaria o diálogo aberto.
+let printFrame: HTMLIFrameElement | null = null;
+
 function openPrintWindow(html: string) {
   const win = window.open("", "_blank");
-  if (!win) {
+  if (win) {
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    return;
+  }
+
+  printFrame?.remove();
+  const frame = document.createElement("iframe");
+  frame.setAttribute("aria-hidden", "true");
+  // 1x1 no canto (display:none/visibility:hidden deixariam a impressão em
+  // branco em alguns engines).
+  frame.style.cssText = "position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;";
+  document.body.appendChild(frame);
+  const doc = frame.contentWindow?.document;
+  if (!doc) {
+    frame.remove();
     alert("O navegador bloqueou a janela do relatório. Habilite pop-ups e tente de novo.");
     return;
   }
-  win.document.open();
-  win.document.write(html);
-  win.document.close();
+  printFrame = frame;
+  doc.open();
+  doc.write(html);
+  doc.close();
 }
 
 const AUTO_PRINT = `<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},500);});</script>`;

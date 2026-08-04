@@ -32,13 +32,16 @@ function createWindow() {
   // Carrega o site
   mainWindow.loadURL(APP_URL);
 
-  // Abre links externos no navegador padrão
+  // Janelas novas: "about:blank" é a janela de impressão dos Relatórios de
+  // Bordo (window.open("") + document.write dos PDFs) — permite como janela
+  // filha, senão o "Gerar PDF" morre bloqueado. Qualquer outra URL fora do
+  // app abre no navegador padrão.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url !== APP_URL && !url.startsWith(APP_URL)) {
-      shell.openExternal(url);
-      return { action: "deny" };
+    if (url === "about:blank" || url.startsWith(APP_URL)) {
+      return { action: "allow" };
     }
-    return { action: "allow" };
+    shell.openExternal(url);
+    return { action: "deny" };
   });
 
   // Intercepta navegação para links externos
