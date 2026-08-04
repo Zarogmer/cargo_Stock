@@ -533,8 +533,6 @@ function ReportDetail({
   // Legendas sendo digitadas: do bloco (por rótulo) e da foto (por id).
   const [blockCaptions, setBlockCaptions] = useState<Record<string, string>>({});
   const [photoCaptions, setPhotoCaptions] = useState<Record<number, string>>({});
-  const [newBlockName, setNewBlockName] = useState("");
-  const [addingBlock, setAddingBlock] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   // Qual bloco está enviando agora (mostra o progresso no lugar certo).
   const [uploadingLabel, setUploadingLabel] = useState<string | null>(null);
@@ -875,28 +873,8 @@ function ReportDetail({
     }
   }
 
-  async function createBlock() {
-    const label = newBlockName.trim();
-    if (!label) return;
-    try {
-      const res = await fetch(`/api/relatorios/${jobId}/secoes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, label }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setUploadErrors([json.error || "Não deu pra criar o bloco."]);
-        return;
-      }
-      setSections((prev) => [...prev.filter((s) => s.label !== label), json.data]);
-      setNewBlockName("");
-      setAddingBlock(false);
-    } catch {
-      setUploadErrors(["Erro ao conectar com o servidor."]);
-    }
-  }
-
+  // Bloco só some da tela quando está vazio: os fixos (ciclo + porões) nunca
+  // saem, e sobrou remoção só pros rótulos livres de relatórios antigos.
   async function removeBlock(label: string) {
     try {
       const res = await fetch(
@@ -1540,11 +1518,19 @@ function ReportDetail({
             const items = photos.filter((p) => photoBlockKey(p.hold_label) === b.label);
             const stage = blockStage[b.label] || "ANTES";
             const sending = uploadingLabel === b.label && !!uploadProgress;
-            // Porão mostra as fotos separadas por fase; os demais, tudo junto.
-            const buckets = b.isHold
-              ? STAGES.map((s) => ({ key: s.value, title: STAGE_UPLOAD_LABEL[s.value] || s.label, list: items.filter((p) => p.stage === s.value) }))
-                  .concat([{ key: "GERAL", title: "Sem fase", list: items.filter((p) => !STAGES.some((s) => s.value === p.stage)) }])
-              : [{ key: "TODAS", title: "", list: items }];
+            // Fase da foto normalizada: qualquer coisa fora de Antes/Durante/
+            // Depois (fotos antigas com stage GERAL) cai em "Sem fase".
+            const stageOf = (p: PhotoMeta) => (STAGES.some((s) => s.value === p.stage) ? p.stage : "GERAL");
+            const chips = b.isHold
+              ? [
+                  ...STAGES.map((s) => ({ value: s.value, label: STAGE_UPLOAD_LABEL[s.value] || s.label })),
+                  // "Sem fase" só aparece se existir foto antiga assim.
+                  ...(items.some((p) => stageOf(p) === "GERAL") ? [{ value: "GERAL", label: "Sem fase" }] : []),
+                ]
+              : [];
+            // O chip é FILTRO: mostra só as fotos da fase escolhida, senão o
+            // supervisor troca a fase e continua vendo as mesmas fotos.
+            const shown = b.isHold ? items.filter((p) => stageOf(p) === stage) : items;
 
             return (
               <div key={b.label} className="bg-card rounded-xl border border-border p-4 space-y-3">
@@ -1579,22 +1565,26 @@ function ReportDetail({
                   />
                 )}
 
-                {/* Fase da lavagem: só porão/área tem antes/durante/depois. */}
-                {b.isHold && !locked && (
+                {/* Fase da lavagem: só porão/área tem antes/durante/depois.
+                    O chip escolhe a fase que aparece E a que recebe a foto. */}
+                {b.isHold && (
                   <div className="flex flex-wrap gap-1.5">
-                    {STAGES.map((s) => (
-                      <button
-                        key={s.value}
-                        onClick={() => setBlockStage((prev) => ({ ...prev, [b.label]: s.value }))}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition ${
-                          stage === s.value
-                            ? "bg-primary text-white border-primary"
-                            : "bg-card text-text-light border-border hover:border-primary/60"
-                        }`}
-                      >
-                        {STAGE_UPLOAD_LABEL[s.value] || s.label}
-                      </button>
-                    ))}
+                    {chips.map((c) => {
+                      const count = items.filter((p) => stageOf(p) === c.value).length;
+                      return (
+                        <button
+                          key={c.value}
+                          onClick={() => setBlockStage((prev) => ({ ...prev, [b.label]: c.value }))}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition ${
+                            stage === c.value
+                              ? "bg-primary text-white border-primary"
+                              : "bg-card text-text-light border-border hover:border-primary/60"
+                          }`}
+                        >
+                          {c.label} ({count})
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
 
@@ -1610,85 +1600,47 @@ function ReportDetail({
                   </button>
                 )}
 
-                {buckets.map((bucket) =>
-                  bucket.list.length === 0 ? null : (
-                    <div key={bucket.key} className="space-y-2">
-                      {bucket.title && (
-                        <p className="text-xs font-semibold text-text-light">
-                          {bucket.title} <span className="font-normal">({bucket.list.length})</span>
-                        </p>
-                      )}
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                        {bucket.list.map((p) => (
-                          <div key={p.id} className="bg-bg rounded-xl border border-border overflow-hidden">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={`/api/relatorios/fotos/${p.id}`} alt={p.caption || b.label} className="w-full h-36 object-cover" loading="lazy" />
-                            <div className="p-2 space-y-1.5">
-                              {locked ? (
-                                <p className="text-xs text-text-light truncate">{p.caption || "—"}</p>
-                              ) : (
-                                <div className="flex items-center gap-1">
-                                  <input
-                                    type="text"
-                                    value={photoCaptions[p.id] ?? ""}
-                                    onChange={(e) => setPhotoCaptions((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                                    onBlur={() => savePhotoCaption(p.id)}
-                                    placeholder="Legenda da foto"
-                                    className="flex-1 min-w-0 px-2 py-1 text-xs border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                  />
-                                  <button
-                                    onClick={() => setDeletePhoto(p)}
-                                    title="Excluir foto"
-                                    className="p-1 text-text-light hover:text-danger hover:bg-danger/10 rounded transition shrink-0"
-                                  >
-                                    <TrashIcon className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              )}
+                {shown.length === 0 ? (
+                  <p className="text-xs text-text-light">
+                    {b.isHold ? "Nenhuma foto nesta fase ainda." : "Nenhuma foto neste bloco ainda."}
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                    {shown.map((p) => (
+                      <div key={p.id} className="bg-bg rounded-xl border border-border overflow-hidden">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={`/api/relatorios/fotos/${p.id}`} alt={p.caption || b.label} className="w-full h-36 object-cover" loading="lazy" />
+                        <div className="p-2 space-y-1.5">
+                          {locked ? (
+                            <p className="text-xs text-text-light truncate">{p.caption || "—"}</p>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="text"
+                                value={photoCaptions[p.id] ?? ""}
+                                onChange={(e) => setPhotoCaptions((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                                onBlur={() => savePhotoCaption(p.id)}
+                                placeholder="Legenda da foto"
+                                className="flex-1 min-w-0 px-2 py-1 text-xs border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                              />
+                              <button
+                                onClick={() => setDeletePhoto(p)}
+                                title="Excluir foto"
+                                className="p-1 text-text-light hover:text-danger hover:bg-danger/10 rounded transition shrink-0"
+                              >
+                                <TrashIcon className="w-3.5 h-3.5" />
+                              </button>
                             </div>
-                          </div>
-                        ))}
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )
+                    ))}
+                  </div>
                 )}
               </div>
             );
           })}
 
-          {!locked &&
-            (addingBlock ? (
-              <div className="bg-card rounded-xl border border-border p-4 flex flex-col sm:flex-row gap-2">
-                <input
-                  type="text"
-                  value={newBlockName}
-                  autoFocus
-                  onChange={(e) => setNewBlockName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && createBlock()}
-                  placeholder="Nome do bloco (ex.: Convés, Praça de máquinas...)"
-                  className={inputCls}
-                />
-                <div className="flex gap-2">
-                  <Button onClick={createBlock}>Criar</Button>
-                  <button
-                    onClick={() => {
-                      setAddingBlock(false);
-                      setNewBlockName("");
-                    }}
-                    className="px-3 py-2 text-sm text-text-light hover:text-text hover:bg-gray-100 rounded-lg transition"
-                  >
-                    Cancelar
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={() => setAddingBlock(true)}
-                className="w-full border-2 border-dashed border-border hover:border-primary/60 rounded-xl py-3 text-sm font-medium text-text-light hover:text-primary transition"
-              >
-                ＋ Novo bloco
-              </button>
-            ))}
         </div>
       )}
 
