@@ -24,7 +24,7 @@ import { hasModuleAccess } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, TrashIcon } from "@/components/icons";
-import { processReportPhoto } from "@/lib/watermark";
+import { processReportPhoto, sniffImageType } from "@/lib/watermark";
 import {
   EVAL_CRITERIA,
   printCleaningReport,
@@ -710,14 +710,44 @@ function ReportDetail({
   }
 
   async function handleFiles(files: FileList | null) {
-    if (!files || files.length === 0) return;
-    const list = Array.from(files);
+    const list = files ? Array.from(files) : [];
     setUploadErrors([]);
+    if (list.length === 0) {
+      setUploadErrors(["Nenhuma foto veio da galeria — tente selecionar de novo."]);
+      return;
+    }
     const errs: string[] = [];
+
+    // O File que a galeria do celular entrega é só um ponteiro pra foto (no
+    // iPhone, um item do Photos, às vezes ainda no iCloud). Esse ponteiro pode
+    // morrer no meio do envio — enquanto a foto anterior sobe, o app vai pro
+    // background ou o input é resetado — e aí nada mais é lido. Por isso os
+    // bytes de TODAS as fotos são copiados aqui, antes de qualquer ida ao
+    // servidor. (Foto tirada na hora pela câmera não sofria disso: era um
+    // arquivo temporário de verdade.)
+    setUploadProgress(`Lendo ${list.length} foto${list.length > 1 ? "s" : ""}...`);
+    const items: { name: string; blob: Blob | null }[] = [];
+    for (const f of list) {
+      const name = f.name || "foto";
+      try {
+        const buf = await f.arrayBuffer();
+        const head = new Uint8Array(buf.slice(0, 16));
+        const type = sniffImageType(head) || f.type || "application/octet-stream";
+        items.push({ name, blob: new Blob([buf], { type }) });
+      } catch {
+        items.push({ name, blob: null });
+      }
+    }
+
     for (let i = 0; i < list.length; i++) {
       setUploadProgress(`Enviando foto ${i + 1} de ${list.length}...`);
+      const item = items[i];
+      if (!item.blob) {
+        errs.push(`${item.name}: o celular não deixou ler o arquivo (se a foto está no iCloud, abra ela na galeria primeiro)`);
+        continue;
+      }
       try {
-        const dataUrl = await processReportPhoto(list[i]);
+        const dataUrl = await processReportPhoto(item.blob);
         const res = await fetch(`/api/relatorios/${jobId}/fotos`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -730,14 +760,14 @@ function ReportDetail({
             image_data: dataUrl,
           }),
         });
-        const json = await res.json();
+        const json = await res.json().catch(() => ({}));
         if (!res.ok) {
-          errs.push(`${list[i].name}: ${json.error || "erro no envio"}`);
+          errs.push(`${item.name}: ${json.error || `erro no envio (${res.status})`}`);
           continue;
         }
         setPhotos((prev) => [...prev, json.data]);
-      } catch {
-        errs.push(`${list[i].name}: formato não suportado`);
+      } catch (err) {
+        errs.push(`${item.name}: ${err instanceof Error ? err.message : "não foi possível enviar"}`);
       }
     }
     setUploadProgress("");
@@ -1407,9 +1437,12 @@ function ReportDetail({
               accept="image/*"
               multiple
               className="hidden"
-              onChange={(e) => {
-                handleFiles(e.target.files);
-                e.target.value = "";
+              onChange={async (e) => {
+                // Só limpa o input DEPOIS de processar: no iPhone, resetar o
+                // input no meio do envio invalida as fotos da galeria.
+                const input = e.currentTarget;
+                await handleFiles(input.files);
+                input.value = "";
               }}
             />
             <button
@@ -1426,7 +1459,14 @@ function ReportDetail({
               </p>
             </button>
             {uploadErrors.length > 0 && (
-              <p className="text-xs text-danger">Falhou: {uploadErrors.join("; ")}</p>
+              <div className="bg-danger/10 border border-danger/30 rounded-lg p-3 space-y-1">
+                <p className="text-sm font-semibold text-danger">⚠️ Não deu pra enviar:</p>
+                <ul className="text-xs text-danger space-y-0.5">
+                  {uploadErrors.map((e, i) => (
+                    <li key={i}>• {e}</li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
           )}
