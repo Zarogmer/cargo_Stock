@@ -207,6 +207,8 @@ function joinTimeRange(start: string, end: string): string {
 // Texto do relatório pro WhatsApp (botão "Enviar pro WhatsApp"): resumo em
 // PT-BR do que foi preenchido na aba Lavagem — é mensagem interna pro
 // escritório, diferente dos PDFs (inglês). Usa a formatação do app (*negrito*).
+// A previsão de término (ETC) vai logo no cabeçalho, junto do status: é o dado
+// que o escritório mais procura na mensagem, não dava pra ficar no rodapé.
 function buildWhatsText(opts: {
   vesselName: string;
   kind: Kind;
@@ -236,6 +238,8 @@ function buildWhatsText(opts: {
   const info = [dateBr && `📅 ${dateBr}`, header.port && `📍 ${header.port}`].filter(Boolean).join(" · ");
   if (info) L.push(info);
   L.push(header.status === "COMPLETO" ? "✅ Operação completa" : "🔄 Operação em andamento");
+  const etc = [header.etc_date, header.etc_time].filter((v) => String(v || "").trim()).join(" às ");
+  if (etc) L.push(`⏳ *Previsão de término:* ${etc}`);
 
   const named = holds.filter((h) => h.label.trim());
   if (named.length) {
@@ -261,9 +265,6 @@ function buildWhatsText(opts: {
   }
 
   if (header.remarks.trim()) L.push("", "*Observações*", header.remarks.trim());
-  if (header.etc_date || header.etc_time) {
-    L.push("", `⏳ Previsão de término: ${[header.etc_date, header.etc_time].filter(Boolean).join(" ")}`);
-  }
   L.push("", `_Enviado pelo Cargo Stock — ${opts.supervisorName}_`);
   return L.join("\n");
 }
@@ -503,8 +504,6 @@ function ReportDetail({
   const [customActivityRows, setCustomActivityRows] = useState<Set<number>>(new Set());
   const [savingReport, setSavingReport] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
-  // WhatsApp da empresa (wa.me) pro "Enviar pro WhatsApp" — null = indisponível.
-  const [waNumber, setWaNumber] = useState<string | null>(null);
 
   // ── Avaliações ────────────────────────────────────────────────────────────
   const [evals, setEvals] = useState<Map<number, EvalDraft>>(new Map());
@@ -582,21 +581,6 @@ function ReportDetail({
   useEffect(() => {
     load();
   }, [load]);
-
-  // Busca o número da empresa uma vez — o clique no botão fica 100% síncrono
-  // (window.open dentro do gesto do usuário, sem bloqueio de pop-up).
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/relatorios/whats-target")
-      .then((r) => r.json())
-      .then((j) => {
-        if (alive) setWaNumber(j?.data?.number || null);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   // Sincronização das avaliações: enquanto a aba Avaliações está aberta, busca
   // de tempos em tempos o que foi salvo por outra pessoa (ex.: a gestão vendo
@@ -777,11 +761,12 @@ function ReportDetail({
 
   const vesselName = data?.ship?.name || data?.job.name || "—";
 
-  // Abre o WhatsApp do celular do supervisor com o relatório pronto, direto na
-  // conversa com a empresa (wa.me funciona sem ter o contato salvo). Salva o
-  // relatório junto, pra mensagem e sistema ficarem idênticos.
+  // Abre o WhatsApp do celular do supervisor com o relatório pronto e deixa ELE
+  // escolher pra onde vai: wa.me SEM número cai na tela de "enviar para", que
+  // lista contatos e grupos (antes ia direto pro chat da empresa, e o relatório
+  // costuma ser postado num grupo do navio). Salva o relatório junto, pra
+  // mensagem e sistema ficarem idênticos.
   function sendToWhats() {
-    if (!waNumber) return;
     const text = buildWhatsText({
       vesselName,
       kind,
@@ -790,7 +775,7 @@ function ReportDetail({
       activities,
       supervisorName,
     });
-    window.open(`https://wa.me/${waNumber}?text=${encodeURIComponent(text)}`, "_blank", "noopener");
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
     // Relatório concluído é só leitura — manda a mensagem sem tentar salvar.
     if (!(canRate && savedStatus === "COMPLETO")) saveReport();
   }
@@ -879,7 +864,9 @@ function ReportDetail({
         </h1>
       </div>
 
-      <div className="flex gap-1.5 overflow-x-auto pb-1">
+      {/* Abas quebram linha no celular: em ~390px as 4 não cabiam e a última
+          ficava cortada na borda (a rolagem lateral passava despercebida). */}
+      <div className="flex flex-wrap gap-1.5">
         {tabs.map((t) => (
           <button
             key={t.key}
@@ -914,27 +901,30 @@ function ReportDetail({
               está concluído na visão do supervisor. min-w-0 anula o
               min-width:min-content padrão de fieldset (quebraria o responsivo). */}
           <fieldset disabled={locked} className="space-y-4 min-w-0">
-          <div className="bg-card rounded-xl border border-border p-4 grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div>
+          {/* Cabeçalho: uma coluna no celular. Em duas, o input de data (que no
+              iOS tem largura mínima própria) estourava a célula e encostava no
+              campo do lado. min-w-0 solta as células do min-width:auto do grid. */}
+          <div className="bg-card rounded-xl border border-border p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="min-w-0">
               <label className="block text-xs font-medium text-text-light mb-1">Data do relatório</label>
               <input type="date" value={header.report_date} onChange={(e) => setHeader((h) => ({ ...h, report_date: e.target.value }))} className={inputCls} />
             </div>
-            <div>
+            <div className="min-w-0">
               <label className="block text-xs font-medium text-text-light mb-1">Porto / Fundeio</label>
               <input type="text" value={header.port} onChange={(e) => setHeader((h) => ({ ...h, port: e.target.value }))} className={inputCls} placeholder="Santos" />
             </div>
-            <div>
+            <div className="min-w-0">
               <label className="block text-xs font-medium text-text-light mb-1">Status do relatório</label>
               {/* Não é mais select: o status muda pelo Concluir/Reabrir. */}
               <div className={`px-3 py-2 rounded-lg border text-sm font-medium ${savedStatus === "COMPLETO" ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-amber-50 border-amber-200 text-amber-700"}`}>
                 {savedStatus === "COMPLETO" ? "✅ Concluído" : "🔄 Em andamento"}
               </div>
             </div>
-            <div>
+            <div className="min-w-0">
               <label className="block text-xs font-medium text-text-light mb-1">Previsão de término (ETC)</label>
               <div className="flex gap-1.5">
-                <input type="text" value={header.etc_date} onChange={(e) => setHeader((h) => ({ ...h, etc_date: e.target.value }))} className={inputCls} placeholder="Data" />
-                <input type="text" value={header.etc_time} onChange={(e) => setHeader((h) => ({ ...h, etc_time: e.target.value }))} className={inputCls} placeholder="Hora" />
+                <input type="text" value={header.etc_date} onChange={(e) => setHeader((h) => ({ ...h, etc_date: e.target.value }))} className={`${inputCls} min-w-0`} placeholder="Data" />
+                <input type="text" value={header.etc_time} onChange={(e) => setHeader((h) => ({ ...h, etc_time: e.target.value }))} className={`${inputCls} min-w-0`} placeholder="Hora" />
               </div>
             </div>
           </div>
@@ -1076,15 +1066,19 @@ function ReportDetail({
                   if (v) markHoldInProgress(a.hold_label);
                 };
                 return (
-                  <div key={i} className="grid grid-cols-2 md:grid-cols-[220px_1fr_150px_36px] gap-2 items-center bg-gray-50 rounded-lg p-2">
-                    <div className="col-span-2 md:col-span-1 flex items-center gap-1">
-                      <input type="time" value={start} onChange={(e) => setTime("start", e.target.value)} className={inputCls} title="Início" />
+                  // No celular a linha é [campo | lixeira]: horário e atividade
+                  // ocupam a largura toda e o porão divide a última fileira com
+                  // a lixeira. Antes a lixeira caía sozinha numa 3ª fileira e
+                  // deixava metade dela em branco.
+                  <div key={i} className="grid grid-cols-[1fr_32px] md:grid-cols-[220px_1fr_150px_36px] gap-2 items-center bg-gray-50 rounded-lg p-2">
+                    <div className="col-span-2 md:col-span-1 flex items-center gap-1 min-w-0">
+                      <input type="time" value={start} onChange={(e) => setTime("start", e.target.value)} className={`${inputCls} min-w-0`} title="Início" />
                       <span className="text-xs text-text-light shrink-0">→</span>
-                      <input type="time" value={end} onChange={(e) => setTime("end", e.target.value)} className={inputCls} title="Término" />
+                      <input type="time" value={end} onChange={(e) => setTime("end", e.target.value)} className={`${inputCls} min-w-0`} title="Término" />
                     </div>
                     {custom ? (
-                      <div className="flex items-center gap-1">
-                        <input type="text" list="activity-suggestions" value={a.activity} onChange={(e) => patchAct({ activity: e.target.value })} className={inputCls} placeholder="Digite a atividade..." />
+                      <div className="col-span-2 md:col-span-1 flex items-center gap-1 min-w-0">
+                        <input type="text" list="activity-suggestions" value={a.activity} onChange={(e) => patchAct({ activity: e.target.value })} className={`${inputCls} min-w-0`} placeholder="Digite a atividade..." />
                         <button
                           onClick={() => {
                             setCustomActivityRows((prev) => {
@@ -1111,7 +1105,7 @@ function ReportDetail({
                             patchAct({ activity: e.target.value });
                           }
                         }}
-                        className={inputCls}
+                        className={`${inputCls} col-span-2 md:col-span-1`}
                       >
                         <option value="">— atividade —</option>
                         {ACTIVITY_SUGGESTIONS.map((s) => (
@@ -1127,7 +1121,7 @@ function ReportDetail({
                         patchAct({ hold_label: label });
                         if (start || end) markHoldInProgress(label);
                       }}
-                      className={inputCls}
+                      className={`${inputCls} min-w-0`}
                     >
                       <option value="">— {kind === "COSTADO" ? "área" : "porão"} —</option>
                       {holdLabels.map((l) => (
@@ -1169,12 +1163,8 @@ function ReportDetail({
             <Button
               variant="success"
               onClick={sendToWhats}
-              disabled={!waNumber || savingReport}
-              title={
-                waNumber
-                  ? "Abre o WhatsApp do seu celular com o relatório pronto pra enviar pra empresa"
-                  : "WhatsApp da empresa indisponível no momento"
-              }
+              disabled={savingReport}
+              title="Abre o WhatsApp com o relatório pronto — você escolhe o contato ou grupo pra enviar"
             >
               📲 Enviar pro WhatsApp
             </Button>
