@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { actorCanAccessJob, getReportActor, parseKind, WORKED_ALLOC_WHERE } from "@/lib/report-scope";
+import { actorCanAccessJob, baseKind, getReportActor, parseKind, WORKED_ALLOC_WHERE } from "@/lib/report-scope";
 
 // PUT /api/relatorios/[jobId]/avaliacoes — grava as avaliações de desempenho
 // dos colaboradores escalados no serviço (upsert por job+kind+colaborador).
@@ -32,18 +32,21 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
 
   const { jobId } = await params;
   const body = await req.json();
-  const kind = parseKind(body.kind);
-  if (!kind) return NextResponse.json({ error: "kind inválido" }, { status: 400 });
-  if (!(await actorCanAccessJob(actor, jobId, kind))) {
+  const kindParam = parseKind(body.kind);
+  if (!kindParam) return NextResponse.json({ error: "kind inválido" }, { status: 400 });
+  if (!(await actorCanAccessJob(actor, jobId, kindParam))) {
     return NextResponse.json({ error: "Sem permissão neste navio" }, { status: 403 });
   }
+  // A nota é da pessoa no navio, não do serviço: Raspagem/Pintura gravam na
+  // mesma avaliação do Embarque (a aba Avaliações só aparece lá).
+  const kind = baseKind(kindParam);
 
   const evals = Array.isArray(body.evaluations) ? body.evaluations : [];
 
   // Só aceita avaliação de quem está de fato escalado neste serviço do navio —
   // e nunca de quem está escalado como SUPERVISOR (mesma régua da tela).
   const allocs = await prisma.jobAllocation.findMany({
-    where: { job_id: jobId, kind, employee_id: { not: null }, ...WORKED_ALLOC_WHERE },
+    where: { job_id: jobId, kind: baseKind(kind), employee_id: { not: null }, ...WORKED_ALLOC_WHERE },
     select: {
       employee_id: true,
       job_functions: { select: { name: true } },

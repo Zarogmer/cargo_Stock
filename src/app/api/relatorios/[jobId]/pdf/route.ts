@@ -1,10 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { actorCanAccessJob, getReportActor, parseKind, WORKED_ALLOC_WHERE } from "@/lib/report-scope";
+import { actorCanAccessJob, baseKind, getReportActor, parseKind, WORKED_ALLOC_WHERE } from "@/lib/report-scope";
 import { buildCleaningReportPdf, buildEvaluationPdf, buildPhotoReportPdf } from "@/lib/report-pdf";
-import { EVAL_CRITERIA, EvaluationPrintRow, formatDayMonthYear, reportFileName } from "@/lib/report-format";
+import {
+  EVAL_CRITERIA,
+  EvaluationPrintRow,
+  REPORT_KINDS,
+  ReportKindName,
+  formatDayMonthYear,
+  reportFileName,
+} from "@/lib/report-format";
 
-// GET /api/relatorios/[jobId]/pdf?kind=EMBARQUE|COSTADO&tipo=cleaning|fotos|avaliacao
+// GET /api/relatorios/[jobId]/pdf?kind=EMBARQUE|COSTADO|RASPAGEM|PINTURA&tipo=cleaning|fotos|avaliacao
 //
 // Devolve o PDF pronto (attachment) — o navegador baixa direto, igual aos
 // documentos do RH. O conteúdo é o que está SALVO no banco: a tela avisa pra
@@ -68,7 +75,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
       });
       return pdfResponse(
         pdf,
-        reportFileName(isCostado ? "Hull Side Cleaning Report" : "Cargo Hold Cleaning Report", vesselName, dateStr)
+        reportFileName(
+          isCostado ? "Hull Side Cleaning Report" : `${REPORT_KINDS[kind].titleEn} Report`,
+          vesselName,
+          dateStr
+        )
       );
     }
 
@@ -91,7 +102,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
       return pdfResponse(
         pdf,
         reportFileName(
-          isCostado ? "Hull Side Photographic Report" : "Cargo Hold Photographic Report",
+          isCostado
+            ? "Hull Side Photographic Report"
+            : `${REPORT_KINDS[kind].titleEn} Photographic Report`,
           vesselName,
           dateStr
         )
@@ -101,14 +114,18 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
     // avaliacao — mesma equipe da aba Avaliações: escalados no serviço, sem o
     // supervisor (ele avalia, não é avaliado) e só quem já tem alguma nota.
     const allocs = await prisma.jobAllocation.findMany({
-      where: { job_id: jobId, kind, employee_id: { not: null }, ...WORKED_ALLOC_WHERE },
+      where: { job_id: jobId, kind: baseKind(kind), employee_id: { not: null }, ...WORKED_ALLOC_WHERE },
       include: {
         employees: { select: { id: true, name: true, role: true } },
         job_functions: { select: { name: true } },
       },
       orderBy: { added_at: "asc" },
     });
-    const evaluations = await prisma.performanceEvaluation.findMany({ where: { job_id: jobId, kind } });
+    // A avaliação da equipe é uma só por navio+escala: Raspagem e Pintura leem
+    // a do Embarque (é o mesmo time, avaliado uma vez).
+    const evaluations = await prisma.performanceEvaluation.findMany({
+      where: { job_id: jobId, kind: baseKind(kind) },
+    });
 
     const seen = new Set<number>();
     const rows: EvaluationPrintRow[] = [];
@@ -151,9 +168,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
 // Supervisor escalado neste navio+serviço: quem entra na assinatura do
 // Cleaning Report. Vem da escalação (função SUPERVISOR), igual ao critério que
 // a aba Avaliações usa pra tirar o supervisor da lista de avaliados.
-async function shipSupervisorName(jobId: string, kind: "EMBARQUE" | "COSTADO"): Promise<string | null> {
+async function shipSupervisorName(jobId: string, kind: ReportKindName): Promise<string | null> {
   const allocs = await prisma.jobAllocation.findMany({
-    where: { job_id: jobId, kind, employee_id: { not: null }, ...WORKED_ALLOC_WHERE },
+    where: { job_id: jobId, kind: baseKind(kind), employee_id: { not: null }, ...WORKED_ALLOC_WHERE },
     include: {
       employees: { select: { name: true, role: true } },
       job_functions: { select: { name: true } },

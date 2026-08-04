@@ -28,15 +28,17 @@ import { processReportPhoto, sniffImageType } from "@/lib/watermark";
 import { shareOrDownloadBlob } from "@/lib/print";
 import {
   EVAL_CRITERIA,
+  REPORT_KINDS,
   photoBlockKey,
   photoPlaceRank,
   GENERAL_BLOCK,
   type ActivityRow,
   type HoldRow,
   type PhotoMeta,
+  type ReportKindName,
 } from "@/lib/report-format";
 
-type Kind = "EMBARQUE" | "COSTADO";
+type Kind = ReportKindName;
 
 interface ShipInfo {
   id: string;
@@ -143,38 +145,92 @@ const SHIP_STATUS_CHIP: Record<string, { label: string; cls: string }> = {
   CONCLUIDO: { label: "Concluído", cls: "bg-emerald-100 text-emerald-700" },
 };
 
-const KIND_LABEL: Record<Kind, string> = { EMBARQUE: "Embarque", COSTADO: "Costado" };
-const KIND_EMOJI: Record<Kind, string> = { EMBARQUE: "⚓", COSTADO: "🌊" };
+// Nome/emoji de cada serviço — a fonte é o mapa compartilhado com o PDF.
+const KIND_LABEL: Record<Kind, string> = {
+  EMBARQUE: REPORT_KINDS.EMBARQUE.label,
+  COSTADO: REPORT_KINDS.COSTADO.label,
+  RASPAGEM: REPORT_KINDS.RASPAGEM.label,
+  PINTURA: REPORT_KINDS.PINTURA.label,
+};
+const KIND_EMOJI: Record<Kind, string> = {
+  EMBARQUE: REPORT_KINDS.EMBARQUE.emoji,
+  COSTADO: REPORT_KINDS.COSTADO.emoji,
+  RASPAGEM: REPORT_KINDS.RASPAGEM.emoji,
+  PINTURA: REPORT_KINDS.PINTURA.emoji,
+};
 const STAGES = [
   { value: "ANTES", label: "Antes" },
   { value: "DURANTE", label: "Durante" },
   { value: "DEPOIS", label: "Depois" },
 ];
 
-// Rótulos do select de fase no upload de fotos ("Durante A lavagem" — com a
+// O serviço no meio da frase: "Antes DA LAVAGEM", "Depois DA RASPAGEM".
+const KIND_WORK_NOUN: Record<Kind, string> = {
+  EMBARQUE: "lavagem",
+  COSTADO: "lavagem",
+  RASPAGEM: "raspagem",
+  PINTURA: "pintura",
+};
+
+// Rótulos do select de fase no upload de fotos ("Durante a lavagem" — com a
 // gramática certa). A fase só existe pra porão/área; locais do ciclo vão sem
 // fase (stage GERAL).
-const STAGE_UPLOAD_LABEL: Record<string, string> = {
-  ANTES: "Antes da lavagem",
-  DURANTE: "Durante a lavagem",
-  DEPOIS: "Depois da lavagem",
-};
+function stageUploadLabel(stage: string, kind: Kind): string {
+  const noun = KIND_WORK_NOUN[kind];
+  if (stage === "ANTES") return `Antes da ${noun}`;
+  if (stage === "DURANTE") return `Durante a ${noun}`;
+  if (stage === "DEPOIS") return `Depois da ${noun}`;
+  return stage;
+}
 
 // Opções do Registro de atividades (select — "Parada" registra período sem
 // operação). "Outra..." abre texto livre, com estas mesmas sugestões no datalist.
 // (Lavagem com água salgada/doce saiu da lista: o horário das duas fases é
 // registrado por porão, na tabela de cima.)
-const ACTIVITY_SUGGESTIONS = [
-  "Parada",
-  "Parada — aguardando liberação do porão",
-  "Enxágue",
-  "Secagem do porão",
-  "Remoção de resíduos de carga",
-  "Montagem de equipamentos",
-  "Desmontagem do material",
-  "Embarque de equipamentos",
-  "Retirada de materiais",
-];
+const ACTIVITY_SUGGESTIONS_BY_KIND: Record<Kind, string[]> = {
+  EMBARQUE: [
+    "Parada",
+    "Parada — aguardando liberação do porão",
+    "Enxágue",
+    "Secagem do porão",
+    "Remoção de resíduos de carga",
+    "Montagem de equipamentos",
+    "Desmontagem do material",
+    "Embarque de equipamentos",
+    "Retirada de materiais",
+  ],
+  COSTADO: [
+    "Parada",
+    "Enxágue",
+    "Montagem de equipamentos",
+    "Desmontagem do material",
+    "Embarque de equipamentos",
+    "Retirada de materiais",
+  ],
+  RASPAGEM: [
+    "Parada",
+    "Parada — aguardando liberação do porão",
+    "Raspagem manual",
+    "Raspagem mecânica",
+    "Remoção de resíduos de carga",
+    "Remoção de ferrugem",
+    "Limpeza após a raspagem",
+    "Montagem de equipamentos",
+    "Desmontagem do material",
+  ],
+  PINTURA: [
+    "Parada",
+    "Parada — aguardando secagem",
+    "Preparação da superfície",
+    "Aplicação de primer",
+    "1ª demão de tinta",
+    "2ª demão de tinta",
+    "Retoques",
+    "Secagem",
+    "Montagem de equipamentos",
+    "Desmontagem do material",
+  ],
+};
 
 // Locais da foto além dos porões (Embarque), na ordem do ciclo real da
 // operação: caminhão → material a bordo → navio → volta. Substituem o antigo
@@ -255,10 +311,13 @@ function buildWhatsText(opts: {
     L.push("", `*${opts.kind === "COSTADO" ? "Áreas do costado" : "Porões"}*`);
     for (const h of named) {
       L.push(`• ${h.label} — ${HOLD_STATUS_PT[h.status] || h.status} · ${h.completion_pct}%`);
+      // Água salgada/doce só na lavagem; raspagem e pintura registram um
+      // horário só (início → término).
+      const water = REPORT_KINDS[opts.kind].waterPhases;
       for (const line of [
-        phase("🌊", "Água salgada", h.salt_start, h.salt_end),
-        phase("💧", "Água doce", h.fresh_start, h.fresh_end),
-        phase("🕐", "Horário geral", h.start_time, h.end_time),
+        water ? phase("🌊", "Água salgada", h.salt_start, h.salt_end) : null,
+        water ? phase("💧", "Água doce", h.fresh_start, h.fresh_end) : null,
+        phase("🕐", water ? "Horário geral" : "Horário", h.start_time, h.end_time),
       ]) {
         if (line) L.push(`   ${line}`);
       }
@@ -494,6 +553,12 @@ function ReportDetail({
   const [error, setError] = useState("");
   const [tab, setTab] = useState<"lavagem" | "avaliacoes" | "fotos" | "gerar">("lavagem");
 
+  // Config do serviço: nome das abas, se tem fase de água, palavra do porão/área.
+  const kindInfo = REPORT_KINDS[kind];
+  // Avaliação da equipe existe uma vez por navio, no relatório de lavagem.
+  const showEvaluations = kind === "EMBARQUE" || kind === "COSTADO";
+  const activitySuggestions = ACTIVITY_SUGGESTIONS_BY_KIND[kind];
+
   // ── Rascunho da lavagem ────────────────────────────────────────────────────
   const [header, setHeader] = useState({
     report_date: todayIso(),
@@ -571,8 +636,9 @@ function ReportDetail({
       });
       setSavedStatus(r?.status ?? "EM_ANDAMENTO");
 
-      if (kind === "EMBARQUE" && d.ship?.holds_count) {
-        // A lista de porões vem do cadastro do navio (aba Navios).
+      if (kind !== "COSTADO" && d.ship?.holds_count) {
+        // A lista de porões vem do cadastro do navio (aba Navios) — vale pra
+        // lavagem, raspagem e pintura (são os mesmos porões do navio).
         setHolds(mergeShipHolds(r?.holds ?? [], d.ship.holds_count));
       } else if (r && r.holds.length > 0) {
         setHolds(r.holds.map((h) => ({ ...h })));
@@ -668,14 +734,16 @@ function ReportDetail({
       const label = photoBlockKey(l);
       if (!labels.includes(label)) labels.push(label);
     };
-    if (kind === "EMBARQUE") PHOTO_PLACES.forEach(push);
+    // Os locais do ciclo (caminhão → material → navio → volta) valem pra todo
+    // serviço de embarque: lavagem, raspagem e pintura embarcam igual.
+    if (kind !== "COSTADO") PHOTO_PLACES.forEach(push);
     else push(GENERAL_BLOCK);
     holdLabels.forEach(push);
     sections.forEach((s) => push(s.label));
     photos.forEach((p) => push(p.hold_label || ""));
 
     const fixed = new Set(
-      (kind === "EMBARQUE" ? PHOTO_PLACES : [GENERAL_BLOCK]).concat(holdLabels).map(photoBlockKey)
+      (kind !== "COSTADO" ? PHOTO_PLACES : [GENERAL_BLOCK]).concat(holdLabels).map(photoBlockKey)
     );
     const orderOf = new Map(sections.map((s) => [s.label, s.sort_order]));
 
@@ -973,17 +1041,21 @@ function ReportDetail({
     );
   }
 
-  // > 0 = Embarque com nº de porões no cadastro do navio: lista travada nesse
-  // tamanho (sem Adicionar; rótulo e exclusão bloqueados nas linhas do cadastro).
-  const lockedHolds = kind === "EMBARQUE" ? data.ship?.holds_count || 0 : 0;
+  // > 0 = serviço de porão (lavagem/raspagem/pintura) com nº de porões no
+  // cadastro do navio: lista travada nesse tamanho (sem Adicionar; rótulo e
+  // exclusão bloqueados nas linhas do cadastro).
+  const lockedHolds = kind !== "COSTADO" ? data.ship?.holds_count || 0 : 0;
 
   // Relatório concluído + visão do supervisor = tudo somente leitura (a gestão
   // continua editando e pode reabrir).
   const locked = canRate && savedStatus === "COMPLETO";
 
   const tabs = [
-    { key: "lavagem" as const, label: kind === "COSTADO" ? "🧽 Lavagem do Costado" : "🧽 Lavagem dos Porões" },
-    { key: "avaliacoes" as const, label: "⭐ Avaliações" },
+    { key: "lavagem" as const, label: `${kindInfo.emoji} ${kindInfo.workTab}` },
+    // A avaliação da equipe é uma só por navio — fica no relatório de lavagem
+    // (Embarque/Costado). Raspagem e Pintura são relatórios de serviço pro
+    // cliente; repetir as notas neles seria avaliar a mesma pessoa 3 vezes.
+    ...(showEvaluations ? [{ key: "avaliacoes" as const, label: "⭐ Avaliações" }] : []),
     { key: "fotos" as const, label: `📷 Fotos${photos.length ? ` (${photos.length})` : ""}` },
     { key: "gerar" as const, label: "📄 Gerar Relatórios" },
   ];
@@ -1077,6 +1149,11 @@ function ReportDetail({
                     {lockedHolds} {lockedHolds > 1 ? "porões" : "porão"} conforme o cadastro do navio (aba Navios).
                   </p>
                 )}
+                {!kindInfo.waterPhases && (
+                  <p className="text-xs text-text-light mt-0.5">
+                    Marque o início e o término da {KIND_WORK_NOUN[kind]} em cada porão.
+                  </p>
+                )}
               </div>
               {lockedHolds === 0 && (
                 <Button
@@ -1105,7 +1182,7 @@ function ReportDetail({
                   setHolds((prev) => prev.map((x, j) => (j === i ? { ...x, ...p } : x)));
                 // Horário preenchido em porão pendente → "Em andamento" sozinho.
                 const patchTime = (
-                  field: "salt_start" | "salt_end" | "fresh_start" | "fresh_end",
+                  field: "salt_start" | "salt_end" | "fresh_start" | "fresh_end" | "start_time" | "end_time",
                   v: string
                 ) =>
                   patch({
@@ -1138,31 +1215,46 @@ function ReportDetail({
                         </button>
                       )}
                     </div>
-                    {/* Fases da lavagem: água salgada (lavagem) e doce (enxágue).
-                        Empilha até lg — em ~768-850px as metades espremiam os
-                        inputs de horário a ~40px (ilegível). */}
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                    {kindInfo.waterPhases ? (
+                      <>
+                        {/* Fases da lavagem: água salgada (lavagem) e doce
+                            (enxágue). Empilha até lg — em ~768-850px as metades
+                            espremiam os inputs de horário a ~40px (ilegível). */}
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs text-text-light w-24 shrink-0">🌊 Água salgada</span>
+                            <input type="time" value={normalizeTime(h.salt_start)} onChange={(e) => patchTime("salt_start", e.target.value)} className={inputCls} title="Início" />
+                            <span className="text-xs text-text-light shrink-0">→</span>
+                            <input type="time" value={normalizeTime(h.salt_end)} onChange={(e) => patchTime("salt_end", e.target.value)} className={inputCls} title="Término" />
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs text-text-light w-24 shrink-0">💧 Água doce</span>
+                            <input type="time" value={normalizeTime(h.fresh_start)} onChange={(e) => patchTime("fresh_start", e.target.value)} className={inputCls} title="Início" />
+                            <span className="text-xs text-text-light shrink-0">→</span>
+                            <input type="time" value={normalizeTime(h.fresh_end)} onChange={(e) => patchTime("fresh_end", e.target.value)} className={inputCls} title="Término" />
+                          </div>
+                        </div>
+                        {/* Horário geral legado (relatório salvo antes das
+                            fases): só aparece quando tem valor — dá pra ver,
+                            corrigir ou limpar (limpou e salvou → some de vez). */}
+                        {(h.start_time || h.end_time) && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs text-amber-700 w-24 shrink-0" title="Registrado antes da divisão por fases">🕐 Horário geral</span>
+                            <input type="text" value={h.start_time || ""} onChange={(e) => patch({ start_time: e.target.value })} className={inputCls} placeholder="Início" />
+                            <input type="text" value={h.end_time || ""} onChange={(e) => patch({ end_time: e.target.value })} className={inputCls} placeholder="Término" />
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      // Raspagem e pintura não têm fase de água: um horário só
+                      // (início → término), gravado nos mesmos campos gerais.
                       <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-text-light w-24 shrink-0">🌊 Água salgada</span>
-                        <input type="time" value={normalizeTime(h.salt_start)} onChange={(e) => patchTime("salt_start", e.target.value)} className={inputCls} title="Início" />
+                        <span className="text-xs text-text-light w-24 shrink-0">
+                          {kindInfo.emoji} {kind === "PINTURA" ? "Pintura" : "Raspagem"}
+                        </span>
+                        <input type="time" value={normalizeTime(h.start_time)} onChange={(e) => patchTime("start_time", e.target.value)} className={inputCls} title="Início" />
                         <span className="text-xs text-text-light shrink-0">→</span>
-                        <input type="time" value={normalizeTime(h.salt_end)} onChange={(e) => patchTime("salt_end", e.target.value)} className={inputCls} title="Término" />
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-text-light w-24 shrink-0">💧 Água doce</span>
-                        <input type="time" value={normalizeTime(h.fresh_start)} onChange={(e) => patchTime("fresh_start", e.target.value)} className={inputCls} title="Início" />
-                        <span className="text-xs text-text-light shrink-0">→</span>
-                        <input type="time" value={normalizeTime(h.fresh_end)} onChange={(e) => patchTime("fresh_end", e.target.value)} className={inputCls} title="Término" />
-                      </div>
-                    </div>
-                    {/* Horário geral legado (relatório salvo antes das fases):
-                        só aparece quando tem valor — dá pra ver, corrigir ou
-                        limpar (limpou e salvou → some de vez). */}
-                    {(h.start_time || h.end_time) && (
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-amber-700 w-24 shrink-0" title="Registrado antes da divisão por fases">🕐 Horário geral</span>
-                        <input type="text" value={h.start_time || ""} onChange={(e) => patch({ start_time: e.target.value })} className={inputCls} placeholder="Início" />
-                        <input type="text" value={h.end_time || ""} onChange={(e) => patch({ end_time: e.target.value })} className={inputCls} placeholder="Término" />
+                        <input type="time" value={normalizeTime(h.end_time)} onChange={(e) => patchTime("end_time", e.target.value)} className={inputCls} title="Término" />
                       </div>
                     )}
                   </div>
@@ -1185,7 +1277,7 @@ function ReportDetail({
 
             {/* O modo texto livre ("Outra...") completa com as mesmas sugestões */}
             <datalist id="activity-suggestions">
-              {ACTIVITY_SUGGESTIONS.map((s) => (
+              {activitySuggestions.map((s) => (
                 <option key={s} value={s} />
               ))}
             </datalist>
@@ -1196,7 +1288,7 @@ function ReportDetail({
                   setActivities((prev) => prev.map((x, j) => (j === i ? { ...x, ...p } : x)));
                 const { start, end } = splitTimeRange(a.time_range);
                 // Valor fora da lista (legado/texto livre) mantém a linha em modo texto.
-                const custom = customActivityRows.has(i) || (!!a.activity && !ACTIVITY_SUGGESTIONS.includes(a.activity));
+                const custom = customActivityRows.has(i) || (!!a.activity && !activitySuggestions.includes(a.activity));
                 const setTime = (which: "start" | "end", v: string) => {
                   patchAct({ time_range: joinTimeRange(which === "start" ? v : start, which === "end" ? v : end) || null });
                   if (v) markHoldInProgress(a.hold_label);
@@ -1244,7 +1336,7 @@ function ReportDetail({
                         className={`${inputCls} col-span-2 md:col-span-1`}
                       >
                         <option value="">— atividade —</option>
-                        {ACTIVITY_SUGGESTIONS.map((s) => (
+                        {activitySuggestions.map((s) => (
                           <option key={s} value={s}>{s}</option>
                         ))}
                         <option value={CUSTOM_ACTIVITY}>✏️ Outra (digitar)...</option>
@@ -1525,7 +1617,7 @@ function ReportDetail({
             const stageOf = (p: PhotoMeta) => (STAGES.some((s) => s.value === p.stage) ? p.stage : "GERAL");
             const chips = b.isHold
               ? [
-                  ...STAGES.map((s) => ({ value: s.value, label: STAGE_UPLOAD_LABEL[s.value] || s.label })),
+                  ...STAGES.map((s) => ({ value: s.value, label: stageUploadLabel(s.value, kind) })),
                   // "Sem fase" só aparece se existir foto antiga assim.
                   ...(items.some((p) => stageOf(p) === "GERAL") ? [{ value: "GERAL", label: "Sem fase" }] : []),
                 ]
@@ -1597,7 +1689,7 @@ function ReportDetail({
                     className="w-full border-2 border-dashed border-border hover:border-primary/60 rounded-xl py-4 text-center transition disabled:opacity-60"
                   >
                     <p className="text-sm font-medium text-text">
-                      {sending ? uploadProgress : `📷 Adicionar fotos${b.isHold ? ` · ${STAGE_UPLOAD_LABEL[stage]}` : ""}`}
+                      {sending ? uploadProgress : `📷 Adicionar fotos${b.isHold ? ` · ${stageUploadLabel(stage, kind)}` : ""}`}
                     </p>
                   </button>
                 )}
@@ -1648,13 +1740,13 @@ function ReportDetail({
 
       {/* ── Gerar relatórios ── */}
       {tab === "gerar" && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className={`grid grid-cols-1 gap-4 ${showEvaluations ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
           <div className="bg-card rounded-xl border border-border p-5 flex flex-col gap-3">
-            <p className="text-3xl">🧽</p>
+            <p className="text-3xl">{kindInfo.emoji}</p>
             <div className="flex-1">
-              <p className="font-bold text-text">Cleaning Report</p>
+              <p className="font-bold text-text">{kindInfo.titleEn} Report</p>
               <p className="text-xs text-text-light mt-1">
-                Relatório operacional da lavagem (1 página, em inglês): status por {kind === "COSTADO" ? "área" : "porão"}, atividades, observações, ETC e assinatura.
+                Relatório operacional da {KIND_WORK_NOUN[kind]} (1 página, em inglês): status por {kindInfo.areaWord}, atividades, observações, ETC e assinatura.
               </p>
             </div>
             <Button onClick={() => downloadPdf("cleaning")} disabled={!!generatingPdf}>
@@ -1675,28 +1767,35 @@ function ReportDetail({
             </Button>
           </div>
 
-          <div className="bg-card rounded-xl border border-border p-5 flex flex-col gap-3">
-            <p className="text-3xl">⭐</p>
-            <div className="flex-1">
-              <p className="font-bold text-text">Avaliação de Desempenho</p>
-              <p className="text-xs text-text-light mt-1">
-                Avaliação da equipe com notas por critério, pontos a melhorar e observações do supervisor.
-              </p>
+          {/* A avaliação é do time no navio, feita uma vez no relatório de
+              lavagem — Raspagem/Pintura não repetem o card. */}
+          {showEvaluations && (
+            <div className="bg-card rounded-xl border border-border p-5 flex flex-col gap-3">
+              <p className="text-3xl">⭐</p>
+              <div className="flex-1">
+                <p className="font-bold text-text">Avaliação de Desempenho</p>
+                <p className="text-xs text-text-light mt-1">
+                  Avaliação da equipe com notas por critério, pontos a melhorar e observações do supervisor.
+                </p>
+              </div>
+              <Button onClick={() => downloadPdf("avaliacao")} disabled={evalTeam.length === 0 || !!generatingPdf}>
+                {generatingPdf === "avaliacao" ? "Gerando..." : "Baixar PDF"}
+              </Button>
             </div>
-            <Button onClick={() => downloadPdf("avaliacao")} disabled={evalTeam.length === 0 || !!generatingPdf}>
-              {generatingPdf === "avaliacao" ? "Gerando..." : "Baixar PDF"}
-            </Button>
-          </div>
+          )}
 
           {pdfError && (
-            <div className="md:col-span-3 bg-danger/10 border border-danger/30 rounded-xl p-3 text-sm text-danger">
+            <div className={`${showEvaluations ? "md:col-span-3" : "md:col-span-2"} bg-danger/10 border border-danger/30 rounded-xl p-3 text-sm text-danger`}>
               ⚠️ {pdfError}
             </div>
           )}
 
-          <div className="md:col-span-3 bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-900">
+          <div className={`${showEvaluations ? "md:col-span-3" : "md:col-span-2"} bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-900`}>
             💡 O PDF é gerado no servidor e baixa direto (no celular abre o menu de compartilhar).
             Gere o PDF <strong>depois de salvar</strong> as alterações, pra sair tudo atualizado.
+            {!showEvaluations && (
+              <> A avaliação da equipe fica no relatório de <strong>Embarque</strong> deste navio — é uma só pra todos os serviços.</>
+            )}
           </div>
         </div>
       )}

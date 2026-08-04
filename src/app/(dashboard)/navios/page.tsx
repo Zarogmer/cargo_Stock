@@ -229,6 +229,13 @@ export default function NaviosPage() {
   // Ver escala-whatsapp-pref.
   const { send: sendWhats, setSend: setSendWhats } = useSendWhatsappPref();
   const [groupParticipants, setGroupParticipants] = useState<Set<number>>(new Set());
+  // Quem entrou na seleção pela ESCOLHA DA EQUIPE (e não por clique do usuário).
+  // Trocar de equipe só desmarca estes — quem foi marcado na mão continua
+  // escalado. Antes a troca varria todo mundo de equipe conhecida e o
+  // colaborador escolhido à mão sumia da escala sem aviso.
+  const [teamAutoPicked, setTeamAutoPicked] = useState<Set<number>>(new Set());
+  // Aviso da escolha de equipe: quantos entraram (ou por que ninguém entrou).
+  const [teamPickInfo, setTeamPickInfo] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   // Quando marcado, todo funcionário ATIVO do setor ADMINISTRATIVO com telefone
   // entra no grupo do WhatsApp (mas NÃO é escalado — admin não trabalha no navio).
   const [includeAdminSector, setIncludeAdminSector] = useState(false);
@@ -533,6 +540,8 @@ export default function NaviosPage() {
     setGroupWarning(null);
     setGroupPerEmpFn(new Map());
     setGroupPerEmpFn2(new Map());
+    setTeamAutoPicked(new Set());
+    setTeamPickInfo(null);
     // Default shift date = today (the form's arrival_date is empty at this point).
     setCostadoShiftDate(new Date().toISOString().slice(0, 10));
     setCostadoShiftPeriod("07-13");
@@ -548,6 +557,8 @@ export default function NaviosPage() {
     setGroupWarning(null);
     setGroupPerEmpFn(new Map());
     setGroupPerEmpFn2(new Map());
+    setTeamAutoPicked(new Set());
+    setTeamPickInfo(null);
     setCostadoShiftDate(new Date().toISOString().slice(0, 10));
     setCostadoShiftPeriod("07-13");
     const opType = getOperationType(ship.services);
@@ -579,8 +590,9 @@ export default function NaviosPage() {
   // Ao escolher Equipe 1 / Equipe 2 / Equipe Turbo no formulário, já marca os
   // colaboradores daquela equipe pra escalar e preenche a função de cada um
   // pelo cargo. Pula quem está preso em outra operação ativa. Trocar de equipe
-  // (ou voltar pra "Sem equipe") limpa os membros de equipe antes, pra seleção
-  // refletir só a equipe atual. Não faz nada na edição — lá não se escala ninguém.
+  // (ou voltar pra "Sem equipe") desmarca APENAS quem tinha entrado pela equipe
+  // anterior — quem o usuário marcou na mão continua escalado. Não faz nada na
+  // edição — lá não se escala ninguém.
   function selectTeamMembersForForm(team: string) {
     if (editingShip) return;
     const validTeam = !!TEAM_LABELS[team];
@@ -600,20 +612,21 @@ export default function NaviosPage() {
         })
       : [];
 
+    // Só sai da seleção quem tinha ENTRADO pela equipe anterior.
+    const previousAuto = teamAutoPicked;
+    const nextAuto = new Set(teamAvailable.map((e) => e.id));
+
     setGroupParticipants((prev) => {
       const next = new Set(prev);
-      for (const e of employees) {
-        if (TEAM_LABELS[e.team || ""]) next.delete(e.id);
-      }
-      for (const e of teamAvailable) next.add(e.id);
+      for (const id of previousAuto) if (!nextAuto.has(id)) next.delete(id);
+      for (const id of nextAuto) next.add(id);
       return next;
     });
     setGroupPerEmpFn((m) => {
       const nm = new Map(m);
-      for (const e of employees) {
-        if (TEAM_LABELS[e.team || ""]) nm.delete(e.id);
-      }
+      for (const id of previousAuto) if (!nextAuto.has(id)) nm.delete(id);
       for (const e of teamAvailable) {
+        if (nm.get(e.id)) continue; // não sobrescreve função escolhida na mão
         const role = (e.role || "").trim().toUpperCase();
         const fn = role ? pickFunctionByName(escalableFunctions, role, "EMBARQUE") : null;
         if (fn) nm.set(e.id, String(fn.id));
@@ -622,10 +635,33 @@ export default function NaviosPage() {
     });
     setGroupPerEmpFn2((m) => {
       const nm = new Map(m);
-      for (const e of employees) {
-        if (TEAM_LABELS[e.team || ""]) nm.delete(e.id);
-      }
+      for (const id of previousAuto) if (!nextAuto.has(id)) nm.delete(id);
       return nm;
+    });
+    setTeamAutoPicked(nextAuto);
+
+    // A escolha da equipe é silenciosa demais: se ninguém do RH está marcado
+    // naquela equipe (ou estão todos embarcados), a seleção não muda e o
+    // usuário acha que escalou. Agora a tela diz o que aconteceu.
+    if (!validTeam) {
+      setTeamPickInfo(null);
+      return;
+    }
+    if (nextAuto.size > 0) {
+      // Escalar sem a caixinha marcada não gera escala nenhuma — liga sozinho.
+      setCreateGroup(true);
+      setTeamPickInfo({
+        tone: "ok",
+        text: `${nextAuto.size} colaborador(es) da ${TEAM_LABELS[team]} marcados pra escalar (revise em "Escalar colaboradores", abaixo).`,
+      });
+      return;
+    }
+    const inTeam = employees.filter((e) => e.team === team);
+    setTeamPickInfo({
+      tone: "warn",
+      text: inTeam.length === 0
+        ? `Nenhum colaborador está na ${TEAM_LABELS[team]} no RH (Colaboradores → Equipe), então ninguém foi marcado. Marque na mão em "Escalar colaboradores", abaixo.`
+        : `Os ${inTeam.length} colaborador(es) da ${TEAM_LABELS[team]} estão indisponíveis (já embarcados, sem telefone ou inativos) — ninguém foi marcado automaticamente.`,
     });
   }
 
@@ -2136,6 +2172,18 @@ export default function NaviosPage() {
                     <option value="EQUIPE_2">Equipe 2</option>
                     <option value="EQUIPE_4">Equipe Turbo</option>
                   </select>
+                  {!editingShip && teamPickInfo && (
+                    <p
+                      className={`text-[11px] mt-1.5 rounded-md px-2 py-1.5 border ${
+                        teamPickInfo.tone === "ok"
+                          ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                          : "bg-amber-50 border-amber-300 text-amber-800"
+                      }`}
+                    >
+                      {teamPickInfo.tone === "ok" ? "✅ " : "⚠️ "}
+                      {teamPickInfo.text}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -2652,6 +2700,14 @@ export default function NaviosPage() {
                                     onChange={() => {
                                       if (isOccupied) return;
                                       const wasChecked = groupParticipants.has(emp.id);
+                                      // Mexeu na mão → deixa de ser "escolha da
+                                      // equipe": trocar de equipe não desfaz mais.
+                                      setTeamAutoPicked((prev) => {
+                                        if (!prev.has(emp.id)) return prev;
+                                        const n = new Set(prev);
+                                        n.delete(emp.id);
+                                        return n;
+                                      });
                                       setGroupParticipants((prev) => {
                                         const next = new Set(prev);
                                         if (next.has(emp.id)) next.delete(emp.id);

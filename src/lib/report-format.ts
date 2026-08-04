@@ -3,6 +3,75 @@
 // Só funções puras aqui — nada de DOM nem de pdf-lib, senão um lado arrasta a
 // dependência do outro pro bundle.
 
+// Serviço do navio que vira um relatório próprio. EMBARQUE = lavagem de porão
+// e COSTADO = lavagem do costado (os dois originais); RASPAGEM e PINTURA são os
+// outros serviços do Embarque (ships.services), cada um com o seu relatório pro
+// cliente. Raspagem/Pintura andam junto da escala de EMBARQUE — não existe
+// alocação própria delas (ver baseKind em report-scope.ts).
+export type ReportKindName = "EMBARQUE" | "COSTADO" | "RASPAGEM" | "PINTURA";
+
+export interface ReportKindInfo {
+  // Nome do serviço na tela (PT).
+  label: string;
+  emoji: string;
+  // Título da aba de preenchimento ("Lavagem dos Porões", "Raspagem dos Porões"…).
+  workTab: string;
+  // Nome do relatório em inglês, sem "Report" — o PDF vai pro agente/armador.
+  titleEn: string;
+  // Como o serviço aparece na fase da foto: "BEFORE <stageEn>".
+  stageEn: string;
+  // Lavagem tem as duas fases de água (salgada/doce); raspagem e pintura têm só
+  // início e término.
+  waterPhases: boolean;
+  // Costado trabalha por "área"; os demais, por porão.
+  areaWord: "porão" | "área";
+  // Serviço do cadastro do navio (ships.services) que liga este relatório.
+  service: string;
+}
+
+export const REPORT_KINDS: Record<ReportKindName, ReportKindInfo> = {
+  EMBARQUE: {
+    label: "Embarque",
+    emoji: "⚓",
+    workTab: "Lavagem dos Porões",
+    titleEn: "Cargo Hold Cleaning",
+    stageEn: "CLEANING",
+    waterPhases: true,
+    areaWord: "porão",
+    service: "LAVAGEM_PORAO",
+  },
+  COSTADO: {
+    label: "Costado",
+    emoji: "🌊",
+    workTab: "Lavagem do Costado",
+    titleEn: "Hull Side Cleaning",
+    stageEn: "CLEANING",
+    waterPhases: true,
+    areaWord: "área",
+    service: "COSTADO",
+  },
+  RASPAGEM: {
+    label: "Raspagem",
+    emoji: "🪚",
+    workTab: "Raspagem dos Porões",
+    titleEn: "Cargo Hold Scraping",
+    stageEn: "SCRAPING",
+    waterPhases: false,
+    areaWord: "porão",
+    service: "RASPAGEM",
+  },
+  PINTURA: {
+    label: "Pintura",
+    emoji: "🎨",
+    workTab: "Pintura dos Porões",
+    titleEn: "Cargo Hold Painting",
+    stageEn: "PAINTING",
+    waterPhases: false,
+    areaWord: "porão",
+    service: "PINTURA",
+  },
+};
+
 export interface HoldRow {
   label: string;
   status: string; // PENDENTE | EM_ANDAMENTO | COMPLETO
@@ -100,7 +169,7 @@ export function photoPlaceRank(label: string | null, customOrder = 0): number {
 
 // "Porão 3" → "CARGO HOLD #3" (os relatórios de lavagem/fotos saem em inglês —
 // vão pro agente/armador). Outros rótulos: caixa alta.
-export function holdLabelEn(label: string | null, kind: "EMBARQUE" | "COSTADO"): string {
+export function holdLabelEn(label: string | null, kind: ReportKindName): string {
   if (!label || label.trim().toLowerCase() === "geral") {
     return kind === "COSTADO" ? "HULL SIDE" : "GENERAL";
   }
@@ -109,11 +178,13 @@ export function holdLabelEn(label: string | null, kind: "EMBARQUE" | "COSTADO"):
   return PHOTO_PLACE_EN[label.trim().toLowerCase()] || label.toUpperCase();
 }
 
-export const STAGE_EN: Record<string, string> = {
-  ANTES: "BEFORE CLEANING",
-  DURANTE: "DURING CLEANING",
-  DEPOIS: "AFTER CLEANING",
-};
+// "BEFORE CLEANING" / "BEFORE SCRAPING" / "BEFORE PAINTING" — a fase da foto
+// nomeia o serviço do relatório.
+export function stageEn(stage: string, kind: ReportKindName): string | null {
+  const prefix: Record<string, string> = { ANTES: "BEFORE", DURANTE: "DURING", DEPOIS: "AFTER" };
+  const p = prefix[stage];
+  return p ? `${p} ${REPORT_KINDS[kind].stageEn}` : null;
+}
 
 export const HOLD_STATUS_EN: Record<string, string> = {
   PENDENTE: "Pending",

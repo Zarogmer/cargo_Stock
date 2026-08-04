@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { hasModuleAccess } from "@/lib/rbac";
+import type { ReportKindName } from "@/lib/report-format";
 import type { Role } from "@/types/database";
 
 // Escopo dos Relatórios de Bordo (/api/relatorios):
@@ -10,10 +11,32 @@ import type { Role } from "@/types/database";
 //   (users.employee_id) tem alocação ATIVA — e o serviço (kind) da alocação
 //   define qual relatório ele pode mexer: EMBARQUE, COSTADO ou os dois.
 
-export type ReportKind = "EMBARQUE" | "COSTADO";
+export type ReportKind = ReportKindName;
+
+const ALL_KINDS: ReportKind[] = ["EMBARQUE", "COSTADO", "RASPAGEM", "PINTURA"];
 
 export function parseKind(value: unknown): ReportKind | null {
-  return value === "EMBARQUE" || value === "COSTADO" ? value : null;
+  return ALL_KINDS.includes(value as ReportKind) ? (value as ReportKind) : null;
+}
+
+// Qual escalação sustenta o relatório. Raspagem e Pintura são serviços do
+// EMBARQUE: a equipe é a mesma do embarque (job_allocations.kind = EMBARQUE),
+// só o relatório é separado. Sem isso o supervisor perderia o acesso e a
+// equipe/assinatura sairiam vazias nesses dois relatórios.
+export function baseKind(kind: ReportKind): "EMBARQUE" | "COSTADO" {
+  return kind === "COSTADO" ? "COSTADO" : "EMBARQUE";
+}
+
+// Relatórios que o navio tem, pelos serviços do cadastro (ships.services).
+// Navio sem serviço marcado (legado) continua com o relatório de Embarque.
+export function reportKindsForServices(services: string[] | null | undefined): ReportKind[] {
+  const set = new Set((services || []).map((s) => String(s).toUpperCase()));
+  if (set.has("COSTADO")) return ["COSTADO"];
+  const kinds: ReportKind[] = [];
+  if (set.has("LAVAGEM_PORAO") || set.size === 0) kinds.push("EMBARQUE");
+  if (set.has("RASPAGEM")) kinds.push("RASPAGEM");
+  if (set.has("PINTURA")) kinds.push("PINTURA");
+  return kinds.length > 0 ? kinds : ["EMBARQUE"];
 }
 
 // Alocação que "conta como trabalho" (mesma régua de countsAsWorked em
@@ -65,16 +88,17 @@ export async function getReportActor(): Promise<ReportActor | null> {
   };
 }
 
-// Em quais serviços (kinds) o ator pode mexer neste job. Gestão: todos;
-// supervisor: os kinds das alocações "trabalhadas" do colaborador dele no job.
-export async function actorKindsForJob(actor: ReportActor, jobId: string): Promise<ReportKind[]> {
+// Em quais ESCALAS (Embarque/Costado) o ator pode mexer neste job. Gestão:
+// todas; supervisor: as das alocações "trabalhadas" do colaborador dele no job.
+// Raspagem/Pintura seguem a escala de Embarque (ver baseKind).
+export async function actorKindsForJob(actor: ReportActor, jobId: string): Promise<("EMBARQUE" | "COSTADO")[]> {
   if (!actor.isSupervisor) return ["EMBARQUE", "COSTADO"];
   if (!actor.employeeId) return [];
   const allocs = await prisma.jobAllocation.findMany({
     where: { job_id: jobId, employee_id: actor.employeeId, ...WORKED_ALLOC_WHERE },
     select: { kind: true },
   });
-  const kinds = new Set<ReportKind>();
+  const kinds = new Set<"EMBARQUE" | "COSTADO">();
   for (const a of allocs) kinds.add(a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE");
   return [...kinds];
 }
@@ -84,7 +108,19 @@ export async function actorCanAccessJob(
   jobId: string,
   kind: ReportKind
 ): Promise<boolean> {
+  // Raspagem/Pintura só existem se o navio contratou o serviço — vale pra
+  // gestão também (senão dava pra abrir um relatório de pintura em navio só de
+  // lavagem chamando a API na mão). Embarque/Costado ficam de fora da checagem:
+  // navio antigo pode estar sem `services` preenchido e o relatório dele já
+  // existe.
+  if (kind === "RASPAGEM" || kind === "PINTURA") {
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+      select: { ships: { select: { services: true } } },
+    });
+    if (!reportKindsForServices(job?.ships?.services).includes(kind)) return false;
+  }
   if (!actor.isSupervisor) return true;
   const kinds = await actorKindsForJob(actor, jobId);
-  return kinds.includes(kind);
+  return kinds.includes(baseKind(kind));
 }

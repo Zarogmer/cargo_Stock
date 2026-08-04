@@ -22,13 +22,15 @@ import {
   HoldRow,
   HOLD_STATUS_EN,
   PhotoMeta,
+  REPORT_KINDS,
+  ReportKindName,
   SectionMeta,
-  STAGE_EN,
   bareVesselName,
   formatDayMonthYear,
   holdLabelEn,
   photoBlockKey,
   photoPlaceRank,
+  stageEn,
 } from "./report-format";
 
 // ── Medidas e paleta ────────────────────────────────────────────────────────
@@ -191,7 +193,7 @@ class Doc {
 
 export async function buildCleaningReportPdf(opts: {
   vesselName: string;
-  kind: "EMBARQUE" | "COSTADO";
+  kind: ReportKindName;
   reportDate: string | null;
   port: string | null;
   complete: boolean;
@@ -203,6 +205,7 @@ export async function buildCleaningReportPdf(opts: {
   supervisorName: string;
 }): Promise<Uint8Array> {
   const isCostado = opts.kind === "COSTADO";
+  const info = REPORT_KINDS[opts.kind];
   const dateStr = formatDayMonthYear(opts.reportDate);
   const d = await Doc.create();
   d.newPage();
@@ -218,7 +221,7 @@ export async function buildCleaningReportPdf(opts: {
   d.y = d.brandHeader("Marine Operations");
 
   // Título
-  d.text(isCostado ? "Costado (Hull Side) Cleaning Report" : "Cargo Hold Cleaning Report", M, d.y - 17, {
+  d.text(isCostado ? "Costado (Hull Side) Cleaning Report" : `${info.titleEn} Report`, M, d.y - 17, {
     size: 19,
     bold: true,
   });
@@ -251,11 +254,15 @@ export async function buildCleaningReportPdf(opts: {
   // 1. Status dos porões/áreas
   const areaCol = isCostado ? "AREA" : "CARGO HOLD";
   d.y = d.sectionBar(
-    isCostado ? "1. OPERATIONAL STATUS OF HULL SIDE CLEANING" : "1. OPERATIONAL STATUS OF CARGO HOLDS CLEANING",
+    isCostado
+      ? "1. OPERATIONAL STATUS OF HULL SIDE CLEANING"
+      : `1. OPERATIONAL STATUS OF ${info.titleEn.replace(/^Cargo Hold /, "CARGO HOLDS ").toUpperCase()}`,
     d.y
   );
 
-  const hasPhases = opts.holds.some((h) => h.salt_start || h.salt_end || h.fresh_start || h.fresh_end);
+  // Raspagem e pintura não têm fase de água — a tabela sai com início/término.
+  const hasPhases =
+    info.waterPhases && opts.holds.some((h) => h.salt_start || h.salt_end || h.fresh_start || h.fresh_end);
   const range = (a: string | null, b: string | null) => (a || b ? `${a || "..."} - ${b || "..."}` : "-");
   const holdCols = [0.26, 0.16, 0.21, 0.21, 0.16].map((f) => f * CONTENT_W);
   const holdHead = hasPhases
@@ -355,7 +362,8 @@ export async function buildCleaningReportPdf(opts: {
   d.rect(M, d.y - 13, CONTENT_W, 1.2, BRAND);
   d.y -= 15;
   for (const row of [
-    ["Cleaning Supervisor", opts.supervisorName, dateStr],
+    // "Cleaning Supervisor" / "Scraping Supervisor" / "Painting Supervisor".
+    [`${info.stageEn.charAt(0)}${info.stageEn.slice(1).toLowerCase()} Supervisor`, opts.supervisorName, dateStr],
     ["", "", ""],
   ]) {
     drawRow([row[0], row[1], row[2], ""], sigCols, d.y - 14, {});
@@ -373,12 +381,13 @@ export async function buildCleaningReportPdf(opts: {
 
 export async function buildPhotoReportPdf(opts: {
   vesselName: string;
-  kind: "EMBARQUE" | "COSTADO";
+  kind: ReportKindName;
   reportDate: string | null;
   photos: (PhotoMeta & { image_data: string })[];
   sections: SectionMeta[];
 }): Promise<Uint8Array> {
   const isCostado = opts.kind === "COSTADO";
+  const info = REPORT_KINDS[opts.kind];
   const dateStr = formatDayMonthYear(opts.reportDate);
   const captionOf = new Map(opts.sections.map((s) => [s.label, (s.caption || "").trim()]));
   const orderOf = new Map(opts.sections.map((s) => [s.label, s.sort_order]));
@@ -407,13 +416,18 @@ export async function buildPhotoReportPdf(opts: {
   y -= 90;
   d.text("PHOTOGRAPHIC REPORT", M, y, { size: 10, bold: true, color: BRAND });
   y -= 40;
-  d.text(isCostado ? "Costado Cleaning" : "Cargo Hold Cleaning", M, y, { size: 31, bold: true });
+  d.text(isCostado ? "Costado Cleaning" : info.titleEn, M, y, { size: 31, bold: true });
   y -= 34;
   d.text("Report", M, y, { size: 31, bold: true, color: BRAND });
   y -= 22;
   d.rect(M, y, 62, 4.5, AMBER);
   y -= 22;
-  d.text("Before, during and after cleaning \xB7 operational sequence", M, y, { size: 11, color: MUTED });
+  d.text(
+    `Before, during and after ${info.stageEn.toLowerCase()} \xB7 operational sequence`,
+    M,
+    y,
+    { size: 11, color: MUTED }
+  );
 
   y -= 60;
   const rows: [string, string][] = [
@@ -458,11 +472,11 @@ export async function buildPhotoReportPdf(opts: {
         const title = holdLabelEn(p.hold_label, opts.kind);
         const titleY = top - (blockCaption ? 18 : 21);
         d.text(title, M + 14, titleY, { size: 13, bold: true });
-        const stageEn = STAGE_EN[p.stage];
-        if (stageEn) {
+        const stageLabel = stageEn(p.stage, opts.kind);
+        if (stageLabel) {
           const x = M + 14 + d.width(title, { size: 13, bold: true });
           d.text(` \xB7 `, x, titleY, { size: 13, color: MUTED });
-          d.text(stageEn, x + d.width(" \xB7 ", { size: 13 }), titleY, { size: 13, bold: true, color: BRAND });
+          d.text(stageLabel, x + d.width(" \xB7 ", { size: 13 }), titleY, { size: 13, bold: true, color: BRAND });
         }
         d.textRight(`${i + 1} / ${stageItems.length}`, A4_W - M - 12, titleY, { size: 9, bold: true, color: MUTED });
         if (blockCaption) {

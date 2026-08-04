@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { actorCanAccessJob, getReportActor, parseKind, WORKED_ALLOC_WHERE } from "@/lib/report-scope";
+import { actorCanAccessJob, baseKind, getReportActor, parseKind, WORKED_ALLOC_WHERE } from "@/lib/report-scope";
 
-// GET /api/relatorios/[jobId]?kind=EMBARQUE|COSTADO
+// GET /api/relatorios/[jobId]?kind=EMBARQUE|COSTADO|RASPAGEM|PINTURA
 // Tudo que a tela do relatório precisa: navio, relatório (porões + atividades),
 // fotos (só metadados — a imagem vem por /api/relatorios/fotos/[id]), equipe
 // escalada no serviço e avaliações já feitas.
@@ -50,9 +50,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
   });
 
   // Equipe escalada neste serviço (uma linha por colaborador — no Costado a
-  // mesma pessoa tem várias alocações, uma por turno).
+  // mesma pessoa tem várias alocações, uma por turno). Raspagem/Pintura usam a
+  // equipe do Embarque: são serviços do mesmo embarque, sem escala própria.
   const allocs = await prisma.jobAllocation.findMany({
-    where: { job_id: jobId, kind, employee_id: { not: null }, ...WORKED_ALLOC_WHERE },
+    where: { job_id: jobId, kind: baseKind(kind), employee_id: { not: null }, ...WORKED_ALLOC_WHERE },
     include: {
       employees: { select: { id: true, name: true, role: true } },
       job_functions: { select: { name: true } },
@@ -72,8 +73,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
   }
   team.sort((x, y) => x.name.localeCompare(y.name));
 
+  // Uma avaliação por navio+escala: Raspagem/Pintura leem a do Embarque (mesmo
+  // time, avaliado uma vez só).
   const evaluations = await prisma.performanceEvaluation.findMany({
-    where: { job_id: jobId, kind },
+    where: { job_id: jobId, kind: baseKind(kind) },
   });
 
   // Média histórica de cada membro nos OUTROS navios — só pra gestão (o
@@ -157,11 +160,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
   const holds = (Array.isArray(body.holds) ? body.holds : []).slice(0, MAX_ROWS);
   const activities = (Array.isArray(body.activities) ? body.activities : []).slice(0, MAX_ROWS);
 
-  // Embarque com nº de porões no cadastro do navio (aba Navios): o relatório
-  // não pode EXCEDER o cadastro — supervisor não adiciona porão a mais (a tela
-  // já esconde o Adicionar; aqui é a blindagem pra chamada direta na API).
-  // Menos linhas pode (relatório antigo/parcial).
-  if (kind === "EMBARQUE") {
+  // Serviço de porão (Embarque/Raspagem/Pintura) com nº de porões no cadastro
+  // do navio (aba Navios): o relatório não pode EXCEDER o cadastro — supervisor
+  // não adiciona porão a mais (a tela já esconde o Adicionar; aqui é a
+  // blindagem pra chamada direta na API). Menos linhas pode (parcial).
+  if (kind !== "COSTADO") {
     const jobShip = await prisma.job.findUnique({
       where: { id: jobId },
       select: { ships: { select: { holds_count: true } } },
