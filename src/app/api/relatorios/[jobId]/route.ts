@@ -42,6 +42,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
         },
         orderBy: [{ hold_label: "asc" }, { stage: "asc" }, { sort_order: "asc" }, { id: "asc" }],
       },
+      sections: {
+        select: { id: true, label: true, caption: true, sort_order: true },
+        orderBy: [{ sort_order: "asc" }, { id: "asc" }],
+      },
     },
   });
 

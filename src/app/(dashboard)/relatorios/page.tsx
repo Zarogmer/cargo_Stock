@@ -25,16 +25,16 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, TrashIcon } from "@/components/icons";
 import { processReportPhoto, sniffImageType } from "@/lib/watermark";
+import { shareOrDownloadBlob } from "@/lib/print";
 import {
   EVAL_CRITERIA,
-  printCleaningReport,
-  printEvaluationReport,
-  printPhotoReport,
+  photoBlockKey,
+  photoPlaceRank,
+  GENERAL_BLOCK,
   type ActivityRow,
-  type EvaluationPrintRow,
   type HoldRow,
   type PhotoMeta,
-} from "@/lib/ship-report-print";
+} from "@/lib/report-format";
 
 type Kind = "EMBARQUE" | "COSTADO";
 
@@ -89,6 +89,16 @@ interface ReportApi {
   holds: (HoldRow & { id: number })[];
   activities: (ActivityRow & { id: number })[];
   photos: (PhotoMeta & { created_by: string; created_at: string })[];
+  sections: SectionRow[];
+}
+
+// Bloco de fotos com legenda própria / criado à mão. Os blocos fixos (ciclo da
+// operação + porões do navio) aparecem na tela mesmo sem linha no banco.
+interface SectionRow {
+  id: number;
+  label: string;
+  caption: string | null;
+  sort_order: number;
 }
 
 interface DetailData {
@@ -177,9 +187,6 @@ const PHOTO_PLACES = [
 
 // Sentinela do select de atividade: troca a linha pra texto livre.
 const CUSTOM_ACTIVITY = "__outra__";
-
-// Sentinela do select de local da foto: troca pra texto livre.
-const CUSTOM_PLACE = "__outro_local__";
 
 // time_range é texto no banco ("22:00 - 01:40") — os pickers de hora convertem
 // pra lá e de volta. Valores legados que não parseiam aparecem vazios no picker
@@ -516,18 +523,30 @@ function ReportDetail({
   const evalsSyncRef = useRef(0);
 
   // ── Fotos ─────────────────────────────────────────────────────────────────
+  // A aba é montada em BLOCOS (locais do ciclo + porões + blocos criados à
+  // mão). Cada bloco tem seu próprio botão de adicionar foto, sua legenda e —
+  // nos porões — a fase da lavagem. Não existe mais um seletor global de local.
   const [photos, setPhotos] = useState<(PhotoMeta & { created_by?: string })[]>([]);
-  // Embarque começa no primeiro local do ciclo; Costado mantém "Geral / sem área".
-  const [uploadHold, setUploadHold] = useState(kind === "EMBARQUE" ? PHOTO_PLACES[0] : "");
-  // true = local da foto em modo texto livre ("Outro local...").
-  const [uploadHoldCustom, setUploadHoldCustom] = useState(false);
-  const [uploadStage, setUploadStage] = useState("ANTES");
-  const [uploadCaption, setUploadCaption] = useState("");
+  const [sections, setSections] = useState<SectionRow[]>([]);
+  // Fase escolhida em cada bloco de porão (default: Antes).
+  const [blockStage, setBlockStage] = useState<Record<string, string>>({});
+  // Legendas sendo digitadas: do bloco (por rótulo) e da foto (por id).
+  const [blockCaptions, setBlockCaptions] = useState<Record<string, string>>({});
+  const [photoCaptions, setPhotoCaptions] = useState<Record<number, string>>({});
+  const [newBlockName, setNewBlockName] = useState("");
+  const [addingBlock, setAddingBlock] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
+  // Qual bloco está enviando agora (mostra o progresso no lugar certo).
+  const [uploadingLabel, setUploadingLabel] = useState<string | null>(null);
   const [uploadErrors, setUploadErrors] = useState<string[]>([]);
   const [deletePhoto, setDeletePhoto] = useState<PhotoMeta | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // ── Geração dos PDFs ──────────────────────────────────────────────────────
+  const [generatingPdf, setGeneratingPdf] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Destino do próximo arquivo escolhido — setado ao clicar no bloco.
+  const uploadTargetRef = useRef<{ label: string; stage: string }>({ label: "", stage: "GERAL" });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -562,6 +581,9 @@ function ReportDetail({
       }
       setActivities(r ? r.activities.map((a) => ({ ...a })) : []);
       setPhotos(r ? r.photos : []);
+      setSections(r?.sections ?? []);
+      setBlockCaptions(Object.fromEntries((r?.sections ?? []).map((s) => [s.label, s.caption || ""])));
+      setPhotoCaptions(Object.fromEntries((r?.photos ?? []).map((p) => [p.id, p.caption || ""])));
 
       const map = new Map<number, EvalDraft>();
       for (const member of d.team) {
@@ -636,8 +658,36 @@ function ReportDetail({
     [data?.team]
   );
 
-  // Local escolhido pra foto é porão/área? Só aí a fase da lavagem se aplica.
-  const uploadIsHold = holdLabels.includes(uploadHold);
+  // Blocos da aba Fotos, na MESMA ordem em que saem no PDF: locais do ciclo da
+  // operação, porões do cadastro do navio, blocos criados à mão e qualquer
+  // rótulo que já tenha foto (relatórios antigos). Todos existem na tela mesmo
+  // vazios — é só clicar no bloco pra adicionar foto nele.
+  const photoBlocks = useMemo(() => {
+    const labels: string[] = [];
+    const push = (l: string) => {
+      const label = photoBlockKey(l);
+      if (!labels.includes(label)) labels.push(label);
+    };
+    if (kind === "EMBARQUE") PHOTO_PLACES.forEach(push);
+    else push(GENERAL_BLOCK);
+    holdLabels.forEach(push);
+    sections.forEach((s) => push(s.label));
+    photos.forEach((p) => push(p.hold_label || ""));
+
+    const fixed = new Set(
+      (kind === "EMBARQUE" ? PHOTO_PLACES : [GENERAL_BLOCK]).concat(holdLabels).map(photoBlockKey)
+    );
+    const orderOf = new Map(sections.map((s) => [s.label, s.sort_order]));
+
+    return labels
+      .map((label) => ({
+        label,
+        isHold: holdLabels.includes(label),
+        fixed: fixed.has(label),
+        rank: photoPlaceRank(label, orderOf.get(label) ?? 0),
+      }))
+      .sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label, "pt-BR", { numeric: true }));
+  }, [kind, holdLabels, sections, photos]);
 
   // Preencheu horário de uma atividade/fase ligada a um porão pendente → o
   // porão entra em "Em andamento" sozinho (Completo não é rebaixado).
@@ -709,9 +759,18 @@ function ReportDetail({
     }
   }
 
+  // Abre o seletor de arquivos já sabendo em que bloco (e fase) a foto entra.
+  function openPicker(label: string, stage: string) {
+    uploadTargetRef.current = { label, stage };
+    setUploadErrors([]);
+    fileInputRef.current?.click();
+  }
+
   async function handleFiles(files: FileList | null) {
+    const target = uploadTargetRef.current;
     const list = files ? Array.from(files) : [];
     setUploadErrors([]);
+    setUploadingLabel(target.label);
     if (list.length === 0) {
       setUploadErrors(["Nenhuma foto veio da galeria — tente selecionar de novo."]);
       return;
@@ -753,10 +812,9 @@ function ReportDetail({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             kind,
-            hold_label: uploadHold || null,
+            hold_label: target.label,
             // Fase de lavagem só em porão/área; locais do ciclo vão sem fase.
-            stage: holdLabels.includes(uploadHold) ? uploadStage : "GERAL",
-            caption: uploadCaption || null,
+            stage: target.stage,
             image_data: dataUrl,
           }),
         });
@@ -771,8 +829,89 @@ function ReportDetail({
       }
     }
     setUploadProgress("");
+    setUploadingLabel(null);
     setUploadErrors(errs);
-    setUploadCaption("");
+  }
+
+  // ── Blocos de foto ────────────────────────────────────────────────────────
+
+  // Legenda do bloco: cria a linha na primeira vez que alguém escreve algo.
+  async function saveBlockCaption(label: string) {
+    const caption = (blockCaptions[label] ?? "").trim();
+    const current = sections.find((s) => s.label === label);
+    if ((current?.caption || "") === caption) return;
+    if (!current && !caption) return;
+    try {
+      const res = await fetch(`/api/relatorios/${jobId}/secoes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, label, caption }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setUploadErrors([json.error || "Não deu pra salvar a legenda do bloco."]);
+        return;
+      }
+      setSections((prev) => [...prev.filter((s) => s.label !== label), json.data]);
+    } catch {
+      setUploadErrors(["Erro ao conectar com o servidor."]);
+    }
+  }
+
+  async function savePhotoCaption(id: number) {
+    const caption = (photoCaptions[id] ?? "").trim();
+    const current = photos.find((p) => p.id === id);
+    if (!current || (current.caption || "") === caption) return;
+    try {
+      const res = await fetch(`/api/relatorios/fotos/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ caption }),
+      });
+      if (!res.ok) return;
+      setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, caption: caption || null } : p)));
+    } catch {
+      // legenda é detalhe: falhou, o texto continua na tela pra tentar de novo
+    }
+  }
+
+  async function createBlock() {
+    const label = newBlockName.trim();
+    if (!label) return;
+    try {
+      const res = await fetch(`/api/relatorios/${jobId}/secoes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, label }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setUploadErrors([json.error || "Não deu pra criar o bloco."]);
+        return;
+      }
+      setSections((prev) => [...prev.filter((s) => s.label !== label), json.data]);
+      setNewBlockName("");
+      setAddingBlock(false);
+    } catch {
+      setUploadErrors(["Erro ao conectar com o servidor."]);
+    }
+  }
+
+  async function removeBlock(label: string) {
+    try {
+      const res = await fetch(
+        `/api/relatorios/${jobId}/secoes?kind=${kind}&label=${encodeURIComponent(label)}`,
+        { method: "DELETE" }
+      );
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setUploadErrors([json.error || "Não deu pra remover o bloco."]);
+        return;
+      }
+      setSections((prev) => prev.filter((s) => s.label !== label));
+    } catch {
+      setUploadErrors(["Erro ao conectar com o servidor."]);
+    }
   }
 
   async function confirmDeletePhoto() {
@@ -810,40 +949,27 @@ function ReportDetail({
     if (!(canRate && savedStatus === "COMPLETO")) saveReport();
   }
 
-  function generateCleaning() {
-    printCleaningReport({
-      vesselName,
-      kind,
-      reportDate: header.report_date || null,
-      port: header.port || null,
-      complete: savedStatus === "COMPLETO",
-      holds,
-      activities,
-      remarks: header.remarks || null,
-      etcDate: header.etc_date || null,
-      etcTime: header.etc_time || null,
-      supervisorName,
-    });
-  }
-
-  function generatePhotos() {
-    printPhotoReport({
-      vesselName,
-      kind,
-      reportDate: header.report_date || null,
-      photos,
-    });
-  }
-
-  function generateEvaluations() {
-    if (!data) return;
-    const rows: EvaluationPrintRow[] = evalTeam
-      .map((m) => {
-        const e = evals.get(m.employee_id) || EMPTY_EVAL;
-        return { name: m.name, function_name: m.function_name, ...e, comments: e.comments || null };
-      })
-      .filter((r) => EVAL_CRITERIA.some((c) => Number(r[c.key]) > 0));
-    printEvaluationReport({ vesselName, reportDate: header.report_date || null, rows });
+  // O PDF é montado no servidor (src/lib/report-pdf.ts) e baixado como arquivo
+  // — igual aos documentos do RH. No celular abre o menu de compartilhar.
+  // Conteúdo = o que está SALVO: o aviso da aba lembra de salvar antes.
+  async function downloadPdf(tipo: "cleaning" | "fotos" | "avaliacao") {
+    setPdfError("");
+    setGeneratingPdf(tipo);
+    try {
+      const res = await fetch(`/api/relatorios/${jobId}/pdf?kind=${kind}&tipo=${tipo}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Erro ${res.status}`);
+      }
+      const blob = await res.blob();
+      const name = res.headers.get("Content-Disposition")?.match(/filename\*=UTF-8''([^;]+)/);
+      const fileName = name ? decodeURIComponent(name[1]) : `Relatorio ${vesselName}.pdf`;
+      await shareOrDownloadBlob(blob, fileName);
+    } catch (err) {
+      setPdfError(err instanceof Error ? err.message : "Não foi possível gerar o PDF.");
+    } finally {
+      setGeneratingPdf(null);
+    }
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -1376,138 +1502,193 @@ function ReportDetail({
               ✅ Relatório concluído — as fotos ficam travadas. Precisando mexer, peça pra gestão reabrir.
             </div>
           )}
-          {!locked && (
-          <div className="bg-card rounded-xl border border-border p-4 space-y-3">
-            <p className="font-semibold text-text text-sm">Adicionar fotos</p>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              {uploadHoldCustom ? (
-                <div className="flex items-center gap-1">
-                  <input type="text" value={uploadHold} onChange={(e) => setUploadHold(e.target.value)} className={inputCls} placeholder="Digite o local da foto..." />
-                  <button
-                    onClick={() => {
-                      setUploadHoldCustom(false);
-                      setUploadHold(kind === "EMBARQUE" ? PHOTO_PLACES[0] : "");
-                    }}
-                    title="Voltar pra lista de locais"
-                    className="px-2 py-1.5 text-text-light hover:text-text hover:bg-gray-200 rounded-lg transition shrink-0 text-sm"
-                  >
-                    ☰
-                  </button>
-                </div>
-              ) : (
-                <select
-                  value={uploadHold}
-                  onChange={(e) => {
-                    if (e.target.value === CUSTOM_PLACE) {
-                      setUploadHoldCustom(true);
-                      setUploadHold("");
-                    } else {
-                      setUploadHold(e.target.value);
-                    }
-                  }}
-                  className={inputCls}
-                >
-                  {kind === "COSTADO" ? (
-                    <option value="">Geral / sem área</option>
-                  ) : (
-                    PHOTO_PLACES.map((p) => (
-                      <option key={p} value={p}>{p}</option>
-                    ))
-                  )}
-                  {holdLabels.map((l) => (
-                    <option key={l} value={l}>{l}</option>
-                  ))}
-                  <option value={CUSTOM_PLACE}>✏️ Outro local (digitar)...</option>
-                </select>
-              )}
-              {/* Fase da lavagem só pra porão/área — carregando caminhão etc.
-                  não tem "antes/durante/depois da lavagem". */}
-              {uploadIsHold && (
-                <select value={uploadStage} onChange={(e) => setUploadStage(e.target.value)} className={inputCls}>
-                  {STAGES.map((s) => (
-                    <option key={s.value} value={s.value}>{STAGE_UPLOAD_LABEL[s.value] || s.label}</option>
-                  ))}
-                </select>
-              )}
-              <input type="text" value={uploadCaption} onChange={(e) => setUploadCaption(e.target.value)} className={`${inputCls} col-span-2 ${uploadIsHold ? "" : "md:col-span-3"}`} placeholder="Legenda (opcional)" />
+          {/* Um input só, escondido: o bloco clicado define destino e fase. */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={async (e) => {
+              // Só limpa o input DEPOIS de processar: no iPhone, resetar o
+              // input no meio do envio invalida as fotos da galeria.
+              const input = e.currentTarget;
+              await handleFiles(input.files);
+              input.value = "";
+            }}
+          />
+
+          {uploadErrors.length > 0 && (
+            <div className="bg-danger/10 border border-danger/30 rounded-lg p-3 space-y-1">
+              <p className="text-sm font-semibold text-danger">⚠️ Não deu pra enviar:</p>
+              <ul className="text-xs text-danger space-y-0.5">
+                {uploadErrors.map((e, i) => (
+                  <li key={i}>• {e}</li>
+                ))}
+              </ul>
             </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={async (e) => {
-                // Só limpa o input DEPOIS de processar: no iPhone, resetar o
-                // input no meio do envio invalida as fotos da galeria.
-                const input = e.currentTarget;
-                await handleFiles(input.files);
-                input.value = "";
-              }}
-            />
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={!!uploadProgress}
-              className="w-full border-2 border-dashed border-border hover:border-primary/60 rounded-xl p-6 text-center transition disabled:opacity-60"
-            >
-              <p className="text-3xl mb-1">📷</p>
-              <p className="text-sm font-medium text-text">
-                {uploadProgress || "Selecionar fotos (câmera ou galeria)"}
-              </p>
-              <p className="text-xs text-text-light mt-1">
-                A marca d&apos;água da Cargo é aplicada automaticamente em cada foto.
-              </p>
-            </button>
-            {uploadErrors.length > 0 && (
-              <div className="bg-danger/10 border border-danger/30 rounded-lg p-3 space-y-1">
-                <p className="text-sm font-semibold text-danger">⚠️ Não deu pra enviar:</p>
-                <ul className="text-xs text-danger space-y-0.5">
-                  {uploadErrors.map((e, i) => (
-                    <li key={i}>• {e}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
           )}
 
-          {photos.length === 0 ? (
-            <div className="bg-card rounded-xl border border-border p-8 text-center text-sm text-text-light">
-              Nenhuma foto adicionada ainda.
-            </div>
-          ) : (
-            (() => {
-              const groups = new Map<string, typeof photos>();
-              for (const p of photos) {
-                // Foto sem fase (GERAL — locais do ciclo) agrupa só pelo local.
-                const stageLabel = STAGES.find((s) => s.value === p.stage)?.label;
-                const key = `${p.hold_label || "Geral"}${stageLabel ? ` · ${stageLabel}` : ""}`;
-                if (!groups.has(key)) groups.set(key, []);
-                groups.get(key)!.push(p);
-              }
-              return [...groups.entries()].map(([label, items]) => (
-                <div key={label} className="space-y-2">
-                  <p className="text-sm font-semibold text-text">{label} <span className="text-text-light font-normal">({items.length})</span></p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                    {items.map((p) => (
-                      <div key={p.id} className="bg-card rounded-xl border border-border overflow-hidden">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={`/api/relatorios/fotos/${p.id}`} alt={p.caption || label} className="w-full h-36 object-cover" loading="lazy" />
-                        <div className="p-2 flex items-center justify-between gap-1">
-                          <p className="text-xs text-text-light truncate">{p.caption || "—"}</p>
-                          {!locked && (
-                            <button onClick={() => setDeletePhoto(p)} title="Excluir foto" className="p-1 text-text-light hover:text-danger hover:bg-danger/10 rounded transition shrink-0">
-                              <TrashIcon className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
+          {!locked && (
+            <p className="text-xs text-text-light">
+              Cada bloco vira uma seção do Relatório Fotográfico, nesta ordem. Clique no bloco pra
+              adicionar as fotos dele — a marca d&apos;água da Cargo entra sozinha.
+            </p>
+          )}
+
+          {photoBlocks.map((b) => {
+            const items = photos.filter((p) => photoBlockKey(p.hold_label) === b.label);
+            const stage = blockStage[b.label] || "ANTES";
+            const sending = uploadingLabel === b.label && !!uploadProgress;
+            // Porão mostra as fotos separadas por fase; os demais, tudo junto.
+            const buckets = b.isHold
+              ? STAGES.map((s) => ({ key: s.value, title: STAGE_UPLOAD_LABEL[s.value] || s.label, list: items.filter((p) => p.stage === s.value) }))
+                  .concat([{ key: "GERAL", title: "Sem fase", list: items.filter((p) => !STAGES.some((s) => s.value === p.stage)) }])
+              : [{ key: "TODAS", title: "", list: items }];
+
+            return (
+              <div key={b.label} className="bg-card rounded-xl border border-border p-4 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="font-semibold text-text">
+                    {b.label}{" "}
+                    <span className="text-text-light font-normal text-sm">({items.length})</span>
+                  </p>
+                  {!b.fixed && !locked && (
+                    <button
+                      onClick={() => removeBlock(b.label)}
+                      title={items.length ? "Apague as fotos antes de remover o bloco" : "Remover bloco"}
+                      className="p-1 text-text-light hover:text-danger hover:bg-danger/10 rounded transition shrink-0"
+                    >
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                {locked ? (
+                  blockCaptions[b.label] ? (
+                    <p className="text-sm text-text-light">📝 {blockCaptions[b.label]}</p>
+                  ) : null
+                ) : (
+                  <input
+                    type="text"
+                    value={blockCaptions[b.label] ?? ""}
+                    onChange={(e) => setBlockCaptions((prev) => ({ ...prev, [b.label]: e.target.value }))}
+                    onBlur={() => saveBlockCaption(b.label)}
+                    placeholder="Legenda do bloco (opcional — sai no PDF)"
+                    className={inputCls}
+                  />
+                )}
+
+                {/* Fase da lavagem: só porão/área tem antes/durante/depois. */}
+                {b.isHold && !locked && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {STAGES.map((s) => (
+                      <button
+                        key={s.value}
+                        onClick={() => setBlockStage((prev) => ({ ...prev, [b.label]: s.value }))}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition ${
+                          stage === s.value
+                            ? "bg-primary text-white border-primary"
+                            : "bg-card text-text-light border-border hover:border-primary/60"
+                        }`}
+                      >
+                        {STAGE_UPLOAD_LABEL[s.value] || s.label}
+                      </button>
                     ))}
                   </div>
+                )}
+
+                {!locked && (
+                  <button
+                    onClick={() => openPicker(b.label, b.isHold ? stage : "GERAL")}
+                    disabled={!!uploadProgress}
+                    className="w-full border-2 border-dashed border-border hover:border-primary/60 rounded-xl py-4 text-center transition disabled:opacity-60"
+                  >
+                    <p className="text-sm font-medium text-text">
+                      {sending ? uploadProgress : `📷 Adicionar fotos${b.isHold ? ` · ${STAGE_UPLOAD_LABEL[stage]}` : ""}`}
+                    </p>
+                  </button>
+                )}
+
+                {buckets.map((bucket) =>
+                  bucket.list.length === 0 ? null : (
+                    <div key={bucket.key} className="space-y-2">
+                      {bucket.title && (
+                        <p className="text-xs font-semibold text-text-light">
+                          {bucket.title} <span className="font-normal">({bucket.list.length})</span>
+                        </p>
+                      )}
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                        {bucket.list.map((p) => (
+                          <div key={p.id} className="bg-bg rounded-xl border border-border overflow-hidden">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={`/api/relatorios/fotos/${p.id}`} alt={p.caption || b.label} className="w-full h-36 object-cover" loading="lazy" />
+                            <div className="p-2 space-y-1.5">
+                              {locked ? (
+                                <p className="text-xs text-text-light truncate">{p.caption || "—"}</p>
+                              ) : (
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="text"
+                                    value={photoCaptions[p.id] ?? ""}
+                                    onChange={(e) => setPhotoCaptions((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                                    onBlur={() => savePhotoCaption(p.id)}
+                                    placeholder="Legenda da foto"
+                                    className="flex-1 min-w-0 px-2 py-1 text-xs border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                  />
+                                  <button
+                                    onClick={() => setDeletePhoto(p)}
+                                    title="Excluir foto"
+                                    className="p-1 text-text-light hover:text-danger hover:bg-danger/10 rounded transition shrink-0"
+                                  >
+                                    <TrashIcon className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                )}
+              </div>
+            );
+          })}
+
+          {!locked &&
+            (addingBlock ? (
+              <div className="bg-card rounded-xl border border-border p-4 flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={newBlockName}
+                  autoFocus
+                  onChange={(e) => setNewBlockName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && createBlock()}
+                  placeholder="Nome do bloco (ex.: Convés, Praça de máquinas...)"
+                  className={inputCls}
+                />
+                <div className="flex gap-2">
+                  <Button onClick={createBlock}>Criar</Button>
+                  <button
+                    onClick={() => {
+                      setAddingBlock(false);
+                      setNewBlockName("");
+                    }}
+                    className="px-3 py-2 text-sm text-text-light hover:text-text hover:bg-gray-100 rounded-lg transition"
+                  >
+                    Cancelar
+                  </button>
                 </div>
-              ));
-            })()
-          )}
+              </div>
+            ) : (
+              <button
+                onClick={() => setAddingBlock(true)}
+                className="w-full border-2 border-dashed border-border hover:border-primary/60 rounded-xl py-3 text-sm font-medium text-text-light hover:text-primary transition"
+              >
+                ＋ Novo bloco
+              </button>
+            ))}
         </div>
       )}
 
@@ -1522,7 +1703,9 @@ function ReportDetail({
                 Relatório operacional da lavagem (1 página, em inglês): status por {kind === "COSTADO" ? "área" : "porão"}, atividades, observações, ETC e assinatura.
               </p>
             </div>
-            <Button onClick={generateCleaning}>Gerar PDF</Button>
+            <Button onClick={() => downloadPdf("cleaning")} disabled={!!generatingPdf}>
+              {generatingPdf === "cleaning" ? "Gerando..." : "Baixar PDF"}
+            </Button>
           </div>
 
           <div className="bg-card rounded-xl border border-border p-5 flex flex-col gap-3">
@@ -1533,7 +1716,9 @@ function ReportDetail({
                 Capa + uma foto por página (antes/durante/depois), com a marca d&apos;água da Cargo. {photos.length} foto{photos.length === 1 ? "" : "s"} no relatório.
               </p>
             </div>
-            <Button onClick={generatePhotos} disabled={photos.length === 0}>Gerar PDF</Button>
+            <Button onClick={() => downloadPdf("fotos")} disabled={photos.length === 0 || !!generatingPdf}>
+              {generatingPdf === "fotos" ? "Gerando..." : "Baixar PDF"}
+            </Button>
           </div>
 
           <div className="bg-card rounded-xl border border-border p-5 flex flex-col gap-3">
@@ -1544,14 +1729,20 @@ function ReportDetail({
                 Avaliação da equipe com notas por critério, pontos a melhorar e observações do supervisor.
               </p>
             </div>
-            <Button onClick={generateEvaluations} disabled={evalTeam.length === 0}>Gerar PDF</Button>
+            <Button onClick={() => downloadPdf("avaliacao")} disabled={evalTeam.length === 0 || !!generatingPdf}>
+              {generatingPdf === "avaliacao" ? "Gerando..." : "Baixar PDF"}
+            </Button>
           </div>
 
+          {pdfError && (
+            <div className="md:col-span-3 bg-danger/10 border border-danger/30 rounded-xl p-3 text-sm text-danger">
+              ⚠️ {pdfError}
+            </div>
+          )}
+
           <div className="md:col-span-3 bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-900">
-            💡 O relatório abre o diálogo de impressão (numa janela nova ou direto por aqui) — escolha{" "}
-            <strong>&quot;Salvar como PDF&quot;</strong> pra baixar o arquivo. No celular, use o menu de
-            compartilhar/imprimir do navegador. Gere o PDF <strong>depois de salvar</strong> as
-            alterações, pra sair tudo atualizado.
+            💡 O PDF é gerado no servidor e baixa direto (no celular abre o menu de compartilhar).
+            Gere o PDF <strong>depois de salvar</strong> as alterações, pra sair tudo atualizado.
           </div>
         </div>
       )}

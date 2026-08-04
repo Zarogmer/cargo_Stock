@@ -1,6 +1,5 @@
-const { app, BrowserWindow, shell, Menu, Tray, nativeImage, ipcMain } = require("electron");
+const { app, BrowserWindow, shell, Menu, Tray, nativeImage } = require("electron");
 const path = require("path");
-const fs = require("fs");
 
 // URL do site deployado no Railway
 const APP_URL = "https://cargostock-production.up.railway.app";
@@ -33,14 +32,9 @@ function createWindow() {
   // Carrega o site
   mainWindow.loadURL(APP_URL);
 
-  // Janelas novas: "about:blank" é a janela de impressão dos Relatórios de
-  // Bordo (window.open("") + document.write dos PDFs) — permite como janela
-  // filha, senão o "Gerar PDF" morre bloqueado. Qualquer outra URL fora do
-  // app abre no navegador padrão.
   // Só manda pro navegador padrão o que for http/https de fora do app. Sem esse
-  // filtro, o "about:blank" da janela de impressão caía no shell.openExternal e
-  // o Windows abria a caixa "Você precisa de um novo app para abrir este link
-  // about" — o que o usuário via ao gerar PDF.
+  // filtro, um "about:blank" caía no shell.openExternal e o Windows abria a
+  // caixa "Você precisa de um novo app para abrir este link about".
   const isExternalLink = (url) => /^https?:\/\//i.test(url) && !url.startsWith(APP_URL);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -71,59 +65,6 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
-}
-
-// Salva um relatório como PDF de verdade, sem passar pelo diálogo de impressão
-// do Windows (que no Electron é o diálogo do sistema, não a pré-visualização do
-// Chrome). O renderer manda o HTML já com as imagens embutidas em data URL —
-// por isso a janela oculta consegue renderizar tudo sem sessão/cookie.
-// O arquivo cai em Downloads e abre no visualizador padrão.
-ipcMain.handle("save-pdf", async (_event, payload) => {
-  const html = String(payload?.html || "");
-  const baseName = sanitizeFileName(payload?.fileName || "Relatorio") + ".pdf";
-  const tmpHtml = path.join(app.getPath("temp"), `cargo-report-${Date.now()}.html`);
-  let win = null;
-
-  try {
-    fs.writeFileSync(tmpHtml, html, "utf8");
-    win = new BrowserWindow({
-      show: false,
-      webPreferences: { javascript: false, contextIsolation: true, nodeIntegration: false },
-    });
-    await win.loadFile(tmpHtml);
-
-    // margins zerado = respeita o @page margin do CSS do relatório.
-    const pdf = await win.webContents.printToPDF({
-      pageSize: "A4",
-      printBackground: true,
-      margins: { top: 0, bottom: 0, left: 0, right: 0 },
-    });
-
-    const target = uniquePath(app.getPath("downloads"), baseName);
-    fs.writeFileSync(target, pdf);
-    shell.openPath(target);
-    return { ok: true, path: target };
-  } catch (err) {
-    return { ok: false, error: String((err && err.message) || err) };
-  } finally {
-    if (win) win.destroy();
-    fs.unlink(tmpHtml, () => {});
-  }
-});
-
-function sanitizeFileName(name) {
-  return String(name).replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ").trim().slice(0, 120) || "Relatorio";
-}
-
-// "Relatorio.pdf" já existe → "Relatorio (2).pdf" (não sobrescreve o anterior).
-function uniquePath(dir, fileName) {
-  const ext = path.extname(fileName);
-  const stem = path.basename(fileName, ext);
-  let candidate = path.join(dir, fileName);
-  for (let i = 2; fs.existsSync(candidate); i++) {
-    candidate = path.join(dir, `${stem} (${i})${ext}`);
-  }
-  return candidate;
 }
 
 // Cria ícone na bandeja do sistema (system tray)

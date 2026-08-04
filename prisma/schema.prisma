@@ -834,6 +834,7 @@ model ShipReport {
   holds      ShipReportHold[]
   activities ShipReportActivity[]
   photos     ShipReportPhoto[]
+  sections   ShipReportSection[]
 
   @@unique([job_id, kind])
   @@map("ship_reports")
@@ -894,6 +895,25 @@ model ShipReportPhoto {
 
   @@index([report_id])
   @@map("ship_report_photos")
+}
+
+// Bloco de fotos do relatório fotográfico ("Carregamento do caminhão",
+// "Porão 3", ou um criado pelo supervisor). Os blocos fixos (locais do ciclo +
+// porões do cadastro do navio) aparecem na tela mesmo sem linha aqui — a linha
+// só existe quando o bloco ganha legenda própria ou foi criado à mão.
+model ShipReportSection {
+  id         Int        @id @default(autoincrement())
+  report_id  String     @db.Uuid
+  reports    ShipReport @relation(fields: [report_id], references: [id], onDelete: Cascade)
+  label      String // casa com ship_report_photos.hold_label
+  caption    String? // legenda do bloco inteiro — sai no PDF
+  // Só ordena os blocos criados à mão; os fixos seguem a sequência da operação.
+  sort_order Int        @default(0)
+  created_at DateTime   @default(now()) @db.Timestamptz()
+
+  @@unique([report_id, label])
+  @@index([report_id])
+  @@map("ship_report_sections")
 }
 
 // Avaliação de desempenho de um colaborador num navio: 7 critérios de 1 a 5
