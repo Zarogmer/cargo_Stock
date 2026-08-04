@@ -128,13 +128,23 @@ export function UsuariosTab({ employees, canManage }: { employees: Employee[]; c
     matchSearch(`${u.full_name} ${u.email} ${u.employees?.name || ""}`, search)
   );
 
-  // Colaboradores ativos primeiro; inativos ficam no fim, marcados.
-  const employeeOptions = [...employees].sort((a, b) => {
-    const ai = a.status === "INATIVO" ? 1 : 0;
-    const bi = b.status === "INATIVO" ? 1 : 0;
-    if (ai !== bi) return ai - bi;
-    return a.name.localeCompare(b.name);
-  });
+  // Só quem tem a função SUPERVISOR no cadastro entra na lista: este login É o
+  // acesso do supervisor de bordo. Mostrar a empresa inteira só dava chance de
+  // vincular a pessoa errada — e um não-supervisor não assina o Cleaning Report
+  // nem lança avaliação. Editando um usuário antigo, o colaborador já vinculado
+  // continua na lista mesmo que a função dele tenha mudado (senão o select
+  // abriria vazio e o formulário travaria no "obrigatório").
+  const isSupervisor = (e: Employee) => (e.role || "").trim().toUpperCase() === "SUPERVISOR";
+  const linkedId = editUser?.employee_id ?? null;
+  // Ativos primeiro; inativos ficam no fim, marcados.
+  const employeeOptions = employees
+    .filter((e) => isSupervisor(e) || e.id === linkedId)
+    .sort((a, b) => {
+      const ai = a.status === "INATIVO" ? 1 : 0;
+      const bi = b.status === "INATIVO" ? 1 : 0;
+      if (ai !== bi) return ai - bi;
+      return a.name.localeCompare(b.name);
+    });
 
   const columns = [
     {
@@ -303,9 +313,15 @@ export function UsuariosTab({ employees, canManage }: { employees: Employee[]; c
                 </option>
               ))}
             </select>
-            <p className="text-xs text-text-light mt-1">
-              O supervisor verá os navios em que ESTE colaborador estiver escalado.
-            </p>
+            {employeeOptions.length === 0 ? (
+              <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 mt-1">
+                ⚠️ Nenhum colaborador com a função <strong>SUPERVISOR</strong> no cadastro. Ajuste a função dele na aba Colaboradores pra poder criar o login.
+              </p>
+            ) : (
+              <p className="text-xs text-text-light mt-1">
+                Só colaboradores com a função <strong>SUPERVISOR</strong> aparecem aqui. O supervisor verá os navios em que ESTE colaborador estiver escalado.
+              </p>
+            )}
           </div>
 
           {formError && (

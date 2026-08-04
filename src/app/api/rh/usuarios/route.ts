@@ -22,6 +22,28 @@ async function requireManager() {
   return { session, role };
 }
 
+// O login de bordo é do SUPERVISOR: só colaborador com essa função no cadastro
+// pode ser vinculado. Mesma régua do resto dos Relatórios de Bordo (assinatura
+// do Cleaning Report e quem fica de fora das avaliações). A tela já filtra o
+// select; aqui é a blindagem pra chamada direta na API.
+async function rejectNonSupervisor(employeeId: number | null): Promise<NextResponse | null> {
+  if (!employeeId) return null;
+  const emp = await prisma.employee.findUnique({
+    where: { id: employeeId },
+    select: { role: true },
+  });
+  if (!emp) {
+    return NextResponse.json({ error: "Colaborador não encontrado." }, { status: 400 });
+  }
+  if ((emp.role || "").trim().toUpperCase() !== "SUPERVISOR") {
+    return NextResponse.json(
+      { error: "Só colaborador com a função SUPERVISOR pode ter login de supervisor." },
+      { status: 400 }
+    );
+  }
+  return null;
+}
+
 const SELECT = {
   id: true,
   email: true,
@@ -68,6 +90,8 @@ export async function POST(request: NextRequest) {
       // escala é a fonte da visibilidade dele.
       return NextResponse.json({ error: "Selecione o colaborador vinculado." }, { status: 400 });
     }
+    const notSupervisor = await rejectNonSupervisor(employee_id);
+    if (notSupervisor) return notSupervisor;
 
     const password_hash = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({
@@ -113,7 +137,16 @@ export async function PATCH(request: NextRequest) {
       data.email = v;
     }
     if (body.employee_id !== undefined) {
-      data.employee_id = body.employee_id ? Number(body.employee_id) : null;
+      const employeeId = body.employee_id ? Number(body.employee_id) : null;
+      // Trocar o vínculo só vale pra outro supervisor; manter o mesmo (mesmo que
+      // a função dele tenha mudado depois) continua permitido — senão editar o
+      // email de um login antigo ficaria bloqueado.
+      const target2 = await prisma.user.findUnique({ where: { id }, select: { employee_id: true } });
+      if (employeeId !== (target2?.employee_id ?? null)) {
+        const notSupervisor = await rejectNonSupervisor(employeeId);
+        if (notSupervisor) return notSupervisor;
+      }
+      data.employee_id = employeeId;
     }
     if (body.password) {
       const p = String(body.password);
