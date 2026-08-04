@@ -141,6 +141,15 @@ const STAGES = [
   { value: "DEPOIS", label: "Depois" },
 ];
 
+// Rótulos do select de fase no upload de fotos ("Durante A lavagem" — com a
+// gramática certa). A fase só existe pra porão/área; locais do ciclo vão sem
+// fase (stage GERAL).
+const STAGE_UPLOAD_LABEL: Record<string, string> = {
+  ANTES: "Antes da lavagem",
+  DURANTE: "Durante a lavagem",
+  DEPOIS: "Depois da lavagem",
+};
+
 // Opções do Registro de atividades (select — "Parada" registra período sem
 // operação). "Outra..." abre texto livre, com estas mesmas sugestões no datalist.
 const ACTIVITY_SUGGESTIONS = [
@@ -168,6 +177,9 @@ const PHOTO_PLACES = [
 
 // Sentinela do select de atividade: troca a linha pra texto livre.
 const CUSTOM_ACTIVITY = "__outra__";
+
+// Sentinela do select de local da foto: troca pra texto livre.
+const CUSTOM_PLACE = "__outro_local__";
 
 // time_range é texto no banco ("22:00 - 01:40") — os pickers de hora convertem
 // pra lá e de volta. Valores legados que não parseiam aparecem vazios no picker
@@ -209,7 +221,14 @@ function buildWhatsText(opts: {
     EM_ANDAMENTO: "Em andamento",
     COMPLETO: "Completo",
   };
-  const range = (start: string | null, end: string | null) => `${start || "…"} → ${end || "…"}`;
+  // Uma linha por fase, com nome por extenso — só emoji não dava pra saber
+  // qual era a salgada e qual era a doce.
+  const phase = (emoji: string, name: string, start: string | null, end: string | null) => {
+    if (!start && !end) return null;
+    if (start && end) return `${emoji} ${name}: ${start} às ${end}`;
+    if (start) return `${emoji} ${name}: iniciou às ${start}`;
+    return `${emoji} ${name}: terminou às ${end}`;
+  };
 
   const L: string[] = [];
   L.push(`🚢 *RELATÓRIO DE BORDO — ${opts.vesselName}* (${KIND_LABEL[opts.kind]})`);
@@ -223,12 +242,13 @@ function buildWhatsText(opts: {
     L.push("", `*${opts.kind === "COSTADO" ? "Áreas do costado" : "Porões"}*`);
     for (const h of named) {
       L.push(`• ${h.label} — ${HOLD_STATUS_PT[h.status] || h.status} · ${h.completion_pct}%`);
-      const phases = [
-        (h.salt_start || h.salt_end) && `🌊 ${range(h.salt_start, h.salt_end)}`,
-        (h.fresh_start || h.fresh_end) && `💧 ${range(h.fresh_start, h.fresh_end)}`,
-        (h.start_time || h.end_time) && `🕐 ${range(h.start_time, h.end_time)}`,
-      ].filter(Boolean);
-      if (phases.length) L.push(`   ${phases.join(" · ")}`);
+      for (const line of [
+        phase("🌊", "Água salgada", h.salt_start, h.salt_end),
+        phase("💧", "Água doce", h.fresh_start, h.fresh_end),
+        phase("🕐", "Horário geral", h.start_time, h.end_time),
+      ]) {
+        if (line) L.push(`   ${line}`);
+      }
     }
   }
 
@@ -496,6 +516,8 @@ function ReportDetail({
   const [photos, setPhotos] = useState<(PhotoMeta & { created_by?: string })[]>([]);
   // Embarque começa no primeiro local do ciclo; Costado mantém "Geral / sem área".
   const [uploadHold, setUploadHold] = useState(kind === "EMBARQUE" ? PHOTO_PLACES[0] : "");
+  // true = local da foto em modo texto livre ("Outro local...").
+  const [uploadHoldCustom, setUploadHoldCustom] = useState(false);
   const [uploadStage, setUploadStage] = useState("ANTES");
   const [uploadCaption, setUploadCaption] = useState("");
   const [uploadProgress, setUploadProgress] = useState("");
@@ -626,6 +648,9 @@ function ReportDetail({
     [data?.team]
   );
 
+  // Local escolhido pra foto é porão/área? Só aí a fase da lavagem se aplica.
+  const uploadIsHold = holdLabels.includes(uploadHold);
+
   // Preencheu horário de uma atividade/fase ligada a um porão pendente → o
   // porão entra em "Em andamento" sozinho (Completo não é rebaixado).
   const markHoldInProgress = useCallback((label: string | null | undefined) => {
@@ -701,7 +726,8 @@ function ReportDetail({
           body: JSON.stringify({
             kind,
             hold_label: uploadHold || null,
-            stage: uploadStage,
+            // Fase de lavagem só em porão/área; locais do ciclo vão sem fase.
+            stage: holdLabels.includes(uploadHold) ? uploadStage : "GERAL",
             caption: uploadCaption || null,
             image_data: dataUrl,
           }),
@@ -1272,24 +1298,56 @@ function ReportDetail({
           <div className="bg-card rounded-xl border border-border p-4 space-y-3">
             <p className="font-semibold text-text text-sm">Adicionar fotos</p>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              <select value={uploadHold} onChange={(e) => setUploadHold(e.target.value)} className={inputCls}>
-                {kind === "COSTADO" ? (
-                  <option value="">Geral / sem área</option>
-                ) : (
-                  PHOTO_PLACES.map((p) => (
-                    <option key={p} value={p}>{p}</option>
-                  ))
-                )}
-                {holdLabels.map((l) => (
-                  <option key={l} value={l}>{l}</option>
-                ))}
-              </select>
-              <select value={uploadStage} onChange={(e) => setUploadStage(e.target.value)} className={inputCls}>
-                {STAGES.map((s) => (
-                  <option key={s.value} value={s.value}>{s.label} da lavagem</option>
-                ))}
-              </select>
-              <input type="text" value={uploadCaption} onChange={(e) => setUploadCaption(e.target.value)} className={`${inputCls} col-span-2`} placeholder="Legenda (opcional)" />
+              {uploadHoldCustom ? (
+                <div className="flex items-center gap-1">
+                  <input type="text" value={uploadHold} onChange={(e) => setUploadHold(e.target.value)} className={inputCls} placeholder="Digite o local da foto..." />
+                  <button
+                    onClick={() => {
+                      setUploadHoldCustom(false);
+                      setUploadHold(kind === "EMBARQUE" ? PHOTO_PLACES[0] : "");
+                    }}
+                    title="Voltar pra lista de locais"
+                    className="px-2 py-1.5 text-text-light hover:text-text hover:bg-gray-200 rounded-lg transition shrink-0 text-sm"
+                  >
+                    ☰
+                  </button>
+                </div>
+              ) : (
+                <select
+                  value={uploadHold}
+                  onChange={(e) => {
+                    if (e.target.value === CUSTOM_PLACE) {
+                      setUploadHoldCustom(true);
+                      setUploadHold("");
+                    } else {
+                      setUploadHold(e.target.value);
+                    }
+                  }}
+                  className={inputCls}
+                >
+                  {kind === "COSTADO" ? (
+                    <option value="">Geral / sem área</option>
+                  ) : (
+                    PHOTO_PLACES.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))
+                  )}
+                  {holdLabels.map((l) => (
+                    <option key={l} value={l}>{l}</option>
+                  ))}
+                  <option value={CUSTOM_PLACE}>✏️ Outro local (digitar)...</option>
+                </select>
+              )}
+              {/* Fase da lavagem só pra porão/área — carregando caminhão etc.
+                  não tem "antes/durante/depois da lavagem". */}
+              {uploadIsHold && (
+                <select value={uploadStage} onChange={(e) => setUploadStage(e.target.value)} className={inputCls}>
+                  {STAGES.map((s) => (
+                    <option key={s.value} value={s.value}>{STAGE_UPLOAD_LABEL[s.value] || s.label}</option>
+                  ))}
+                </select>
+              )}
+              <input type="text" value={uploadCaption} onChange={(e) => setUploadCaption(e.target.value)} className={`${inputCls} col-span-2 ${uploadIsHold ? "" : "md:col-span-3"}`} placeholder="Legenda (opcional)" />
             </div>
             <input
               ref={fileInputRef}
@@ -1328,7 +1386,9 @@ function ReportDetail({
             (() => {
               const groups = new Map<string, typeof photos>();
               for (const p of photos) {
-                const key = `${p.hold_label || "Geral"} · ${STAGES.find((s) => s.value === p.stage)?.label || p.stage}`;
+                // Foto sem fase (GERAL — locais do ciclo) agrupa só pelo local.
+                const stageLabel = STAGES.find((s) => s.value === p.stage)?.label;
+                const key = `${p.hold_label || "Geral"}${stageLabel ? ` · ${stageLabel}` : ""}`;
                 if (!groups.has(key)) groups.set(key, []);
                 groups.get(key)!.push(p);
               }

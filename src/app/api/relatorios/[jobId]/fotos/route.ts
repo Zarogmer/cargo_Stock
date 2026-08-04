@@ -31,7 +31,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ job
     return NextResponse.json({ error: "Imagem grande demais (máx ~2MB)." }, { status: 413 });
   }
 
-  const stage = ["ANTES", "DURANTE", "DEPOIS"].includes(String(body.stage))
+  // GERAL = foto sem fase de lavagem (locais do ciclo da operação: caminhão,
+  // embarque de material, navio... — a fase só existe pra porão/área).
+  const stage = ["ANTES", "DURANTE", "DEPOIS", "GERAL"].includes(String(body.stage))
     ? String(body.stage)
     : "ANTES";
   const holdLabel = body.hold_label ? String(body.hold_label) : null;

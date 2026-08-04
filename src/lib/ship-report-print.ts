@@ -338,10 +338,17 @@ export function printPhotoReport(opts: {
   let pages = "";
   for (const key of groupKeys) {
     const items = groups.get(key)!;
-    for (const stage of stageOrder) {
-      const stageItems = items.filter((p) => p.stage === stage);
+    // Fotos SEM fase de lavagem (stage GERAL — locais do ciclo: caminhão,
+    // embarque de material, navio...) vêm primeiro e sem o sufixo
+    // BEFORE/DURING/AFTER; depois as fases na ordem Antes→Durante→Depois.
+    const buckets = [
+      items.filter((p) => !stageOrder.includes(p.stage)),
+      ...stageOrder.map((stage) => items.filter((p) => p.stage === stage)),
+    ];
+    for (const stageItems of buckets) {
       stageItems.forEach((p, i) => {
-        const header = `${holdLabelEn(p.hold_label, opts.kind)} — ${STAGE_EN[stage] || stage} (${i + 1}/${stageItems.length})`;
+        const stageEn = STAGE_EN[p.stage];
+        const header = `${holdLabelEn(p.hold_label, opts.kind)}${stageEn ? ` — ${stageEn}` : ""} (${i + 1}/${stageItems.length})`;
         pages += `
   <div class="photo-page">
     <div class="photo-head">${esc(header)}</div>
