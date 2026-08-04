@@ -142,6 +142,23 @@ async function getInstanceToken(): Promise<string> {
 // Useful when the instance is recreated and the cached token goes stale.
 export function clearInstanceTokenCache() {
   cachedInstanceToken = null;
+  cachedOwnerNumber = null;
+}
+
+// Número do WhatsApp conectado na instância (ownerJid do fetchInstances) — é o
+// "WhatsApp da empresa" pros links wa.me. Cacheado por processo, igual ao
+// token; se trocar o chip da instância, o redeploy/restart (ou
+// clearInstanceTokenCache) renova.
+let cachedOwnerNumber: string | null = null;
+export async function getInstanceNumber(): Promise<string | null> {
+  if (cachedOwnerNumber) return cachedOwnerNumber;
+  const cfg = readConfig();
+  const list = (await evolutionFetch<Array<{ name?: string; ownerJid?: string }>>(`/instance/fetchInstances`)) || [];
+  const found = list.find((i) => i.name === cfg.instance);
+  const digits = (found?.ownerJid || "").split("@")[0].replace(/\D/g, "");
+  if (!digits) return null;
+  cachedOwnerNumber = digits;
+  return digits;
 }
 
 export async function sendWhatsappText(to: string, text: string): Promise<unknown> {

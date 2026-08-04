@@ -10,9 +10,12 @@
 // define se ele vê o relatório de EMBARQUE, de COSTADO ou os dois. O escopo é
 // aplicado no servidor (/api/relatorios) — a tela só reflete.
 //
-// A aba Avaliações sincroniza sozinha (polling) enquanto está aberta: a gestão
-// vê ao vivo as notas que o supervisor salva de bordo — edições locais ainda
-// não salvas nunca são sobrescritas pelo refresh.
+// Avaliações: SÓ o SUPERVISOR dá nota (e não avalia a si mesmo — quem tem
+// função SUPERVISOR fica fora da lista). A gestão vê em modo leitura, ao vivo
+// (polling enquanto a aba está aberta), o que o supervisor lançou de bordo;
+// edições locais do supervisor nunca são sobrescritas pelo refresh.
+// Acesso ao módulo: Gestor/RH/Executivo/Financeiro/Tecnologia + Supervisor
+// (ver RELATORIOS no rbac.ts).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -189,6 +192,62 @@ function joinTimeRange(start: string, end: string): string {
   return "";
 }
 
+// Texto do relatório pro WhatsApp (botão "Enviar pro WhatsApp"): resumo em
+// PT-BR do que foi preenchido na aba Lavagem — é mensagem interna pro
+// escritório, diferente dos PDFs (inglês). Usa a formatação do app (*negrito*).
+function buildWhatsText(opts: {
+  vesselName: string;
+  kind: Kind;
+  header: { report_date: string; port: string; status: string; remarks: string; etc_date: string; etc_time: string };
+  holds: HoldRow[];
+  activities: ActivityRow[];
+  supervisorName: string;
+}): string {
+  const { header, holds, activities } = opts;
+  const HOLD_STATUS_PT: Record<string, string> = {
+    PENDENTE: "Pendente",
+    EM_ANDAMENTO: "Em andamento",
+    COMPLETO: "Completo",
+  };
+  const range = (start: string | null, end: string | null) => `${start || "…"} → ${end || "…"}`;
+
+  const L: string[] = [];
+  L.push(`🚢 *RELATÓRIO DE BORDO — ${opts.vesselName}* (${KIND_LABEL[opts.kind]})`);
+  const dateBr = header.report_date ? header.report_date.split("-").reverse().join("/") : "";
+  const info = [dateBr && `📅 ${dateBr}`, header.port && `📍 ${header.port}`].filter(Boolean).join(" · ");
+  if (info) L.push(info);
+  L.push(header.status === "COMPLETO" ? "✅ Operação completa" : "🔄 Operação em andamento");
+
+  const named = holds.filter((h) => h.label.trim());
+  if (named.length) {
+    L.push("", `*${opts.kind === "COSTADO" ? "Áreas do costado" : "Porões"}*`);
+    for (const h of named) {
+      L.push(`• ${h.label} — ${HOLD_STATUS_PT[h.status] || h.status} · ${h.completion_pct}%`);
+      const phases = [
+        (h.salt_start || h.salt_end) && `🌊 ${range(h.salt_start, h.salt_end)}`,
+        (h.fresh_start || h.fresh_end) && `💧 ${range(h.fresh_start, h.fresh_end)}`,
+        (h.start_time || h.end_time) && `🕐 ${range(h.start_time, h.end_time)}`,
+      ].filter(Boolean);
+      if (phases.length) L.push(`   ${phases.join(" · ")}`);
+    }
+  }
+
+  const acts = activities.filter((a) => a.activity.trim());
+  if (acts.length) {
+    L.push("", "*Atividades*");
+    for (const a of acts) {
+      L.push(`• ${a.time_range ? `${a.time_range} — ` : ""}${a.activity}${a.hold_label ? ` (${a.hold_label})` : ""}`);
+    }
+  }
+
+  if (header.remarks.trim()) L.push("", "*Observações*", header.remarks.trim());
+  if (header.etc_date || header.etc_time) {
+    L.push("", `⏳ Previsão de término: ${[header.etc_date, header.etc_time].filter(Boolean).join(" ")}`);
+  }
+  L.push("", `_Enviado pelo Cargo Stock — ${opts.supervisorName}_`);
+  return L.join("\n");
+}
+
 function emptyHold(label: string): HoldRow {
   return {
     label,
@@ -264,6 +323,7 @@ export default function RelatoriosPage() {
         jobId={selected.jobId}
         kind={selected.kind}
         supervisorName={profile?.full_name || "—"}
+        canRate={profile?.role === "SUPERVISOR"}
         onBack={() => {
           setSelected(null);
           loadNavios();
@@ -377,11 +437,14 @@ function ReportDetail({
   jobId,
   kind,
   supervisorName,
+  canRate,
   onBack,
 }: {
   jobId: string;
   kind: Kind;
   supervisorName: string;
+  // true só pro papel SUPERVISOR: ele dá as notas. A gestão vê em modo leitura.
+  canRate: boolean;
   onBack: () => void;
 }) {
   const [data, setData] = useState<DetailData | null>(null);
@@ -404,6 +467,8 @@ function ReportDetail({
   const [customActivityRows, setCustomActivityRows] = useState<Set<number>>(new Set());
   const [savingReport, setSavingReport] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
+  // WhatsApp da empresa (wa.me) pro "Enviar pro WhatsApp" — null = indisponível.
+  const [waNumber, setWaNumber] = useState<string | null>(null);
 
   // ── Avaliações ────────────────────────────────────────────────────────────
   const [evals, setEvals] = useState<Map<number, EvalDraft>>(new Map());
@@ -480,6 +545,21 @@ function ReportDetail({
     load();
   }, [load]);
 
+  // Busca o número da empresa uma vez — o clique no botão fica 100% síncrono
+  // (window.open dentro do gesto do usuário, sem bloqueio de pop-up).
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/relatorios/whats-target")
+      .then((r) => r.json())
+      .then((j) => {
+        if (alive) setWaNumber(j?.data?.number || null);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // Sincronização das avaliações: enquanto a aba Avaliações está aberta, busca
   // de tempos em tempos o que foi salvo por outra pessoa (ex.: a gestão vendo
   // ao vivo as notas que o supervisor lança de bordo). Só atualiza quem não tem
@@ -527,6 +607,13 @@ function ReportDetail({
     [holds]
   );
 
+  // Quem aparece na aba Avaliações: a equipe escalada SEM supervisor — o
+  // supervisor avalia, não é avaliado (nem por ele mesmo, nem pela gestão).
+  const evalTeam = useMemo(
+    () => (data?.team || []).filter((m) => (m.function_name || "").trim().toUpperCase() !== "SUPERVISOR"),
+    [data?.team]
+  );
+
   // Preencheu horário de uma atividade/fase ligada a um porão pendente → o
   // porão entra em "Em andamento" sozinho (Completo não é rebaixado).
   const markHoldInProgress = useCallback((label: string | null | undefined) => {
@@ -564,7 +651,7 @@ function ReportDetail({
     setSavingEvals(true);
     setSavedMsg("");
     try {
-      const payload = data.team.map((m) => ({ employee_id: m.employee_id, ...(evals.get(m.employee_id) || EMPTY_EVAL) }));
+      const payload = evalTeam.map((m) => ({ employee_id: m.employee_id, ...(evals.get(m.employee_id) || EMPTY_EVAL) }));
       const res = await fetch(`/api/relatorios/${jobId}/avaliacoes`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -638,6 +725,16 @@ function ReportDetail({
 
   const vesselName = data?.ship?.name || data?.job.name || "—";
 
+  // Abre o WhatsApp do celular do supervisor com o relatório pronto, direto na
+  // conversa com a empresa (wa.me funciona sem ter o contato salvo). Salva o
+  // relatório junto, pra mensagem e sistema ficarem idênticos.
+  function sendToWhats() {
+    if (!waNumber) return;
+    const text = buildWhatsText({ vesselName, kind, header, holds, activities, supervisorName });
+    window.open(`https://wa.me/${waNumber}?text=${encodeURIComponent(text)}`, "_blank", "noopener");
+    saveReport();
+  }
+
   function generateCleaning() {
     printCleaningReport({
       vesselName,
@@ -665,7 +762,7 @@ function ReportDetail({
 
   function generateEvaluations() {
     if (!data) return;
-    const rows: EvaluationPrintRow[] = data.team
+    const rows: EvaluationPrintRow[] = evalTeam
       .map((m) => {
         const e = evals.get(m.employee_id) || EMPTY_EVAL;
         return { name: m.name, function_name: m.function_name, ...e, comments: e.comments || null };
@@ -969,7 +1066,19 @@ function ReportDetail({
             <textarea value={header.remarks} onChange={(e) => setHeader((h) => ({ ...h, remarks: e.target.value }))} rows={3} className={inputCls} placeholder="Observações gerais da operação..." />
           </div>
 
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2 flex-wrap">
+            <Button
+              variant="success"
+              onClick={sendToWhats}
+              disabled={!waNumber || savingReport}
+              title={
+                waNumber
+                  ? "Abre o WhatsApp do seu celular com o relatório pronto pra enviar pra empresa"
+                  : "WhatsApp da empresa indisponível no momento"
+              }
+            >
+              📲 Enviar pro WhatsApp
+            </Button>
             <Button onClick={saveReport} disabled={savingReport}>
               {savingReport ? "Salvando..." : "💾 Salvar relatório"}
             </Button>
@@ -977,28 +1086,33 @@ function ReportDetail({
         </div>
       )}
 
-      {/* ── Avaliações ── */}
+      {/* ── Avaliações ──
+          Supervisor (canRate): dá as notas da equipe — sem avaliar a si mesmo.
+          Gestão: SÓ LEITURA, ao vivo — vê o que o supervisor lançou de bordo. */}
       {tab === "avaliacoes" && (
         <div className="space-y-4">
-          {data.team.length === 0 ? (
+          {!canRate && (
+            <div className="flex items-center gap-2 bg-card border border-border rounded-lg px-3 py-2 text-xs text-text-light">
+              <span className="relative flex h-2 w-2 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </span>
+              Ao vivo: aqui você acompanha as avaliações que o supervisor lança de bordo — elas aparecem sozinhas, sem recarregar a página.
+            </div>
+          )}
+          {evalTeam.length === 0 ? (
             <div className="bg-card rounded-xl border border-border p-8 text-center text-sm text-text-light">
-              Nenhum colaborador escalado neste serviço ainda.
+              Nenhum colaborador pra avaliar neste serviço ainda.
             </div>
           ) : (
             <>
-              <div className="flex items-center gap-2 bg-card border border-border rounded-lg px-3 py-2 text-xs text-text-light">
-                <span className="relative flex h-2 w-2 shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                </span>
-                Sincronização automática ligada: avaliações salvas por outra pessoa (ex.: o supervisor a bordo) aparecem aqui sozinhas, sem recarregar a página.
-              </div>
-              {data.team.map((m) => {
+              {evalTeam.map((m) => {
                 const e = evals.get(m.employee_id) || EMPTY_EVAL;
                 const rated = EVAL_CRITERIA.map((c) => e[c.key as keyof EvalDraft] as number).filter((v) => v > 0);
                 const avg = rated.length ? (rated.reduce((s, v) => s + v, 0) / rated.length).toFixed(1) : null;
                 const hist = data.history?.[m.employee_id];
                 const saved = data.evaluations.find((x) => x.employee_id === m.employee_id);
+                const hasAny = rated.length > 0 || !!e.comments.trim();
                 return (
                   <div key={m.employee_id} className="bg-card rounded-xl border border-border p-4 space-y-3">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1027,60 +1141,92 @@ function ReportDetail({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-1.5">
-                      {EVAL_CRITERIA.map((c) => {
-                        const value = e[c.key as keyof EvalDraft] as number;
-                        return (
-                          <div key={c.key} className="flex items-center justify-between gap-2">
-                            <span className="text-sm text-text">{c.label}</span>
-                            <div className="flex items-center gap-0.5">
-                              {[1, 2, 3, 4, 5].map((n) => (
-                                <button
-                                  key={n}
-                                  type="button"
-                                  onClick={() => {
-                                    dirtyEvalsRef.current.add(m.employee_id);
-                                    setEvals((prev) => {
-                                      const next = new Map(prev);
-                                      next.set(m.employee_id, { ...e, [c.key]: value === n ? 0 : n });
-                                      return next;
-                                    });
-                                  }}
-                                  className={`text-xl leading-none transition ${n <= value ? "text-amber-500" : "text-gray-300 hover:text-amber-300"}`}
-                                  title={`${n} estrela${n > 1 ? "s" : ""}`}
-                                >
-                                  ★
-                                </button>
-                              ))}
-                              <span className="text-xs text-text-light w-7 text-right">{value > 0 ? `(${value})` : ""}</span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                    {canRate ? (
+                      <>
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-1.5">
+                          {EVAL_CRITERIA.map((c) => {
+                            const value = e[c.key as keyof EvalDraft] as number;
+                            return (
+                              <div key={c.key} className="flex items-center justify-between gap-2">
+                                <span className="text-sm text-text">{c.label}</span>
+                                <div className="flex items-center gap-0.5">
+                                  {[1, 2, 3, 4, 5].map((n) => (
+                                    <button
+                                      key={n}
+                                      type="button"
+                                      onClick={() => {
+                                        dirtyEvalsRef.current.add(m.employee_id);
+                                        setEvals((prev) => {
+                                          const next = new Map(prev);
+                                          next.set(m.employee_id, { ...e, [c.key]: value === n ? 0 : n });
+                                          return next;
+                                        });
+                                      }}
+                                      className={`text-xl leading-none transition ${n <= value ? "text-amber-500" : "text-gray-300 hover:text-amber-300"}`}
+                                      title={`${n} estrela${n > 1 ? "s" : ""}`}
+                                    >
+                                      ★
+                                    </button>
+                                  ))}
+                                  <span className="text-xs text-text-light w-7 text-right">{value > 0 ? `(${value})` : ""}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
 
-                    <textarea
-                      value={e.comments}
-                      onChange={(ev) => {
-                        dirtyEvalsRef.current.add(m.employee_id);
-                        setEvals((prev) => {
-                          const next = new Map(prev);
-                          next.set(m.employee_id, { ...e, comments: ev.target.value });
-                          return next;
-                        });
-                      }}
-                      rows={2}
-                      className={inputCls}
-                      placeholder="Observações do supervisor sobre este colaborador..."
-                    />
+                        <textarea
+                          value={e.comments}
+                          onChange={(ev) => {
+                            dirtyEvalsRef.current.add(m.employee_id);
+                            setEvals((prev) => {
+                              const next = new Map(prev);
+                              next.set(m.employee_id, { ...e, comments: ev.target.value });
+                              return next;
+                            });
+                          }}
+                          rows={2}
+                          className={inputCls}
+                          placeholder="Observações do supervisor sobre este colaborador..."
+                        />
+                      </>
+                    ) : hasAny ? (
+                      <>
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-1.5">
+                          {EVAL_CRITERIA.map((c) => {
+                            const value = e[c.key as keyof EvalDraft] as number;
+                            return (
+                              <div key={c.key} className="flex items-center justify-between gap-2">
+                                <span className="text-sm text-text">{c.label}</span>
+                                <div className="flex items-center gap-0.5">
+                                  {[1, 2, 3, 4, 5].map((n) => (
+                                    <span key={n} className={`text-xl leading-none ${n <= value ? "text-amber-500" : "text-gray-200"}`}>
+                                      ★
+                                    </span>
+                                  ))}
+                                  <span className="text-xs text-text-light w-7 text-right">{value > 0 ? `(${value})` : "—"}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {e.comments.trim() && (
+                          <p className="text-sm text-text bg-gray-50 rounded-lg p-2.5 whitespace-pre-wrap">💬 {e.comments}</p>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-sm text-text-light">⏳ O supervisor ainda não avaliou este colaborador.</p>
+                    )}
                   </div>
                 );
               })}
-              <div className="flex justify-end">
-                <Button onClick={saveEvals} disabled={savingEvals}>
-                  {savingEvals ? "Salvando..." : "💾 Salvar avaliações"}
-                </Button>
-              </div>
+              {canRate && (
+                <div className="flex justify-end">
+                  <Button onClick={saveEvals} disabled={savingEvals}>
+                    {savingEvals ? "Salvando..." : "💾 Salvar avaliações"}
+                  </Button>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -1209,7 +1355,7 @@ function ReportDetail({
                 Avaliação da equipe com notas por critério, pontos a melhorar e observações do supervisor.
               </p>
             </div>
-            <Button onClick={generateEvaluations} disabled={data.team.length === 0}>Gerar PDF</Button>
+            <Button onClick={generateEvaluations} disabled={evalTeam.length === 0}>Gerar PDF</Button>
           </div>
 
           <div className="md:col-span-3 bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-900">

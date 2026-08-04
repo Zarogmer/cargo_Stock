@@ -33,11 +33,12 @@ export type Permission =
   | "emprestar"
   | "manutencao";
 
-// EXECUTIVO e COMERCIAL têm exatamente as MESMAS permissões — "Comercial" é só
-// uma categoria à parte no cadastro (mesmo padrão de ESTAGIO≈TECNOLOGIA, mas
-// aqui sem nenhuma diferença). Definimos o bloco uma vez e reaproveitamos nos
-// dois papéis, e toda lista de papéis abaixo que tem EXECUTIVO também traz
-// COMERCIAL. Se as permissões do Executivo mudarem, o Comercial acompanha só.
+// EXECUTIVO e COMERCIAL têm as MESMAS permissões — "Comercial" é só uma
+// categoria à parte no cadastro (mesmo padrão de ESTAGIO≈TECNOLOGIA). Definimos
+// o bloco uma vez e reaproveitamos nos dois papéis, e toda lista de papéis
+// abaixo que tem EXECUTIVO também traz COMERCIAL. ÚNICA exceção (2026-08):
+// Relatórios de Bordo é restrito a Gestor/RH/Executivo/Financeiro/Tecnologia
+// (+ Supervisor), então o COMERCIAL fica de fora — ver COMERCIAL_PERMS.
 const EXECUTIVO_PERMS: Partial<Record<Module, Permission[]>> = {
   DASHBOARD: ["view"],
   ALMOXARIFADO: ["view"],
@@ -60,6 +61,10 @@ const EXECUTIVO_PERMS: Partial<Record<Module, Permission[]>> = {
   RELATORIOS: ["view", "create", "edit", "delete"],
 };
 
+// Comercial = Executivo SEM os Relatórios de Bordo.
+const COMERCIAL_PERMS: Partial<Record<Module, Permission[]>> = { ...EXECUTIVO_PERMS };
+delete COMERCIAL_PERMS.RELATORIOS;
+
 // RBAC matrix - same as your Python app
 const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   GESTOR: {
@@ -81,8 +86,8 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     RELATORIOS: ["view", "create", "edit", "delete"],
   },
   EXECUTIVO: EXECUTIVO_PERMS,
-  // COMERCIAL = mesma permissão de EXECUTIVO (ver EXECUTIVO_PERMS acima).
-  COMERCIAL: EXECUTIVO_PERMS,
+  // COMERCIAL = EXECUTIVO menos Relatórios de Bordo (ver COMERCIAL_PERMS acima).
+  COMERCIAL: COMERCIAL_PERMS,
   MANUTENCAO: {
     DASHBOARD: ["view"],
     ALMOXARIFADO: ["view"],
@@ -181,7 +186,8 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
     WHATSAPP: ["view"],
     MENSAGENS: ["view", "create"],
     CONVERSAS: ["view", "create"],
-    RELATORIOS: ["view", "create", "edit", "delete"],
+    // Relatórios de Bordo fora do Estágio (2026-08): módulo restrito a
+    // Gestor/RH/Executivo/Financeiro/Tecnologia + Supervisor.
   },
   // Usuário criado pelo RH e vinculado a um colaborador (users.employee_id).
   // Enxerga SÓ os Relatórios de Bordo — e, dentro deles, apenas os navios em
