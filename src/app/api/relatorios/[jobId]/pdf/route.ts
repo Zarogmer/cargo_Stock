@@ -49,6 +49,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
 
   try {
     if (tipo === "cleaning") {
+      // A assinatura é do supervisor DO NAVIO (quem foi escalado com a função
+      // SUPERVISOR), não de quem clicou em baixar — o RH/gestão gera o PDF com
+      // frequência e o nome deles não pode ir pra assinatura do relatório.
+      const supervisorName = (await shipSupervisorName(jobId, kind)) || report?.created_by || actor.name;
       const pdf = await buildCleaningReportPdf({
         vesselName,
         kind,
@@ -60,7 +64,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
         remarks: report?.remarks ?? null,
         etcDate: report?.etc_date ?? null,
         etcTime: report?.etc_time ?? null,
-        supervisorName: actor.name,
+        supervisorName,
       });
       return pdfResponse(
         pdf,
@@ -142,6 +146,26 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
     console.error("[relatorios/pdf] falhou:", detail);
     return NextResponse.json({ error: "Não foi possível gerar o PDF agora.", detail }, { status: 500 });
   }
+}
+
+// Supervisor escalado neste navio+serviço: quem entra na assinatura do
+// Cleaning Report. Vem da escalação (função SUPERVISOR), igual ao critério que
+// a aba Avaliações usa pra tirar o supervisor da lista de avaliados.
+async function shipSupervisorName(jobId: string, kind: "EMBARQUE" | "COSTADO"): Promise<string | null> {
+  const allocs = await prisma.jobAllocation.findMany({
+    where: { job_id: jobId, kind, employee_id: { not: null }, ...WORKED_ALLOC_WHERE },
+    include: {
+      employees: { select: { name: true, role: true } },
+      job_functions: { select: { name: true } },
+    },
+    orderBy: { added_at: "asc" },
+  });
+  for (const a of allocs) {
+    if (!a.employees) continue;
+    const fn = (a.job_functions?.name || a.employees.role || "").trim().toUpperCase();
+    if (fn === "SUPERVISOR") return a.employees.name;
+  }
+  return null;
 }
 
 function pdfResponse(bytes: Uint8Array, baseName: string): NextResponse {
