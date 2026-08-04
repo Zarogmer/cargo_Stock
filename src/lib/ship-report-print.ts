@@ -108,6 +108,13 @@ function esc(value: unknown): string {
     .replace(/"/g, "&quot;");
 }
 
+// Nome do arquivo do PDF — vale tanto pro <title> (é o que o Chrome sugere no
+// "Salvar como PDF") quanto pro arquivo que o app desktop salva em Downloads.
+// Sem barra, senão vira pasta/nome inválido.
+function reportFileName(...parts: string[]): string {
+  return parts.filter(Boolean).join(" - ").replace(/[\\/]/g, "-");
+}
+
 function logoUrl(): string {
   return `${window.location.origin}/cargo-logo.png`;
 }
@@ -367,8 +374,14 @@ export function printCleaningReport(opts: {
         .join("")
     : `<tr><td colspan="3" class="c muted">No activities recorded.</td></tr>`;
 
+  const docName = reportFileName(
+    isCostado ? "Hull Side Cleaning Report" : "Cargo Hold Cleaning Report",
+    opts.vesselName,
+    dateStr
+  );
+
   const html = `<!doctype html><html><head><meta charset="utf-8" />
-<title>${esc(opts.vesselName)} - Cleaning Report</title>
+<title>${esc(docName)}</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   @page { size: A4; margin: 10mm; }
@@ -459,7 +472,7 @@ ${watermarkImg()}
 ${AUTO_PRINT}
 </body></html>`;
 
-  openPrintWindow(html, `Cleaning Report - ${opts.vesselName} - ${dateStr}`);
+  openPrintWindow(html, docName);
 }
 
 // ── 2. Relatório Fotográfico (capa + 1 foto por página) ─────────────────────
@@ -527,8 +540,14 @@ export function printPhotoReport(opts: {
   const coverTitle = isCostado ? "Costado Cleaning" : "Cargo Hold Cleaning";
   const scopeLabel = isCostado ? "AREAS INSPECTED" : "CARGO HOLDS INSPECTED";
 
+  const docName = reportFileName(
+    isCostado ? "Hull Side Photographic Report" : "Cargo Hold Photographic Report",
+    opts.vesselName,
+    dateStr
+  );
+
   const html = `<!doctype html><html><head><meta charset="utf-8" />
-<title>${esc(opts.vesselName)} - Photographic Report</title>
+<title>${esc(docName)}</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   /* Margem de 10mm → 277mm úteis. As páginas usam 272mm (folga pro
@@ -601,7 +620,7 @@ ${pages || `<div class="photo-page"><p class="empty">Nenhuma foto adicionada ain
 ${AUTO_PRINT}
 </body></html>`;
 
-  openPrintWindow(html, `Relatorio Fotografico - ${opts.vesselName} - ${dateStr}`);
+  openPrintWindow(html, docName);
 }
 
 // Muitos navios já vêm cadastrados como "MV FULANO" — tira o prefixo antes de
@@ -660,8 +679,10 @@ export function printEvaluationReport(opts: {
     })
     .join("");
 
+  const docName = reportFileName("Avaliação de Desempenho", opts.vesselName, dateStr);
+
   const html = `<!doctype html><html><head><meta charset="utf-8" />
-<title>Avaliação de desempenho - ${esc(opts.vesselName)}</title>
+<title>${esc(docName)}</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   @page { size: A4; margin: 12mm; }
@@ -695,7 +716,7 @@ export function printEvaluationReport(opts: {
 </style></head><body>
 ${watermarkImg()}
 <div class="content">
-  ${brandHeader("Recursos Humanos &middot; Bordo")}
+  ${brandHeader("Recursos Humanos")}
   <h1>Avaliação de desempenho</h1>
   <div class="rule"></div>
   <p class="sub">Navio: <b>${esc(opts.vesselName)}</b> &nbsp;•&nbsp; Data: ${esc(dateStr)} &nbsp;•&nbsp; ${opts.rows.length} colaborador(es) avaliado(s)</p>
@@ -708,5 +729,5 @@ ${watermarkImg()}
 ${AUTO_PRINT}
 </body></html>`;
 
-  openPrintWindow(html, `Avaliacao de Desempenho - ${opts.vesselName} - ${dateStr}`);
+  openPrintWindow(html, docName);
 }
