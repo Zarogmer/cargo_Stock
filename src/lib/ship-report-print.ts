@@ -115,13 +115,23 @@ function formatDayMonthYear(iso: string | null | undefined): string {
   return d.toLocaleDateString("pt-BR");
 }
 
+// Locais de foto fora dos porões (PHOTO_PLACES da tela de Relatórios) → inglês
+// do PDF. Chave em minúsculas pra casar sem depender de caixa.
+const PHOTO_PLACE_EN: Record<string, string> = {
+  "carregamento do caminhão": "TRUCK LOADING",
+  "embarque de material": "MATERIAL BOARDING",
+  "navio": "VESSEL",
+  "desembarque do navio": "VESSEL DISEMBARKATION",
+  "descarregamento do caminhão": "TRUCK UNLOADING",
+};
+
 // "Porão 3" → "CARGO HOLD #3" (os relatórios de lavagem/fotos saem em inglês,
 // como os modelos — vão pro agente/armador). Outros rótulos: caixa alta.
 function holdLabelEn(label: string | null, kind: "EMBARQUE" | "COSTADO"): string {
   if (!label) return kind === "COSTADO" ? "HULL SIDE" : "GENERAL";
   const m = label.match(/por[aã]o\s*#?\s*(\d+)/i);
   if (m) return `CARGO HOLD #${m[1]}`;
-  return label.toUpperCase();
+  return PHOTO_PLACE_EN[label.trim().toLowerCase()] || label.toUpperCase();
 }
 
 const STAGE_EN: Record<string, string> = {

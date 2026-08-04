@@ -152,6 +152,17 @@ const ACTIVITY_SUGGESTIONS = [
   "Montagem de equipamentos",
 ];
 
+// Locais da foto além dos porões (Embarque), na ordem do ciclo real da
+// operação: caminhão → material a bordo → navio → volta. Substituem o antigo
+// "Geral / sem porão"; o PDF traduz cada um pro inglês (holdLabelEn).
+const PHOTO_PLACES = [
+  "Carregamento do caminhão",
+  "Embarque de material",
+  "Navio",
+  "Desembarque do navio",
+  "Descarregamento do caminhão",
+];
+
 // Sentinela do select de atividade: troca a linha pra texto livre.
 const CUSTOM_ACTIVITY = "__outra__";
 
@@ -406,7 +417,8 @@ function ReportDetail({
 
   // ── Fotos ─────────────────────────────────────────────────────────────────
   const [photos, setPhotos] = useState<(PhotoMeta & { created_by?: string })[]>([]);
-  const [uploadHold, setUploadHold] = useState("");
+  // Embarque começa no primeiro local do ciclo; Costado mantém "Geral / sem área".
+  const [uploadHold, setUploadHold] = useState(kind === "EMBARQUE" ? PHOTO_PLACES[0] : "");
   const [uploadStage, setUploadStage] = useState("ANTES");
   const [uploadCaption, setUploadCaption] = useState("");
   const [uploadProgress, setUploadProgress] = useState("");
@@ -1081,7 +1093,13 @@ function ReportDetail({
             <p className="font-semibold text-text text-sm">Adicionar fotos</p>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <select value={uploadHold} onChange={(e) => setUploadHold(e.target.value)} className={inputCls}>
-                <option value="">{kind === "COSTADO" ? "Geral / sem área" : "Geral / sem porão"}</option>
+                {kind === "COSTADO" ? (
+                  <option value="">Geral / sem área</option>
+                ) : (
+                  PHOTO_PLACES.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))
+                )}
                 {holdLabels.map((l) => (
                   <option key={l} value={l}>{l}</option>
                 ))}
