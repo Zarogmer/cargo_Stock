@@ -262,6 +262,18 @@ function emptyHold(label: string): HoldRow {
   };
 }
 
+// EMBARQUE com nº de porões no cadastro (aba Navios): a lista do relatório É a
+// do navio — completa com vazios até o nº do cadastro; linhas salvas ALÉM dele
+// (legado de antes da trava) continuam visíveis só pra dar baixa. O supervisor
+// não adiciona porão: o Adicionar some e o PUT rejeita exceder o cadastro.
+function mergeShipHolds(saved: HoldRow[], count: number): HoldRow[] {
+  const rows: HoldRow[] = Array.from({ length: count }, (_, i) =>
+    saved[i] ? { ...saved[i] } : emptyHold(`Porão ${i + 1}`)
+  );
+  for (let i = count; i < saved.length; i++) rows.push({ ...saved[i] });
+  return rows;
+}
+
 function todayIso(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -515,11 +527,11 @@ function ReportDetail({
         etc_time: r?.etc_time ?? "",
       });
 
-      if (r && r.holds.length > 0) {
+      if (kind === "EMBARQUE" && d.ship?.holds_count) {
+        // A lista de porões vem do cadastro do navio (aba Navios).
+        setHolds(mergeShipHolds(r?.holds ?? [], d.ship.holds_count));
+      } else if (r && r.holds.length > 0) {
         setHolds(r.holds.map((h) => ({ ...h })));
-      } else if (kind === "EMBARQUE" && d.ship?.holds_count) {
-        // Primeiro acesso: já monta a lista de porões do navio.
-        setHolds(Array.from({ length: d.ship.holds_count }, (_, i) => emptyHold(`Porão ${i + 1}`)));
       } else {
         setHolds([]);
       }
@@ -792,6 +804,10 @@ function ReportDetail({
     );
   }
 
+  // > 0 = Embarque com nº de porões no cadastro do navio: lista travada nesse
+  // tamanho (sem Adicionar; rótulo e exclusão bloqueados nas linhas do cadastro).
+  const lockedHolds = kind === "EMBARQUE" ? data.ship?.holds_count || 0 : 0;
+
   const tabs = [
     { key: "lavagem" as const, label: kind === "COSTADO" ? "🧽 Lavagem do Costado" : "🧽 Lavagem dos Porões" },
     { key: "avaliacoes" as const, label: "⭐ Avaliações" },
@@ -861,23 +877,32 @@ function ReportDetail({
 
           {/* Porões / áreas */}
           <div className="bg-card rounded-xl border border-border p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="font-semibold text-text text-sm">
-                {kind === "COSTADO" ? "Áreas do costado" : "Porões"}
-              </p>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() =>
-                  setHolds((prev) => [
-                    ...prev,
-                    emptyHold(kind === "COSTADO" ? `Área ${prev.length + 1}` : `Porão ${prev.length + 1}`),
-                  ])
-                }
-              >
-                <PlusIcon className="w-4 h-4" />
-                Adicionar
-              </Button>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <p className="font-semibold text-text text-sm">
+                  {kind === "COSTADO" ? "Áreas do costado" : "Porões"}
+                </p>
+                {lockedHolds > 0 && (
+                  <p className="text-xs text-text-light mt-0.5">
+                    {lockedHolds} {lockedHolds > 1 ? "porões" : "porão"} conforme o cadastro do navio (aba Navios).
+                  </p>
+                )}
+              </div>
+              {lockedHolds === 0 && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    setHolds((prev) => [
+                      ...prev,
+                      emptyHold(kind === "COSTADO" ? `Área ${prev.length + 1}` : `Porão ${prev.length + 1}`),
+                    ])
+                  }
+                >
+                  <PlusIcon className="w-4 h-4" />
+                  Adicionar
+                </Button>
+              )}
             </div>
 
             {holds.length === 0 && (
@@ -897,10 +922,17 @@ function ReportDetail({
                     [field]: v || null,
                     ...(v && h.status === "PENDENTE" ? { status: "EM_ANDAMENTO" } : {}),
                   } as Partial<HoldRow>);
+                // Linha do cadastro do navio: nome fixo e sem exclusão. Linhas
+                // além do cadastro (legado) seguem editáveis pra dar baixa.
+                const fixed = lockedHolds > 0 && i < lockedHolds;
                 return (
                   <div key={i} className="bg-gray-50 rounded-lg p-2.5 space-y-2">
                     <div className="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_150px_90px_36px] gap-2 items-center">
-                      <input type="text" value={h.label} onChange={(e) => patch({ label: e.target.value })} className={inputCls} placeholder={kind === "COSTADO" ? "Área" : "Porão"} />
+                      {fixed ? (
+                        <p className="px-3 py-2 text-sm font-semibold text-text">{h.label}</p>
+                      ) : (
+                        <input type="text" value={h.label} onChange={(e) => patch({ label: e.target.value })} className={inputCls} placeholder={kind === "COSTADO" ? "Área" : "Porão"} />
+                      )}
                       <select value={h.status} onChange={(e) => patch({ status: e.target.value, completion_pct: e.target.value === "COMPLETO" ? 100 : h.completion_pct })} className={inputCls}>
                         <option value="PENDENTE">Pendente</option>
                         <option value="EM_ANDAMENTO">Em andamento</option>
@@ -910,9 +942,11 @@ function ReportDetail({
                         <input type="number" min={0} max={100} value={h.completion_pct} onChange={(e) => patch({ completion_pct: Math.max(0, Math.min(100, Number(e.target.value) || 0)) })} className={inputCls} />
                         <span className="text-xs text-text-light">%</span>
                       </div>
-                      <button onClick={() => setHolds((prev) => prev.filter((_, j) => j !== i))} title="Remover" className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition justify-self-end">
-                        <TrashIcon className="w-4 h-4" />
-                      </button>
+                      {!fixed && (
+                        <button onClick={() => setHolds((prev) => prev.filter((_, j) => j !== i))} title="Remover" className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition justify-self-end">
+                          <TrashIcon className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                     {/* Fases da lavagem: água salgada (lavagem) e doce (enxágue).
                         Empilha até lg — em ~768-850px as metades espremiam os

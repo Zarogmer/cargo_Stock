@@ -140,6 +140,25 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
   const holds = (Array.isArray(body.holds) ? body.holds : []).slice(0, MAX_ROWS);
   const activities = (Array.isArray(body.activities) ? body.activities : []).slice(0, MAX_ROWS);
 
+  // Embarque com nº de porões no cadastro do navio (aba Navios): o relatório
+  // não pode EXCEDER o cadastro — supervisor não adiciona porão a mais (a tela
+  // já esconde o Adicionar; aqui é a blindagem pra chamada direta na API).
+  // Menos linhas pode (relatório antigo/parcial).
+  if (kind === "EMBARQUE") {
+    const jobShip = await prisma.job.findUnique({
+      where: { id: jobId },
+      select: { ships: { select: { holds_count: true } } },
+    });
+    const maxHolds = jobShip?.ships?.holds_count || 0;
+    const namedHolds = holds.filter((h: Record<string, unknown>) => String(h.label || "").trim()).length;
+    if (maxHolds > 0 && namedHolds > maxHolds) {
+      return NextResponse.json(
+        { error: `O navio tem ${maxHolds} porões no cadastro (aba Navios) — remova os porões a mais antes de salvar.` },
+        { status: 400 }
+      );
+    }
+  }
+
   const headerData = {
     report_date: r.report_date ? new Date(String(r.report_date)) : null,
     port: clip(r.port, 120),
