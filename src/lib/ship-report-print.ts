@@ -2,10 +2,16 @@
 //
 // Os três relatórios saem como HTML de impressão numa janela nova — o usuário
 // imprime/salva como PDF pelo diálogo do navegador (mesmo caminho no celular).
-// Layouts replicam os modelos de referência aprovados pelo usuário:
-//   1. Cleaning Report (1 página, estilo "CARGO HOLD CLEANING REPORT")
-//   2. Relatório Fotográfico (capa + 1 foto por página, estilo Deep Water)
+//   1. Cleaning Report (1 página, conteúdo em inglês pro agente/armador)
+//   2. Relatório Fotográfico (capa + 1 foto por página)
 //   3. Avaliação de Desempenho (cards com estrelas por colaborador)
+//
+// O VISUAL é o do Cargo Stock (azul #1e40af + slate + âmbar, títulos alinhados
+// à esquerda, faixas claras com filete azul, cartões arredondados) — de
+// propósito diferente do modelo navy+dourado de mercado que serviu de
+// referência inicial de CONTEÚDO. O nome que assina segue sendo Cargo Ships
+// Cleaning. Ao mexer aqui, mantenha essa distância visual.
+//
 // Todos levam a marca d'água da logo da Cargo: translúcida no fundo de cada
 // página, e nas fotos ela já vem queimada desde o upload (src/lib/watermark.ts).
 
@@ -59,9 +65,40 @@ export const EVAL_CRITERIA: { key: keyof EvaluationPrintRow; label: string }[] =
   { key: "technical", label: "Habilidade técnica" },
 ];
 
-const NAVY = "#101a33";
-const BLUE = "#2d4a8a";
-const GOLD = "#c9a44b";
+// Paleta do Cargo Stock (mesma do app — src/app/globals.css).
+const BRAND = "#1e40af";
+const BRAND_DK = "#1e3a8a";
+const INK = "#0f172a";
+const MUTED = "#64748b";
+const LINE = "#e2e8f0";
+const SOFT = "#f1f5f9";
+const AMBER = "#f59e0b";
+
+const FONT = `"Segoe UI", system-ui, Roboto, Helvetica, Arial, sans-serif`;
+
+// Cabeçalho de marca comum aos três relatórios: logo à esquerda, assinatura da
+// empresa à direita e filete azul embaixo.
+function brandHeader(subtitle: string): string {
+  return `
+  <div class="brand">
+    <img class="brand-logo" src="${logoUrl()}" alt="Cargo Ships Cleaning" />
+    <div class="brand-txt">
+      <p class="brand-name">CARGO SHIPS CLEANING</p>
+      <p class="brand-sub">${esc(subtitle)}</p>
+    </div>
+  </div>`;
+}
+
+function brandCss(): string {
+  return `
+    .brand { display: flex; align-items: center; gap: 12px; padding-bottom: 10px;
+             border-bottom: 3px solid ${BRAND}; }
+    .brand-logo { width: 46px; }
+    .brand-txt { line-height: 1.3; }
+    .brand-name { font-size: 13px; font-weight: bold; color: ${BRAND_DK}; letter-spacing: 1.6px; }
+    .brand-sub { font-size: 9.5px; color: ${MUTED}; letter-spacing: 1.2px; text-transform: uppercase; }
+  `;
+}
 
 function esc(value: unknown): string {
   return String(value ?? "")
@@ -150,6 +187,28 @@ const PHOTO_PLACE_EN: Record<string, string> = {
   "descarregamento do caminhão": "TRUCK UNLOADING",
 };
 
+// Ordem em que os locais aparecem no relatório fotográfico: a sequência real da
+// operação, pra o PDF já sair na ordem que o cliente lê —
+// caminhão → material → navio → porões 1..N → desembarque → descarregamento.
+// Local digitado à mão ("Outro local...") entra depois dos porões, ainda a
+// bordo, antes da volta.
+const PHOTO_PLACE_ORDER: Record<string, number> = {
+  "carregamento do caminhão": 10,
+  "embarque de material": 20,
+  "navio": 30,
+  "desembarque do navio": 900,
+  "desembarque de material": 900,
+  "descarregamento do caminhão": 910,
+};
+
+function placeRank(label: string | null): number {
+  const l = (label || "").trim().toLowerCase();
+  if (!l) return 0; // Geral / costado sem área
+  const m = l.match(/por[aã]o\s*#?\s*(\d+)/);
+  if (m) return 100 + Number(m[1]);
+  return PHOTO_PLACE_ORDER[l] ?? 500;
+}
+
 // "Porão 3" → "CARGO HOLD #3" (os relatórios de lavagem/fotos saem em inglês,
 // como os modelos — vão pro agente/armador). Outros rótulos: caixa alta.
 function holdLabelEn(label: string | null, kind: "EMBARQUE" | "COSTADO"): string {
@@ -187,15 +246,15 @@ export function printCleaningReport(opts: {
   supervisorName: string;
 }) {
   const isCostado = opts.kind === "COSTADO";
-  const title = isCostado ? "COSTADO (HULL SIDE) CLEANING REPORT" : "CARGO HOLD CLEANING REPORT";
+  const title = isCostado ? "Costado (Hull Side) Cleaning Report" : "Cargo Hold Cleaning Report";
   const areaCol = isCostado ? "AREA" : "CARGO HOLD";
   const section1 = isCostado
     ? "1. OPERATIONAL STATUS OF HULL SIDE CLEANING"
     : "1. OPERATIONAL STATUS OF CARGO HOLDS CLEANING";
   const dateStr = formatDayMonthYear(opts.reportDate);
   const statusBadge = opts.complete
-    ? `<span class="badge ok">✔</span> Complete`
-    : `<span class="badge warn">…</span> In progress`;
+    ? `<span class="badge ok">COMPLETE</span>`
+    : `<span class="badge warn">IN PROGRESS</span>`;
 
   // Com qualquer fase de água preenchida, a tabela mostra as duas colunas
   // (salt water wash / fresh water rinse); senão mantém o formato legado
@@ -254,41 +313,47 @@ export function printCleaningReport(opts: {
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   @page { size: A4; margin: 10mm; }
-  body { font-family: Arial, Helvetica, sans-serif; color: #1c2333; font-size: 11px;
+  body { font-family: ${FONT}; color: ${INK}; font-size: 11px;
          -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   ${watermarkCss()}
+  ${brandCss()}
   .content { position: relative; z-index: 1; }
-  .head { background: ${NAVY}; color: #fff; text-align: center; padding: 16px 12px 12px; }
-  .head h1 { font-size: 21px; letter-spacing: 0.5px; }
-  .head p { color: #9fb0d8; font-size: 10.5px; margin-top: 5px; }
-  .info { display: flex; border: 1px solid #d8dee9; }
-  .info > div { flex: 1; padding: 9px 12px; border-right: 1px solid #d8dee9; }
-  .info > div:last-child { border-right: none; }
-  .lbl { font-size: 8px; color: #7a8699; letter-spacing: 0.8px; font-weight: bold; }
-  .val { font-size: 12px; font-weight: bold; margin-top: 4px; }
-  .bar { background: ${NAVY}; color: #fff; font-weight: bold; font-size: 10.5px;
-         letter-spacing: 0.4px; padding: 7px 12px; margin-top: 12px; }
+  .title { margin-top: 14px; }
+  .title h1 { font-size: 22px; color: ${INK}; letter-spacing: -0.2px; }
+  .title .rule { width: 54px; height: 4px; background: ${AMBER}; border-radius: 2px; margin-top: 7px; }
+  .info { display: flex; gap: 8px; margin-top: 14px; }
+  .info > div { flex: 1; background: ${SOFT}; border-radius: 8px; padding: 9px 11px; }
+  .lbl { font-size: 8px; color: ${MUTED}; letter-spacing: 0.9px; font-weight: bold; }
+  .val { font-size: 12.5px; font-weight: bold; margin-top: 4px; color: ${INK}; }
+  .bar { background: ${SOFT}; border-left: 4px solid ${BRAND}; border-radius: 0 7px 7px 0;
+         color: ${BRAND_DK}; font-weight: bold; font-size: 10.5px; letter-spacing: 0.4px;
+         padding: 8px 12px; margin: 15px 0 7px; }
   table { width: 100%; border-collapse: collapse; }
-  thead th { background: ${BLUE}; color: #fff; font-size: 9px; letter-spacing: 0.6px;
-             padding: 7px 10px; text-align: left; }
-  tbody td { padding: 7px 10px; border-bottom: 1px solid #e6eaf2; font-size: 10.5px; }
-  tbody tr:nth-child(odd) { background: #f4f6fa; }
+  thead th { color: ${MUTED}; font-size: 8.5px; letter-spacing: 0.7px; font-weight: bold;
+             padding: 0 10px 6px; text-align: left; border-bottom: 2px solid ${BRAND}; }
+  tbody td { padding: 7px 10px; border-bottom: 1px solid ${LINE}; font-size: 10.5px; }
   td.c, th.c { text-align: center; }
-  td.b { font-weight: bold; }
-  .muted { color: #8a94a6; }
-  .box { border: 1px solid #d8dee9; background: #f4f6fa; padding: 12px; min-height: 34px;
-         font-size: 10.5px; }
-  .badge { display: inline-block; width: 13px; height: 13px; border-radius: 3px; color: #fff;
-           font-size: 9px; text-align: center; line-height: 13px; margin-right: 4px; }
-  .badge.ok { background: #22a06b; }
-  .badge.warn { background: #d97706; }
-  .sig td { padding: 10px; }
-  .sig .line { display: inline-block; min-width: 130px; border-bottom: 1px solid #7a8699; }
-  .footer { text-align: center; color: #8a94a6; font-size: 9px; margin-top: 18px; }
+  td.b { font-weight: bold; color: ${BRAND_DK}; }
+  .muted { color: ${MUTED}; }
+  .box { border: 1px solid ${LINE}; border-radius: 8px; background: #fff; padding: 11px 12px;
+         min-height: 34px; font-size: 10.5px; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; color: #fff;
+           font-size: 9px; font-weight: bold; letter-spacing: 0.3px; }
+  .badge.ok { background: #10b981; }
+  .badge.warn { background: ${AMBER}; }
+  .sig td { padding: 11px 10px; }
+  .sig .line { display: inline-block; min-width: 130px; border-bottom: 1px solid ${MUTED}; }
+  .footer { display: flex; justify-content: space-between; color: ${MUTED}; font-size: 9px;
+            margin-top: 18px; border-top: 1px solid ${LINE}; padding-top: 8px; }
 </style></head><body>
 ${watermarkImg()}
 <div class="content">
-  <div class="head"><h1>${esc(title)}</h1><p>Cargo Ships Cleaning &middot; Marine Operations</p></div>
+  ${brandHeader("Marine Operations")}
+
+  <div class="title">
+    <h1>${esc(title)}</h1>
+    <div class="rule"></div>
+  </div>
 
   <div class="info">
     <div><p class="lbl">VESSEL NAME</p><p class="val">${esc(opts.vesselName)}</p></div>
@@ -327,7 +392,10 @@ ${watermarkImg()}
     </tbody>
   </table>
 
-  <p class="footer">${esc(opts.vesselName)} &middot; ${esc(isCostado ? "Costado Cleaning Report" : "Cargo Hold Cleaning Report")} &middot; ${esc(opts.port || "")}${opts.port ? ", " : ""}${esc(dateStr)}</p>
+  <div class="footer">
+    <span>${esc(opts.vesselName)} &middot; ${esc(opts.port || "")}${opts.port ? " &middot; " : ""}${esc(dateStr)}</span>
+    <span>Cargo Ships Cleaning</span>
+  </div>
 </div>
 ${AUTO_PRINT}
 </body></html>`;
@@ -346,7 +414,9 @@ export function printPhotoReport(opts: {
   const isCostado = opts.kind === "COSTADO";
   const dateStr = formatDayMonthYear(opts.reportDate);
 
-  // Agrupa por porão/área (ordem alfabética-numérica) e etapa (Antes→Durante→Depois).
+  // Agrupa por porão/área e ordena pela sequência da operação (placeRank):
+  // carregamento → embarque de material → navio → porões 1..N → desembarque →
+  // descarregamento. Dentro do local, as fases vêm Antes→Durante→Depois.
   const stageOrder = ["ANTES", "DURANTE", "DEPOIS"];
   const groups = new Map<string, PhotoMeta[]>();
   for (const p of opts.photos) {
@@ -354,11 +424,16 @@ export function printPhotoReport(opts: {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(p);
   }
-  const groupKeys = [...groups.keys()].sort((a, b) =>
-    a.localeCompare(b, "pt-BR", { numeric: true })
-  );
+  const groupKeys = [...groups.keys()].sort((a, b) => {
+    const diff = placeRank(a) - placeRank(b);
+    return diff !== 0 ? diff : a.localeCompare(b, "pt-BR", { numeric: true });
+  });
 
-  const inspected = groupKeys.filter((k) => k !== "").length || groups.size;
+  // "Porões inspecionados" conta só porão mesmo — caminhão/navio não entram.
+  const holdKeys = groupKeys.filter((k) => /por[aã]o/i.test(k));
+  const inspected = isCostado
+    ? groupKeys.filter((k) => k !== "").length || groups.size
+    : holdKeys.length;
 
   let pages = "";
   for (const key of groupKeys) {
@@ -373,72 +448,107 @@ export function printPhotoReport(opts: {
     for (const stageItems of buckets) {
       stageItems.forEach((p, i) => {
         const stageEn = STAGE_EN[p.stage];
-        const header = `${holdLabelEn(p.hold_label, opts.kind)}${stageEn ? ` — ${stageEn}` : ""} (${i + 1}/${stageItems.length})`;
         pages += `
   <div class="photo-page">
-    <div class="photo-head">${esc(header)}</div>
-    <img class="photo" src="${photoUrl(p.id)}" alt="" />
-    ${p.caption ? `<p class="caption">${esc(p.caption)}</p>` : ""}
+    <div class="ph-head">
+      <span class="ph-title">${esc(holdLabelEn(p.hold_label, opts.kind))}${stageEn ? ` <span class="ph-stage">${esc(stageEn)}</span>` : ""}</span>
+      <span class="ph-count">${i + 1} / ${stageItems.length}</span>
+    </div>
+    <div class="ph-body"><img class="photo" src="${photoUrl(p.id)}" alt="" /></div>
+    <div class="ph-foot">
+      <span>${p.caption ? esc(p.caption) : `M/V ${esc(bareVesselName(opts.vesselName).toUpperCase())}`}</span>
+      <span>${esc(dateStr)}</span>
+    </div>
   </div>`;
       });
     }
   }
 
-  // Muitos navios já vêm cadastrados como "MV FULANO" — tira o prefixo antes
-  // de estampar "M/V" na capa, senão sai "M/V MV FULANO".
-  const bareVessel = opts.vesselName.replace(/^m\/?v\.?\s+/i, "");
-  const coverTitle = isCostado ? "COSTADO<br/>CLEANING REPORT" : "HOLD CLEANING<br/>REPORT";
-  const coverFoot = isCostado ? `AREAS INSPECTED: ${inspected}` : `CARGO HOLDS INSPECTED: ${inspected}`;
+  const bareVessel = bareVesselName(opts.vesselName);
+  const coverTitle = isCostado ? "Costado Cleaning" : "Cargo Hold Cleaning";
+  const scopeLabel = isCostado ? "AREAS INSPECTED" : "CARGO HOLDS INSPECTED";
 
   const html = `<!doctype html><html><head><meta charset="utf-8" />
 <title>${esc(opts.vesselName)} - Photographic Report</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  @page { size: A4; margin: 8mm; }
-  body { font-family: Arial, Helvetica, sans-serif; color: #1c2333;
+  /* Margem de 10mm → 277mm úteis. As páginas usam 272mm (folga pro
+     arredondamento do navegador não gerar página em branco). */
+  @page { size: A4; margin: 10mm; }
+  body { font-family: ${FONT}; color: ${INK};
          -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   ${watermarkCss()}
-  .cover { position: relative; z-index: 1; height: 96vh; border: 1px solid ${GOLD};
-           outline: 3px double #e6d9b8; outline-offset: -8px;
-           display: flex; flex-direction: column; align-items: center; text-align: center;
-           padding: 48px 24px 32px; page-break-after: always; }
-  .cover .logo { width: 170px; margin-bottom: 18px; }
-  .cover .kicker { color: ${GOLD}; letter-spacing: 6px; font-size: 12px; font-weight: bold; }
-  .cover .rule { width: 90px; border-bottom: 3px solid ${NAVY}; margin: 10px auto 0; }
-  .cover h1 { color: ${NAVY}; font-size: 42px; letter-spacing: 3px; margin-top: 110px; line-height: 1.25; }
-  .cover .sub { color: #55607a; letter-spacing: 4px; font-size: 13px; margin-top: 12px; }
-  .cover .band { background: ${NAVY}; color: #fff; width: 82%; padding: 16px 10px; margin-top: 48px; }
-  .cover .band .v { color: ${GOLD}; letter-spacing: 5px; font-size: 10px; font-weight: bold; }
-  .cover .band .name { font-size: 30px; font-weight: bold; letter-spacing: 2px; margin-top: 6px; }
-  .cover .date { margin-top: 26px; font-size: 15px; font-family: "Courier New", monospace; }
-  .cover .foot { margin-top: auto; color: #55607a; letter-spacing: 3px; font-size: 11px;
-                 border-top: 1px solid ${GOLD}; padding-top: 12px; min-width: 55%; }
-  .photo-page { position: relative; z-index: 1; page-break-after: always; }
+  ${brandCss()}
+
+  .cover { position: relative; z-index: 1; height: 272mm; display: flex; flex-direction: column;
+           page-break-after: always; }
+  .cover .kicker { color: ${BRAND}; letter-spacing: 4px; font-size: 11px; font-weight: bold;
+                   margin-top: 42mm; }
+  .cover h1 { font-size: 44px; line-height: 1.1; color: ${INK}; margin-top: 10px;
+              letter-spacing: -0.5px; }
+  .cover h1 span { display: block; color: ${BRAND}; }
+  .cover .rule { width: 70px; height: 5px; background: ${AMBER}; border-radius: 3px; margin-top: 16px; }
+  .cover .sub { color: ${MUTED}; font-size: 13px; margin-top: 14px; letter-spacing: 0.4px; }
+  .cover .card { margin-top: 24mm; border: 1px solid ${LINE}; border-radius: 12px; overflow: hidden; }
+  .cover .card .row { display: flex; border-bottom: 1px solid ${LINE}; }
+  .cover .card .row:last-child { border-bottom: none; }
+  .cover .card .k { width: 42%; background: ${SOFT}; color: ${MUTED}; font-size: 9.5px;
+                    font-weight: bold; letter-spacing: 1.2px; padding: 13px 16px; }
+  .cover .card .v { flex: 1; padding: 13px 16px; font-size: 15px; font-weight: bold; color: ${INK}; }
+  .cover .foot { margin-top: auto; border-top: 1px solid ${LINE}; padding-top: 10px;
+                 display: flex; justify-content: space-between; color: ${MUTED}; font-size: 10px; }
+
+  /* Página de foto: cabeçalho fixo em cima, rodapé embaixo e a imagem
+     centralizada no espaço que sobra (sem folga só de um lado). */
+  .photo-page { position: relative; z-index: 1; height: 272mm; display: flex; flex-direction: column;
+                page-break-after: always; }
   .photo-page:last-child { page-break-after: auto; }
-  .photo-head { background: ${NAVY}; color: #fff; font-weight: bold; font-size: 15px;
-                letter-spacing: 0.5px; padding: 10px 14px; }
-  .photo { width: 100%; margin-top: 4px; }
-  .caption { color: #55607a; font-size: 11px; padding: 6px 2px; }
+  .ph-head { display: flex; align-items: center; justify-content: space-between;
+             background: ${SOFT}; border-left: 5px solid ${BRAND}; border-radius: 0 8px 8px 0;
+             padding: 10px 14px; }
+  .ph-title { font-size: 14px; font-weight: bold; color: ${INK}; letter-spacing: 0.3px; }
+  .ph-stage { color: ${BRAND}; font-weight: bold; }
+  .ph-stage::before { content: "· "; color: ${MUTED}; }
+  .ph-count { font-size: 10px; font-weight: bold; color: ${MUTED}; letter-spacing: 1px; }
+  .ph-body { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
+             padding: 8mm 0; }
+  .photo { max-width: 100%; max-height: 232mm; object-fit: contain; border-radius: 6px;
+           border: 1px solid ${LINE}; }
+  .ph-foot { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid ${LINE};
+             padding-top: 8px; color: ${MUTED}; font-size: 10px; }
+  .empty { padding: 24px; color: ${MUTED}; }
 </style></head><body>
 ${watermarkImg()}
 <div class="cover">
-  <img class="logo" src="${logoUrl()}" alt="Cargo Ships Cleaning" />
+  ${brandHeader("Photographic Report")}
   <div class="kicker">PHOTOGRAPHIC REPORT</div>
+  <h1>${esc(coverTitle)}<span>Report</span></h1>
   <div class="rule"></div>
-  <h1>${coverTitle}</h1>
-  <div class="sub">BEFORE &amp; AFTER CLEANING</div>
-  <div class="band">
-    <div class="v">VESSEL</div>
-    <div class="name">M/V ${esc(bareVessel.toUpperCase())}</div>
+  <div class="sub">Before, during and after cleaning &middot; operational sequence</div>
+
+  <div class="card">
+    <div class="row"><div class="k">VESSEL</div><div class="v">M/V ${esc(bareVessel.toUpperCase())}</div></div>
+    <div class="row"><div class="k">DATE</div><div class="v">${esc(dateStr)}</div></div>
+    <div class="row"><div class="k">${esc(scopeLabel)}</div><div class="v">${inspected}</div></div>
+    <div class="row"><div class="k">PHOTOS</div><div class="v">${opts.photos.length}</div></div>
   </div>
-  <div class="date">Date: ${esc(dateStr)}</div>
-  <div class="foot">${esc(coverFoot)}</div>
+
+  <div class="foot">
+    <span>Cargo Ships Cleaning &middot; Marine Operations</span>
+    <span>${esc(dateStr)}</span>
+  </div>
 </div>
-${pages || `<div class="photo-page"><p style="padding:24px;color:#8a94a6;">Nenhuma foto adicionada ainda.</p></div>`}
+${pages || `<div class="photo-page"><p class="empty">Nenhuma foto adicionada ainda.</p></div>`}
 ${AUTO_PRINT}
 </body></html>`;
 
   openPrintWindow(html);
+}
+
+// Muitos navios já vêm cadastrados como "MV FULANO" — tira o prefixo antes de
+// estampar "M/V", senão sai "M/V MV FULANO".
+function bareVesselName(name: string): string {
+  return name.replace(/^m\/?v\.?\s+/i, "");
 }
 
 // ── 3. Avaliação de Desempenho ───────────────────────────────────────────────
@@ -496,34 +606,45 @@ export function printEvaluationReport(opts: {
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   @page { size: A4; margin: 12mm; }
-  body { font-family: Arial, Helvetica, sans-serif; color: #24292f; font-size: 12px;
+  body { font-family: ${FONT}; color: ${INK}; font-size: 12px;
          -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   ${watermarkCss()}
+  ${brandCss()}
   .content { position: relative; z-index: 1; }
-  h1 { font-size: 22px; color: #1c2333; }
-  .sub { color: #57606a; font-size: 11px; margin: 6px 0 16px; }
-  .sub b { color: #1c2333; }
-  .card { border: 1px solid #d8dee9; border-radius: 10px; padding: 14px 16px; margin-bottom: 14px;
+  h1 { font-size: 22px; color: ${INK}; margin-top: 14px; letter-spacing: -0.2px; }
+  .rule { width: 54px; height: 4px; background: ${AMBER}; border-radius: 2px; margin-top: 7px; }
+  .sub { color: ${MUTED}; font-size: 11px; margin: 9px 0 16px; }
+  .sub b { color: ${INK}; }
+  .card { border: 1px solid ${LINE}; border-left: 4px solid ${BRAND}; border-radius: 10px;
+          padding: 14px 16px; margin-bottom: 14px;
           break-inside: avoid; page-break-inside: avoid; background: #fff; }
   .card-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
-  .name { font-size: 15px; font-weight: bold; color: #1c2333; }
-  .fn { font-size: 11px; font-weight: normal; color: #57606a; }
-  .avg { color: ${BLUE}; font-weight: bold; font-size: 13px; }
+  .name { font-size: 15px; font-weight: bold; color: ${INK}; }
+  .fn { font-size: 11px; font-weight: normal; color: ${MUTED}; }
+  .avg { color: ${BRAND}; font-weight: bold; font-size: 13px; }
   table { width: 100%; border-collapse: collapse; }
-  td { padding: 5px 8px; border-bottom: 1px solid #eef1f5; font-size: 11.5px; }
-  td.stars { text-align: right; color: #b8860b; letter-spacing: 2px; white-space: nowrap; }
-  td.stars .n { color: #57606a; letter-spacing: 0; }
-  .sec { font-weight: bold; font-size: 11.5px; margin-top: 9px; }
+  td { padding: 5px 8px; border-bottom: 1px solid ${SOFT}; font-size: 11.5px; }
+  td.stars { text-align: right; color: ${AMBER}; letter-spacing: 2px; white-space: nowrap; }
+  td.stars .n { color: ${MUTED}; letter-spacing: 0; }
+  .sec { font-weight: bold; font-size: 11.5px; margin-top: 9px; color: ${BRAND_DK}; }
   .weak ul { margin: 4px 0 0 20px; color: #b42318; }
   .weak li { margin-bottom: 2px; }
-  .ok { color: #7a4d00; margin-top: 4px; }
-  .obs { background: #f4f6fa; border-radius: 6px; padding: 8px 10px; margin-top: 4px; min-height: 20px; }
+  .ok { color: #047857; margin-top: 4px; }
+  .obs { background: ${SOFT}; border-radius: 6px; padding: 8px 10px; margin-top: 4px; min-height: 20px; }
+  .footer { display: flex; justify-content: space-between; color: ${MUTED}; font-size: 9px;
+            margin-top: 6px; border-top: 1px solid ${LINE}; padding-top: 8px; }
 </style></head><body>
 ${watermarkImg()}
 <div class="content">
+  ${brandHeader("Recursos Humanos &middot; Bordo")}
   <h1>Avaliação de desempenho</h1>
+  <div class="rule"></div>
   <p class="sub">Navio: <b>${esc(opts.vesselName)}</b> &nbsp;•&nbsp; Data: ${esc(dateStr)} &nbsp;•&nbsp; ${opts.rows.length} colaborador(es) avaliado(s)</p>
-  ${cards || `<p style="color:#8a94a6;">Nenhuma avaliação preenchida ainda.</p>`}
+  ${cards || `<p style="color:${MUTED};">Nenhuma avaliação preenchida ainda.</p>`}
+  <div class="footer">
+    <span>${esc(opts.vesselName)} &middot; ${esc(dateStr)}</span>
+    <span>Cargo Ships Cleaning</span>
+  </div>
 </div>
 ${AUTO_PRINT}
 </body></html>`;
