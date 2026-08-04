@@ -162,16 +162,18 @@ const STAGE_UPLOAD_LABEL: Record<string, string> = {
 
 // Opções do Registro de atividades (select — "Parada" registra período sem
 // operação). "Outra..." abre texto livre, com estas mesmas sugestões no datalist.
+// (Lavagem com água salgada/doce saiu da lista: o horário das duas fases é
+// registrado por porão, na tabela de cima.)
 const ACTIVITY_SUGGESTIONS = [
-  "Lavagem com água salgada",
-  "Lavagem com água doce",
   "Parada",
-  "Parada por chuva",
   "Parada — aguardando liberação do porão",
   "Enxágue",
   "Secagem do porão",
   "Remoção de resíduos de carga",
   "Montagem de equipamentos",
+  "Desmontagem do material",
+  "Embarque de equipamentos",
+  "Retirada de materiais",
 ];
 
 // Locais da foto além dos porões (Embarque), na ordem do ciclo real da
