@@ -22,6 +22,19 @@ async function requireManager() {
   return { session, role };
 }
 
+// Todo login novo de supervisor é do domínio da empresa — a tela já mostra o
+// "@dominio" travado; aqui é a blindagem. Logins antigos de outro domínio
+// continuam funcionando: a checagem só vale pra criação e pra troca de email.
+const EMAIL_DOMAIN = "cargoships.com.br";
+
+function rejectForeignDomain(email: string): NextResponse | null {
+  if (email.endsWith(`@${EMAIL_DOMAIN}`)) return null;
+  return NextResponse.json(
+    { error: `O login do supervisor tem que ser @${EMAIL_DOMAIN}.` },
+    { status: 400 }
+  );
+}
+
 // O login de bordo é do SUPERVISOR: só colaborador com essa função no cadastro
 // pode ser vinculado. Mesma régua do resto dos Relatórios de Bordo (assinatura
 // do Cleaning Report e quem fica de fora das avaliações). A tela já filtra o
@@ -79,6 +92,8 @@ export async function POST(request: NextRequest) {
     if (!email || !email.includes("@")) {
       return NextResponse.json({ error: "Informe um email válido (é o login)." }, { status: 400 });
     }
+    const foreignDomain = rejectForeignDomain(email);
+    if (foreignDomain) return foreignDomain;
     if (password.length < 6) {
       return NextResponse.json({ error: "A senha deve ter pelo menos 6 caracteres." }, { status: 400 });
     }
@@ -120,7 +135,10 @@ export async function PATCH(request: NextRequest) {
 
     // Trava de segurança: por aqui só se mexe em SUPERVISOR (o RH não pode
     // trocar a senha de um Executivo, por exemplo).
-    const target = await prisma.user.findUnique({ where: { id }, select: { role: true } });
+    const target = await prisma.user.findUnique({
+      where: { id },
+      select: { role: true, email: true, employee_id: true },
+    });
     if (!target || target.role !== "SUPERVISOR") {
       return NextResponse.json({ error: "Usuário não encontrado." }, { status: 404 });
     }
@@ -134,6 +152,12 @@ export async function PATCH(request: NextRequest) {
     if (body.email !== undefined) {
       const v = String(body.email).toLowerCase().trim();
       if (!v.includes("@")) return NextResponse.json({ error: "Email inválido." }, { status: 400 });
+      // Só cobra o domínio da empresa quando o email MUDA — reenviar o login
+      // antigo (de outro domínio) numa edição de nome/senha continua passando.
+      if (v !== target.email) {
+        const foreignDomain = rejectForeignDomain(v);
+        if (foreignDomain) return foreignDomain;
+      }
       data.email = v;
     }
     if (body.employee_id !== undefined) {
@@ -141,8 +165,7 @@ export async function PATCH(request: NextRequest) {
       // Trocar o vínculo só vale pra outro supervisor; manter o mesmo (mesmo que
       // a função dele tenha mudado depois) continua permitido — senão editar o
       // email de um login antigo ficaria bloqueado.
-      const target2 = await prisma.user.findUnique({ where: { id }, select: { employee_id: true } });
-      if (employeeId !== (target2?.employee_id ?? null)) {
+      if (employeeId !== (target.employee_id ?? null)) {
         const notSupervisor = await rejectNonSupervisor(employeeId);
         if (notSupervisor) return notSupervisor;
       }
