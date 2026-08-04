@@ -132,6 +132,49 @@ function watermarkImg(): string {
   return `<img class="page-watermark" src="${logoUrl()}" alt="" />`;
 }
 
+// No app desktop (Electron) existe um gerador de PDF de verdade: manda o HTML
+// pro processo principal, que salva em Downloads e abre o arquivo — sem o
+// diálogo de impressão do Windows. Só existe a partir do setup 0.2.4; versões
+// antigas não têm `savePdf` e seguem no caminho de impressão do navegador.
+type ElectronBridge = {
+  savePdf?: (html: string, fileName: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+};
+
+function electronBridge(): ElectronBridge | null {
+  return (window as unknown as { electronAPI?: ElectronBridge }).electronAPI || null;
+}
+
+// A janela oculta que gera o PDF não tem a sessão do usuário, então as fotos
+// (/api/relatorios/fotos/:id) e a logo viram data URL antes de sair daqui.
+async function inlineImages(html: string): Promise<string> {
+  const urls = [...new Set([...html.matchAll(/src="([^"]+)"/g)].map((m) => m[1]))].filter((u) =>
+    /^https?:/i.test(u)
+  );
+  const map = new Map<string, string>();
+
+  await Promise.all(
+    urls.map(async (url) => {
+      try {
+        const res = await fetch(url, { credentials: "include" });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(String(fr.result));
+          fr.onerror = () => reject(fr.error);
+          fr.readAsDataURL(blob);
+        });
+        map.set(url, dataUrl);
+      } catch {
+        // imagem que não baixou fica com a URL original (some no PDF, mas o
+        // resto do relatório sai).
+      }
+    })
+  );
+
+  return html.replace(/src="([^"]+)"/g, (m, u: string) => (map.has(u) ? `src="${map.get(u)}"` : m));
+}
+
 // Primeiro tenta janela nova (navegador comum). Quando o pop-up é bloqueado —
 // caso do app desktop (o Electron nega janela filha de about:blank em builds
 // antigos) — cai pra um iframe invisível na própria página: o AUTO_PRINT do
@@ -140,7 +183,23 @@ function watermarkImg(): string {
 // impressão — remover cedo demais cancelaria o diálogo aberto.
 let printFrame: HTMLIFrameElement | null = null;
 
-function openPrintWindow(html: string) {
+function openPrintWindow(html: string, fileName: string) {
+  const bridge = electronBridge();
+  if (bridge?.savePdf) {
+    // O AUTO_PRINT não vai junto: a janela oculta só renderiza, quem gera o
+    // arquivo é o printToPDF do Electron.
+    inlineImages(html.replace(AUTO_PRINT, ""))
+      .then((inlined) => bridge.savePdf!(inlined, fileName))
+      .then((res) => {
+        if (!res?.ok) throw new Error(res?.error || "falhou");
+      })
+      .catch(() => printInBrowser(html)); // deu ruim: volta pro diálogo de impressão
+    return;
+  }
+  printInBrowser(html);
+}
+
+function printInBrowser(html: string) {
   const win = window.open("", "_blank");
   if (win) {
     win.document.open();
@@ -400,7 +459,7 @@ ${watermarkImg()}
 ${AUTO_PRINT}
 </body></html>`;
 
-  openPrintWindow(html);
+  openPrintWindow(html, `Cleaning Report - ${opts.vesselName} - ${dateStr}`);
 }
 
 // ── 2. Relatório Fotográfico (capa + 1 foto por página) ─────────────────────
@@ -542,7 +601,7 @@ ${pages || `<div class="photo-page"><p class="empty">Nenhuma foto adicionada ain
 ${AUTO_PRINT}
 </body></html>`;
 
-  openPrintWindow(html);
+  openPrintWindow(html, `Relatorio Fotografico - ${opts.vesselName} - ${dateStr}`);
 }
 
 // Muitos navios já vêm cadastrados como "MV FULANO" — tira o prefixo antes de
@@ -649,5 +708,5 @@ ${watermarkImg()}
 ${AUTO_PRINT}
 </body></html>`;
 
-  openPrintWindow(html);
+  openPrintWindow(html, `Avaliacao de Desempenho - ${opts.vesselName} - ${dateStr}`);
 }
