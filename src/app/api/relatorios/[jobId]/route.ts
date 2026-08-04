@@ -131,6 +131,19 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
     return NextResponse.json({ error: "Sem permissão neste navio" }, { status: 403 });
   }
 
+  // Relatório CONCLUÍDO trava o supervisor por completo — nem "reabrir" ele
+  // consegue (o status só volta pra EM_ANDAMENTO pela gestão).
+  const existing = await prisma.shipReport.findUnique({
+    where: { job_id_kind: { job_id: jobId, kind } },
+    select: { status: true },
+  });
+  if (existing?.status === "COMPLETO" && actor.isSupervisor) {
+    return NextResponse.json(
+      { error: "Relatório concluído — somente a gestão pode editar ou reabrir." },
+      { status: 403 }
+    );
+  }
+
   const r = (body.report || {}) as Record<string, unknown>;
   // Limites de sanidade: o SUPERVISOR tem escrita aqui — sem teto, um payload
   // gigante inflaria o Postgres e tornaria tela/PDF inutilizáveis. Navio real

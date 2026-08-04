@@ -488,11 +488,15 @@ function ReportDetail({
   const [header, setHeader] = useState({
     report_date: todayIso(),
     port: "",
-    status: "EM_ANDAMENTO",
     remarks: "",
     etc_date: "",
     etc_time: "",
   });
+  // Status SALVO do relatório (EM_ANDAMENTO | COMPLETO). Não é select: muda só
+  // pelas ações "Concluir relatório" (qualquer um) e "Reabrir" (só gestão).
+  // COMPLETO trava o relatório inteiro pro SUPERVISOR — tela e API.
+  const [savedStatus, setSavedStatus] = useState("EM_ANDAMENTO");
+  const [confirmConclude, setConfirmConclude] = useState(false);
   const [holds, setHolds] = useState<HoldRow[]>([]);
   const [activities, setActivities] = useState<ActivityRow[]>([]);
   // Linhas de atividade em modo "Outra..." (texto livre) — por índice.
@@ -543,11 +547,11 @@ function ReportDetail({
       setHeader({
         report_date: isoDateOnly(r?.report_date ?? null) || todayIso(),
         port: r?.port ?? d.ship?.port ?? "",
-        status: r?.status ?? "EM_ANDAMENTO",
         remarks: r?.remarks ?? "",
         etc_date: r?.etc_date ?? "",
         etc_time: r?.etc_time ?? "",
       });
+      setSavedStatus(r?.status ?? "EM_ANDAMENTO");
 
       if (kind === "EMBARQUE" && d.ship?.holds_count) {
         // A lista de porões vem do cadastro do navio (aba Navios).
@@ -660,22 +664,32 @@ function ReportDetail({
     );
   }, []);
 
-  async function saveReport() {
+  // nextStatus: sem argumento = salvar mantendo o status atual; "COMPLETO" =
+  // Concluir relatório; "EM_ANDAMENTO" (vindo de um concluído) = Reabrir.
+  async function saveReport(nextStatus?: "EM_ANDAMENTO" | "COMPLETO") {
+    const statusToSave = nextStatus ?? savedStatus;
     setSavingReport(true);
     setSavedMsg("");
     try {
       const res = await fetch(`/api/relatorios/${jobId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, report: header, holds, activities }),
+        body: JSON.stringify({ kind, report: { ...header, status: statusToSave }, holds, activities }),
       });
       const json = await res.json();
       if (!res.ok) {
         setSavedMsg(`⚠️ ${json.error || "Erro ao salvar."}`);
         return;
       }
-      setSavedMsg("✅ Relatório salvo!");
-      setTimeout(() => setSavedMsg(""), 3000);
+      setSavedStatus(statusToSave);
+      setSavedMsg(
+        nextStatus === "COMPLETO"
+          ? "✅ Relatório concluído! A partir de agora só a gestão consegue editar."
+          : nextStatus === "EM_ANDAMENTO"
+            ? "🔓 Relatório reaberto — o supervisor pode editar de novo."
+            : "✅ Relatório salvo!"
+      );
+      setTimeout(() => setSavedMsg(""), 5000);
     } catch {
       setSavedMsg("⚠️ Erro ao conectar com o servidor.");
     } finally {
@@ -768,9 +782,17 @@ function ReportDetail({
   // relatório junto, pra mensagem e sistema ficarem idênticos.
   function sendToWhats() {
     if (!waNumber) return;
-    const text = buildWhatsText({ vesselName, kind, header, holds, activities, supervisorName });
+    const text = buildWhatsText({
+      vesselName,
+      kind,
+      header: { ...header, status: savedStatus },
+      holds,
+      activities,
+      supervisorName,
+    });
     window.open(`https://wa.me/${waNumber}?text=${encodeURIComponent(text)}`, "_blank", "noopener");
-    saveReport();
+    // Relatório concluído é só leitura — manda a mensagem sem tentar salvar.
+    if (!(canRate && savedStatus === "COMPLETO")) saveReport();
   }
 
   function generateCleaning() {
@@ -779,7 +801,7 @@ function ReportDetail({
       kind,
       reportDate: header.report_date || null,
       port: header.port || null,
-      complete: header.status === "COMPLETO",
+      complete: savedStatus === "COMPLETO",
       holds,
       activities,
       remarks: header.remarks || null,
@@ -834,6 +856,10 @@ function ReportDetail({
   // tamanho (sem Adicionar; rótulo e exclusão bloqueados nas linhas do cadastro).
   const lockedHolds = kind === "EMBARQUE" ? data.ship?.holds_count || 0 : 0;
 
+  // Relatório concluído + visão do supervisor = tudo somente leitura (a gestão
+  // continua editando e pode reabrir).
+  const locked = canRate && savedStatus === "COMPLETO";
+
   const tabs = [
     { key: "lavagem" as const, label: kind === "COSTADO" ? "🧽 Lavagem do Costado" : "🧽 Lavagem dos Porões" },
     { key: "avaliacoes" as const, label: "⭐ Avaliações" },
@@ -876,6 +902,18 @@ function ReportDetail({
       {/* ── Lavagem ── */}
       {tab === "lavagem" && (
         <div className="space-y-4">
+          {savedStatus === "COMPLETO" && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800">
+              ✅ Relatório concluído
+              {locked
+                ? " — somente leitura. Precisando corrigir algo, peça pra gestão reabrir."
+                : ". O supervisor não consegue mais editar — use “Reabrir relatório” pra liberar de novo."}
+            </div>
+          )}
+          {/* fieldset desabilita todos os campos de uma vez quando o relatório
+              está concluído na visão do supervisor. min-w-0 anula o
+              min-width:min-content padrão de fieldset (quebraria o responsivo). */}
+          <fieldset disabled={locked} className="space-y-4 min-w-0">
           <div className="bg-card rounded-xl border border-border p-4 grid grid-cols-2 md:grid-cols-4 gap-3">
             <div>
               <label className="block text-xs font-medium text-text-light mb-1">Data do relatório</label>
@@ -887,10 +925,10 @@ function ReportDetail({
             </div>
             <div>
               <label className="block text-xs font-medium text-text-light mb-1">Status do relatório</label>
-              <select value={header.status} onChange={(e) => setHeader((h) => ({ ...h, status: e.target.value }))} className={inputCls}>
-                <option value="EM_ANDAMENTO">Em andamento</option>
-                <option value="COMPLETO">Completo</option>
-              </select>
+              {/* Não é mais select: o status muda pelo Concluir/Reabrir. */}
+              <div className={`px-3 py-2 rounded-lg border text-sm font-medium ${savedStatus === "COMPLETO" ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-amber-50 border-amber-200 text-amber-700"}`}>
+                {savedStatus === "COMPLETO" ? "✅ Concluído" : "🔄 Em andamento"}
+              </div>
             </div>
             <div>
               <label className="block text-xs font-medium text-text-light mb-1">Previsão de término (ETC)</label>
@@ -1125,6 +1163,7 @@ function ReportDetail({
             <p className="font-semibold text-text text-sm">Observações</p>
             <textarea value={header.remarks} onChange={(e) => setHeader((h) => ({ ...h, remarks: e.target.value }))} rows={3} className={inputCls} placeholder="Observações gerais da operação..." />
           </div>
+          </fieldset>
 
           <div className="flex justify-end gap-2 flex-wrap">
             <Button
@@ -1139,9 +1178,26 @@ function ReportDetail({
             >
               📲 Enviar pro WhatsApp
             </Button>
-            <Button onClick={saveReport} disabled={savingReport}>
-              {savingReport ? "Salvando..." : "💾 Salvar relatório"}
-            </Button>
+            {!canRate && savedStatus === "COMPLETO" && (
+              <Button variant="warning" onClick={() => saveReport("EM_ANDAMENTO")} disabled={savingReport}>
+                🔓 Reabrir relatório
+              </Button>
+            )}
+            {!locked && (
+              <Button onClick={() => saveReport()} disabled={savingReport}>
+                {savingReport ? "Salvando..." : "💾 Salvar relatório"}
+              </Button>
+            )}
+            {!locked && savedStatus !== "COMPLETO" && (
+              <Button
+                variant="success"
+                onClick={() => setConfirmConclude(true)}
+                disabled={savingReport}
+                title="Fecha o relatório: depois de concluído, o supervisor não edita mais (a gestão pode reabrir)"
+              >
+                ✅ Concluir relatório
+              </Button>
+            )}
           </div>
         </div>
       )}
@@ -1295,6 +1351,12 @@ function ReportDetail({
       {/* ── Fotos ── */}
       {tab === "fotos" && (
         <div className="space-y-4">
+          {locked && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800">
+              ✅ Relatório concluído — as fotos ficam travadas. Precisando mexer, peça pra gestão reabrir.
+            </div>
+          )}
+          {!locked && (
           <div className="bg-card rounded-xl border border-border p-4 space-y-3">
             <p className="font-semibold text-text text-sm">Adicionar fotos</p>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -1377,6 +1439,7 @@ function ReportDetail({
               <p className="text-xs text-danger">Falhou: {uploadErrors.join("; ")}</p>
             )}
           </div>
+          )}
 
           {photos.length === 0 ? (
             <div className="bg-card rounded-xl border border-border p-8 text-center text-sm text-text-light">
@@ -1402,9 +1465,11 @@ function ReportDetail({
                         <img src={`/api/relatorios/fotos/${p.id}`} alt={p.caption || label} className="w-full h-36 object-cover" loading="lazy" />
                         <div className="p-2 flex items-center justify-between gap-1">
                           <p className="text-xs text-text-light truncate">{p.caption || "—"}</p>
-                          <button onClick={() => setDeletePhoto(p)} title="Excluir foto" className="p-1 text-text-light hover:text-danger hover:bg-danger/10 rounded transition shrink-0">
-                            <TrashIcon className="w-3.5 h-3.5" />
-                          </button>
+                          {!locked && (
+                            <button onClick={() => setDeletePhoto(p)} title="Excluir foto" className="p-1 text-text-light hover:text-danger hover:bg-danger/10 rounded transition shrink-0">
+                              <TrashIcon className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1468,6 +1533,22 @@ function ReportDetail({
         title="Excluir foto"
         message="Excluir esta foto do relatório?"
         loading={deleting}
+      />
+
+      <ConfirmDialog
+        open={confirmConclude}
+        onClose={() => setConfirmConclude(false)}
+        onConfirm={() => {
+          setConfirmConclude(false);
+          saveReport("COMPLETO");
+        }}
+        title="Concluir relatório"
+        message={
+          canRate
+            ? "Concluir o relatório? Depois de concluído você não consegue mais editar — só a gestão reabre."
+            : "Concluir o relatório? O supervisor não vai mais conseguir editar (você pode reabrir quando quiser)."
+        }
+        loading={savingReport}
       />
     </div>
   );

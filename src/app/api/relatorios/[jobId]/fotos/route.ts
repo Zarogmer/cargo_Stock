@@ -38,6 +38,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ job
     : "ANTES";
   const holdLabel = body.hold_label ? String(body.hold_label) : null;
 
+  // Relatório concluído: supervisor não adiciona mais fotos (gestão pode).
+  const existing = await prisma.shipReport.findUnique({
+    where: { job_id_kind: { job_id: jobId, kind } },
+    select: { status: true },
+  });
+  if (existing?.status === "COMPLETO" && actor.isSupervisor) {
+    return NextResponse.json(
+      { error: "Relatório concluído — somente a gestão pode mexer nas fotos." },
+      { status: 403 }
+    );
+  }
+
   // A foto pode chegar antes de qualquer "Salvar" do relatório — garante o
   // registro-pai na hora.
   const report = await prisma.shipReport.upsert({

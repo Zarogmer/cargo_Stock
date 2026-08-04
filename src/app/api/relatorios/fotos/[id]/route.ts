@@ -14,7 +14,7 @@ async function loadPhotoWithAccess(id: number) {
 
   const photo = await prisma.shipReportPhoto.findUnique({
     where: { id },
-    include: { reports: { select: { job_id: true, kind: true } } },
+    include: { reports: { select: { job_id: true, kind: true, status: true } } },
   });
   if (!photo) return { error: NextResponse.json({ error: "Foto não encontrada" }, { status: 404 }) };
 
@@ -23,6 +23,16 @@ async function loadPhotoWithAccess(id: number) {
     return { error: NextResponse.json({ error: "Sem permissão" }, { status: 403 }) };
   }
   return { photo, actor };
+}
+
+// Relatório concluído: supervisor não altera nem apaga foto (ver a imagem — o
+// GET — continua liberado). A gestão segue podendo mexer.
+function lockedForActor(result: { photo: { reports: { status: string } }; actor: { isSupervisor: boolean } }) {
+  if (result.photo.reports.status !== "COMPLETO" || !result.actor.isSupervisor) return null;
+  return NextResponse.json(
+    { error: "Relatório concluído — somente a gestão pode mexer nas fotos." },
+    { status: 403 }
+  );
 }
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -50,12 +60,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const { id } = await params;
   const result = await loadPhotoWithAccess(Number(id));
   if ("error" in result) return result.error;
+  const lockError = lockedForActor(result);
+  if (lockError) return lockError;
 
   const body = await req.json();
   const data: Record<string, unknown> = {};
   if (body.caption !== undefined) data.caption = body.caption ? String(body.caption) : null;
   if (body.hold_label !== undefined) data.hold_label = body.hold_label ? String(body.hold_label) : null;
-  if (body.stage !== undefined && ["ANTES", "DURANTE", "DEPOIS"].includes(String(body.stage))) {
+  if (body.stage !== undefined && ["ANTES", "DURANTE", "DEPOIS", "GERAL"].includes(String(body.stage))) {
     data.stage = String(body.stage);
   }
 
@@ -74,6 +86,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const { id } = await params;
   const result = await loadPhotoWithAccess(Number(id));
   if ("error" in result) return result.error;
+  const lockError = lockedForActor(result);
+  if (lockError) return lockError;
 
   await prisma.shipReportPhoto.delete({ where: { id: Number(id) } });
   return NextResponse.json({ data: { ok: true } });
