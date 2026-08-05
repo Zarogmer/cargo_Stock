@@ -1256,7 +1256,25 @@ function ReportDetail({
                         <option value="COMPLETO">Completo</option>
                       </select>
                       <div className="flex items-center gap-1">
-                        <input type="number" min={0} max={100} value={h.completion_pct} onChange={(e) => patch({ completion_pct: Math.max(0, Math.min(100, Number(e.target.value) || 0)) })} className={inputCls} />
+                        {/* Tocou no campo → seleciona o que está lá: digitar
+                            por cima do 0 dá "100", não "0100". O React não
+                            corrige sozinho porque, pra ele, "0100" já é 100 —
+                            então o zero à esquerda a gente tira na mão. */}
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min={0}
+                          max={100}
+                          value={h.completion_pct}
+                          onFocus={(e) => e.currentTarget.select()}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const pct = Math.max(0, Math.min(100, Number(raw) || 0));
+                            if (/^0\d/.test(raw)) e.currentTarget.value = String(pct);
+                            patch({ completion_pct: pct });
+                          }}
+                          className={inputCls}
+                        />
                         <span className="text-xs text-text-light">%</span>
                       </div>
                       {!fixed && (
