@@ -29,6 +29,7 @@ import { shareOrDownloadBlob } from "@/lib/print";
 import {
   EVAL_CRITERIA,
   REPORT_KINDS,
+  formatEtcDate,
   photoBlockKey,
   photoPlaceRank,
   GENERAL_BLOCK,
@@ -257,6 +258,23 @@ function normalizeTime(v: string | null | undefined): string {
   return `${String(h).padStart(2, "0")}:${m[2]}`;
 }
 
+// A data do ETC virou seletor (o input só aceita ISO yyyy-mm-dd). Relatório
+// antigo tinha texto livre ali: "04/08" e "4-8-2026" a gente entende e mostra
+// no calendário; o que não dá pra entender continua guardado e vira aviso na
+// tela até escolherem a data — nada é apagado sem a pessoa ver.
+function normalizeDate(v: string | null | undefined): string {
+  const s = String(v || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[/.\-](\d{1,2})(?:[/.\-](\d{2,4}))?$/);
+  if (!m) return "";
+  const day = Number(m[1]);
+  const month = Number(m[2]);
+  if (day < 1 || day > 31 || month < 1 || month > 12) return "";
+  const raw = m[3] ? Number(m[3]) : new Date().getFullYear();
+  const year = raw < 100 ? 2000 + raw : raw;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 function splitTimeRange(v: string | null | undefined): { start: string; end: string } {
   const [a = "", b = ""] = String(v || "").split(/\s*[-–—]\s*/);
   return { start: normalizeTime(a), end: normalizeTime(b) };
@@ -303,7 +321,9 @@ function buildWhatsText(opts: {
   const info = [dateBr && `📅 ${dateBr}`, header.port && `📍 ${header.port}`].filter(Boolean).join(" · ");
   if (info) L.push(info);
   L.push(header.status === "COMPLETO" ? "✅ Operação completa" : "🔄 Operação em andamento");
-  const etc = [header.etc_date, header.etc_time].filter((v) => String(v || "").trim()).join(" às ");
+  const etc = [formatEtcDate(header.etc_date), header.etc_time]
+    .filter((v) => String(v || "").trim())
+    .join(" às ");
   if (etc) L.push(`⏳ *Previsão de término:* ${etc}`);
 
   const named = holds.filter((h) => h.label.trim());
@@ -1052,6 +1072,16 @@ function ReportDetail({
   // continua editando e pode reabrir).
   const locked = canRate && savedStatus === "COMPLETO";
 
+  // ETC anotado como texto livre (antes dos seletores) que nem data nem hora
+  // conseguem exibir — mostrado como aviso ao lado dos campos.
+  const etcLegacy = [
+    normalizeDate(header.etc_date) ? "" : header.etc_date,
+    normalizeTime(header.etc_time) ? "" : header.etc_time,
+  ]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean)
+    .join(" ");
+
   const tabs = [
     { key: "lavagem" as const, label: `${kindInfo.emoji} ${kindInfo.workTab}` },
     // A avaliação da equipe é uma só por navio — fica no relatório de lavagem
@@ -1132,10 +1162,18 @@ function ReportDetail({
             </div>
             <div className="min-w-0">
               <label className="block text-xs font-medium text-text-light mb-1">Previsão de término (ETC)</label>
+              {/* Data e hora saem de seletor — digitar solto virava "0408". */}
               <div className="flex gap-1.5">
-                <input type="text" value={header.etc_date} onChange={(e) => setHeader((h) => ({ ...h, etc_date: e.target.value }))} className={`${inputCls} min-w-0`} placeholder="Data" />
-                <input type="text" value={header.etc_time} onChange={(e) => setHeader((h) => ({ ...h, etc_time: e.target.value }))} className={`${inputCls} min-w-0`} placeholder="Hora" />
+                <input type="date" value={normalizeDate(header.etc_date)} onChange={(e) => setHeader((h) => ({ ...h, etc_date: e.target.value }))} className={`${inputCls} min-w-0`} title="Data prevista" />
+                <input type="time" value={normalizeTime(header.etc_time)} onChange={(e) => setHeader((h) => ({ ...h, etc_time: e.target.value }))} className={`${inputCls} min-w-0`} title="Hora prevista" />
               </div>
+              {/* Valor antigo que o seletor não entendeu: fica visível pra
+                  pessoa reescolher, em vez de sumir calado no próximo salvar. */}
+              {etcLegacy && (
+                <p className="text-[11px] text-amber-700 mt-1">
+                  Anotado antes como “{etcLegacy}” — escolha a data/hora pra atualizar.
+                </p>
+              )}
             </div>
           </div>
 

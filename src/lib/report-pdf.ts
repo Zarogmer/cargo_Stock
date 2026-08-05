@@ -27,6 +27,7 @@ import {
   SectionMeta,
   bareVesselName,
   formatDayMonthYear,
+  formatEtcDate,
   holdLabelEn,
   photoBlockKey,
   photoPlaceRank,
@@ -345,7 +346,7 @@ export async function buildCleaningReportPdf(opts: {
   // 4. ETC
   paginate(80);
   d.y = d.sectionBar("4. ESTIMATED TIME OF COMPLETION (ETC)", d.y);
-  [["ETC DATE", opts.etcDate || "-"], ["ETC TIME (LT)", opts.etcTime || "-"]].forEach(([label, value], i) => {
+  [["ETC DATE", formatEtcDate(opts.etcDate) || "-"], ["ETC TIME (LT)", opts.etcTime || "-"]].forEach(([label, value], i) => {
     const w = (CONTENT_W - 6) / 2;
     const x = M + i * (w + 6);
     d.rect(x, d.y - 34, w, 34, SOFT);

@@ -199,6 +199,15 @@ export function formatDayMonthYear(iso: string | null | undefined): string {
   return d.toLocaleDateString("pt-BR");
 }
 
+// A data do ETC vem do seletor de data (ISO yyyy-mm-dd) — na tela e no PDF ela
+// sai em dd/mm/aaaa, igual à data do relatório. Relatório antigo tinha texto
+// livre nesse campo: esse a gente mostra exatamente como foi digitado.
+export function formatEtcDate(v: string | null | undefined): string {
+  const s = String(v || "").trim();
+  if (!s) return "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? formatDayMonthYear(s) : s;
+}
+
 // Nome do arquivo baixado. Sem barra (data) nem caractere que o Windows recusa.
 export function reportFileName(...parts: string[]): string {
   return parts
