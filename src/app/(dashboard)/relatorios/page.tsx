@@ -734,17 +734,19 @@ function ReportDetail({
       const label = photoBlockKey(l);
       if (!labels.includes(label)) labels.push(label);
     };
-    // Os locais do ciclo (caminhão → material → navio → volta) valem pra todo
-    // serviço de embarque: lavagem, raspagem e pintura embarcam igual.
-    if (kind !== "COSTADO") PHOTO_PLACES.forEach(push);
-    else push(GENERAL_BLOCK);
+    // Os locais do ciclo (caminhão → material → navio → volta) só entram na
+    // lavagem dos porões, que é o relatório que cobre o embarque inteiro.
+    // Raspagem e pintura são serviços do porão: bloco de porão e mais nada.
+    // Costado trabalha por área, sem porão: fica com o bloco geral.
+    const places = kind === "EMBARQUE" ? PHOTO_PLACES : kind === "COSTADO" ? [GENERAL_BLOCK] : [];
+    places.forEach(push);
     holdLabels.forEach(push);
     sections.forEach((s) => push(s.label));
+    // Fotos já enviadas aparecem mesmo em bloco que saiu da lista (relatório
+    // antigo de raspagem/pintura com foto no caminhão) — nada some da tela.
     photos.forEach((p) => push(p.hold_label || ""));
 
-    const fixed = new Set(
-      (kind !== "COSTADO" ? PHOTO_PLACES : [GENERAL_BLOCK]).concat(holdLabels).map(photoBlockKey)
-    );
+    const fixed = new Set(places.concat(holdLabels).map(photoBlockKey));
     const orderOf = new Map(sections.map((s) => [s.label, s.sort_order]));
 
     return labels
