@@ -1181,14 +1181,24 @@ function ReportDetail({
                 const patch = (p: Partial<HoldRow>) =>
                   setHolds((prev) => prev.map((x, j) => (j === i ? { ...x, ...p } : x)));
                 // Horário preenchido em porão pendente → "Em andamento" sozinho.
+                // Raspagem e pintura têm um horário só: marcou o término, o
+                // serviço daquele porão acabou → "Completo" e 100%. Na lavagem
+                // são duas fases (salgada + doce), então o término de uma não
+                // fecha o porão — lá continua manual.
                 const patchTime = (
                   field: "salt_start" | "salt_end" | "fresh_start" | "fresh_end" | "start_time" | "end_time",
                   v: string
-                ) =>
+                ) => {
+                  const finishes = !kindInfo.waterPhases && field === "end_time";
                   patch({
                     [field]: v || null,
-                    ...(v && h.status === "PENDENTE" ? { status: "EM_ANDAMENTO" } : {}),
+                    ...(v && finishes
+                      ? { status: "COMPLETO", completion_pct: 100 }
+                      : v && h.status === "PENDENTE"
+                        ? { status: "EM_ANDAMENTO" }
+                        : {}),
                   } as Partial<HoldRow>);
+                };
                 // Linha do cadastro do navio: nome fixo e sem exclusão. Linhas
                 // além do cadastro (legado) seguem editáveis pra dar baixa.
                 const fixed = lockedHolds > 0 && i < lockedHolds;
