@@ -10,6 +10,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // Supervisor nao troca a propria senha: quem define e o RH.
+    if (session.user.role === "SUPERVISOR") {
+      return NextResponse.json(
+        { error: "Sua senha e definida pelo RH." },
+        { status: 403 }
+      );
+    }
+
     const { password } = await request.json();
 
     if (!password || password.length < 6) {
