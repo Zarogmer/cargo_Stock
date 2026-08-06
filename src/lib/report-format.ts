@@ -136,6 +136,36 @@ export function photoBlockKey(label: string | null | undefined): string {
   return (label || "").trim() || GENERAL_BLOCK;
 }
 
+// Locais da foto além dos porões, na ordem do ciclo real da operação:
+// caminhão → material a bordo → navio → volta.
+export const PHOTO_PLACES = [
+  "Carregamento do caminhão",
+  "Embarque de material",
+  "Navio",
+  "Desembarque do navio",
+  "Descarga do Caminhão",
+];
+
+// Esses blocos são do EMBARQUE inteiro, não de um serviço: o caminhão é
+// carregado uma vez só, o material embarca uma vez só. Por isso as fotos deles
+// são as MESMAS nos três relatórios de porão do navio — só o bloco do porão
+// muda de um serviço pro outro. O Costado é um embarque à parte e fica de fora.
+export const SHARED_PHOTO_KINDS: ReportKindName[] = ["EMBARQUE", "RASPAGEM", "PINTURA"];
+
+// Rótulos que valem como bloco compartilhado, incluindo o nome antigo do
+// último bloco (renomeado pra "Descarga do Caminhão") — relatório que ficou
+// pelo caminho da migração continua junto do bloco novo.
+export const SHARED_BLOCK_LABELS = [...PHOTO_PLACES, "Descarregamento do caminhão"];
+
+export function sharesPhotoBlocks(kind: ReportKindName): boolean {
+  return SHARED_PHOTO_KINDS.includes(kind);
+}
+
+export function isSharedPhotoBlock(label: string | null | undefined): boolean {
+  const l = photoBlockKey(label).toLowerCase();
+  return SHARED_BLOCK_LABELS.some((p) => p.toLowerCase() === l);
+}
+
 // Locais de foto fora dos porões (blocos fixos da aba Fotos) → inglês do PDF.
 // Chave em minúsculas pra casar sem depender de caixa.
 const PHOTO_PLACE_EN: Record<string, string> = {
@@ -143,7 +173,8 @@ const PHOTO_PLACE_EN: Record<string, string> = {
   "embarque de material": "MATERIAL BOARDING",
   "navio": "VESSEL",
   "desembarque do navio": "VESSEL DISEMBARKATION",
-  "descarregamento do caminhão": "TRUCK UNLOADING",
+  "descarga do caminhão": "TRUCK UNLOADING",
+  "descarregamento do caminhão": "TRUCK UNLOADING", // nome antigo do bloco
 };
 
 // Ordem em que os blocos aparecem — a sequência real da operação, pro PDF já
@@ -156,7 +187,8 @@ const PHOTO_PLACE_ORDER: Record<string, number> = {
   "navio": 30,
   "desembarque do navio": 900,
   "desembarque de material": 900,
-  "descarregamento do caminhão": 910,
+  "descarga do caminhão": 910,
+  "descarregamento do caminhão": 910, // nome antigo do bloco
 };
 
 export function photoPlaceRank(label: string | null, customOrder = 0): number {

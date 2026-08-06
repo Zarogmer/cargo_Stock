@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { actorCanAccessJob, getReportActor, parseKind } from "@/lib/report-scope";
+import { REPORT_KINDS, type ReportKindName } from "@/lib/report-format";
 
 // GET  /api/relatorios/fotos/[id] — serve a imagem em si (bytes), pra usar em
 //      <img src>. O JSON do relatório traz só metadados; 90 fotos em base64
@@ -22,15 +23,24 @@ async function loadPhotoWithAccess(id: number) {
   if (!(await actorCanAccessJob(actor, photo.reports.job_id, kind))) {
     return { error: NextResponse.json({ error: "Sem permissão" }, { status: 403 }) };
   }
-  return { photo, actor };
+  return { photo, kind, actor };
 }
 
 // Relatório concluído: supervisor não altera nem apaga foto (ver a imagem — o
-// GET — continua liberado). A gestão segue podendo mexer.
-function lockedForActor(result: { photo: { reports: { status: string } }; actor: { isSupervisor: boolean } }) {
+// GET — continua liberado). A gestão segue podendo mexer. O serviço aparece no
+// aviso porque a foto pode ser de um bloco compartilhado: quem está na Raspagem
+// não entenderia um "relatório concluído" sem saber que o travado é o da
+// Lavagem, onde a foto do caminhão foi enviada.
+function lockedForActor(result: {
+  photo: { reports: { status: string } };
+  kind: ReportKindName;
+  actor: { isSupervisor: boolean };
+}) {
   if (result.photo.reports.status !== "COMPLETO" || !result.actor.isSupervisor) return null;
   return NextResponse.json(
-    { error: "Relatório concluído — somente a gestão pode mexer nas fotos." },
+    {
+      error: `Relatório de ${REPORT_KINDS[result.kind].label} concluído — somente a gestão pode mexer nessas fotos.`,
+    },
     { status: 403 }
   );
 }

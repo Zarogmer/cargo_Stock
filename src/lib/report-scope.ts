@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { hasModuleAccess } from "@/lib/rbac";
-import type { ReportKindName } from "@/lib/report-format";
+import { SHARED_PHOTO_KINDS, sharesPhotoBlocks, type ReportKindName } from "@/lib/report-format";
 import type { Role } from "@/types/database";
 
 // Escopo dos Relatórios de Bordo (/api/relatorios):
@@ -101,6 +101,20 @@ export async function actorKindsForJob(actor: ReportActor, jobId: string): Promi
   const kinds = new Set<"EMBARQUE" | "COSTADO">();
   for (const a of allocs) kinds.add(a.kind === "COSTADO" ? "COSTADO" : "EMBARQUE");
   return [...kinds];
+}
+
+// Relatórios IRMÃOS que dividem os blocos do ciclo da operação com este — os
+// outros serviços de porão do MESMO navio (ver SHARED_PHOTO_KINDS). A foto do
+// carregamento do caminhão continua guardada no relatório em que foi enviada;
+// é a leitura que junta os irmãos, então nada precisa ser duplicado nem
+// migrado. Só entram relatórios que já existem.
+export async function siblingBlockReportIds(jobId: string, kind: ReportKind): Promise<string[]> {
+  if (!sharesPhotoBlocks(kind)) return [];
+  const siblings = await prisma.shipReport.findMany({
+    where: { job_id: jobId, kind: { in: SHARED_PHOTO_KINDS.filter((k) => k !== kind) } },
+    select: { id: true },
+  });
+  return siblings.map((s) => s.id);
 }
 
 export async function actorCanAccessJob(

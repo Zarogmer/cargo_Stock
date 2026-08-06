@@ -28,10 +28,14 @@ import { processReportPhoto, sniffImageType } from "@/lib/watermark";
 import { shareOrDownloadBlob } from "@/lib/print";
 import {
   EVAL_CRITERIA,
+  PHOTO_PLACES,
   REPORT_KINDS,
   formatEtcDate,
+  isSharedPhotoBlock,
   photoBlockKey,
   photoPlaceRank,
+  sharesPhotoBlocks,
+  SHARED_PHOTO_KINDS,
   GENERAL_BLOCK,
   type ActivityRow,
   type HoldRow,
@@ -51,6 +55,9 @@ interface ShipInfo {
   cargo_type: string | null;
   holds_count: number | null;
   client_name: string | null;
+  // Serviços contratados (LAVAGEM_PORAO/RASPAGEM/PINTURA/COSTADO) — dizem se
+  // este navio tem mais de um relatório de porão dividindo os blocos do ciclo.
+  services?: string[] | null;
 }
 
 interface NavioItem {
@@ -91,8 +98,6 @@ interface ReportApi {
   etc_time: string | null;
   holds: (HoldRow & { id: number })[];
   activities: (ActivityRow & { id: number })[];
-  photos: (PhotoMeta & { created_by: string; created_at: string })[];
-  sections: SectionRow[];
 }
 
 // Bloco de fotos com legenda própria / criado à mão. Os blocos fixos (ciclo da
@@ -109,6 +114,10 @@ interface DetailData {
   ship: ShipInfo | null;
   kind: Kind;
   report: ReportApi | null;
+  // Fotos e blocos vêm fora do relatório: os do ciclo da operação são os mesmos
+  // nos relatórios de Lavagem, Raspagem e Pintura do navio (ver /api/relatorios).
+  photos: (PhotoMeta & { created_by: string; created_at: string })[];
+  sections: SectionRow[];
   team: TeamMember[];
   evaluations: EvaluationApi[];
   // Média histórica de cada membro nos outros navios (só vem pra gestão).
@@ -232,17 +241,6 @@ const ACTIVITY_SUGGESTIONS_BY_KIND: Record<Kind, string[]> = {
     "Desmontagem do material",
   ],
 };
-
-// Locais da foto além dos porões (Embarque), na ordem do ciclo real da
-// operação: caminhão → material a bordo → navio → volta. Substituem o antigo
-// "Geral / sem porão"; o PDF traduz cada um pro inglês (holdLabelEn).
-const PHOTO_PLACES = [
-  "Carregamento do caminhão",
-  "Embarque de material",
-  "Navio",
-  "Desembarque do navio",
-  "Descarregamento do caminhão",
-];
 
 // Sentinela do select de atividade: troca a linha pra texto livre.
 const CUSTOM_ACTIVITY = "__outra__";
@@ -666,10 +664,10 @@ function ReportDetail({
         setHolds([]);
       }
       setActivities(r ? r.activities.map((a) => ({ ...a })) : []);
-      setPhotos(r ? r.photos : []);
-      setSections(r?.sections ?? []);
-      setBlockCaptions(Object.fromEntries((r?.sections ?? []).map((s) => [s.label, s.caption || ""])));
-      setPhotoCaptions(Object.fromEntries((r?.photos ?? []).map((p) => [p.id, p.caption || ""])));
+      setPhotos(d.photos ?? []);
+      setSections(d.sections ?? []);
+      setBlockCaptions(Object.fromEntries((d.sections ?? []).map((s) => [photoBlockKey(s.label), s.caption || ""])));
+      setPhotoCaptions(Object.fromEntries((d.photos ?? []).map((p) => [p.id, p.caption || ""])));
 
       const map = new Map<number, EvalDraft>();
       for (const member of d.team) {
@@ -754,11 +752,12 @@ function ReportDetail({
       const label = photoBlockKey(l);
       if (!labels.includes(label)) labels.push(label);
     };
-    // Os locais do ciclo (caminhão → material → navio → volta) só entram na
-    // lavagem dos porões, que é o relatório que cobre o embarque inteiro.
-    // Raspagem e pintura são serviços do porão: bloco de porão e mais nada.
+    // Os locais do ciclo (caminhão → material → navio → volta) entram nos três
+    // relatórios de porão — e com as MESMAS fotos: o caminhão é carregado uma
+    // vez só pro embarque inteiro (a API junta os relatórios irmãos). Só o
+    // bloco do porão muda de um serviço pro outro.
     // Costado trabalha por área, sem porão: fica com o bloco geral.
-    const places = kind === "EMBARQUE" ? PHOTO_PLACES : kind === "COSTADO" ? [GENERAL_BLOCK] : [];
+    const places = kind === "COSTADO" ? [GENERAL_BLOCK] : PHOTO_PLACES;
     places.forEach(push);
     holdLabels.forEach(push);
     sections.forEach((s) => push(s.label));
@@ -778,6 +777,16 @@ function ReportDetail({
       }))
       .sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label, "pt-BR", { numeric: true }));
   }, [kind, holdLabels, sections, photos]);
+
+  // Serviços de porão que este navio contratou (cadastro do navio). Com mais de
+  // um, os blocos do ciclo da operação são os MESMOS nos relatórios deles — a
+  // tela avisa isso em cada bloco compartilhado.
+  const sharedWithLabels = useMemo(() => {
+    if (!sharesPhotoBlocks(kind)) return [];
+    const services = new Set((data?.ship?.services || []).map((s) => String(s).toUpperCase()));
+    const kinds = SHARED_PHOTO_KINDS.filter((k) => services.has(REPORT_KINDS[k].service));
+    return kinds.length > 1 ? kinds.map((k) => REPORT_KINDS[k].label) : [];
+  }, [kind, data?.ship?.services]);
 
   // Preencheu horário de uma atividade/fase ligada a um porão pendente → o
   // porão entra em "Em andamento" sozinho (Completo não é rebaixado).
@@ -987,10 +996,21 @@ function ReportDetail({
   async function confirmDeletePhoto() {
     if (!deletePhoto) return;
     setDeleting(true);
+    setUploadErrors([]);
     try {
-      await fetch(`/api/relatorios/fotos/${deletePhoto.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/relatorios/fotos/${deletePhoto.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        // Pode ser foto de um bloco compartilhado guardada num relatório irmão
+        // já concluído — o aviso do servidor diz qual é.
+        const json = await res.json().catch(() => ({}));
+        setUploadErrors([json.error || "Não deu pra excluir a foto."]);
+        setDeletePhoto(null);
+        return;
+      }
       setPhotos((prev) => prev.filter((p) => p.id !== deletePhoto.id));
       setDeletePhoto(null);
+    } catch {
+      setUploadErrors(["Erro ao conectar com o servidor."]);
     } finally {
       setDeleting(false);
     }
@@ -1693,6 +1713,9 @@ function ReportDetail({
             // O chip é FILTRO: mostra só as fotos da fase escolhida, senão o
             // supervisor troca a fase e continua vendo as mesmas fotos.
             const shown = b.isHold ? items.filter((p) => stageOf(p) === stage) : items;
+            // Bloco do ciclo da operação num navio com mais de um serviço de
+            // porão: a foto enviada aqui vale pros outros relatórios também.
+            const sharedNote = sharedWithLabels.length > 0 && isSharedPhotoBlock(b.label);
 
             return (
               <div key={b.label} className="bg-card rounded-xl border border-border p-4 space-y-3">
@@ -1711,6 +1734,13 @@ function ReportDetail({
                     </button>
                   )}
                 </div>
+
+                {sharedNote && (
+                  <p className="text-xs text-text-light">
+                    🔗 Bloco do embarque — estas fotos são as mesmas nos relatórios de{" "}
+                    {sharedWithLabels.join(", ")}. Só os porões mudam de um serviço pro outro.
+                  </p>
+                )}
 
                 {locked ? (
                   blockCaptions[b.label] ? (

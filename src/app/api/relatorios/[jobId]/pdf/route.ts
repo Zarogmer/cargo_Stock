@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { actorCanAccessJob, baseKind, getReportActor, parseKind, WORKED_ALLOC_WHERE } from "@/lib/report-scope";
+import {
+  actorCanAccessJob,
+  baseKind,
+  getReportActor,
+  parseKind,
+  siblingBlockReportIds,
+  WORKED_ALLOC_WHERE,
+} from "@/lib/report-scope";
 import { buildCleaningReportPdf, buildEvaluationPdf, buildPhotoReportPdf } from "@/lib/report-pdf";
 import {
   EVAL_CRITERIA,
   EvaluationPrintRow,
   REPORT_KINDS,
   ReportKindName,
+  SHARED_BLOCK_LABELS,
+  SectionMeta,
   formatDayMonthYear,
   reportFileName,
 } from "@/lib/report-format";
@@ -84,20 +93,44 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
     }
 
     if (tipo === "fotos") {
-      // image_data só é lido aqui (o JSON da tela traz apenas metadados).
-      const photos = report
-        ? await prisma.shipReportPhoto.findMany({
-            where: { report_id: report.id },
-            orderBy: [{ hold_label: "asc" }, { stage: "asc" }, { sort_order: "asc" }, { id: "asc" }],
-            select: { id: true, hold_label: true, stage: true, caption: true, image_data: true },
-          })
-        : [];
+      // Mesmo conteúdo da aba Fotos: as fotos deste relatório mais os blocos do
+      // ciclo da operação guardados nos relatórios irmãos do navio (o
+      // carregamento do caminhão é um só e sai nos três PDFs). image_data só é
+      // lido aqui — o JSON da tela traz apenas metadados.
+      const siblings = await siblingBlockReportIds(jobId, kind);
+      const PHOTO_FIELDS = { id: true, hold_label: true, stage: true, caption: true, image_data: true };
+      const [ownPhotos, sharedPhotos, sharedSections] = await Promise.all([
+        report
+          ? prisma.shipReportPhoto.findMany({ where: { report_id: report.id }, select: PHOTO_FIELDS })
+          : [],
+        siblings.length
+          ? prisma.shipReportPhoto.findMany({
+              where: { report_id: { in: siblings }, hold_label: { in: SHARED_BLOCK_LABELS } },
+              select: PHOTO_FIELDS,
+            })
+          : [],
+        siblings.length
+          ? prisma.shipReportSection.findMany({
+              where: { report_id: { in: siblings }, label: { in: SHARED_BLOCK_LABELS } },
+              select: { label: true, caption: true, sort_order: true },
+              orderBy: [{ sort_order: "asc" }, { id: "asc" }],
+            })
+          : [],
+      ]);
+      const photos = [...ownPhotos, ...sharedPhotos].sort((a, b) => a.id - b.id);
+      const sections: SectionMeta[] = [...(report?.sections ?? [])];
+      const seenLabels = new Set(sections.map((s) => s.label));
+      for (const s of sharedSections) {
+        if (seenLabels.has(s.label)) continue;
+        seenLabels.add(s.label);
+        sections.push(s);
+      }
       const pdf = await buildPhotoReportPdf({
         vesselName,
         kind,
         reportDate: report?.report_date?.toISOString() ?? null,
         photos,
-        sections: report?.sections ?? [],
+        sections,
       });
       return pdfResponse(
         pdf,

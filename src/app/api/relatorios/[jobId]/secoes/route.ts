@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { actorCanAccessJob, getReportActor, parseKind } from "@/lib/report-scope";
+import { actorCanAccessJob, getReportActor, parseKind, siblingBlockReportIds } from "@/lib/report-scope";
+import { isSharedPhotoBlock } from "@/lib/report-format";
 
 // Blocos do relatório fotográfico (aba Fotos). Os blocos fixos — locais do
 // ciclo da operação e os porões do cadastro do navio — são montados pela tela e
@@ -36,7 +37,7 @@ async function loadReport(jobId: string, kindRaw: unknown) {
       ),
     };
   }
-  return { report };
+  return { report, kind };
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
@@ -62,6 +63,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ job
     update: caption === undefined ? {} : { caption },
     select: { id: true, label: true, caption: true, sort_order: true },
   });
+
+  // Bloco do ciclo da operação (caminhão, material, navio): a legenda é a mesma
+  // nos relatórios irmãos do navio — replica pros que já existem pra não ficar
+  // um texto diferente em cada serviço. (Quem ainda não tem relatório lê a
+  // legenda do irmão no GET.)
+  if (caption !== undefined && isSharedPhotoBlock(label)) {
+    const siblings = await siblingBlockReportIds(jobId, result.kind);
+    for (const reportId of siblings) {
+      await prisma.shipReportSection.upsert({
+        where: { report_id_label: { report_id: reportId, label } },
+        create: { report_id: reportId, label, caption, sort_order: section.sort_order },
+        update: { caption },
+      });
+    }
+  }
 
   return NextResponse.json({ data: section });
 }

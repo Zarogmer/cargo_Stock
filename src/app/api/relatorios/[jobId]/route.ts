@@ -1,11 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { actorCanAccessJob, baseKind, getReportActor, parseKind, WORKED_ALLOC_WHERE } from "@/lib/report-scope";
+import {
+  actorCanAccessJob,
+  baseKind,
+  getReportActor,
+  parseKind,
+  siblingBlockReportIds,
+  WORKED_ALLOC_WHERE,
+} from "@/lib/report-scope";
+import { SHARED_BLOCK_LABELS } from "@/lib/report-format";
 
 // GET /api/relatorios/[jobId]?kind=EMBARQUE|COSTADO|RASPAGEM|PINTURA
 // Tudo que a tela do relatório precisa: navio, relatório (porões + atividades),
 // fotos (só metadados — a imagem vem por /api/relatorios/fotos/[id]), equipe
 // escalada no serviço e avaliações já feitas.
+//
+// Fotos e blocos vêm FORA do relatório (data.photos / data.sections) porque não
+// são só dele: os blocos do ciclo da operação (caminhão, material, navio) são
+// os mesmos nos relatórios de Lavagem, Raspagem e Pintura do navio — só o bloco
+// do porão é de cada serviço.
 export async function GET(req: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
   const actor = await getReportActor();
   if (!actor) return NextResponse.json({ error: "Sem permissão" }, { status: 403 });
@@ -24,6 +37,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
         select: {
           id: true, name: true, port: true, status: true, arrival_date: true,
           departure_date: true, cargo_type: true, holds_count: true, client_name: true,
+          services: true,
         },
       },
     },
@@ -35,19 +49,54 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
     include: {
       holds: { orderBy: { sort_order: "asc" } },
       activities: { orderBy: { sort_order: "asc" } },
-      photos: {
-        select: {
-          id: true, hold_label: true, stage: true, caption: true,
-          sort_order: true, created_by: true, created_at: true,
-        },
-        orderBy: [{ hold_label: "asc" }, { stage: "asc" }, { sort_order: "asc" }, { id: "asc" }],
-      },
-      sections: {
-        select: { id: true, label: true, caption: true, sort_order: true },
-        orderBy: [{ sort_order: "asc" }, { id: "asc" }],
-      },
     },
   });
+
+  // Fotos e blocos: os do próprio relatório + os blocos do ciclo da operação
+  // que estão guardados nos relatórios irmãos do navio (a foto do caminhão
+  // entra uma vez e vale pros três serviços). Ordem por id = ordem em que
+  // foram enviadas, junte de onde vier.
+  const siblings = await siblingBlockReportIds(jobId, kind);
+  const PHOTO_FIELDS = {
+    id: true, hold_label: true, stage: true, caption: true,
+    sort_order: true, created_by: true, created_at: true,
+  } as const;
+  const ownId = report?.id;
+  const [ownPhotos, sharedPhotos, ownSections, sharedSections] = await Promise.all([
+    ownId
+      ? prisma.shipReportPhoto.findMany({ where: { report_id: ownId }, select: PHOTO_FIELDS })
+      : [],
+    siblings.length
+      ? prisma.shipReportPhoto.findMany({
+          where: { report_id: { in: siblings }, hold_label: { in: SHARED_BLOCK_LABELS } },
+          select: PHOTO_FIELDS,
+        })
+      : [],
+    ownId
+      ? prisma.shipReportSection.findMany({
+          where: { report_id: ownId },
+          select: { id: true, label: true, caption: true, sort_order: true },
+          orderBy: [{ sort_order: "asc" }, { id: "asc" }],
+        })
+      : [],
+    siblings.length
+      ? prisma.shipReportSection.findMany({
+          where: { report_id: { in: siblings }, label: { in: SHARED_BLOCK_LABELS } },
+          select: { id: true, label: true, caption: true, sort_order: true },
+          orderBy: [{ sort_order: "asc" }, { id: "asc" }],
+        })
+      : [],
+  ]);
+  const photos = [...ownPhotos, ...sharedPhotos].sort((a, b) => a.id - b.id);
+  // Legenda do bloco: a do próprio relatório manda; a do irmão só preenche o
+  // que ainda não tem (a escrita replica pros irmãos, então costumam ser iguais).
+  const seenLabels = new Set(ownSections.map((s) => s.label));
+  const sections = [...ownSections];
+  for (const s of sharedSections) {
+    if (seenLabels.has(s.label)) continue;
+    seenLabels.add(s.label);
+    sections.push(s);
+  }
 
   // Equipe escalada neste serviço (uma linha por colaborador — no Costado a
   // mesma pessoa tem várias alocações, uma por turno). Raspagem/Pintura usam a
@@ -117,6 +166,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
       ship: job.ships,
       kind,
       report,
+      photos,
+      sections,
       team,
       evaluations,
       history,
