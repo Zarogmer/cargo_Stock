@@ -260,7 +260,7 @@ export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "ESTAGIO", "EXECUTIVO", "CO
 export const FORNECEDORES_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO", "RH"];
 
 // Papéis que acessam o módulo bancário do Financeiro (Contas a Pagar,
-// Conciliação Bancária, Boletos por e-mail e o Painel financeiro). Dados de
+// Conciliação Bancária e o Painel financeiro). Dados de
 // banco/saldo/extrato são sensíveis — só Executivo, Financeiro e Tecnologia.
 // Estágio, apesar de ver o resto do Financeiro (Valores/Pagamento de Navios),
 // NÃO entra aqui. Fonte única: sidebar (roles nos sub-itens), páginas e as
@@ -409,7 +409,6 @@ export const NAV_ITEMS: NavItem[] = [
       // FINANCEIRO_BANCO_ROLES (Estágio fica de fora). Ver docs/financeiro/.
       { label: "Contas a Pagar", href: "/financeiro/contas", roles: FINANCEIRO_BANCO_ROLES },
       { label: "Conciliação Bancária", href: "/financeiro/conciliacao", roles: FINANCEIRO_BANCO_ROLES },
-      { label: "Boletos por e-mail", href: "/financeiro/email", roles: FINANCEIRO_BANCO_ROLES },
       // Espelho da planilha da diretoria. Restrita como o módulo bancário: traz
       // folha de pagamento e distribuição aos sócios da empresa inteira.
       { label: "Demonstração Financeira", href: "/financeiro?tab=demonstracao", roles: FINANCEIRO_BANCO_ROLES },
