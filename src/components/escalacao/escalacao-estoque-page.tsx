@@ -703,8 +703,16 @@ export function EscalacaoEstoquePage() {
       }
     }
 
+    // É AQUI que o embarque se fecha: o navio vira EM_OPERACAO, o botão
+    // Embarcar some e a aba Retorno abre. Se esta gravação falhar o estoque JÁ
+    // foi baixado, então não dá pra dizer "confirmado" e seguir — o navio
+    // ficaria agendado pra sempre e alguém embarcaria de novo. Avisa na tela.
+    let statusWarn = "";
     if (currentShip.status === "AGENDADO") {
-      await db.from("ships").update({ status: "EM_OPERACAO" } as any).eq("id", selectedShip);
+      const upd = (await db.from("ships").update({ status: "EM_OPERACAO" } as any).eq("id", selectedShip)) as any;
+      if (upd?.error) {
+        statusWarn = ` ⚠️ ATENÇÃO: o estoque foi baixado mas o navio NÃO entrou em operação (${upd.error.message}) — mude o status pra "Em Operação" na aba Navios, senão o Retorno não abre.`;
+      }
     }
 
     setEmbarking(false);
@@ -712,7 +720,7 @@ export function EscalacaoEstoquePage() {
 
     // Aviso automático no grupo do WhatsApp (com a lista preenchida em PDF).
     // Best-effort: o embarque já aconteceu — falha aqui só vira aviso na tela.
-    setEmbarkMsg("⚓ Embarque confirmado! Enviando aviso pro WhatsApp...");
+    setEmbarkMsg("⚓ Embarque confirmado! Enviando a lista pro WhatsApp...");
     try {
       const res = await fetch("/api/embarque/notify", {
         method: "POST",
@@ -732,14 +740,14 @@ export function EscalacaoEstoquePage() {
         if (groupsSent > 0 && data.group) parts.push(`grupo ${data.group}`);
         if (dmSent > 0) parts.push(`${dmSent} pessoa${dmSent === 1 ? "" : "s"} do Administrativo`);
         const pdfNote = data?.pdf === "sent" ? " com a lista em PDF" : data?.pdf === "failed" ? " (PDF não gerado — foi só o texto)" : "";
-        setEmbarkMsg(`⚓ Embarque confirmado! 📨 Aviso enviado pro WhatsApp (${parts.join(" + ")})${pdfNote}.`);
+        setEmbarkMsg(`⚓ Embarque confirmado! 📨 Lista enviada pro WhatsApp (${parts.join(" + ")})${pdfNote}.${statusWarn}`);
       } else if (data?.skipped || data?.warning) {
-        setEmbarkMsg(`⚓ Embarque confirmado! ⚠️ ${data.skipped || data.warning}`);
+        setEmbarkMsg(`⚓ Embarque confirmado! ⚠️ ${data.skipped || data.warning}${statusWarn}`);
       } else {
-        setEmbarkMsg("⚓ Embarque confirmado! Não consegui avisar no WhatsApp.");
+        setEmbarkMsg(`⚓ Embarque confirmado! Não consegui mandar a lista no WhatsApp.${statusWarn}`);
       }
     } catch (err) {
-      setEmbarkMsg(`⚓ Embarque confirmado! Erro ao avisar no WhatsApp: ${(err as Error).message}`);
+      setEmbarkMsg(`⚓ Embarque confirmado! Erro ao mandar a lista no WhatsApp: ${(err as Error).message}${statusWarn}`);
     }
     loadData();
   }
