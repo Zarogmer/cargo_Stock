@@ -1175,11 +1175,16 @@ export function EscalacaoEstoquePage() {
     }
   }
 
-  // Manda a lista de embarque (materiais + rancho, com as quantidades que a
+  // Reenvia a lista de embarque (materiais + rancho, com as quantidades que a
   // equipe leva) pro grupo configurado em Mensagens › "Lista de embarque" —
   // texto + a lista preenchida em PDF (layout do Check List) anexada.
+  // O 1º envio é automático no ⚓ Embarcar; aqui é só pra mandar de novo depois.
   async function handleSendEmbarkList() {
     if (!currentShip || !selectedTeam) return;
+    if (currentShip.status === "AGENDADO") {
+      setEmbarkMsg("⚓ A lista vai pro grupo quando você confirmar o Embarcar — assim o navio entra em operação e o Retorno abre.");
+      return;
+    }
     setSendingEmbarkList(true);
     setEmbarkMsg(null);
     try {
@@ -1293,12 +1298,12 @@ export function EscalacaoEstoquePage() {
             <Button size="sm" variant="secondary" onClick={() => handleDownloadChecklist("embarque", "xlsx")} disabled={downloading !== null || embarking} title="Baixar a lista preenchida em Excel pra editar">
               {downloading === "xlsx" ? "Gerando..." : "📊 Excel"}
             </Button>
-            <Button size="sm" variant="secondary" onClick={handleSendEmbarkList} disabled={sendingEmbarkList || embarking} title="Manda a lista no grupo do WhatsApp com o PDF anexado">
-              {sendingEmbarkList ? "Enviando..." : "📨 Enviar lista pro WhatsApp"}
-            </Button>
             {/* Dá pra embarcar mesmo com item faltando (o operacional pediu essa
                 flexibilidade): baixa só o que a equipe tem. Só embarca AGENDADO
-                (um embarque por navio); depois vira Em Operação/Concluído. */}
+                (um embarque por navio); depois vira Em Operação/Concluído.
+                A lista só vai pro grupo NO embarque — antes disso não tem botão
+                de enviar, senão a equipe recebe a lista e o navio fica agendado
+                pra sempre (sem Retorno). Depois de embarcado sobra o reenvio. */}
             {currentShip?.status === "AGENDADO" ? (
               <Button
                 size="sm"
@@ -1307,19 +1312,26 @@ export function EscalacaoEstoquePage() {
                 title={
                   hasMissing
                     ? `Faltam ${missingNames.length} item(ns) — embarca baixando só o que a equipe tem`
-                    : "Baixa o kit e o rancho do Estoque e avisa o grupo no WhatsApp"
+                    : "Baixa o kit e o rancho do Estoque e manda a lista no grupo do WhatsApp"
                 }
               >
                 ⚓ Embarcar
               </Button>
             ) : (
-              <span className="text-xs font-medium px-3 py-2 rounded-lg bg-gray-100 text-text-light">
-                {currentShip?.status === "CONCLUIDO"
-                  ? "✅ Navio concluído"
-                  : currentShip?.status === "CANCELADO"
-                    ? "🚫 Navio cancelado"
-                    : "⚓ Já embarcado (Em Operação) — faça o Retorno na aba ao lado"}
-              </span>
+              <>
+                {currentShip?.status === "EM_OPERACAO" && (
+                  <Button size="sm" variant="secondary" onClick={handleSendEmbarkList} disabled={sendingEmbarkList || embarking} title="Manda a lista de novo no grupo do WhatsApp com o PDF anexado">
+                    {sendingEmbarkList ? "Enviando..." : "📨 Reenviar lista pro WhatsApp"}
+                  </Button>
+                )}
+                <span className="text-xs font-medium px-3 py-2 rounded-lg bg-gray-100 text-text-light">
+                  {currentShip?.status === "CONCLUIDO"
+                    ? "✅ Navio concluído"
+                    : currentShip?.status === "CANCELADO"
+                      ? "🚫 Navio cancelado"
+                      : "⚓ Já embarcado (Em Operação) — faça o Retorno na aba ao lado"}
+                </span>
+              </>
             )}
           </div>
         )}
@@ -1716,7 +1728,7 @@ export function EscalacaoEstoquePage() {
         onClose={() => setConfirmEmbark(false)}
         onConfirm={handleEmbarcar}
         title="Confirmar Embarque"
-        message={`Embarcar ${selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"} no navio "${currentShip?.name}"? Os materiais do kit serão baixados do Estoque e a comida do Rancho desta equipe. O aviso de embarque (com a lista em PDF) vai automático pro grupo do WhatsApp.${hasMissing ? ` ⚠️ Atenção: ${missingNames.length} item(ns) sem quantidade pra equipe (${missingSummary}) — só o que a equipe tem será baixado.` : ""}`}
+        message={`Embarcar ${selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"} no navio "${currentShip?.name}"? Os materiais do kit serão baixados do Estoque e a comida do Rancho desta equipe. A lista (com o PDF) vai automático pro grupo do WhatsApp e o navio passa pra Em Operação — aí abre a aba Retorno.${hasMissing ? ` ⚠️ Atenção: ${missingNames.length} item(ns) sem quantidade pra equipe (${missingSummary}) — só o que a equipe tem será baixado.` : ""}`}
         confirmLabel="⚓ Confirmar Embarque"
         variant="warning"
         loading={embarking}
