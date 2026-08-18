@@ -320,10 +320,10 @@ export default function NaviosPage() {
   // "Fechar" navio Em Operação: a Data de Saída é informada no resumo do navio
   // (modal de detalhe), onde também dá pra puxar as compras antes de fechar.
   const [closeDate, setCloseDate] = useState("");
-  // O navio só pode ser fechado depois de ter Retorno registrado (aba
-  // Embarque/Retorno). null = ainda carregando essa informação.
+  // Se o navio ainda não tem Retorno registrado (aba Embarque/Retorno), o
+  // "Fechar" avisa que a conferência fica pendente — mas não trava o fechamento.
+  // null = ainda carregando essa informação.
   const [shipHasReturn, setShipHasReturn] = useState<boolean | null>(null);
-  const [closeError, setCloseError] = useState<string | null>(null);
 
   const canEdit = profile ? hasPermission(profile.role, "NAVIOS", "edit") : false;
   const canCreate = profile ? hasPermission(profile.role, "NAVIOS", "create") : false;
@@ -1092,17 +1092,10 @@ export default function NaviosPage() {
 
   // Fecha o navio: registra a data de saída, marca CONCLUIDO e fecha a ponta
   // do(s) job(s) (end_date). Só depois disso o navio aparece no Financeiro.
+  // Retorno NÃO é obrigatório pra fechar: sem Retorno o navio continua na aba
+  // Embarque/Retorno (mesmo Concluído) até a conferência de material ser feita lá.
   async function handleClose() {
     if (!selectedShip || !closeDate) return;
-    // Trava: só fecha se houver Retorno registrado pra este navio. Assim ninguém
-    // conclui um navio sem passar pela conferência de retorno de material.
-    const { data: rets } = await db.from("material_returns").select("id").eq("ship_id", selectedShip.id);
-    if (!Array.isArray(rets) || rets.length === 0) {
-      setShipHasReturn(false);
-      setCloseError("Este navio ainda não tem Retorno. Faça o Retorno em Controle › Embarque/Retorno antes de fechar.");
-      return;
-    }
-    setCloseError(null);
     await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate }).eq("id", selectedShip.id);
     await db.from("jobs").update({ end_date: closeDate }).eq("ship_id", selectedShip.id);
     // Solta a tripulação AGORA. Confiar na varredura por data de saída deixava
@@ -1175,8 +1168,7 @@ export default function NaviosPage() {
     setPullError(null);
     // Data de Saída do "Fechar Navio" (rodapé do resumo): a já registrada ou hoje.
     setCloseDate(ship.departure_date ? ship.departure_date.slice(0, 10) : new Date().toISOString().slice(0, 10));
-    setCloseError(null);
-    // Descobre se o navio já tem Retorno — o "Fechar Navio" depende disso.
+    // Descobre se o navio já tem Retorno — o "Fechar Navio" avisa se ainda falta.
     setShipHasReturn(null);
     (async () => {
       const { data } = await db.from("material_returns").select("id").eq("ship_id", ship.id);
@@ -1965,13 +1957,11 @@ export default function NaviosPage() {
                     🏁 Registra a saída, marca como <strong>Concluído</strong> e libera o navio pro <strong>Financeiro</strong>. Puxe as compras acima antes, se precisar.
                   </p>
                   {shipHasReturn === false && (
-                    <p className="text-xs text-red-700 bg-red-50 border border-red-300 rounded-lg px-3 py-2">
-                      ⚠️ Este navio ainda não tem <strong>Retorno</strong> registrado. Faça o Retorno em{" "}
-                      <strong>Controle › Embarque/Retorno</strong> antes de fechar (ao confirmar o retorno o navio já fecha sozinho).
+                    <p className="text-xs text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2">
+                      ⚠️ Este navio ainda não tem <strong>Retorno</strong> registrado — dá pra fechar mesmo assim.
+                      Ele continua em <strong>Controle › Embarque/Retorno</strong> até o Retorno ser feito
+                      (a conferência do material e o resumo no WhatsApp podem ficar pra depois).
                     </p>
-                  )}
-                  {closeError && (
-                    <p className="text-xs text-red-700 bg-red-50 border border-red-300 rounded-lg px-3 py-2">{closeError}</p>
                   )}
                   <div className="flex flex-col sm:flex-row sm:items-end gap-2">
                     <div className="flex-1">
@@ -1985,8 +1975,7 @@ export default function NaviosPage() {
                     </div>
                     <button
                       onClick={handleClose}
-                      disabled={!closeDate || shipHasReturn === false}
-                      title={shipHasReturn === false ? "Faça o Retorno em Embarque/Retorno antes de fechar" : undefined}
+                      disabled={!closeDate}
                       className="py-2 px-4 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 transition disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                     >
                       🏁 Fechar Navio

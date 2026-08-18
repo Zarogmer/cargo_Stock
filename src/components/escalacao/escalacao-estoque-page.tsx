@@ -22,6 +22,7 @@ interface Ship {
   status: string;
   assigned_team: string | null;
   cargo_type: string | null; // produto/carga — sai no "Produto" do Check List
+  services?: string[] | null; // ["COSTADO"] = navio de Costado (sem kit/Retorno)
 }
 
 // Item do kit de embarque (embark_kit_items) + o material do Estoque ligado.
@@ -142,7 +143,8 @@ export function EscalacaoEstoquePage() {
   const [ships, setShips] = useState<Ship[]>([]);
   const [selectedShip, setSelectedShip] = useState<string>("");
   // Mostrar navios finalizados (Concluído/Cancelado) no seletor — igual à aba
-  // Escalação. Por padrão só os ativos (Agendado / Em Operação).
+  // Escalação. Por padrão só os ativos (Agendado / Em Operação) + os Concluídos
+  // que ainda não têm Retorno registrado (fechados direto na aba Navios).
   const [showFinished, setShowFinished] = useState(false);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [kitItems, setKitItems] = useState<KitItem[]>([]);
@@ -216,15 +218,24 @@ export function EscalacaoEstoquePage() {
   // Navio "ativo" = ainda em andamento (Agendado / Em Operação). Finalizados
   // (Concluído / Cancelado) só aparecem com o toggle "mostrar finalizados".
   const isActiveShip = (s: Ship) => s.status === "AGENDADO" || s.status === "EM_OPERACAO";
-  const visibleShips = showFinished ? ships : ships.filter(isActiveShip);
+  // Navio fechado direto na aba Navios (Concluído SEM Retorno registrado)
+  // continua na lista padrão: o Retorno pode ser feito depois do fechamento,
+  // e é ele que tira o navio daqui. Costado e navio sem equipe ficam de fora —
+  // não têm kit de material, logo nunca teriam Retorno pra registrar.
+  const shipHasReturn = (shipId: string) => returns.some((r) => r.ship_id === shipId);
+  const isCostadoShip = (s: Ship) => (s.services || []).includes("COSTADO");
+  const isPendingShip = (s: Ship) => isActiveShip(s)
+    || (s.status === "CONCLUIDO" && !!s.assigned_team && !isCostadoShip(s) && !shipHasReturn(s.id));
+  const visibleShips = showFinished ? ships : ships.filter(isPendingShip);
 
   useEffect(() => {
-    // Auto-seleciona o 1º navio ativo (não um finalizado que veio junto na query).
+    // Auto-seleciona o 1º navio pendente (não um finalizado que veio junto na query).
     if (!selectedShip) {
-      const first = ships.find(isActiveShip) || ships[0];
+      const first = ships.find(isPendingShip) || ships[0];
       if (first) setSelectedShip(first.id);
     }
-  }, [ships, selectedShip]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ships, returns, selectedShip]);
 
   const currentShip = ships.find((s) => s.id === selectedShip);
   // A equipe vem do cadastro do navio (aba Navios) — não se escolhe aqui.
@@ -234,12 +245,16 @@ export function EscalacaoEstoquePage() {
     : null) as "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "EQUIPE_4" | null;
 
   // Navio já EM OPERAÇÃO (embarque feito) abre direto na aba Retorno; agendado
-  // abre no Embarque. Só troca ao MUDAR de navio — respeita o clique manual.
+  // abre no Embarque. Concluído sem Retorno também abre no Retorno — é o que
+  // falta fazer nele. Só troca ao MUDAR de navio — respeita o clique manual.
   const lastTabShipRef = useRef<string | null>(null);
   useEffect(() => {
     if (!currentShip || lastTabShipRef.current === currentShip.id) return;
     lastTabShipRef.current = currentShip.id;
-    setTab(currentShip.status === "EM_OPERACAO" ? "retorno" : "embarque");
+    const wantsReturn = currentShip.status === "EM_OPERACAO"
+      || (currentShip.status === "CONCLUIDO" && isPendingShip(currentShip));
+    setTab(wantsReturn ? "retorno" : "embarque");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentShip]);
 
   // Ajustes deste navio (e desta equipe — trocando a equipe do navio, os
@@ -1083,6 +1098,8 @@ export function EscalacaoEstoquePage() {
       //   • fecha o end_date do(s) job(s) — só assim o navio entra no Financeiro;
       //   • solta a tripulação na hora (senão fica "Embarcado" o resto do dia).
       // Também garante que não haja um 2º retorno (navio sai da lista ativa).
+      // Navio JÁ Concluído (fechado antes na aba Navios, sem Retorno) pula tudo
+      // isso: aqui só confere o material — e o navio sai da lista pendente.
       if (currentShip.status !== "CONCLUIDO") {
         const closeDate = (overrideCloseDate && overrideCloseDate.slice(0, 10))
           || (currentShip.departure_date ? String(currentShip.departure_date).slice(0, 10) : today);
@@ -1334,7 +1351,9 @@ export function EscalacaoEstoquePage() {
                 )}
                 <span className="text-xs font-medium px-3 py-2 rounded-lg bg-gray-100 text-text-light">
                   {currentShip?.status === "CONCLUIDO"
-                    ? "✅ Navio concluído"
+                    ? (shipHasReturn(currentShip.id)
+                      ? "✅ Navio concluído"
+                      : "✅ Navio concluído — falta o Retorno na aba ao lado")
                     : currentShip?.status === "CANCELADO"
                       ? "🚫 Navio cancelado"
                       : "⚓ Já embarcado (Em Operação) — faça o Retorno na aba ao lado"}
@@ -1379,7 +1398,8 @@ export function EscalacaoEstoquePage() {
           saving={savingReturn}
           sending={sendingWhats}
           canEdit={canEmbarcar}
-          concluded={!!currentShip && !isActiveShip(currentShip)}
+          concluded={!!currentShip && !isActiveShip(currentShip) && (currentShip.status !== "CONCLUIDO" || !!existingReturn)}
+          closedPendingReturn={!!currentShip && currentShip.status === "CONCLUIDO" && !existingReturn}
           message={returnMsg}
           history={existingReturn ? [existingReturn] : []}
           editing={!!existingReturn}
@@ -1742,30 +1762,44 @@ export function EscalacaoEstoquePage() {
         loading={embarking}
       />
 
-      {/* Confirmar retorno: pede a data de saída do navio, que fecha ele. */}
+      {/* Confirmar retorno: pede a data de saída do navio, que fecha ele. Navio
+          já Concluído (fechado antes na aba Navios) não pede data nenhuma — o
+          retorno só confere o material e manda o resumo no WhatsApp. */}
       <Modal open={confirmReturnOpen} onClose={() => setConfirmReturnOpen(false)} title="Confirmar Retorno" maxWidth="max-w-md">
         <div className="space-y-4">
-          <p className="text-sm text-text-light">
-            Confirmar o retorno de <strong>{selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"}</strong> no
-            navio <strong>{currentShip?.name}</strong>. O que voltou bom volta pro Estoque e o navio é
-            <strong> fechado (Concluído)</strong> com a data abaixo.
-          </p>
-          <div>
-            <label className="block text-sm font-medium text-text mb-1">Data de saída do navio</label>
-            <input
-              type="date"
-              value={closeDateDraft}
-              onChange={(e) => setCloseDateDraft(e.target.value)}
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
-            />
-            <p className="text-xs text-text-light mt-1">É essa a data que fecha o navio, entra no Financeiro e solta a tripulação.</p>
-          </div>
+          {currentShip?.status === "CONCLUIDO" ? (
+            <p className="text-sm text-text-light">
+              Confirmar o retorno de <strong>{selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"}</strong> no
+              navio <strong>{currentShip?.name}</strong>. O que voltou bom volta pro Estoque — o navio já está
+              <strong> Concluído</strong>, então nada muda no fechamento.
+            </p>
+          ) : (
+            <>
+              <p className="text-sm text-text-light">
+                Confirmar o retorno de <strong>{selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"}</strong> no
+                navio <strong>{currentShip?.name}</strong>. O que voltou bom volta pro Estoque e o navio é
+                <strong> fechado (Concluído)</strong> com a data abaixo.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-text mb-1">Data de saída do navio</label>
+                <input
+                  type="date"
+                  value={closeDateDraft}
+                  onChange={(e) => setCloseDateDraft(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+                />
+                <p className="text-xs text-text-light mt-1">É essa a data que fecha o navio, entra no Financeiro e solta a tripulação.</p>
+              </div>
+            </>
+          )}
           <div className="flex justify-end gap-2 pt-1">
             <Button size="sm" variant="secondary" onClick={() => setConfirmReturnOpen(false)} disabled={savingReturn}>
               Cancelar
             </Button>
-            <Button size="sm" onClick={() => handleSaveReturn(closeDateDraft)} disabled={savingReturn || !closeDateDraft}>
-              {savingReturn ? "Fechando..." : "✅ Confirmar e fechar navio"}
+            <Button size="sm" onClick={() => handleSaveReturn(closeDateDraft)} disabled={savingReturn || (currentShip?.status !== "CONCLUIDO" && !closeDateDraft)}>
+              {savingReturn
+                ? "Confirmando..."
+                : currentShip?.status === "CONCLUIDO" ? "✅ Confirmar Retorno" : "✅ Confirmar e fechar navio"}
             </Button>
           </div>
         </div>
@@ -1782,7 +1816,7 @@ interface ReturnKitRow { id: number; stock_item_id: number; estName: string; nee
 
 function RetornoSection({
   shipName, team, teamKit, ranchoKit, draft, setDraft, notes, setNotes,
-  onSave, onSend, onDownload, downloading, saving, sending, canEdit, concluded, message, history, editing,
+  onSave, onSend, onDownload, downloading, saving, sending, canEdit, concluded, closedPendingReturn, message, history, editing,
   renamingId, renameValue, savingRename, onStartRename, onChangeRename, onCancelRename, onSaveRename,
 }: {
   shipName: string;
@@ -1803,6 +1837,9 @@ function RetornoSection({
   // true = navio já concluído (retorno confirmado): campos travados e sem
   // reconfirmar (um retorno por navio).
   concluded: boolean;
+  // true = navio fechado direto na aba Navios (Concluído) mas ainda SEM
+  // Retorno: os campos seguem editáveis pra fazer o Retorno depois.
+  closedPendingReturn: boolean;
   message: string | null;
   history: MaterialReturn[];
   editing: boolean;
@@ -1997,6 +2034,11 @@ function RetornoSection({
           <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
             ✅ Navio finalizado — o retorno já foi fechado (aparece em &ldquo;mostrar finalizados&rdquo;).
             Os campos ficam só pra consulta.
+          </p>
+        ) : closedPendingReturn ? (
+          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            🏁 Navio já fechado (<strong>Concluído</strong>) — falta o <strong>Retorno</strong> do material.
+            Confira abaixo e confirme: o resumo vai pro WhatsApp normalmente e o navio sai desta lista.
           </p>
         ) : editing && (
           <p className="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
@@ -2295,7 +2337,7 @@ function ShipSelector({
           </div>
           <div className="px-3 py-2 bg-gray-50 border-t border-border flex items-center justify-between gap-2">
             <span className="text-[10px] text-text-light">
-              {ships.length} navio(s) {showFinished ? "(inclui finalizados)" : "(Agendado / Em Operação)"}
+              {ships.length} navio(s) {showFinished ? "(inclui finalizados)" : "(Agendado / Em Operação / aguardando Retorno)"}
             </span>
             <label className="flex items-center gap-1.5 text-[11px] text-text-light cursor-pointer select-none">
               <input
