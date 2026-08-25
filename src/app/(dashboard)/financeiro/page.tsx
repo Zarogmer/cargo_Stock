@@ -61,6 +61,7 @@ import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
+import { DollarTicker, useDollarQuote } from "@/components/dollar-ticker";
 import { DemonstracaoFinanceiraPage } from "@/components/financeiro/demonstracao-financeira-page";
 import { RelatorioValesPage } from "@/components/financeiro/relatorio-vales-page";
 import {
@@ -570,6 +571,9 @@ export default function FinanceiroPage() {
   // Demonstração Financeira traz folha e distribuição aos sócios: mesma régua do
   // módulo bancário (Estágio fica de fora). Casa com o roles: do menu em rbac.ts.
   const canSeeDemonstracao = canAccessFinanceiroBanco(role);
+  // Cotação do dólar no Pagamento de Navios — o navio é cobrado em dólar, então
+  // o câmbio do dia fica à mão na hora de fechar o valor (mesma fonte do Dashboard).
+  const dollar = useDollarQuote();
 
   const [functions, setFunctions] = useState<JobFunction[]>([]);
   const [units, setUnits] = useState<WorkUnit[]>([]);
@@ -818,19 +822,22 @@ export default function FinanceiroPage() {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
-      <div>
-        <div className="flex items-baseline gap-2 flex-wrap">
-          <h1 className="text-2xl font-bold text-text">Financeiro 💰</h1>
-          {activeTabLabel && (
-            <>
-              <span className="text-text-light">›</span>
-              <span className="text-lg font-semibold text-text-light">{activeTabLabel}</span>
-            </>
-          )}
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+        <div>
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <h1 className="text-2xl font-bold text-text">Financeiro 💰</h1>
+            {activeTabLabel && (
+              <>
+                <span className="text-text-light">›</span>
+                <span className="text-lg font-semibold text-text-light">{activeTabLabel}</span>
+              </>
+            )}
+          </div>
+          <p className="text-text-light text-sm mt-0.5">
+            Catálogo de funções, pagamentos e documentos
+          </p>
         </div>
-        <p className="text-text-light text-sm mt-0.5">
-          Catálogo de funções, pagamentos e documentos
-        </p>
+        {initialTab === "navios" && <DollarTicker dollar={dollar} />}
       </div>
 
       {/* Filtro de período/porto/cliente + KPIs — dirigem as listas de pagamento
@@ -4050,6 +4057,10 @@ function JobDetailModal({
       // Funcionários começam na linha 9 (linha 8 fica em branco como no template)
       let row = 9;
       let totalFolha = 0, totalNavio = 0, totalAdto = 0, totalDescGeral = 0;
+      // Quanto vai pra cada banco (soma do PAGTO NA FOLHA) — o financeiro precisa
+      // saber quanto depositar no Itaú e quanto no Santander, e quanto sacar pra
+      // entregar em mãos a quem não tem conta.
+      const porBanco: Record<BankBucket, number> = { ITAU: 0, SANTANDER: 0, TRAZER: 0, OUTROS: 0 };
       // Rateio da perda: cada colaborador paga a sua parte UMA vez (no Costado
       // a mesma pessoa aparece em várias linhas).
       const descGeralSeen = new Set<number>();
@@ -4074,13 +4085,14 @@ function JobDetailModal({
         totalNavio += total;
         totalAdto += adto;
         totalDescGeral += descGeral;
-        // Sem conta bancária = pagamento em espécie ("TRAZER SALÁRIO"). É o valor
-        // que a coluna ITAÚ/SANTANDER passa a mostrar, pra filtrar quem recebe fora
-        // do banco. Com conta, mostra o banco (base do filtro Itaú/Santander).
+        // Coluna ITAÚ/SANTANDER: banco + TIPO DA CONTA (conta salário, corrente,
+        // poupança, digital). Sem conta bancária o pagamento é em espécie —
+        // "S/CONTA - TRAZER SALÁRIO". É por essa coluna que a folha é filtrada.
         const hasAccount = !!(e?.bank_account && String(e.bank_account).trim());
         const bankCell = hasAccount
           ? formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null)
-          : "TRAZER SALÁRIO";
+          : "S/CONTA - TRAZER SALÁRIO";
+        porBanco[bankBucket(e?.bank_name ?? null, hasAccount)] += folha;
         set(`B${row}`, idx + 1, styleCellCenter, "n");
         set(`C${row}`, e?.name || a.job_functions?.name || `#${a.function_id}`, styleCellCenter);
         set(`D${row}`, e?.bank_agency || "", styleCellCenter);
@@ -4113,12 +4125,29 @@ function JobDetailModal({
       set(`F${row}`, "PAGTO FOLHA:", styleSummaryLabel);
       set(`G${row}`, totalFolha, styleSummaryMoney, "n"); row++;
       set(`F${row}`, "PAGTO NAVIO:", styleSummaryLabel);
-      set(`G${row}`, totalNavio, styleSummaryMoney, "n");
+      set(`G${row}`, totalNavio, styleSummaryMoney, "n"); row += 2;
+
+      // Quebra por banco do PAGTO NA FOLHA: quanto depositar em cada banco.
+      // Itaú e Santander sempre aparecem (mesmo zerados, pra a linha existir);
+      // "A TRAZER" e "OUTROS" só quando têm valor. A soma fecha com PAGTO FOLHA.
+      set(`F${row}`, "TOTAL ITAÚ:", styleTotalLabel);
+      set(`G${row}`, porBanco.ITAU, styleTotalMoney, "n"); row++;
+      set(`F${row}`, "TOTAL SANTANDER:", styleTotalLabel);
+      set(`G${row}`, porBanco.SANTANDER, styleTotalMoney, "n"); row++;
+      if (porBanco.TRAZER > 0) {
+        set(`F${row}`, "TOTAL A TRAZER (s/ conta):", styleTotalLabel);
+        set(`G${row}`, porBanco.TRAZER, styleTotalMoney, "n"); row++;
+      }
+      if (porBanco.OUTROS > 0) {
+        set(`F${row}`, "TOTAL OUTROS BANCOS:", styleTotalLabel);
+        set(`G${row}`, porBanco.OUTROS, styleTotalMoney, "n"); row++;
+      }
 
       ws["!ref"] = `A1:M${row + 2}`;
       ws["!cols"] = [
         { wch: 3 }, { wch: 5 }, { wch: 38 }, { wch: 10 }, { wch: 16 },
-        { wch: 18 }, { wch: 15 }, { wch: 16 }, { wch: 15 }, { wch: 70 },
+        // F cabe "SANTANDER - Conta Salário" e os rótulos "TOTAL A TRAZER (s/ conta):"
+        { wch: 28 }, { wch: 15 }, { wch: 16 }, { wch: 15 }, { wch: 70 },
       ];
       ws["!rows"] = Array.from({ length: row + 2 }, (_, i) => (i === 6 ? { hpt: 38 } : { hpt: 18 }));
       ws["!merges"] = [
@@ -6736,18 +6765,35 @@ async function downloadXlsxWithLogo(out: ArrayBuffer, filename: string, logoShee
   triggerBlobDownload(blob, filename);
 }
 
+// Rótulo da coluna ITAÚ/SANTANDER da Folha de Pagamento. O TIPO DA CONTA vem
+// sempre explícito (conta salário / corrente / poupança / digital) — é assunto
+// recorrente no pagamento e antes "corrente" não aparecia, então a planilha
+// mostrava só "ITAU" e ninguém sabia que conta era. Sem banco = "S/CONTA";
+// banco sem tipo cadastrado = "BANCO - S/tipo", pra cobrar o cadastro no RH.
+const BANK_ACCOUNT_TYPE_LABELS: Record<string, string> = {
+  CONTA_SAL: "Conta Salário",
+  CORRENTE: "Corrente",
+  POUPANCA: "Poupança",
+  DIGITAL: "Digital",
+};
 function formatBankLabel(name: string | null, type: string | null): string {
-  if (!name) return "";
-  const cleanName = name.toUpperCase();
-  if (!type) return cleanName;
-  const tMap: Record<string, string> = {
-    POUPANCA: "POUPANÇA",
-    CONTA_SAL: "Salário",
-    DIGITAL: "Digital",
-    CORRENTE: "",
-  };
-  const suffix = tMap[type] ?? type;
-  return suffix ? `${cleanName}-${suffix}` : cleanName;
+  const cleanName = (name || "").trim().toUpperCase();
+  const suffix = type ? (BANK_ACCOUNT_TYPE_LABELS[type] ?? type) : "S/tipo";
+  if (!cleanName) return type ? `S/CONTA - ${suffix}` : "S/CONTA";
+  return `${cleanName} - ${suffix}`;
+}
+
+// Em qual "bolso" o pagamento de um colaborador cai, pra somar TOTAL ITAÚ /
+// TOTAL SANTANDER no rodapé da Folha de Pagamento. Sem conta, o dinheiro é
+// sacado e entregue em mãos ("A TRAZER"); outros bancos entram em OUTROS pra o
+// somatório fechar com o TOTAL da coluna.
+type BankBucket = "ITAU" | "SANTANDER" | "TRAZER" | "OUTROS";
+function bankBucket(name: string | null, hasAccount: boolean): BankBucket {
+  if (!hasAccount) return "TRAZER";
+  const n = (name || "").trim().toUpperCase();
+  if (n.startsWith("ITA")) return "ITAU";
+  if (n.startsWith("SANTANDER")) return "SANTANDER";
+  return "OUTROS";
 }
 
 function formatDateBR(iso: string | null | undefined): string {

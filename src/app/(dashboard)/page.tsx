@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
+import { DollarTicker, useDollarQuote } from "@/components/dollar-ticker";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
@@ -96,22 +97,14 @@ interface CrewSituation {
   disponiveis: CrewMember[];
 }
 
-interface DollarQuote {
-  bid: string;
-  ask: string;
-  high: string;
-  low: string;
-  pctChange: string;
-  timestamp: string;
-}
-
 export default function DashboardPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
 
   const [stats, setStats] = useState<DashboardStats>({ totalMateriais: 0, totalRancho: 0, totalEmployees: 0, totalMaquinario: 0, totalFerramentas: 0, totalEletrica: 0, totalEpis: 0, totalUniforms: 0, totalConversations: 0, totalSolicitacoes: 0, totalCompras: 0 });
   const [movements, setMovements] = useState<RecentMovement[]>([]);
-  const [dollar, setDollar] = useState<DollarQuote | null>(null);
+  // Cotação do dólar — compartilhada com o Pagamento de Navios (components/dollar-ticker).
+  const dollar = useDollarQuote();
   const [stockItems, setStockItems] = useState<StockChartItem[]>([]);
   const [purchaseItems, setPurchaseItems] = useState<PurchaseLite[]>([]);
   const [shipsByMonth, setShipsByMonth] = useState<{ month: string; count: number }[]>([]);
@@ -511,24 +504,6 @@ export default function DashboardPage() {
     }
   }, []);
 
-  // Fetch dollar quote
-  const fetchDollar = useCallback(async () => {
-    try {
-      const res = await fetch("https://economia.awesomeapi.com.br/json/last/USD-BRL");
-      const data = await res.json();
-      const usd = data.USDBRL;
-      setDollar({
-        bid: parseFloat(usd.bid).toFixed(2),
-        ask: parseFloat(usd.ask).toFixed(2),
-        high: parseFloat(usd.high).toFixed(2),
-        low: parseFloat(usd.low).toFixed(2),
-        pctChange: usd.pctChange,
-        timestamp: usd.create_date,
-      });
-    } catch {
-      console.error("Failed to fetch dollar quote");
-    }
-  }, []);
 
   // SUPERVISOR não tem Dashboard: a home dele são os Relatórios de Bordo.
   // (Também evita a rajada de chamadas ao /api/db, que é bloqueado pro papel.)
@@ -540,12 +515,8 @@ export default function DashboardPage() {
   useEffect(() => {
     if (isSupervisor) return;
     loadDashboard();
-    fetchDollar();
-    // Refresh dollar every 5 minutes
-    const interval = setInterval(fetchDollar, 5 * 60 * 1000);
-    return () => clearInterval(interval);
     // pathname forces reload when navigating back to dashboard
-  }, [loadDashboard, fetchDollar, pathname, isSupervisor]);
+  }, [loadDashboard, pathname, isSupervisor]);
 
   if (loading) {
     return (
@@ -1061,38 +1032,6 @@ function StatCard({
       </div>
       <p className="text-3xl font-semibold tracking-tight text-text mt-3 tabular-nums">{value}</p>
     </Link>
-  );
-}
-
-function DollarTicker({ dollar }: { dollar: DollarQuote | null }) {
-  if (!dollar) {
-    return (
-      <div className="flex items-center gap-2 text-xs text-text-light">
-        <span className="w-1.5 h-1.5 rounded-full bg-gray-300 animate-pulse" />
-        <span>Carregando cotação...</span>
-      </div>
-    );
-  }
-  const pct = parseFloat(dollar.pctChange);
-  const positive = pct >= 0;
-  return (
-    <div className="inline-flex items-baseline gap-3 self-start sm:self-end">
-      <div className="flex items-baseline gap-1.5">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-text-light">USD</span>
-        <span className="text-base font-semibold text-text tabular-nums">R$ {dollar.bid}</span>
-      </div>
-      <span
-        className={`inline-flex items-center gap-1 text-[11px] font-medium tabular-nums ${
-          positive ? "text-emerald-600" : "text-red-600"
-        }`}
-      >
-        <span>{positive ? "▲" : "▼"}</span>
-        {Math.abs(pct).toFixed(2)}%
-      </span>
-      <span className="hidden md:inline text-[11px] text-text-light tabular-nums">
-        L {dollar.low} · H {dollar.high}
-      </span>
-    </div>
   );
 }
 
