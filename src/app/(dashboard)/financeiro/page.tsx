@@ -553,7 +553,10 @@ function PayShipModal({
 export default function FinanceiroPage() {
   const { profile } = useAuth();
   const searchParams = useSearchParams();
-  const rawTab = searchParams.get("tab") || "funcoes";
+  // Sem ?tab= o Financeiro abre no Pagamento de Navios — "Valores" saiu do menu
+  // (o valor de cada colaborador é digitado direto na tabela do navio) e não
+  // serve mais de porta de entrada. A tela continua acessível pela URL.
+  const rawTab = searchParams.get("tab") || "navios";
   // "Pagamento de Embarque" e "Pagamento de Costado" viraram uma aba só
   // ("Pagamento de Navios"). Mantém links antigos funcionando: embarque/costado
   // caem na aba unificada, e o tipo define qual visão abre primeiro.
@@ -3113,6 +3116,21 @@ interface PurchaseOrderLite {
   ship_name: string | null;
 }
 
+// Resumo do material do navio (Embarque/Retorno) mostrado nas Despesas do
+// Pagamento de Navios. Fica no módulo pra ser constante entre renders.
+type ReturnLine = { name: string; qty: number; value: number; priced: boolean };
+interface MaterialSummary {
+  went: ReturnLine[];
+  lost: ReturnLine[];
+  consumed: ReturnLine[];
+  broken: ReturnLine[];
+  hasReturn: boolean;
+  unpriced: number;
+}
+const EMPTY_RET_SUMMARY: MaterialSummary = {
+  went: [], lost: [], consumed: [], broken: [], hasReturn: false, unpriced: 0,
+};
+
 function JobDetailModal({
   open, job, allocations, adminAllocations = [], adjustments, functions, employees, specialRates, canEdit, canEditFunction = false, profileName, kindFilter, shipServices = [], onClose, onChange,
 }: {
@@ -3156,64 +3174,101 @@ function JobDetailModal({
     kindFilter === "EMBARQUE" ? Math.max(1, Number(job?.holds_count || 1))
     : 1; // Costado: rate já é valor/turno, base = rate × qty.
 
-  // Materiais avariados/perdidos do Retorno deste navio (Embarque/Retorno),
-  // mostrados nas Despesas. Avariado a equipe trouxe (não custa); perdido vira
-  // custo do navio (já lançado como MATERIAL_PERDIDO). Aqui é o registro do que
-  // aconteceu com o kit, pra ficar visível no financeiro.
-  type ReturnLine = { name: string; qty: number; value: number };
-  const EMPTY_RET_SUMMARY = { lost: [] as ReturnLine[], consumed: [] as ReturnLine[], broken: [] as ReturnLine[] };
-  const [returnSummary, setReturnSummary] = useState<{
-    lost: ReturnLine[];
-    consumed: ReturnLine[];
-    broken: ReturnLine[];
-  }>(EMPTY_RET_SUMMARY);
+  // Material do navio (Embarque/Retorno), mostrado nas Despesas com o valor de
+  // estoque de cada item:
+  //   📦 FOI  — o que saiu do Almoxarifado no "Embarcar" (baixas reais).
+  //   ❌ PERDIDO  — não voltou: custo do navio, rateado pela equipe (MATERIAL_PERDIDO).
+  //   🛢️ INSUMO   — consumido de propósito: não custa ao navio.
+  //   🔧 AVARIADO — voltou quebrado (a equipe trouxe): não custa ao navio.
+  // Fica visível mesmo sem retorno conferido, pra o financeiro enxergar o que
+  // embarcou e cobrar a conferência do navio que ainda está pendente.
+  const [returnSummary, setReturnSummary] = useState<MaterialSummary>(EMPTY_RET_SUMMARY);
   useEffect(() => {
     if (!open || !job?.ship_id) { setReturnSummary(EMPTY_RET_SUMMARY); return; }
+    const shipId = job.ship_id;
     let active = true;
     (async () => {
-      const { data } = await db
-        .from("material_returns")
-        .select("material_return_items(item_name, stock_item_id, broken_qty, lost_qty, consumed_qty)")
-        .eq("ship_id", job.ship_id);
+      // As baixas do Embarque são marcadas pelo NOME do navio na observação do
+      // movimento ("Embarque: NAVIO (EQUIPE_X)"), então precisamos do nome atual.
+      const { data: shipRows } = await db.from("ships").select("id, name").eq("id", shipId);
+      const shipName = ((shipRows as { name: string }[] | null)?.[0]?.name || job.name || "").trim();
+      const [retRes, movRes] = await Promise.all([
+        db.from("material_returns")
+          .select("material_return_items(item_name, stock_item_id, broken_qty, lost_qty, consumed_qty)")
+          .eq("ship_id", shipId),
+        shipName
+          ? db.from("stock_movements").select("stock_item_id, quantity, movement_type, notes").like("notes", shipName)
+          : Promise.resolve({ data: [] as unknown[] }),
+      ]);
       if (!active) return;
       type RI = { item_name: string; stock_item_id: number | null; broken_qty: number; lost_qty: number; consumed_qty: number };
-      const rows = (data as { material_return_items?: RI[] }[] | null) || [];
-      const items = rows.flatMap((r) => r.material_return_items || []);
+      const retRows = (retRes.data as { material_return_items?: RI[] }[] | null) || [];
+      const items = retRows.flatMap((r) => r.material_return_items || []);
+
+      // Baixas do "Embarcar" deste navio: "Embarque: NAVIO (EQUIPE)" e
+      // "Embarque (materiais): NAVIO (EQUIPE)". O like() já filtrou pelo nome;
+      // aqui garantimos que é o navio certo (nome pode ser prefixo de outro).
+      type MV = { stock_item_id: number; quantity: number; movement_type: string; notes: string | null };
+      const EMBARK_RE = /^Embarque(?:\s*\([^)]*\))?:\s*/;
+      const movs = ((movRes.data as MV[] | null) || []).filter((m) => {
+        if (m.movement_type !== "BAIXA") return false;
+        const n = m.notes || "";
+        if (!EMBARK_RE.test(n)) return false;
+        return n.replace(EMBARK_RE, "").startsWith(`${shipName} (`);
+      });
+
       // Valor unitário do estoque (coluna sensível — o /api/db só entrega pra
       // gestão; sem acesso vem 0, e aí o valor mostrado é 0 mesmo).
-      const ids = Array.from(new Set(items.map((it) => it.stock_item_id).filter((x): x is number => x != null)));
+      const ids = Array.from(new Set([
+        ...items.map((it) => it.stock_item_id),
+        ...movs.map((m) => m.stock_item_id),
+      ].filter((x): x is number => x != null)));
       const valueById = new Map<number, number>();
+      const nameById = new Map<number, string>();
       if (ids.length) {
-        const { data: sdata } = await db.from("stock_items").select("id, unit_value").in("id", ids);
-        for (const s of (sdata as { id: number; unit_value: number | null }[] | null) || []) {
+        const { data: sdata } = await db.from("stock_items").select("id, name, unit_value").in("id", ids);
+        for (const s of (sdata as { id: number; name: string; unit_value: number | null }[] | null) || []) {
           valueById.set(s.id, Number(s.unit_value || 0));
+          nameById.set(s.id, s.name);
         }
       }
       if (!active) return;
+      const unpricedNames = new Set<string>();
       // Agrupa por nome do item, somando qtd e valor (unit_value × qtd).
-      const acc = (pick: (it: RI) => number): ReturnLine[] => {
-        const m = new Map<string, { qty: number; value: number }>();
-        for (const it of items) {
-          const q = pick(it) || 0;
-          if (q <= 0) continue;
-          const unit = it.stock_item_id != null ? (valueById.get(it.stock_item_id) || 0) : 0;
-          const cur = m.get(it.item_name) || { qty: 0, value: 0 };
-          cur.qty += q;
-          cur.value += unit * q;
-          m.set(it.item_name, cur);
+      const group = (rows: { name: string; id: number | null; qty: number }[]): ReturnLine[] => {
+        const m = new Map<string, { qty: number; value: number; priced: boolean }>();
+        for (const r of rows) {
+          if (r.qty <= 0) continue;
+          const unit = r.id != null ? (valueById.get(r.id) || 0) : 0;
+          if (unit <= 0) unpricedNames.add(r.name);
+          const cur = m.get(r.name) || { qty: 0, value: 0, priced: false };
+          cur.qty += r.qty;
+          cur.value += unit * r.qty;
+          cur.priced = cur.priced || unit > 0;
+          m.set(r.name, cur);
         }
         return Array.from(m.entries())
-          .map(([name, v]) => ({ name, qty: v.qty, value: +v.value.toFixed(2) }))
+          .map(([name, v]) => ({ name, qty: v.qty, value: +v.value.toFixed(2), priced: v.priced }))
           .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
       };
+      const fromReturn = (pick: (it: RI) => number) =>
+        group(items.map((it) => ({ name: it.item_name, id: it.stock_item_id, qty: pick(it) || 0 })));
+      const went = group(movs.map((m) => ({
+        name: nameById.get(m.stock_item_id) || `#${m.stock_item_id}`,
+        id: m.stock_item_id,
+        qty: Number(m.quantity || 0),
+      })));
       setReturnSummary({
-        lost: acc((it) => it.lost_qty),
-        consumed: acc((it) => it.consumed_qty),
-        broken: acc((it) => it.broken_qty),
+        went,
+        lost: fromReturn((it) => it.lost_qty),
+        consumed: fromReturn((it) => it.consumed_qty),
+        broken: fromReturn((it) => it.broken_qty),
+        hasReturn: items.length > 0,
+        unpriced: unpricedNames.size,
       });
     })().catch(() => { if (active) setReturnSummary(EMPTY_RET_SUMMARY); });
     return () => { active = false; };
-  }, [open, job?.ship_id]);
+  }, [open, job?.ship_id, job?.name]);
 
   // Desconto manual (Desc. Geral clicável) por alocação: qual está sendo editada
   // e o rascunho do valor. Salva em job_allocations.general_discount.
@@ -3535,8 +3590,7 @@ function JobDetailModal({
     let baseSum = 0;
     let extraSum = 0;
     for (const a of allocations) {
-      const fn = functions.find((f) => f.id === a.function_id);
-      const defaultRate = Number(fn?.default_rate ?? a.rate);
+      const defaultRate = baseRateOf(a);
       const isEmb = kindFilter === "EMBARQUE";
       // Serviço extra (Raspagem/Pintura) entra na Base — é paga por trabalho feito,
       // não "especial/rateio". Assim Extra continua sendo só especial + rateio.
@@ -3809,10 +3863,16 @@ function JobDetailModal({
     const n = parseInt(s, 10);
     return Number.isFinite(n) && n >= 0 ? n : null;
   }
-  async function handleSetRate(allocId: number, raw: string, current: number) {
+  // Grava o Valor/Porão digitado na linha. No Embarque o número vale SÓ NESTE
+  // NAVIO: a alocação fica travada (function_locked) pra o cadastro do
+  // colaborador não sobrescrever na próxima leitura — cada navio pode ter um
+  // valor por porão diferente. O ↺ na linha destrava e volta pro cadastro.
+  async function handleSetRate(allocId: number, raw: string, current: number, lock = false) {
     const n = parseDecimal(raw);
     if (n == null || n === current) return;
-    await db.from("job_allocations").update({ rate: n }).eq("id", allocId);
+    const payload = lock ? { rate: n, function_locked: true } : { rate: n };
+    const res: any = await db.from("job_allocations").update(payload).eq("id", allocId);
+    if (res?.error) { alert(`Não consegui salvar o valor: ${res.error.message}`); return; }
     onChange();
   }
   async function handleSetQty(allocId: number, raw: string, current: number) {
@@ -3835,11 +3895,22 @@ function JobDetailModal({
     onChange();
   }
 
+  // Valor/Porão que a linha usa como base. Normalmente vem do CADASTRO (função do
+  // colaborador + valor especial/padrão). Quando o usuário digita o valor direto
+  // na tabela, a alocação fica TRAVADA (function_locked) e passa a valer o que
+  // está gravado nela — os valores por porão mudam de navio pra navio e o
+  // Pagamento de Navios precisa aceitar o número da operação real.
+  // Fonte única: tabela, rodapé, gráfico, PDF e Excel usam esta função.
+  function baseRateOf(a: JobAllocation): number {
+    if (a.function_locked) return Number(a.rate);
+    const fn = functions.find((f) => f.id === a.function_id);
+    return Number(fn?.default_rate ?? a.rate);
+  }
+
   // Calcula o total que cada alocação recebe (base + extras). Reusado no PDF e no
   // Excel — fica aqui pra ficar consistente com o que aparece na tabela.
   function allocTotalPerson(a: JobAllocation): number {
-    const fn = functions.find((f) => f.id === a.function_id);
-    const defaultRate = Number(fn?.default_rate ?? a.rate);
+    const defaultRate = baseRateOf(a);
     const actualRate = Number(a.rate);
     const isEmbarque = kindFilter === "EMBARQUE";
     // Serviço extra (Raspagem/Pintura) do navio, por porão, somado à limpeza.
@@ -5096,12 +5167,12 @@ function JobDetailModal({
                       })
                     : allocations
                   ).filter((a) => fnFilter === "ALL" || allocFnName(a) === fnFilter).map((a, idx) => {
-                    // No EMBARQUE: Base usa o valor FIXO da função (default_rate);
-                    // diferenças (overrides) entram como Extra.
+                    // No EMBARQUE: Base usa o valor/porão da linha (cadastro da
+                    // função, ou o valor digitado direto na tabela quando a
+                    // linha está travada); diferenças entram como Extra.
                     // No COSTADO: rate vem sempre da função COSTADO (Valores) —
                     // o stored rate da alocação pode ser legado errado.
-                    const fn = functions.find((f) => f.id === a.function_id);
-                    const defaultRate = Number(fn?.default_rate ?? a.rate);
+                    const defaultRate = baseRateOf(a);
                     const actualRate = Number(a.rate);
                     const isEmbarque = kindFilter === "EMBARQUE";
                     const isCostado = kindFilter === "COSTADO";
@@ -5259,7 +5330,8 @@ function JobDetailModal({
                               value={rateDraft}
                               onChange={(e) => setRateDraft(e.target.value)}
                               onBlur={async () => {
-                                await handleSetRate(a.id, rateDraft, actualRate);
+                                // Embarque: digitar o valor trava a linha neste navio.
+                                await handleSetRate(a.id, rateDraft, rateColValue, isEmbarque);
                                 setEditingRateId(null);
                               }}
                               onKeyDown={(e) => {
@@ -5269,29 +5341,40 @@ function JobDetailModal({
                               autoFocus
                               className="w-24 text-right px-1 py-0.5 border-2 border-primary rounded outline-none"
                             />
-                          ) : isCostado || isEmbarque ? (
-                            // Embarque e Costado: o valor/porão vem sempre do
-                            // cadastro do colaborador (cargo + valor especial/
-                            // padrão da função), não é editável por navio. O
-                            // stored rate (mesmo legado) é ignorado silenciosamente.
-                            <span
-                              className="text-text"
-                              title={isEmbarque
-                                ? "Valor vem do cadastro do colaborador (RH › Colaboradores)"
-                                : "Valor da função COSTADO definido em Valores"}
-                            >
+                          ) : isCostado ? (
+                            // Costado: o valor/turno é único, definido na função
+                            // COSTADO (Valores) — não se edita por navio.
+                            <span className="text-text" title="Valor da função COSTADO definido em Valores">
                               {brl(rateColValue)}
                             </span>
                           ) : (
-                            <button
-                              type="button"
-                              disabled={!canEdit || isReadOnly}
-                              onClick={() => { setRateDraft(actualRate.toString()); setEditingRateId(a.id); }}
-                              className={canEdit && !isReadOnly ? "hover:bg-blue-50 rounded px-1 cursor-text" : ""}
-                              title={canEdit && !isReadOnly ? (isEmbarque ? "Clique para editar (vira valor especial)" : "Clique para editar") : ""}
-                            >
-                              {brl(rateColValue)}
-                            </button>
+                            <div className="flex flex-col items-end">
+                              <button
+                                type="button"
+                                disabled={!canEdit || isReadOnly}
+                                onClick={() => { setRateDraft(String(rateColValue)); setEditingRateId(a.id); }}
+                                className={canEdit && !isReadOnly ? "hover:bg-blue-50 rounded px-1 cursor-text" : ""}
+                                title={canEdit && !isReadOnly
+                                  ? (isEmbarque
+                                      ? "Clique e digite o valor/porão desta operação — vale só neste navio"
+                                      : "Clique para editar")
+                                  : (isEmbarque ? "Valor vem do cadastro do colaborador (RH › Colaboradores)" : "")}
+                              >
+                                {brl(rateColValue)}
+                              </button>
+                              {isEmbarque && a.function_locked && (
+                                canEdit && !isReadOnly ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUnlockFunction(a)}
+                                    className="text-[10px] text-amber-700 hover:text-amber-900 whitespace-nowrap"
+                                    title="Valor digitado, fixado só neste navio. Clique para voltar a seguir o cadastro do colaborador."
+                                  >🔒 fixado ↺</button>
+                                ) : (
+                                  <span className="text-[10px] text-amber-700 whitespace-nowrap" title="Valor fixado só neste navio">🔒 fixado</span>
+                                )
+                              )}
+                            </div>
                           )}
                         </td>
                         {showServiceExtraColumn && (
@@ -5482,8 +5565,7 @@ function JobDetailModal({
                       .filter((a) => fnFilter === "ALL" || allocFnName(a) === fnFilter);
                     const baseTotal = totalAllocs.reduce((s, a) => {
                       if (isEmbarque) {
-                        const fn = functions.find((f) => f.id === a.function_id);
-                        const defaultRate = Number(fn?.default_rate ?? a.rate);
+                        const defaultRate = baseRateOf(a);
                         // Inclui o serviço extra do navio (Raspagem/Pintura) por porão.
                         const serviceExtra = Number(a.service_extra_rate || 0);
                         return s + (defaultRate + serviceExtra) * holdsMultiplier;
@@ -5494,8 +5576,7 @@ function JobDetailModal({
                     const extraTotal = totalAllocs.reduce((s, a) => {
                       const rateio = Number(a.extra_value || 0);
                       if (isEmbarque) {
-                        const fn = functions.find((f) => f.id === a.function_id);
-                        const defaultRate = Number(fn?.default_rate ?? a.rate);
+                        const defaultRate = baseRateOf(a);
                         const special = (Number(a.rate) - defaultRate) * holdsMultiplier;
                         return s + special + rateio;
                       }
@@ -5508,8 +5589,7 @@ function JobDetailModal({
                     const showRateTotal = isEmbarque;
                     const rateColTotal = isEmbarque
                       ? totalAllocs.reduce((s, a) => {
-                          const fn = functions.find((f) => f.id === a.function_id);
-                          const defRate = Number(fn?.default_rate ?? a.rate);
+                          const defRate = baseRateOf(a);
                           return s + (showServiceExtraColumn ? defRate : defRate + Number(a.service_extra_rate || 0));
                         }, 0)
                       : 0;
@@ -5713,22 +5793,34 @@ function JobDetailModal({
             )}
           </div>
 
-          {/* Retorno de material — perdido/insumo/avariado do kit, item a item
-              com valor de estoque (qtd × unitário), subtotal por categoria e
-              total geral, pra empresa ver quanto foi gasto de material. Valor 0
-              aparece como R$ 0,00 (item sem valor cadastrado ou sem acesso à
-              coluna). Só o perdido custa ao navio. */}
-          {(returnSummary.lost.length > 0 || returnSummary.consumed.length > 0 || returnSummary.broken.length > 0) && (() => {
+          {/* Material do navio — o que FOI no embarque (baixas reais do
+              Almoxarifado) e, quando o retorno já foi conferido, o que virou
+              perdido/insumo/avariado. Item a item com valor de estoque
+              (qtd × unitário) e subtotal por categoria. Só o PERDIDO custa ao
+              navio. Item sem unit_value cadastrado aparece como R$ 0,00 — o
+              aviso no rodapé diz quantos são. */}
+          {(kindFilter === "EMBARQUE" || returnSummary.hasReturn || returnSummary.went.length > 0) && (() => {
             const sum = (arr: { value: number }[]) => arr.reduce((s, it) => s + it.value, 0);
             const sections = [
+              { key: "went", icon: "📦", title: "Foi", desc: "saiu do Almoxarifado no Embarcar", cls: "text-emerald-700", items: returnSummary.went },
               { key: "lost", icon: "❌", title: "Perdido", desc: "custo do navio, rateado pela equipe", cls: "text-red-700", items: returnSummary.lost },
               { key: "consumed", icon: "🛢️", title: "Insumo", desc: "consumido — não custa ao navio", cls: "text-sky-700", items: returnSummary.consumed },
               { key: "broken", icon: "🔧", title: "Avariado", desc: "a equipe trouxe — não custa ao navio", cls: "text-amber-700", items: returnSummary.broken },
             ].filter((s) => s.items.length > 0);
-            const totalGeral = sum(returnSummary.lost) + sum(returnSummary.consumed) + sum(returnSummary.broken);
+            const totalFoi = sum(returnSummary.went);
+            const totalPerdido = sum(returnSummary.lost);
+            const nada = sections.length === 0;
             return (
               <div className="mb-2 rounded-lg border border-border bg-gray-50 p-3 text-xs">
-                <p className="font-semibold text-text">🔧 Retorno de material <span className="font-normal text-text-light">(valor de estoque)</span></p>
+                <p className="font-semibold text-text">🧰 Material do navio <span className="font-normal text-text-light">(embarque e retorno · valor de estoque)</span></p>
+                {!returnSummary.hasReturn && (
+                  <p className="mt-1 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-800">
+                    ⚠️ Retorno ainda não conferido — nada foi baixado do kit. Confira em <strong>Embarque/Retorno</strong> pra o perdido/insumo/avariado entrar aqui.
+                  </p>
+                )}
+                {nada ? (
+                  <p className="mt-1.5 text-text-light italic">Nenhum material baixado pra este navio.</p>
+                ) : (
                 <table className="w-full mt-1.5">
                   <thead>
                     <tr className="text-[10px] uppercase tracking-wide text-text-light border-b border-border">
@@ -5749,8 +5841,11 @@ function JobDetailModal({
                           <td className={`pt-1.5 text-right font-semibold tabular-nums whitespace-nowrap ${s.cls}`}>{brl(sum(s.items))}</td>
                         </tr>
                         {s.items.map((it) => (
-                          <tr key={it.name} className="border-t border-border/60">
-                            <td className="py-0.5 pl-4 pr-2">{it.name}</td>
+                          <tr key={`${s.key}-${it.name}`} className="border-t border-border/60">
+                            <td className="py-0.5 pl-4 pr-2">
+                              {it.name}
+                              {!it.priced && <span className="ml-1 text-[10px] text-amber-700" title="Item sem valor unitário cadastrado no Almoxarifado">⚠️ sem valor</span>}
+                            </td>
                             <td className="py-0.5 text-right tabular-nums whitespace-nowrap">×{it.qty}</td>
                             <td className="py-0.5 text-right tabular-nums whitespace-nowrap text-text-light">{brl(it.qty > 0 ? it.value / it.qty : 0)}</td>
                             <td className="py-0.5 text-right tabular-nums whitespace-nowrap font-medium">{brl(it.value)}</td>
@@ -5761,11 +5856,21 @@ function JobDetailModal({
                   </tbody>
                   <tfoot>
                     <tr className="border-t border-border">
-                      <td colSpan={3} className="pt-1.5 font-semibold text-text">💰 Total em materiais</td>
-                      <td className="pt-1.5 text-right font-semibold tabular-nums whitespace-nowrap text-text">{brl(totalGeral)}</td>
+                      <td colSpan={3} className="pt-1.5 font-semibold text-text">📦 Total que embarcou</td>
+                      <td className="pt-1.5 text-right font-semibold tabular-nums whitespace-nowrap text-text">{brl(totalFoi)}</td>
+                    </tr>
+                    <tr>
+                      <td colSpan={3} className="pt-0.5 font-semibold text-red-700">❌ Entra no custo do navio (perdido)</td>
+                      <td className="pt-0.5 text-right font-semibold tabular-nums whitespace-nowrap text-red-700">{brl(totalPerdido)}</td>
                     </tr>
                   </tfoot>
                 </table>
+                )}
+                {returnSummary.unpriced > 0 && (
+                  <p className="mt-1.5 text-[11px] text-amber-800">
+                    ⚠️ {returnSummary.unpriced} {returnSummary.unpriced === 1 ? "item está" : "itens estão"} sem valor unitário no Almoxarifado — {returnSummary.unpriced === 1 ? "entra" : "entram"} como R$ 0,00. Cadastre o valor em <strong>Almoxarifado</strong> pra o custo do material ficar certo.
+                  </p>
+                )}
               </div>
             );
           })()}

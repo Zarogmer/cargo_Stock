@@ -397,11 +397,12 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/financeiro",
     icon: "financeiro",
     module: "FINANCEIRO_MOD",
+    // Painel Financeiro, Valores e Demonstração Financeira saíram do menu em
+    // 2026-08-25 (pedido do Guilherme): o valor de cada colaborador passa a ser
+    // digitado direto na tabela do Pagamento de Navios (Valor/Porão clicável,
+    // travado por navio), então a tela de Valores deixou de ser o caminho.
+    // As páginas continuam existindo — só não são mais listadas.
     children: [
-      // Painel: visão geral (vencimentos de navios/contas, vales, gasto por
-      // seção). Mesma régua do módulo bancário — mostra dados da empresa toda.
-      { label: "Painel Financeiro", href: "/financeiro/painel", roles: FINANCEIRO_BANCO_ROLES },
-      { label: "Valores", href: "/financeiro?tab=funcoes" },
       { label: "Pagamento de Navios", href: "/financeiro?tab=navios" },
       { label: "Controle de Funcionários", href: "/financeiro?tab=controle" },
       { label: "Relatório de Vales", href: "/financeiro?tab=vales" },
@@ -409,9 +410,6 @@ export const NAV_ITEMS: NavItem[] = [
       // FINANCEIRO_BANCO_ROLES (Estágio fica de fora). Ver docs/financeiro/.
       { label: "Contas a Pagar", href: "/financeiro/contas", roles: FINANCEIRO_BANCO_ROLES },
       { label: "Conciliação Bancária", href: "/financeiro/conciliacao", roles: FINANCEIRO_BANCO_ROLES },
-      // Espelho da planilha da diretoria. Restrita como o módulo bancário: traz
-      // folha de pagamento e distribuição aos sócios da empresa inteira.
-      { label: "Demonstração Financeira", href: "/financeiro?tab=demonstracao", roles: FINANCEIRO_BANCO_ROLES },
     ],
   },
   { label: "Conversas", href: "/conversas", icon: "conversas", module: "CONVERSAS" },

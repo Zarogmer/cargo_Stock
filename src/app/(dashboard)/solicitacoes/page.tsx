@@ -336,6 +336,22 @@ function findItemByCodeOrName<T extends { id: number; name: string }>(
   return items.find((i) => norm(i.name) === norm(name));
 }
 
+// Grava o preço da compra como valor unitário do item no Almoxarifado, pra o
+// custo de material do navio (Pagamento de Navios) parar de sair R$ 0,00.
+// Passa pelo servidor porque `unit_value` é coluna sensível — o /api/db apaga o
+// campo de quem não é gestão, e quem lança compra (RH/Estágio) não é.
+// Best-effort: o abastecimento já aconteceu; falhar aqui não desfaz nada.
+async function saveUnitValue(table: "stock_items" | "epis" | "uniforms", id: number | undefined, unitValue: number | undefined) {
+  if (!id || !unitValue || unitValue <= 0) return;
+  try {
+    await fetch("/api/almoxarifado/preco", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ table, id, unit_value: unitValue }),
+    });
+  } catch { /* preço é complemento — não quebra a compra */ }
+}
+
 // --- WhatsApp pro fornecedor ---------------------------------------------
 // Alvo da mensagem: o contato bruto do fornecedor (ex.: "13 3229-9350"), o nome
 // e a mensagem pré-pronta (editável no modal). Compartilhado pela aba
@@ -682,6 +698,8 @@ export default function SolicitacoesPage() {
             name: description, quantity: qty,
             category: spec.category, unit: spec.unit, team: spec.team, size: spec.size,
             code: effectiveCode, crewTeam: spec.crewTeam,
+            // Preço conferido na aprovação vira o valor unitário do item.
+            unitValue: unit,
           });
           stockMsg = ` ${r.created ? "Criado" : "Reposto"} (+${formatQty(r.quantity)}) em ${r.where}.`;
         } catch (stockErr: any) {
@@ -740,7 +758,7 @@ export default function SolicitacoesPage() {
   // mesmo nome, soma a quantidade (reposição); senão cria um material novo com a
   // categoria escolhida. Também registra um movimento de ENTRADA pro histórico.
   // É a "ponte" entre Solicitações de compra e o Estoque.
-  const storeInStock = useCallback(async (opts: { name: string; quantity: number; category: string; code?: string | null; team?: string }) => {
+  const storeInStock = useCallback(async (opts: { name: string; quantity: number; category: string; code?: string | null; team?: string; unitValue?: number }) => {
     const actor = profile?.full_name || "Sistema";
     const name = (opts.name || "").trim();
     const qty = opts.quantity > 0 ? opts.quantity : 1;
@@ -794,6 +812,9 @@ export default function SolicitacoesPage() {
       stockItemId = (inserted as any)?.id;
     }
 
+    // Preço da compra vira o valor unitário do item (custo de reposição atual).
+    await saveUnitValue("stock_items", stockItemId, opts.unitValue);
+
     // Movimento de ENTRADA pro histórico do almoxarifado (não-fatal).
     if (stockItemId) {
       try {
@@ -837,7 +858,7 @@ export default function SolicitacoesPage() {
   // comprada vira uma máquina (status Disponível). Devolve um resumo pro toast.
   const storeInWarehouse = useCallback(async (
     dest: WarehouseDest,
-    opts: { name: string; quantity: number; category?: string; unit?: string; team?: string; size?: string; code?: string | null; crewTeam?: string },
+    opts: { name: string; quantity: number; category?: string; unit?: string; team?: string; size?: string; code?: string | null; crewTeam?: string; unitValue?: number },
   ): Promise<{ created: boolean; where: string; quantity: number }> => {
     const actor = profile?.full_name || "Sistema";
     const name = (opts.name || "").trim();
@@ -849,7 +870,7 @@ export default function SolicitacoesPage() {
 
     // Estoque do galpão — reaproveita a ponte existente (stock_items team=GALPAO).
     if (dest === "ESTOQUE") {
-      const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code });
+      const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code, unitValue: opts.unitValue });
       if (opts.crewTeam && r.stockItemId) await allocateToTeam(r.stockItemId, opts.crewTeam, qty);
       return { created: r.created, where: `Estoque${r.category ? ` · ${r.category}` : ""}${opts.crewTeam ? ` → ${teamLbl(opts.crewTeam)}` : ""}`, quantity: r.quantity };
     }
@@ -911,19 +932,23 @@ export default function SolicitacoesPage() {
         ? findItemByCodeOrName(items, opts.code, name)
         : items.find((s) => norm(s.name) === norm(name) && norm(s.size || "") === norm(size || ""));
       let created: boolean;
+      let itemId: number | undefined;
       if (existing) {
         created = false;
+        itemId = existing.id;
         const { error: e } = await db.from(table).update({
           stock_qty: Number(existing.stock_qty || 0) + addQty, updated_by: actor,
         } as any).eq("id", existing.id);
         if (e) throw new Error(e.message);
       } else {
         created = true;
-        const { error: e } = await db.from(table).insert({
+        const { data: ins, error: e } = await db.from(table).insert({
           name, size, stock_qty: addQty, min_quantity: 0, updated_by: actor,
         } as any);
         if (e) throw new Error(e.message);
+        itemId = (ins as any)?.id;
       }
+      await saveUnitValue(table === "epis" ? "epis" : "uniforms", itemId, opts.unitValue);
       return { created, where: dest === "EPI" ? "EPI" : "Uniforme", quantity: addQty };
     }
 
@@ -933,7 +958,7 @@ export default function SolicitacoesPage() {
     // (reposição) em vez de duplicar — é o que faz o código único evitar
     // repetição mesmo quando a compra vem com nome diferente.
     if (dest === "FERRAMENTA" || dest === "ELETRICA" || dest === "FLUIDOS" || dest === "MAQUINARIO") {
-      const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code, team: dest });
+      const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code, team: dest, unitValue: opts.unitValue });
       if (opts.crewTeam && r.stockItemId) await allocateToTeam(r.stockItemId, opts.crewTeam, qty);
       const label = dest === "FERRAMENTA" ? "Ferramenta" : dest === "ELETRICA" ? "Elétrica" : dest === "FLUIDOS" ? "Fluídos" : "Maquinário";
       return { created: r.created, where: `${label}${r.category && r.category !== "Outros" ? ` · ${r.category}` : ""}${opts.crewTeam ? ` → ${teamLbl(opts.crewTeam)}` : ""}`, quantity: r.quantity };
@@ -1050,6 +1075,8 @@ export default function SolicitacoesPage() {
               category: stock.category, unit: stock.unit, team: stock.team, size: stock.size,
               crewTeam: stock.crewTeam,
               code,
+              // Valor unit. da compra vira o valor unitário do item no Almoxarifado.
+              unitValue: Number(data.unit_value) || 0,
             });
             // Anexa ao toast anterior (ex.: o do lançamento no Contas a Pagar).
             setSaveOk((prev) =>
@@ -1088,6 +1115,8 @@ export default function SolicitacoesPage() {
         quantity: stockRequest.quantity,
         category: spec.category, unit: spec.unit, team: spec.team, size: spec.size,
         code, crewTeam: spec.crewTeam,
+        // Valor aprovado na solicitação vira o valor unitário do item.
+        unitValue: Number(stockRequest.estimated_value) || 0,
       });
       const itemName = stockRequest.tool_name;
       setStockRequest(null);
