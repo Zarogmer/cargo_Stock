@@ -623,7 +623,9 @@ export default function FinanceiroPage() {
       db.from("job_units").select("*"),
       db.from("job_function_rates").select("*").order("valid_from", { ascending: false }),
       db.from("jobs").select("*, ships(name, status, holds_count)").order("start_date", { ascending: false }),
-      db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)"),
+      // Ordem FIXA (added_at, id): sem isso o Postgres devolve na ordem do heap
+      // e a linha editada pulava de lugar na tabela do navio a cada save.
+      db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)").order("added_at").order("id"),
       db.from("job_adjustments").select("*").order("created_at", { ascending: false }),
       db.from("ships").select("id, name, status, services").order("arrival_date", { ascending: false }).limit(50),
       db.from("employees").select("id, name, role, cpf, birth_date, bank_name, bank_agency, bank_account, bank_account_type, status, sector, admin_ship_rate").order("name"),
@@ -4386,9 +4388,10 @@ function JobDetailModal({
   return (
     <Modal open={open} onClose={onClose} title={job.name} maxWidth="max-w-6xl">
       <div className="space-y-4">
-        {/* Topo fixo — Cliente/Carga + resumo financeiro seguem visíveis ao rolar.
-            -mx-6/-mt-4 cancelam o padding do corpo do Modal pra grudar no topo. */}
-        <div className="sticky top-0 z-10 -mx-6 -mt-4 px-6 pt-4 pb-3 bg-white border-b border-border space-y-3">
+        {/* Cliente/Carga + resumo financeiro ficam no topo do modal e rolam junto
+            com o resto. Já foram sticky, mas flutuar por cima da tabela atrapalhava
+            a leitura das linhas (pedido do Guilherme). */}
+        <div className="-mx-6 -mt-4 px-6 pt-4 pb-3 bg-white border-b border-border space-y-3">
         {/* Header com cliente/supervisor/cargo/porões */}
         {(job.client || supervisorName || job.cargo_type || job.holds_count) && (
           <div className="bg-gray-50 rounded-lg p-3 flex flex-wrap gap-3 text-xs">
@@ -5116,8 +5119,7 @@ function JobDetailModal({
                     {multiplierLabel && (
                       <th className="px-2 py-2 text-center text-xs font-semibold text-text-light">{multiplierLabel}</th>
                     )}
-                    <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Base</th>
-                    <th className="px-2 py-2 text-right text-xs font-semibold text-text-light" title="Valor especial + rateio">Extra</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-text-light" title="Base = Valor/Porão × Porões. O Extra (valor especial + rateio) aparece em amarelo logo abaixo da base, quando houver.">Base</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Total</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-purple-700 whitespace-nowrap" title="PAGTO NA FOLHA — líquido do Relatório de Líquidos. Sem import, igual ao Total.">Folha</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap" title="DESCONTO GERAL — material perdido no navio (Embarque/Retorno › Perdido) dividido pela equipe. Avariado que a equipe trouxe de volta não entra aqui.">Desc. Geral</th>
@@ -5358,47 +5360,50 @@ function JobDetailModal({
                         {multiplierLabel && (
                           <td className="px-2 py-2 text-center text-text-light">× {holdsMultiplier}</td>
                         )}
-                        <td className="px-2 py-2 text-right whitespace-nowrap">{brl(base)}</td>
-                        <td
-                          className={`px-2 py-2 text-right whitespace-nowrap ${extra < 0 ? "text-red-700" : "text-amber-700"}`}
-                          title={
-                            specialDelta !== 0 && rateioExtra > 0
-                              ? `Valor especial ${specialDelta >= 0 ? "+" : ""}${brl(specialDelta)} + Rateio ${brl(rateioExtra)}`
-                              : specialDelta !== 0
-                                ? `Valor especial ${specialDelta >= 0 ? "+" : ""}${brl(specialDelta)}`
-                                : rateioExtra > 0
-                                  ? `Rateio ${brl(rateioExtra)}`
-                                  : undefined
-                          }
-                        >
-                          {editingExtraId === a.id && canEdit && !isReadOnly ? (
-                            <input
-                              type="number"
-                              step="0.01"
-                              value={extraDraft}
-                              onChange={(e) => setExtraDraft(e.target.value)}
-                              onBlur={async () => {
-                                await handleSetExtra(a.id, extraDraft, rateioExtra);
-                                setEditingExtraId(null);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                                if (e.key === "Escape") { setEditingExtraId(null); setExtraDraft(""); }
-                              }}
-                              autoFocus
-                              className="w-24 text-right px-1 py-0.5 border-2 border-primary rounded outline-none text-amber-700"
-                            />
-                          ) : (
-                            <button
-                              type="button"
-                              disabled={!canEdit || isReadOnly}
-                              onClick={() => { setExtraDraft(rateioExtra.toString()); setEditingExtraId(a.id); }}
-                              className={canEdit && !isReadOnly ? "hover:bg-amber-50 rounded px-1 cursor-text" : ""}
-                              title={canEdit && !isReadOnly ? "Clique para editar o rateio (valor especial fica intacto)" : ""}
-                            >
-                              {extra === 0 ? "—" : `${extra > 0 ? "+ " : "− "}${brl(Math.abs(extra))}`}
-                            </button>
-                          )}
+                        {/* Base + Extra na mesma célula: a coluna Extra saiu pra
+                            tabela caber sem barra horizontal. O extra (valor
+                            especial + rateio) vira uma linha pequena em amarelo
+                            embaixo da base, clicável pra editar o rateio. */}
+                        <td className="px-2 py-2 text-right whitespace-nowrap">
+                          <div className="flex flex-col items-end leading-tight">
+                            <span>{brl(base)}</span>
+                            {editingExtraId === a.id && canEdit && !isReadOnly ? (
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={extraDraft}
+                                onChange={(e) => setExtraDraft(e.target.value)}
+                                onBlur={async () => {
+                                  await handleSetExtra(a.id, extraDraft, rateioExtra);
+                                  setEditingExtraId(null);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                  if (e.key === "Escape") { setEditingExtraId(null); setExtraDraft(""); }
+                                }}
+                                autoFocus
+                                className="mt-0.5 w-20 text-right px-1 py-0 text-[10px] border-2 border-primary rounded outline-none text-amber-700"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={!canEdit || isReadOnly}
+                                onClick={() => { setExtraDraft(rateioExtra.toString()); setEditingExtraId(a.id); }}
+                                className={`text-[10px] ${extra < 0 ? "text-red-600" : "text-amber-600"} ${canEdit && !isReadOnly ? "hover:bg-amber-50 rounded px-1 cursor-text" : ""} ${extra === 0 ? "opacity-0 hover:opacity-100 transition" : ""}`}
+                                title={
+                                  specialDelta !== 0 && rateioExtra > 0
+                                    ? `Extra: valor especial ${specialDelta >= 0 ? "+" : ""}${brl(specialDelta)} + rateio ${brl(rateioExtra)}`
+                                    : specialDelta !== 0
+                                      ? `Extra: valor especial ${specialDelta >= 0 ? "+" : ""}${brl(specialDelta)}`
+                                      : rateioExtra > 0
+                                        ? `Extra: rateio ${brl(rateioExtra)}`
+                                        : "Clique para lançar um rateio"
+                                }
+                              >
+                                {extra === 0 ? "+ extra" : `${extra > 0 ? "+ " : "− "}${brl(Math.abs(extra))}`}
+                              </button>
+                            )}
+                          </div>
                         </td>
                         <td className="px-2 py-2 text-right font-semibold text-emerald-700 whitespace-nowrap">{brl(base + extra)}</td>
                         <td className="px-2 py-2 text-right whitespace-nowrap">
@@ -5586,9 +5591,16 @@ function JobDetailModal({
                           </td>
                         )}
                         {multiplierLabel && <td className="px-2 py-2"></td>}
-                        <td className="px-2 py-2 text-right whitespace-nowrap">{brl(baseTotal)}</td>
-                        <td className={`px-2 py-2 text-right whitespace-nowrap ${extraTotal < 0 ? "text-red-700" : "text-amber-700"}`}>
-                          {extraTotal === 0 ? "—" : `${extraTotal > 0 ? "+ " : "− "}${brl(Math.abs(extraTotal))}`}
+                        {/* Base + Extra na mesma célula, igual às linhas. */}
+                        <td className="px-2 py-2 text-right whitespace-nowrap">
+                          <div className="flex flex-col items-end leading-tight">
+                            <span>{brl(baseTotal)}</span>
+                            {extraTotal !== 0 && (
+                              <span className={`text-[10px] ${extraTotal < 0 ? "text-red-600" : "text-amber-600"}`}>
+                                {extraTotal > 0 ? "+ " : "− "}{brl(Math.abs(extraTotal))}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-2 py-2 text-right text-emerald-700 whitespace-nowrap">{brl(baseTotal + extraTotal)}</td>
                         <td className="px-2 py-2 text-right text-purple-700 whitespace-nowrap">{brl(baseTotal + extraTotal - pluxeeTotal)}</td>
