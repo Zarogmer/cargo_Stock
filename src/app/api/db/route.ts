@@ -45,6 +45,10 @@ const TABLE_MAP: Record<string, string> = {
   advance_discounts: "advanceDiscount",
   material_returns: "materialReturn",
   material_return_items: "materialReturnItem",
+  // Notas de Débito/Crédito: o cadastro fiscal do cliente é lido/editado pela
+  // tela; a EMISSÃO da nota passa por /api/financeiro/notas (numeração).
+  invoice_clients: "invoiceClient",
+  fiscal_notes: "fiscalNote",
   // Also support "profiles" alias -> reads from users table
   profiles: "user",
   // WhatsApp

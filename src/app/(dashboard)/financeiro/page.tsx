@@ -62,6 +62,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { DollarTicker, useDollarQuote } from "@/components/dollar-ticker";
+import { FiscalNoteModal } from "@/components/financeiro/fiscal-note-modal";
 import { DemonstracaoFinanceiraPage } from "@/components/financeiro/demonstracao-financeira-page";
 import { RelatorioValesPage } from "@/components/financeiro/relatorio-vales-page";
 import {
@@ -243,8 +244,10 @@ const EXPENSE_CATEGORIES = [
   { value: "AJUDA_DE_CUSTO",     label: "Ajuda de custo" },
   { value: "ALIMENTACAO",        label: "Alimentação" },
   { value: "RESTAURANTE",        label: "Jantar/Restaurante" },
-  // Repasse do pagamento do navio — lançado pelo modal "Pagar" (PayShipModal).
-  { value: "REPASSE",            label: "Repasse" },
+  // Nota de Crédito (o antigo "Repasse") — comissão devolvida ao cliente,
+  // lançada pelo modal "Pagar". O valor da categoria segue REPASSE no banco:
+  // renomear quebraria as despesas já gravadas. Só o rótulo mudou (2026-08-25).
+  { value: "REPASSE",            label: "Nota de Crédito" },
   { value: "OUTROS",             label: "Outros" },
 ] as const;
 type ExpenseCategory = typeof EXPENSE_CATEGORIES[number]["value"];
@@ -389,7 +392,8 @@ function addDaysIso(iso: string, days: number): string {
 
 // Modal de PAGAMENTO do navio — o pessoal do Financeiro marca como Pago e
 // registra a data (padrão: fim da operação + 20 dias, o prazo usual do
-// cliente). Mostra o valor do contrato e aceita o "Repasse", que entra como
+// cliente). Mostra o valor do contrato e aceita a "Nota de Crédito" (repasse
+// devolvido ao cliente), que entra como
 // despesa (JobAdjustment ADICIONAL, categoria REPASSE) no custo do navio.
 // Reusa closed_at/closed_by como data/autor do pagamento (FECHADO = "Pago").
 // Permite reabrir (voltar a Em Andamento).
@@ -460,9 +464,9 @@ function PayShipModal({
         const value = parseBrlNumber(repasse);
         if (value > 0) {
           const r = repasseAdjId
-            ? await db.from("job_adjustments").update({ amount: value, description: "Repasse" }).eq("id", repasseAdjId)
+            ? await db.from("job_adjustments").update({ amount: value, description: "Nota de Crédito" }).eq("id", repasseAdjId)
             : await db.from("job_adjustments").insert({
-                job_id: job!.id, type: "ADICIONAL", category: "REPASSE", description: "Repasse", amount: value,
+                job_id: job!.id, type: "ADICIONAL", category: "REPASSE", description: "Nota de Crédito", amount: value,
               });
           if ((r as { error?: { message: string } | null }).error) {
             throw new Error((r as { error: { message: string } }).error.message);
@@ -515,7 +519,7 @@ function PayShipModal({
           </p>
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">Repasse (R$)</label>
+          <label className="block text-sm font-medium mb-1">Nota de Crédito (R$)</label>
           <input
             type="text"
             inputMode="decimal"
@@ -527,7 +531,7 @@ function PayShipModal({
             className={inputCls}
           />
           <p className="text-[11px] text-text-light mt-1">
-            Entra como despesa do navio (categoria Repasse) — soma no custo da operação.
+            Entra como despesa do navio (categoria Nota de Crédito) — soma no custo da operação. Emita o documento no botão 📄 Nota.
           </p>
         </div>
         {err && <p className="text-xs text-danger bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</p>}
@@ -2617,6 +2621,8 @@ function TrabalhosTab({
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
   const [closeShipJob, setCloseShipJob] = useState<Job | null>(null);
   const [payJob, setPayJob] = useState<Job | null>(null);
+  // Nota de Débito/Crédito deste navio (Financeiro › Pagamento de Navios).
+  const [noteJob, setNoteJob] = useState<Job | null>(null);
   // Começa em "Em Aberto": navio Pago (FECHADO) sai da visão padrão — some da
   // lista assim que é pago (fica acessível no filtro "Pago").
   const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("EM_ANDAMENTO");
@@ -2800,6 +2806,15 @@ function TrabalhosTab({
                             {j.status === "FECHADO" ? "💰 Pago" : "💰 Pagar"}
                           </button>
                         )}
+                        {j.status !== "CANCELADO" && (
+                          <button
+                            onClick={() => setNoteJob(j)}
+                            className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+                            title="Emitir Nota de Débito / Nota de Crédito deste navio"
+                          >
+                            📄 Nota
+                          </button>
+                        )}
                         <button onClick={() => { setEditJob(j); setShowJobForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded">
                           <EditIcon />
                         </button>
@@ -2868,6 +2883,26 @@ function TrabalhosTab({
         profileName={profileName}
         onClose={() => setPayJob(null)}
         onSaved={() => { setPayJob(null); onChange(); }}
+      />
+
+      {/* Notas de Débito / Crédito do navio. Os serviços contratados viram a
+          sugestão de itens; o que vem de fora (OI, ISS da contabilidade, taxa
+          do dólar) é digitado na hora. */}
+      <FiscalNoteModal
+        open={!!noteJob}
+        job={noteJob ? {
+          id: noteJob.id,
+          name: noteJob.name,
+          client: noteJob.client ?? null,
+          port: noteJob.port ?? null,
+          holds_count: noteJob.holds_count ?? null,
+          start_date: String(noteJob.start_date).slice(0, 10),
+          end_date: noteJob.end_date ? String(noteJob.end_date).slice(0, 10) : null,
+          contract_value: noteJob.contract_value ?? null,
+        } : null}
+        services={ships.find((sh) => sh.id === noteJob?.ship_id)?.services || []}
+        onClose={() => setNoteJob(null)}
+        onSaved={() => onChange()}
       />
     </div>
   );
@@ -7224,6 +7259,8 @@ function CostadoTab({
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
   const [closeShipJob, setCloseShipJob] = useState<Job | null>(null);
   const [payJob, setPayJob] = useState<Job | null>(null);
+  // Nota de Débito/Crédito deste navio (Financeiro › Pagamento de Navios).
+  const [noteJob, setNoteJob] = useState<Job | null>(null);
 
   // Costado jobs = jobs whose ship is marked as Costado OR that have any COSTADO allocation.
   const costadoShipIds = new Set(
@@ -7356,6 +7393,15 @@ function CostadoTab({
                             {j.status === "FECHADO" ? "💰 Pago" : "💰 Pagar"}
                           </button>
                         )}
+                        {j.status !== "CANCELADO" && (
+                          <button
+                            onClick={() => setNoteJob(j)}
+                            className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+                            title="Emitir Nota de Débito / Nota de Crédito deste navio"
+                          >
+                            📄 Nota
+                          </button>
+                        )}
                         <button
                           onClick={() => setDeleteJob(j)}
                           className="p-1.5 text-danger hover:bg-red-50 rounded"
@@ -7440,6 +7486,26 @@ function CostadoTab({
         profileName={profileName}
         onClose={() => setPayJob(null)}
         onSaved={() => { setPayJob(null); onChange(); }}
+      />
+
+      {/* Notas de Débito / Crédito do navio. Os serviços contratados viram a
+          sugestão de itens; o que vem de fora (OI, ISS da contabilidade, taxa
+          do dólar) é digitado na hora. */}
+      <FiscalNoteModal
+        open={!!noteJob}
+        job={noteJob ? {
+          id: noteJob.id,
+          name: noteJob.name,
+          client: noteJob.client ?? null,
+          port: noteJob.port ?? null,
+          holds_count: noteJob.holds_count ?? null,
+          start_date: String(noteJob.start_date).slice(0, 10),
+          end_date: noteJob.end_date ? String(noteJob.end_date).slice(0, 10) : null,
+          contract_value: noteJob.contract_value ?? null,
+        } : null}
+        services={ships.find((sh) => sh.id === noteJob?.ship_id)?.services || []}
+        onClose={() => setNoteJob(null)}
+        onSaved={() => onChange()}
       />
     </div>
   );

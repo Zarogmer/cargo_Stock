@@ -715,6 +715,7 @@ model Job {
   advance_discounts AdvanceDiscount[]
   ship_reports ShipReport[]
   evaluations  PerformanceEvaluation[]
+  fiscal_notes FiscalNote[]
   created_at  DateTime        @default(now()) @db.Timestamptz()
   updated_at  DateTime        @updatedAt @db.Timestamptz()
   created_by  String
@@ -1649,4 +1650,112 @@ model StatementSectionOverride {
   updated_at  DateTime @updatedAt @db.Timestamptz()
 
   @@map("statement_section_overrides")
+}
+
+// ── Notas de Débito / Crédito (faturamento dos navios) ───────────────────────
+// A empresa cobra o cliente por NOTA DE DÉBITO (ND) e devolve comissão/repasse
+// por NOTA DE CRÉDITO (NC). Hoje isso é feito em planilhas soltas por cliente
+// (WILSON SONS/NOTAS DE DÉBITOS, CONTINENTAL/…), com numeração corrida por ano
+// — 055/26, 058/26, 059/26. O Pagamento de Navios passa a gerar o documento.
+//
+// Dados fiscais do cliente que saem no cabeçalho da nota. Ficam à parte do
+// MarketingClient (prospecção, sem endereço/IE) porque a nota precisa do bloco
+// fiscal completo. `name` casa com jobs.client / ships.client.
+model InvoiceClient {
+  id            Int      @id @default(autoincrement())
+  name          String   @unique
+  legal_name    String? // razão social impressa na nota
+  address       String?
+  cnpj          String?
+  ie            String? // inscrição estadual
+  municipal_reg String? // inscrição municipal
+  // Linha de destinatário da nota. A Wilson Sons usa "AO COMANDANTE E/OU
+  // ARMADOR DO {NAVIO} A/C WILSON SONS SHIPPING SERVICES."; a Continental usa
+  // só a razão social. `{NAVIO}` é trocado pelo nome do navio na geração.
+  header_line   String?
+  // PT (Continental e demais) ou EN (Wilson Sons: DEBIT NOTE, BARTHED/SAILED).
+  language      String   @default("PT")
+  // Moeda padrão das notas deste cliente: BRL ou USD.
+  default_currency String @default("BRL")
+  notes         String?
+  created_by    String
+  updated_at    DateTime @default(now()) @db.Timestamptz()
+
+  @@map("invoice_clients")
+}
+
+model FiscalNote {
+  id     String @id @default(uuid()) @db.Uuid
+  // DEBITO (cobrança do serviço) ou CREDITO (repasse/comissão devolvida).
+  kind   String
+  // Numeração corrida por ano — 59 + 2026 vira "059/26". ND e NC podem repetir
+  // o número (a NC do repasse acompanha a ND do serviço), por isso a unicidade
+  // inclui o tipo.
+  number Int
+  year   Int
+
+  job_id String?
+  jobs   Job?    @relation(fields: [job_id], references: [id], onDelete: SetNull)
+
+  // Snapshot: navio e cliente podem ser renomeados/apagados; a nota emitida não.
+  ship_name         String
+  client_name       String
+  client_legal_name String?
+  client_address    String?
+  client_cnpj       String?
+  client_ie         String?
+  client_municipal  String?
+  header_line       String?
+  language          String  @default("PT")
+
+  // "OI" da agência (ex.: AGVSSZ260673) — número da ordem de serviço do cliente.
+  // Digitado pelo usuário: não existe em nenhuma tabela do sistema.
+  oi             String?
+  port           String?
+  arrival_date   DateTime? @db.Date // BARTHED / Entrada
+  departure_date DateTime? @db.Date // SAILED / Saída
+  issue_date     DateTime  @db.Date
+  due_date       DateTime? @db.Date // VENCIMENTO / DEADLINE
+
+  currency      String   @default("BRL")
+  // Taxa do dólar negociada com o cliente (só informativa na nota; os itens já
+  // vêm convertidos).
+  exchange_rate Decimal? @db.Decimal(12, 4)
+  // ISS do mês — vem da CONTABILIDADE, não do sistema: é sempre perguntado ao
+  // emitir. Quando preenchido, abate do total (Wilson Sons).
+  iss_percent   Decimal? @db.Decimal(6, 4)
+  iss_value     Decimal? @db.Decimal(12, 2)
+
+  subtotal Decimal @db.Decimal(12, 2) // soma dos itens
+  total    Decimal @db.Decimal(12, 2) // subtotal − ISS
+  notes    String?
+
+  items      FiscalNoteItem[]
+  created_by String
+  created_at DateTime @default(now()) @db.Timestamptz()
+  updated_at DateTime @updatedAt @db.Timestamptz()
+
+  @@unique([kind, number, year])
+  @@index([job_id])
+  @@index([year])
+  @@map("fiscal_notes")
+}
+
+// Linha do "Histórico"/DESCRIPTION da nota. Uma por serviço — é assim que a
+// Wilson Sons separa Lavagem de Boat support, e a Continental separa Raspagem
+// de Pintura no mesmo documento.
+model FiscalNoteItem {
+  id          Int        @id @default(autoincrement())
+  note_id     String     @db.Uuid
+  note        FiscalNote @relation(fields: [note_id], references: [id], onDelete: Cascade)
+  position    Int        @default(1)
+  description String
+  // Memória de cálculo opcional (ex.: 2.240,00 USD/porão × 5 porões). Some da
+  // nota quando vazia — nem todo item é por porão.
+  unit_value  Decimal?   @db.Decimal(12, 2)
+  quantity    Decimal?   @db.Decimal(12, 2)
+  amount      Decimal    @db.Decimal(12, 2)
+
+  @@index([note_id])
+  @@map("fiscal_note_items")
 }
