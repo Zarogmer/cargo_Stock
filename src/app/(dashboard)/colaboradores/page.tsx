@@ -23,6 +23,26 @@ import { DocumentosTab } from "./documentos-tab";
 import { UsuariosTab } from "./usuarios-tab";
 import { EmployeeEvaluations } from "./employee-evaluations";
 
+// Rótulos de employees.bank_account_type. "SEM" não é valor do banco — é o
+// filtro/rótulo de quem ainda não teve o tipo cadastrado ("S/conta", como a
+// empresa fala). Usado no filtro, na planilha e no detalhe do colaborador.
+const ACCOUNT_TYPE_LABELS: Record<string, string> = {
+  Todos: "Todos",
+  CONTA_SAL: "Conta salário",
+  CORRENTE: "Corrente",
+  POUPANCA: "Poupança",
+  DIGITAL: "Digital",
+  SEM: "S/conta",
+};
+const ACCOUNT_TYPE_ICONS: Record<string, string> = {
+  Todos: "", CONTA_SAL: "💳", CORRENTE: "🏦", POUPANCA: "🐖", DIGITAL: "📱", SEM: "⚠️",
+};
+// Rótulo do tipo de conta de um colaborador — vazio vira "S/conta".
+function accountTypeLabel(type: string | null | undefined): string {
+  if (!type) return ACCOUNT_TYPE_LABELS.SEM;
+  return ACCOUNT_TYPE_LABELS[type] ?? type;
+}
+
 export default function ColaboradoresPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
@@ -71,6 +91,10 @@ export default function ColaboradoresPage() {
   const [empStatusFilter, setEmpStatusFilter] = useState<"Todos" | "ATIVO" | "INATIVO" | "PENDENCIA">("Todos");
   const [empEscalaFilter, setEmpEscalaFilter] = useState<"Todos" | "DISPONIVEL" | "EMBARCADO" | "COSTADO" | "INATIVO">("Todos");
   const [empRoleFilter, setEmpRoleFilter] = useState("Todos");
+  // Tipo de conta bancária (conta salário / corrente / poupança / digital) —
+  // assunto recorrente na folha de pagamento: a empresa precisa saber quem tem
+  // conta salário pra montar a remessa. "SEM" pega quem está sem tipo definido.
+  const [empAccountFilter, setEmpAccountFilter] = useState<"Todos" | "CONTA_SAL" | "CORRENTE" | "POUPANCA" | "DIGITAL" | "SEM">("Todos");
   const [empViewMode, setEmpViewMode] = useState<"cards" | "spreadsheet">("cards");
   // Área de filtros recolhível — começa fechada pra deixar a lista mais limpa.
   const [showFilters, setShowFilters] = useState(false);
@@ -464,7 +488,10 @@ export default function ColaboradoresPage() {
             // "Inativo" = indisponível e não escalado nem demitido.
             empEscalaFilter === "INATIVO" ? (!k && effectiveEmployeeStatus(e) !== "INATIVO" && !!e.escala_unavailable) : true;
           const roleMatch = empRoleFilter === "Todos" ? true : (e.role || "").trim() === empRoleFilter;
-          return nameMatch && statusMatch && teamMatch && escalaMatch && roleMatch;
+          const accountMatch = empAccountFilter === "Todos" ? true :
+            empAccountFilter === "SEM" ? !e.bank_account_type :
+            e.bank_account_type === empAccountFilter;
+          return nameMatch && statusMatch && teamMatch && escalaMatch && roleMatch && accountMatch;
         });
 
         // Filtros ativos (fora "Todos") — alimentam o contador do botão "Filtros" e
@@ -476,8 +503,9 @@ export default function ColaboradoresPage() {
         if (empTeamFilter !== "Todos") activeFilters.push({ label: `Equipe: ${empTeamFilter}`, clear: () => setEmpTeamFilter("Todos") });
         if (empEscalaFilter !== "Todos") activeFilters.push({ label: `Escalação: ${escalaLabels[empEscalaFilter] || empEscalaFilter}`, clear: () => setEmpEscalaFilter("Todos") });
         if (empRoleFilter !== "Todos") activeFilters.push({ label: `Função: ${empRoleFilter}`, clear: () => setEmpRoleFilter("Todos") });
+        if (empAccountFilter !== "Todos") activeFilters.push({ label: `Conta: ${ACCOUNT_TYPE_LABELS[empAccountFilter]}`, clear: () => setEmpAccountFilter("Todos") });
         const activeFilterCount = activeFilters.length;
-        const clearAllFilters = () => { setEmpStatusFilter("Todos"); setEmpTeamFilter("Todos"); setEmpEscalaFilter("Todos"); setEmpRoleFilter("Todos"); };
+        const clearAllFilters = () => { setEmpStatusFilter("Todos"); setEmpTeamFilter("Todos"); setEmpEscalaFilter("Todos"); setEmpRoleFilter("Todos"); setEmpAccountFilter("Todos"); };
 
         return (
           <div className="space-y-3">
@@ -566,6 +594,25 @@ export default function ColaboradoresPage() {
                     <option value="Todos">Todas as funções</option>
                     {availableRoles.map((r) => <option key={r} value={r}>{r}</option>)}
                   </select>
+                </div>
+                {/* Tipo de conta — a folha de pagamento precisa separar conta
+                    salário de corrente/poupança. O contador ao lado do rótulo
+                    mostra quantos colaboradores caem em cada tipo. */}
+                <div className="flex gap-2 flex-wrap items-center">
+                  <span className="text-xs text-text-light font-semibold uppercase tracking-wider w-20 shrink-0">Conta:</span>
+                  {(["Todos", "CONTA_SAL", "CORRENTE", "POUPANCA", "DIGITAL", "SEM"] as const).map((t) => {
+                    const n = t === "Todos" ? employees.length
+                      : t === "SEM" ? employees.filter((e) => !e.bank_account_type).length
+                      : employees.filter((e) => e.bank_account_type === t).length;
+                    return (
+                      <button key={t} onClick={() => setEmpAccountFilter(t)}
+                        className={`px-3 py-1.5 text-xs rounded-full font-medium transition ${empAccountFilter === t ? "bg-primary text-white" : "bg-gray-100 text-text-light hover:bg-gray-200"}`}
+                        title={t === "SEM" ? "S/conta — colaboradores sem tipo de conta cadastrado" : undefined}>
+                        {ACCOUNT_TYPE_ICONS[t] ? `${ACCOUNT_TYPE_ICONS[t]} ` : ""}{ACCOUNT_TYPE_LABELS[t]}
+                        <span className={`ml-1.5 ${empAccountFilter === t ? "text-white/70" : "text-text-light/60"}`}>{n}</span>
+                      </button>
+                    );
+                  })}
                 </div>
                 {activeFilterCount > 0 && (
                   <button onClick={clearAllFilters}
@@ -732,7 +779,7 @@ export default function ColaboradoresPage() {
                 <h3 className="text-xs font-semibold text-text-light uppercase tracking-wider mb-2">💳 Bancário</h3>
                 <p className="text-sm">
                   <span className="font-medium">{selectedEmp.bank_name}</span>
-                  {selectedEmp.bank_account_type && <span className="ml-2 text-text-light">({selectedEmp.bank_account_type})</span>}
+                  <span className="ml-2 text-text-light">({accountTypeLabel(selectedEmp.bank_account_type)})</span>
                 </p>
                 {(selectedEmp.bank_agency || selectedEmp.bank_account) && (
                   <p className="text-sm font-mono">Ag {selectedEmp.bank_agency || "—"} · Conta {selectedEmp.bank_account || "—"}</p>
@@ -1790,6 +1837,14 @@ const SHEET_COLUMNS: { key: keyof Employee | "__index" | "actions"; label: strin
 
 function renderCell(emp: Employee, key: keyof Employee): React.ReactNode {
   const v = emp[key] as unknown;
+  // Tipo de conta: sem tipo cadastrado aparece como "S/conta" (e não "—"), que é
+  // como a empresa chama quem não tem conta pra receber na folha.
+  if (key === "bank_account_type") {
+    const label = accountTypeLabel(v ? String(v) : null);
+    return v
+      ? <span>{label}</span>
+      : <span className="text-amber-700 font-medium" title="Sem tipo de conta cadastrado">{label}</span>;
+  }
   if (v === null || v === undefined || v === "") return <span className="text-gray-300">—</span>;
   if (typeof v === "boolean") return v ? "OK" : "—";
   if (key === "phone" || key === "family_phone") {

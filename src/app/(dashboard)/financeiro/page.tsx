@@ -3120,7 +3120,6 @@ interface PurchaseOrderLite {
 // Pagamento de Navios. Fica no módulo pra ser constante entre renders.
 type ReturnLine = { name: string; qty: number; value: number; priced: boolean };
 interface MaterialSummary {
-  went: ReturnLine[];
   lost: ReturnLine[];
   consumed: ReturnLine[];
   broken: ReturnLine[];
@@ -3128,7 +3127,7 @@ interface MaterialSummary {
   unpriced: number;
 }
 const EMPTY_RET_SUMMARY: MaterialSummary = {
-  went: [], lost: [], consumed: [], broken: [], hasReturn: false, unpriced: 0,
+  lost: [], consumed: [], broken: [], hasReturn: false, unpriced: 0,
 };
 
 function JobDetailModal({
@@ -3174,101 +3173,75 @@ function JobDetailModal({
     kindFilter === "EMBARQUE" ? Math.max(1, Number(job?.holds_count || 1))
     : 1; // Costado: rate já é valor/turno, base = rate × qty.
 
-  // Material do navio (Embarque/Retorno), mostrado nas Despesas com o valor de
-  // estoque de cada item:
-  //   📦 FOI  — o que saiu do Almoxarifado no "Embarcar" (baixas reais).
+  const [returnSummary, setReturnSummary] = useState<MaterialSummary>(EMPTY_RET_SUMMARY);
+  // Material do navio (Retorno de Material) mostrado nas Despesas, com o valor
+  // de estoque de cada item — a mesma quebra do aviso que vai pro WhatsApp:
   //   ❌ PERDIDO  — não voltou: custo do navio, rateado pela equipe (MATERIAL_PERDIDO).
   //   🛢️ INSUMO   — consumido de propósito: não custa ao navio.
   //   🔧 AVARIADO — voltou quebrado (a equipe trouxe): não custa ao navio.
-  // Fica visível mesmo sem retorno conferido, pra o financeiro enxergar o que
-  // embarcou e cobrar a conferência do navio que ainda está pendente.
-  const [returnSummary, setReturnSummary] = useState<MaterialSummary>(EMPTY_RET_SUMMARY);
+  // RANCHO FICA DE FORA: comida (stock_items com team=EQUIPE_x) não é material
+  // e não entra no custo de material do navio — pedido do Guilherme.
+  // O bloco aparece mesmo sem retorno conferido, pra o financeiro enxergar o
+  // navio que ainda está com a conferência pendente.
   useEffect(() => {
     if (!open || !job?.ship_id) { setReturnSummary(EMPTY_RET_SUMMARY); return; }
     const shipId = job.ship_id;
     let active = true;
     (async () => {
-      // As baixas do Embarque são marcadas pelo NOME do navio na observação do
-      // movimento ("Embarque: NAVIO (EQUIPE_X)"), então precisamos do nome atual.
-      const { data: shipRows } = await db.from("ships").select("id, name").eq("id", shipId);
-      const shipName = ((shipRows as { name: string }[] | null)?.[0]?.name || job.name || "").trim();
-      const [retRes, movRes] = await Promise.all([
-        db.from("material_returns")
-          .select("material_return_items(item_name, stock_item_id, broken_qty, lost_qty, consumed_qty)")
-          .eq("ship_id", shipId),
-        shipName
-          ? db.from("stock_movements").select("stock_item_id, quantity, movement_type, notes").like("notes", shipName)
-          : Promise.resolve({ data: [] as unknown[] }),
-      ]);
+      const { data } = await db
+        .from("material_returns")
+        .select("material_return_items(item_name, stock_item_id, broken_qty, lost_qty, consumed_qty)")
+        .eq("ship_id", shipId);
       if (!active) return;
       type RI = { item_name: string; stock_item_id: number | null; broken_qty: number; lost_qty: number; consumed_qty: number };
-      const retRows = (retRes.data as { material_return_items?: RI[] }[] | null) || [];
-      const items = retRows.flatMap((r) => r.material_return_items || []);
+      const rows = (data as { material_return_items?: RI[] }[] | null) || [];
+      const allItems = rows.flatMap((r) => r.material_return_items || []);
 
-      // Baixas do "Embarcar" deste navio: "Embarque: NAVIO (EQUIPE)" e
-      // "Embarque (materiais): NAVIO (EQUIPE)". O like() já filtrou pelo nome;
-      // aqui garantimos que é o navio certo (nome pode ser prefixo de outro).
-      type MV = { stock_item_id: number; quantity: number; movement_type: string; notes: string | null };
-      const EMBARK_RE = /^Embarque(?:\s*\([^)]*\))?:\s*/;
-      const movs = ((movRes.data as MV[] | null) || []).filter((m) => {
-        if (m.movement_type !== "BAIXA") return false;
-        const n = m.notes || "";
-        if (!EMBARK_RE.test(n)) return false;
-        return n.replace(EMBARK_RE, "").startsWith(`${shipName} (`);
-      });
-
-      // Valor unitário do estoque (coluna sensível — o /api/db só entrega pra
-      // gestão; sem acesso vem 0, e aí o valor mostrado é 0 mesmo).
-      const ids = Array.from(new Set([
-        ...items.map((it) => it.stock_item_id),
-        ...movs.map((m) => m.stock_item_id),
-      ].filter((x): x is number => x != null)));
+      // Valor unitário + setor do item. `team` separa material (GALPAO,
+      // FERRAMENTA, ELETRICA, FLUIDOS, MAQUINARIO) de RANCHO (EQUIPE_x).
+      // unit_value é coluna sensível — o /api/db só entrega pra gestão; sem
+      // acesso vem 0, e aí o valor mostrado é 0 mesmo.
+      const ids = Array.from(new Set(allItems.map((it) => it.stock_item_id).filter((x): x is number => x != null)));
       const valueById = new Map<number, number>();
-      const nameById = new Map<number, string>();
+      const ranchoIds = new Set<number>();
       if (ids.length) {
-        const { data: sdata } = await db.from("stock_items").select("id, name, unit_value").in("id", ids);
-        for (const s of (sdata as { id: number; name: string; unit_value: number | null }[] | null) || []) {
+        const { data: sdata } = await db.from("stock_items").select("id, team, unit_value").in("id", ids);
+        for (const s of (sdata as { id: number; team: string | null; unit_value: number | null }[] | null) || []) {
           valueById.set(s.id, Number(s.unit_value || 0));
-          nameById.set(s.id, s.name);
+          if ((s.team || "").startsWith("EQUIPE_")) ranchoIds.add(s.id);
         }
       }
       if (!active) return;
+      const items = allItems.filter((it) => it.stock_item_id == null || !ranchoIds.has(it.stock_item_id));
       const unpricedNames = new Set<string>();
       // Agrupa por nome do item, somando qtd e valor (unit_value × qtd).
-      const group = (rows: { name: string; id: number | null; qty: number }[]): ReturnLine[] => {
+      const acc = (pick: (it: RI) => number): ReturnLine[] => {
         const m = new Map<string, { qty: number; value: number; priced: boolean }>();
-        for (const r of rows) {
-          if (r.qty <= 0) continue;
-          const unit = r.id != null ? (valueById.get(r.id) || 0) : 0;
-          if (unit <= 0) unpricedNames.add(r.name);
-          const cur = m.get(r.name) || { qty: 0, value: 0, priced: false };
-          cur.qty += r.qty;
-          cur.value += unit * r.qty;
+        for (const it of items) {
+          const q = pick(it) || 0;
+          if (q <= 0) continue;
+          const unit = it.stock_item_id != null ? (valueById.get(it.stock_item_id) || 0) : 0;
+          if (unit <= 0) unpricedNames.add(it.item_name);
+          const cur = m.get(it.item_name) || { qty: 0, value: 0, priced: false };
+          cur.qty += q;
+          cur.value += unit * q;
           cur.priced = cur.priced || unit > 0;
-          m.set(r.name, cur);
+          m.set(it.item_name, cur);
         }
         return Array.from(m.entries())
           .map(([name, v]) => ({ name, qty: v.qty, value: +v.value.toFixed(2), priced: v.priced }))
           .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
       };
-      const fromReturn = (pick: (it: RI) => number) =>
-        group(items.map((it) => ({ name: it.item_name, id: it.stock_item_id, qty: pick(it) || 0 })));
-      const went = group(movs.map((m) => ({
-        name: nameById.get(m.stock_item_id) || `#${m.stock_item_id}`,
-        id: m.stock_item_id,
-        qty: Number(m.quantity || 0),
-      })));
       setReturnSummary({
-        went,
-        lost: fromReturn((it) => it.lost_qty),
-        consumed: fromReturn((it) => it.consumed_qty),
-        broken: fromReturn((it) => it.broken_qty),
+        lost: acc((it) => it.lost_qty),
+        consumed: acc((it) => it.consumed_qty),
+        broken: acc((it) => it.broken_qty),
         hasReturn: items.length > 0,
         unpriced: unpricedNames.size,
       });
     })().catch(() => { if (active) setReturnSummary(EMPTY_RET_SUMMARY); });
     return () => { active = false; };
-  }, [open, job?.ship_id, job?.name]);
+  }, [open, job?.ship_id]);
 
   // Desconto manual (Desc. Geral clicável) por alocação: qual está sendo editada
   // e o rascunho do valor. Salva em job_allocations.general_discount.
@@ -5799,27 +5772,26 @@ function JobDetailModal({
               (qtd × unitário) e subtotal por categoria. Só o PERDIDO custa ao
               navio. Item sem unit_value cadastrado aparece como R$ 0,00 — o
               aviso no rodapé diz quantos são. */}
-          {(kindFilter === "EMBARQUE" || returnSummary.hasReturn || returnSummary.went.length > 0) && (() => {
+          {(kindFilter === "EMBARQUE" || returnSummary.hasReturn) && (() => {
             const sum = (arr: { value: number }[]) => arr.reduce((s, it) => s + it.value, 0);
             const sections = [
-              { key: "went", icon: "📦", title: "Foi", desc: "saiu do Almoxarifado no Embarcar", cls: "text-emerald-700", items: returnSummary.went },
               { key: "lost", icon: "❌", title: "Perdido", desc: "custo do navio, rateado pela equipe", cls: "text-red-700", items: returnSummary.lost },
               { key: "consumed", icon: "🛢️", title: "Insumo", desc: "consumido — não custa ao navio", cls: "text-sky-700", items: returnSummary.consumed },
               { key: "broken", icon: "🔧", title: "Avariado", desc: "a equipe trouxe — não custa ao navio", cls: "text-amber-700", items: returnSummary.broken },
             ].filter((s) => s.items.length > 0);
-            const totalFoi = sum(returnSummary.went);
+            const totalGeral = sections.reduce((t, sec) => t + sum(sec.items), 0);
             const totalPerdido = sum(returnSummary.lost);
             const nada = sections.length === 0;
             return (
               <div className="mb-2 rounded-lg border border-border bg-gray-50 p-3 text-xs">
-                <p className="font-semibold text-text">🧰 Material do navio <span className="font-normal text-text-light">(embarque e retorno · valor de estoque)</span></p>
+                <p className="font-semibold text-text">🔧 Retorno de material <span className="font-normal text-text-light">(valor de estoque · sem rancho)</span></p>
                 {!returnSummary.hasReturn && (
                   <p className="mt-1 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-800">
-                    ⚠️ Retorno ainda não conferido — nada foi baixado do kit. Confira em <strong>Embarque/Retorno</strong> pra o perdido/insumo/avariado entrar aqui.
+                    ⚠️ Retorno ainda não conferido. Confira o material em <strong>Embarque/Retorno</strong> pra o perdido/insumo/avariado entrar aqui.
                   </p>
                 )}
                 {nada ? (
-                  <p className="mt-1.5 text-text-light italic">Nenhum material baixado pra este navio.</p>
+                  <p className="mt-1.5 text-text-light italic">Nenhum material perdido, consumido ou avariado neste navio.</p>
                 ) : (
                 <table className="w-full mt-1.5">
                   <thead>
@@ -5856,8 +5828,8 @@ function JobDetailModal({
                   </tbody>
                   <tfoot>
                     <tr className="border-t border-border">
-                      <td colSpan={3} className="pt-1.5 font-semibold text-text">📦 Total que embarcou</td>
-                      <td className="pt-1.5 text-right font-semibold tabular-nums whitespace-nowrap text-text">{brl(totalFoi)}</td>
+                      <td colSpan={3} className="pt-1.5 font-semibold text-text">💰 Total em materiais</td>
+                      <td className="pt-1.5 text-right font-semibold tabular-nums whitespace-nowrap text-text">{brl(totalGeral)}</td>
                     </tr>
                     <tr>
                       <td colSpan={3} className="pt-0.5 font-semibold text-red-700">❌ Entra no custo do navio (perdido)</td>
