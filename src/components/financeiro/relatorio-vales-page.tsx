@@ -89,7 +89,7 @@ export function RelatorioValesPage({
   );
 
   // Uma linha por funcionário que tem algum vale, igual à planilha. `ships` são
-  // os navios onde os vales dele já foram descontados (Pagamento de Navios) —
+  // os navios onde os vales dele já foram descontados (Resultado do Navio) —
   // pra ver de relance onde o adiantamento voltou, sem precisar expandir.
   const rows = useMemo(() => {
     const withAdvances = employees.filter((e) => advances.some((a) => a.employee_id === e.id));
@@ -126,7 +126,7 @@ export function RelatorioValesPage({
       return;
     }
     // Vincula o desconto no navio escolhido (valor cheio do vale). Não-fatal:
-    // o vale já foi salvo; falhando aqui, desconta manual no Pagamento de Navios.
+    // o vale já foi salvo; falhando aqui, desconta manual no Resultado do Navio.
     const advanceId = (created as unknown as { id?: number } | null)?.id;
     if (discount_job_id && advanceId) {
       const { error: discErr } = await db.from("advance_discounts").insert({
@@ -137,7 +137,7 @@ export function RelatorioValesPage({
         created_by: profileName,
       });
       if (discErr) {
-        setSaveError(`Vale salvo, mas falhou ao vincular o desconto no navio: ${discErr.message}. Desconte manual em Pagamento de Navios.`);
+        setSaveError(`Vale salvo, mas falhou ao vincular o desconto no navio: ${discErr.message}. Desconte manual em Resultado do Navio.`);
       }
     }
     setShowForm(false);
@@ -493,25 +493,25 @@ function ValeFormModal({
                 ? "Escolha o colaborador primeiro"
                 : loadingEmpJobs
                   ? "Carregando navios..."
-                  : "— Descontar depois (Pagamento de Navios)"}
+                  : "— Descontar depois (Resultado do Navio)"}
             </option>
             {discountJobOptions.map((j) => <option key={j.id} value={j.id}>{j.name}</option>)}
           </select>
           {employeeId && !loadingEmpJobs && discountJobOptions.length === 0 && (
             <p className="text-[11px] text-amber-700 mt-1">
-              Este colaborador não está escalado em nenhum navio em aberto — desconte depois em Pagamento de Navios.
+              Este colaborador não está escalado em nenhum navio em aberto — desconte depois em Resultado do Navio.
             </p>
           )}
           {discountJobId && (
             <p className="text-[11px] text-text-light mt-1">
-              O valor cheio do vale ({value > 0 ? formatCurrency(value) : "—"}) entra como desconto na coluna Adiant. deste navio. Dá pra ajustar depois em Pagamento de Navios.
+              O valor cheio do vale ({value > 0 ? formatCurrency(value) : "—"}) entra como desconto na coluna Adiant. deste navio. Dá pra ajustar depois em Resultado do Navio.
             </p>
           )}
         </div>
 
         {!discountJobId && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-800">
-            Sem navio escolhido, o desconto é feito depois, na aba <strong>Pagamento de Navios</strong>: abra o navio e escolha este vale na coluna Adiant. do colaborador.
+            Sem navio escolhido, o desconto é feito depois, na aba <strong>Resultado do Navio</strong>: abra o navio e escolha este vale na coluna Adiant. do colaborador.
           </div>
         )}
 

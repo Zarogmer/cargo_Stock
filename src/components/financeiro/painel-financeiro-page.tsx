@@ -263,7 +263,7 @@ export function PainelFinanceiroPage() {
   );
 
   const shipsDue = useMemo(() => {
-    // Atividade: mesma leitura das abas do Pagamento de Navios — Embarque
+    // Atividade: mesma leitura das abas do Resultado do Navio — Embarque
     // inclui o Administrativo (custo fixo por operação); Costado é só Costado.
     const kindAllocs =
       naviosTipo === "TODOS"
@@ -478,10 +478,10 @@ export function PainelFinanceiroPage() {
             <div className="bg-card border border-border rounded-xl p-4">
               <SectionHeader
                 emoji="🚢"
-                title="Pagamento de Navios — vencimentos"
+                title="Resultado do Navio — vencimentos"
                 hint={`Navio em aberto vence ${SHIP_PAYMENT_DAYS} dias após o fim da operação`}
                 href="/financeiro?tab=navios"
-                linkLabel="Pagamento de Navios"
+                linkLabel="Resultado do Navio"
               />
               {/* Filtros do bloco: mês da operação + Embarque/Costado */}
               <div className="flex items-center gap-2 flex-wrap mb-2">
@@ -726,7 +726,7 @@ export function PainelFinanceiroPage() {
                       <th className="py-2 pr-3 font-semibold">Colaborador</th>
                       <th className="py-2 pr-3 font-semibold">Cargo</th>
                       <th className="py-2 pr-3 font-semibold text-right">Ganho no ano</th>
-                      <th className="py-2 pr-3 font-semibold text-right" title="PAGTO NA FOLHA — Ganho menos a parte paga no cartão Pluxee, igual ao Pagamento de Navios">Folha</th>
+                      <th className="py-2 pr-3 font-semibold text-right" title="PAGTO NA FOLHA — Ganho menos a parte paga no cartão Pluxee, igual ao Resultado do Navio">Folha</th>
                       <th className="py-2 pr-3 font-semibold text-right">Porões</th>
                       <th className="py-2 pr-3 font-semibold text-right">Turnos</th>
                       <th className="py-2 pr-3 font-semibold text-right">Navios</th>

@@ -397,13 +397,15 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/financeiro",
     icon: "financeiro",
     module: "FINANCEIRO_MOD",
-    // Painel Financeiro, Valores e Demonstração Financeira saíram do menu em
-    // 2026-08-25 (pedido do Guilherme): o valor de cada colaborador passa a ser
-    // digitado direto na tabela do Pagamento de Navios (Valor/Porão clicável,
-    // travado por navio), então a tela de Valores deixou de ser o caminho.
-    // As páginas continuam existindo — só não são mais listadas.
+    // Painel Financeiro e Demonstração Financeira saíram do menu em 2026-08-25
+    // (pedido do Guilherme) — as páginas continuam existindo, só não são mais
+    // listadas. A tela de Valores voltou ao menu no mesmo dia como "Pagamentos
+    // e Valores" (o valor por navio continua digitável na tabela do navio, mas
+    // o catálogo de funções/valores voltou a ser um caminho do menu), e
+    // "Pagamento de Navios" virou "Resultado do Navio".
     children: [
-      { label: "Pagamento de Navios", href: "/financeiro?tab=navios" },
+      { label: "Pagamentos e Valores", href: "/financeiro?tab=funcoes" },
+      { label: "Resultado do Navio", href: "/financeiro?tab=navios" },
       { label: "Controle de Funcionários", href: "/financeiro?tab=controle" },
       { label: "Relatório de Vales", href: "/financeiro?tab=vales" },
       // Módulo bancário (fornecedores/bancos) — sub-rotas reais, restritas a

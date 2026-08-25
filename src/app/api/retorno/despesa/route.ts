@@ -16,6 +16,12 @@ const TEAM_LABEL: Record<string, string> = {
 // registrado no retorno e no aviso do WhatsApp, mas não entra no custo do
 // navio (regra de 2026-07-21, pedido do Guilherme).
 //
+// RANCHO FICA DE FORA: comida (stock_items.team = EQUIPE_x) não é material e
+// não entra no custo de material do navio — mesma regra da tela do navio, que
+// já esconde o rancho do bloco "Retorno de material". Sem esse filtro, um
+// retorno que marca a comida como perdida (acontece) viraria desconto na
+// equipe assim que os itens do Rancho ganhassem preço no Almoxarifado.
+//
 // Roda no servidor porque unit_value é coluna sensível (o /api/db a esconde de
 // quem não é gestão) — quem confirma o retorno nem sempre pode VER o preço,
 // mas o prejuízo tem que entrar no custo do navio mesmo assim.
@@ -64,13 +70,15 @@ export async function POST(request: NextRequest) {
     .map((it) => it.stock_item_id)
     .filter((x): x is number => x != null);
   const items = ids.length
-    ? await prisma.stockItem.findMany({ where: { id: { in: ids } }, select: { id: true, unit_value: true } })
+    ? await prisma.stockItem.findMany({ where: { id: { in: ids } }, select: { id: true, team: true, unit_value: true } })
     : [];
   const valueById = new Map(items.map((i) => [i.id, i.unit_value || 0]));
+  const ranchoIds = new Set(items.filter((i) => (i.team || "").startsWith("EQUIPE_")).map((i) => i.id));
 
   let total = 0;
   const parts: string[] = [];
   for (const it of lost) {
+    if (it.stock_item_id != null && ranchoIds.has(it.stock_item_id)) continue; // rancho não custa
     const v = it.stock_item_id != null ? valueById.get(it.stock_item_id) || 0 : 0;
     total += v * it.lost_qty;
     parts.push(`${it.lost_qty}× ${it.item_name}`);

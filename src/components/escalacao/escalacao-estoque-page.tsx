@@ -1067,7 +1067,7 @@ export function EscalacaoEstoquePage() {
       }
 
       // O prejuízo dos quebrados vira despesa "Material danificado" no
-      // Pagamento de Navios. Calculado no servidor (unit_value é coluna
+      // Resultado do Navio. Calculado no servidor (unit_value é coluna
       // sensível que o /api/db esconde de quem não é gestão). Best-effort:
       // o retorno já está salvo; falha aqui só vira nota na tela.
       try {
@@ -1888,7 +1888,7 @@ function RetornoSection({
         <span className="text-center" title="Quanto a equipe leva (referência)">Foi</span>
         <span className="text-center" title="Voltou em bom estado — credita o estoque de volta">Voltou</span>
         {showBL && <span className="text-center" title="Voltou, mas quebrado/estragado — a equipe trouxe de volta; não custa nada ao navio">{labels.broken}</span>}
-        {showBL && <span className="text-center" title="Não voltou — vira despesa do navio, dividida pela equipe no Pagamento de Navios">Perdido</span>}
+        {showBL && <span className="text-center" title="Não voltou — vira despesa do navio, dividida pela equipe no Resultado do Navio">Perdido</span>}
         <span className="text-center" title="Consumido de propósito (graxa, química...) — sai do estoque, mas não custa nada ao navio">Insumo</span>
         <span>Obs.</span>
       </div>

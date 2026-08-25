@@ -554,9 +554,10 @@ function PayShipModal({
 export default function FinanceiroPage() {
   const { profile } = useAuth();
   const searchParams = useSearchParams();
-  // Sem ?tab= o Financeiro abre no Pagamento de Navios — "Valores" saiu do menu
-  // (o valor de cada colaborador é digitado direto na tabela do navio) e não
-  // serve mais de porta de entrada. A tela continua acessível pela URL.
+  // Sem ?tab= o Financeiro abre no Resultado do Navio (ex-"Pagamento de
+  // Navios"). "Pagamentos e Valores" (tab=funcoes) é a antiga aba Valores, de
+  // volta ao menu — o valor de cada colaborador continua digitável direto na
+  // tabela do navio.
   const rawTab = searchParams.get("tab") || "navios";
   // "Pagamento de Embarque" e "Pagamento de Costado" viraram uma aba só
   // ("Pagamento de Navios"). Mantém links antigos funcionando: embarque/costado
@@ -734,7 +735,7 @@ export default function FinanceiroPage() {
   const financeiroTabs = [
     {
       key: "funcoes",
-      label: "💰 Valores",
+      label: "💰 Pagamentos e Valores",
       content: (
         <FuncoesTab
           functions={functions}
@@ -750,7 +751,7 @@ export default function FinanceiroPage() {
     },
     {
       key: "navios",
-      label: "🚢 Pagamento de Navios",
+      label: "🚢 Resultado do Navio",
       content: (
         <PagamentoNaviosTab
           initialTipo={initialTipo}
