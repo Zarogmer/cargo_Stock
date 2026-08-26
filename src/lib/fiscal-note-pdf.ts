@@ -11,6 +11,7 @@
 import { readFile } from "fs/promises";
 import path from "path";
 import { PDFDocument, PDFFont, PDFPage, StandardFonts, rgb } from "pdf-lib";
+import { safe } from "@/lib/report-pdf";
 import {
   CARGO_ISSUER,
   CURRENCY_SYMBOL,
@@ -75,15 +76,10 @@ function wrap(s: string, font: PDFFont, size: number, maxWidth: number): string[
   return lines.length ? lines : [""];
 }
 
-// pdf-lib usa WinAnsi nas fontes padrão: caracteres fora dela (traço longo,
-// aspas curvas) quebram a geração. Normaliza antes de desenhar.
-function ascii(s: string | null | undefined): string {
-  return (s || "")
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[–—]/g, "-")
-    .replace(/ /g, " ");
-}
+// pdf-lib usa WinAnsi nas fontes padrão: caracteres fora dela (emoji, símbolos)
+// quebram a geração. O filtro é o MESMO dos Relatórios de Bordo — além de
+// normalizar aspas/travessão, remove o que a fonte não codifica.
+const ascii = safe;
 
 function money(v: number, symbol: string): string {
   return `${symbol} ${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -105,6 +101,17 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
   const right = A4[0] - MARGIN;
   const innerW = right - left;
   let y = A4[1] - MARGIN;
+
+  // Uma página nem sempre basta: nota com muitos itens (Costado cobrado por
+  // dia/período) estoura o A4 e, sem isto, totais e dados de depósito seriam
+  // desenhados abaixo de y=0 — fora da página, invisíveis. Antes de cada bloco,
+  // se ele não couber, abre página nova e segue do topo.
+  const ensure = (needed: number) => {
+    if (y - needed < MARGIN) {
+      ctx.page = pdf.addPage(A4);
+      y = A4[1] - MARGIN;
+    }
+  };
 
   // ── Timbrado: logo à esquerda, dados da empresa à direita ─────────────────
   try {
@@ -225,13 +232,13 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
 
   // Corpo: uma linha por item. Débito e Crédito ficam em colunas opostas
   // conforme o tipo da nota (ND lança no débito, NC lança no crédito).
-  const bodyTop = y;
   for (const item of [...note.items].sort((a, b) => a.position - b.position)) {
     const memo = item.unit_value && item.quantity
       ? `${money(Number(item.unit_value), symbol)} x ${Number(item.quantity).toLocaleString("pt-BR")}`
       : "";
     const descLines = wrap(ascii(item.description), font, 7.2, colDesc - 10);
     const rowH = Math.max(16, descLines.length * 9 + (memo ? 9 : 0) + 6);
+    ensure(rowH);
     rect(ctx, xDesc, y - rowH, colDesc, rowH);
     rect(ctx, xDebit, y - rowH, colDebit, rowH);
     rect(ctx, xCredit, y - rowH, colCredit, rowH);
@@ -248,6 +255,7 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
   // Linha do ISS: entra do lado oposto ao do serviço, abatendo o total.
   if (totals.issValue > 0) {
     const rowH = 16;
+    ensure(rowH);
     const pct = Number(note.iss_percent || 0);
     const label = `${L.iss} (${pct.toLocaleString("pt-BR", { maximumFractionDigits: 4 })}%) - ${L.issValue}`;
     rect(ctx, xDesc, y - rowH, colDesc, rowH);
@@ -271,6 +279,7 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
   ].filter(Boolean);
   if (infoLines.length) {
     const infoH = 8 + infoLines.length * 10;
+    ensure(infoH);
     rect(ctx, xDesc, y - infoH, colDesc, infoH);
     rect(ctx, xDebit, y - infoH, colDebit, infoH);
     rect(ctx, xCredit, y - infoH, colCredit, infoH);
@@ -279,19 +288,19 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
     let iy = y - 12;
     infoLines.forEach((l, i) => {
       if (i === 0 && note.due_date) {
-        page.drawRectangle({ x: xDesc + 3, y: iy - 3, width: colDesc - 6, height: 11, color: HIGHLIGHT });
+        ctx.page.drawRectangle({ x: xDesc + 3, y: iy - 3, width: colDesc - 6, height: 11, color: HIGHLIGHT });
       }
       text(ctx, ascii(l), xDesc + 6, iy, 7.2, true);
       iy -= 10;
     });
     y -= infoH;
   }
-  void bodyTop;
 
   // ── SUB-TOTAL e TOTAL ─────────────────────────────────────────────────────
   const debitSum = isDebit ? totals.subtotal : totals.issValue;
   const creditSum = isDebit ? totals.issValue : totals.subtotal;
   const totalRow = (label: string, dv: number, cv: number, showDC: boolean, h: number, strong: boolean) => {
+    ensure(h);
     rect(ctx, xDesc, y - h, colDesc, h, strong ? HEAD_BG : undefined);
     rect(ctx, xDebit, y - h, colDebit, h, strong ? HEAD_BG : undefined);
     rect(ctx, xCredit, y - h, colCredit, h, strong ? HEAD_BG : undefined);
@@ -312,12 +321,14 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
 
   // Observação de moeda + linha "Crédito a Favor"
   const obsH = 11;
+  ensure(obsH);
   rect(ctx, left, y - obsH, innerW, obsH, HEAD_BG);
   const obs = note.currency === "USD" ? L.obsUSD : L.obsBRL;
   text(ctx, ascii(obs), left + innerW / 2 - bold.widthOfTextAtSize(ascii(obs), 6.8) / 2, y - obsH + 3, 6.8, true);
   y -= obsH;
 
   const favH = 14;
+  ensure(favH);
   rect(ctx, left, y - favH, innerW - colTotal, favH);
   rect(ctx, left + innerW - colTotal, y - favH, colTotal, favH);
   text(ctx, ascii(isDebit ? L.inFavorDebit : L.inFavorCredit), left + 5, y - favH + 4, 7.4);
@@ -327,6 +338,7 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
   // ── Rodapé: dados de depósito + assinatura ────────────────────────────────
   const boxW = 190;
   const boxH = 52;
+  ensure(boxH + 14); // caixa + linha/nome da assinatura (y-34/y-45)
   rect(ctx, right - boxW, y - boxH, boxW, boxH);
   let by = y - 12;
   for (const l of [
@@ -339,7 +351,7 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
     text(ctx, ascii(l), right - boxW + 6, by, 7, true);
     by -= 9;
   }
-  page.drawLine({
+  ctx.page.drawLine({
     start: { x: left + 10, y: y - 34 },
     end: { x: left + 190, y: y - 34 },
     thickness: 0.6, color: LINE,

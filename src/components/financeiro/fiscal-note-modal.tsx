@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { db } from "@/lib/db";
+import { parseDecimalBR } from "@/lib/utils";
 import {
   calcFiscalNoteTotals,
   formatMoney,
@@ -76,10 +77,9 @@ function todayISO(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function parseBR(v: string): number {
-  const n = parseFloat((v || "").replace(/\./g, "").replace(",", "."));
-  return Number.isFinite(n) ? n : 0;
-}
+// Números digitados em pt-BR (vírgula decimal). parseDecimalBR só trata ponto
+// como milhar quando há vírgula — "5.15" é 5.15, não 515.
+const parseBR = parseDecimalBR;
 
 export function FiscalNoteModal({
   open, job, services, onClose, onSaved,
@@ -136,20 +136,35 @@ export function FiscalNoteModal({
     return list.length ? list : [{ description: "", unit: "", qty: "", amount: "" }];
   }, [job, services]);
 
-  const loadAll = useCallback(async () => {
+  // Notas do navio + próximo número da sequência DO ANO. Separado do loadAll
+  // porque o ano acompanha a data de emissão: se o usuário retroagir a data pra
+  // outro ano, o "Sai como NNN/YY" precisa ser refeito pra sequência daquele ano.
+  const loadNotes = useCallback(async () => {
     if (!job) return;
-    setError(null);
-    const [{ data: clientRows }, res] = await Promise.all([
-      db.from("invoice_clients").select("*"),
-      fetch(`/api/financeiro/notas?job_id=${encodeURIComponent(job.id)}&year=${year}`).then((r) => r.json()).catch(() => null),
-    ]);
-    const list = (clientRows as InvoiceClient[] | null) || [];
-    setClients(list);
+    const res = await fetch(`/api/financeiro/notas?job_id=${encodeURIComponent(job.id)}&year=${year}`)
+      .then((r) => r.json())
+      .catch(() => null);
     if (res) {
       setNotes(res.notes || []);
       setNextDebito(res.nextDebito || 1);
       setNextCredito(res.nextCredito || 1);
     }
+  }, [job, year]);
+
+  useEffect(() => {
+    if (!open || !job) return;
+    loadNotes();
+    // `job` chega como literal novo a cada render do pai — depender do id (e do
+    // ano, que segue a data de emissão) evita refetch em todo render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, job?.id, year]);
+
+  const loadAll = useCallback(async () => {
+    if (!job) return;
+    setError(null);
+    const { data: clientRows } = await db.from("invoice_clients").select("*");
+    const list = (clientRows as InvoiceClient[] | null) || [];
+    setClients(list);
     const match = list.find(
       (c) => c.name.trim().toUpperCase() === (job.client || "").trim().toUpperCase(),
     );
@@ -161,7 +176,7 @@ export function FiscalNoteModal({
     setHeaderLine(match?.header_line || "");
     setLanguage((match?.language === "EN" ? "EN" : "PT") as FiscalNoteLanguage);
     setCurrency((match?.default_currency === "USD" ? "USD" : "BRL") as FiscalNoteCurrency);
-  }, [job, year]);
+  }, [job]);
 
   useEffect(() => {
     if (!open || !job) return;
@@ -261,7 +276,7 @@ export function FiscalNoteModal({
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || `Falha ao emitir a nota (HTTP ${res.status}).`);
-      await loadAll();
+      await Promise.all([loadAll(), loadNotes()]);
       setItems(suggestedItems());
       setNumber("");
       onSaved();

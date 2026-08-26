@@ -19,8 +19,13 @@ function currentYear(): number {
   return new Date().getFullYear();
 }
 
-async function nextNumber(kind: string, year: number): Promise<number> {
-  const last = await prisma.fiscalNote.findFirst({
+// Aceita tanto o client global (GET) quanto o client de transação (POST).
+async function nextNumber(
+  db: Pick<typeof prisma, "fiscalNote">,
+  kind: string,
+  year: number,
+): Promise<number> {
+  const last = await db.fiscalNote.findFirst({
     where: { kind, year },
     orderBy: { number: "desc" },
     select: { number: true },
@@ -47,12 +52,11 @@ export async function GET(request: NextRequest) {
       })
     : [];
 
-  return NextResponse.json({
-    notes,
-    year,
-    nextDebito: await nextNumber("DEBITO", year),
-    nextCredito: await nextNumber("CREDITO", year),
-  });
+  const [nextDebito, nextCredito] = await Promise.all([
+    nextNumber(prisma, "DEBITO", year),
+    nextNumber(prisma, "CREDITO", year),
+  ]);
+  return NextResponse.json({ notes, year, nextDebito, nextCredito });
 }
 
 export async function POST(request: NextRequest) {
@@ -69,7 +73,6 @@ export async function POST(request: NextRequest) {
   if (!body) return NextResponse.json({ error: "Payload inválido" }, { status: 400 });
 
   const kind = body.kind === "CREDITO" ? "CREDITO" : "DEBITO";
-  const year = Number(body.year) || currentYear();
   const items = Array.isArray(body.items) ? body.items : [];
   const cleanItems = items
     .map((it: Record<string, unknown>, i: number) => ({
@@ -89,6 +92,10 @@ export async function POST(request: NextRequest) {
   if (!String(body.issue_date || "").trim()) {
     return NextResponse.json({ error: "Data de emissão é obrigatória." }, { status: 400 });
   }
+  // O ano da sequência sai SEMPRE da data de emissão — fonte única. Um body.year
+  // divergente (modal aberto na virada do ano, chamada direta) registraria a
+  // nota na sequência errada.
+  const year = Number(String(body.issue_date).slice(0, 4)) || currentYear();
 
   const issPercent = body.iss_percent != null && body.iss_percent !== "" ? Number(body.iss_percent) : null;
   const totals = calcFiscalNoteTotals(
@@ -96,17 +103,22 @@ export async function POST(request: NextRequest) {
     issPercent,
   );
 
-  const number = Number(body.number) > 0 ? Number(body.number) : await nextNumber(kind, year);
+  const explicitNumber = Number(body.number) > 0 ? Number(body.number) : null;
   const date = (v: unknown) => {
     const s = String(v || "").slice(0, 10);
     return /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T00:00:00Z`) : null;
   };
 
-  try {
-    const note = await prisma.fiscalNote.create({
+  // MAX()+insert na MESMA transação. Se dois usuários emitirem juntos, o índice
+  // único (kind, number, year) derruba um deles — e aí, quando o número foi
+  // automático, a gente só tenta de novo com o próximo, em vez de devolver um
+  // 409 pra quem nem digitou número.
+  let number = explicitNumber ?? 0;
+  const createNote = (tx: Pick<typeof prisma, "fiscalNote">, n: number) =>
+    tx.fiscalNote.create({
       data: {
         kind,
-        number,
+        number: n,
         year,
         job_id: body.job_id || null,
         ship_name: String(body.ship_name).trim(),
@@ -136,10 +148,27 @@ export async function POST(request: NextRequest) {
       },
       include: { items: { orderBy: { position: "asc" } } },
     });
-    return NextResponse.json({ note });
+
+  const isDup = (err: unknown) =>
+    err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const note = await prisma.$transaction(async (tx) => {
+          number = explicitNumber ?? (await nextNumber(tx, kind, year));
+          return createNote(tx, number);
+        });
+        return NextResponse.json({ note });
+      } catch (err) {
+        // Corrida com número automático: outro usuário levou o número entre o
+        // MAX e o insert — tenta o próximo. Número DIGITADO é conflito real.
+        if (isDup(err) && explicitNumber == null && attempt < 3) continue;
+        throw err;
+      }
+    }
   } catch (err) {
     // Índice único (kind, number, year): alguém já usou esse número no ano.
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+    if (isDup(err)) {
       return NextResponse.json(
         { error: `Já existe uma nota ${kind === "DEBITO" ? "de débito" : "de crédito"} com o número ${number} em ${year}.` },
         { status: 409 },

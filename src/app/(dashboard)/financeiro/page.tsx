@@ -631,7 +631,10 @@ export default function FinanceiroPage() {
       db.from("job_functions").select("*").order("name"),
       db.from("job_units").select("*"),
       db.from("job_function_rates").select("*").order("valid_from", { ascending: false }),
-      db.from("jobs").select("*, ships(name, status, holds_count)").order("start_date", { ascending: false }),
+      // `services` vem junto na relação: a lista `ships` abaixo é limitada às 50
+      // chegadas mais recentes, então a Nota de um navio antigo perderia a
+      // sugestão de serviços se dependesse dela.
+      db.from("jobs").select("*, ships(name, status, holds_count, services)").order("start_date", { ascending: false }),
       // Ordem FIXA (added_at, id): sem isso o Postgres devolve na ordem do heap
       // e a linha editada pulava de lugar na tabela do navio a cada save.
       db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)").order("added_at").order("id"),
@@ -2900,7 +2903,7 @@ function TrabalhosTab({
           end_date: noteJob.end_date ? String(noteJob.end_date).slice(0, 10) : null,
           contract_value: noteJob.contract_value ?? null,
         } : null}
-        services={ships.find((sh) => sh.id === noteJob?.ship_id)?.services || []}
+        services={(noteJob as (Job & { ships?: { services?: string[] | null } | null }) | null)?.ships?.services || []}
         onClose={() => setNoteJob(null)}
         onSaved={() => onChange()}
       />
@@ -3281,7 +3284,9 @@ function JobDetailModal({
         lost: acc((it) => it.lost_qty),
         consumed: acc((it) => it.consumed_qty),
         broken: acc((it) => it.broken_qty),
-        hasReturn: items.length > 0,
+        // Conferido é conferido mesmo que só tenha rancho: o filtro acima é de
+        // CUSTO, não de existência do retorno.
+        hasReturn: allItems.length > 0,
         unpriced: unpricedNames.size,
       });
     })().catch(() => { if (active) setReturnSummary(EMPTY_RET_SUMMARY); });
@@ -4124,7 +4129,14 @@ function JobDetailModal({
         // Coluna ITAÚ/SANTANDER: banco + TIPO DA CONTA (conta salário, corrente,
         // poupança, digital). Sem conta bancária o pagamento é em espécie —
         // "S/CONTA - TRAZER SALÁRIO". É por essa coluna que a folha é filtrada.
-        const hasAccount = !!(e?.bank_account && String(e.bank_account).trim());
+        // Conta SEM banco cadastrado não tem onde depositar: trata como sem
+        // conta (rótulo "S/CONTA - TRAZER SALÁRIO" e bolso A TRAZER). Sem isso o
+        // rótulo dizia "S/CONTA" mas o valor caía em OUTROS BANCOS, e os totais
+        // não fechavam com o filtro da coluna.
+        const hasAccount = !!(
+          e?.bank_account && String(e.bank_account).trim() &&
+          e?.bank_name && String(e.bank_name).trim()
+        );
         const bankCell = hasAccount
           ? formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null)
           : "S/CONTA - TRAZER SALÁRIO";
@@ -7503,7 +7515,7 @@ function CostadoTab({
           end_date: noteJob.end_date ? String(noteJob.end_date).slice(0, 10) : null,
           contract_value: noteJob.contract_value ?? null,
         } : null}
-        services={ships.find((sh) => sh.id === noteJob?.ship_id)?.services || []}
+        services={(noteJob as (Job & { ships?: { services?: string[] | null } | null }) | null)?.ships?.services || []}
         onClose={() => setNoteJob(null)}
         onSaved={() => onChange()}
       />

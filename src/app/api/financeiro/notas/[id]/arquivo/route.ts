@@ -70,12 +70,20 @@ export async function GET(
   const base = fiscalNoteFileName(input.kind, input.number, input.year, input.ship_name);
   const formato = (request.nextUrl.searchParams.get("formato") || "pdf").toLowerCase();
 
+  // Mesma convenção das outras rotas de download: filename= é o fallback ASCII
+  // (RFC 6266 não manda decodificar %20 ali — Safari salvaria "ND%20059..."),
+  // e o nome real com espaços/acentos vai no filename*.
+  const disposition = (ext: string) => {
+    const ascii = `${base}.${ext}`.replace(/[^\x20-\x7E]+/g, "_");
+    return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(`${base}.${ext}`)}`;
+  };
+
   if (formato === "xlsx") {
     const buf = buildFiscalNoteXlsx(input);
     return new NextResponse(Buffer.from(buf), {
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": `attachment; filename="${encodeURIComponent(base)}.xlsx"`,
+        "Content-Disposition": disposition("xlsx"),
       },
     });
   }
@@ -84,7 +92,7 @@ export async function GET(
   return new NextResponse(Buffer.from(pdf), {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="${encodeURIComponent(base)}.pdf"`,
+      "Content-Disposition": disposition("pdf"),
     },
   });
 }

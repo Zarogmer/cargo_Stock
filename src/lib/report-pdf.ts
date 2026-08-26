@@ -53,8 +53,9 @@ const RED = rgb(0.706, 0.137, 0.094);
 const WHITE = rgb(1, 1, 1);
 
 // As fontes padrão do PDF são WinAnsi: acento passa, mas travessão/estrela/emoji
-// não. Tudo que sai em texto passa por aqui.
-function safe(value: unknown): string {
+// não. Tudo que sai em texto passa por aqui. Exportado porque a Nota de
+// Débito/Crédito (fiscal-note-pdf.ts) usa a mesma stack e o mesmo filtro.
+export function safe(value: unknown): string {
   return String(value ?? "")
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')

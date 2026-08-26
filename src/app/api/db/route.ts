@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { canViewStockValue } from "@/lib/rbac";
+import { canViewStockValue, hasPermission } from "@/lib/rbac";
 import type { Role } from "@/types/database";
 
 // Map snake_case table names to Prisma model accessors
@@ -269,6 +269,28 @@ export async function POST(request: NextRequest) {
         { data: null, error: { message: "Sem permissão para este recurso", code: "403" }, count: null },
         { status: 403 }
       );
+    }
+
+    // Faturamento: o gateway é genérico, então as tabelas das notas precisam da
+    // mesma régua da rota dedicada. fiscal_notes NUNCA é escrita por aqui — a
+    // emissão/alteração passa por /api/financeiro/notas (numeração + validação);
+    // sem este bloqueio, qualquer papel logado poderia criar/alterar/apagar uma
+    // nota emitida com um POST direto. Ler nota/cadastro fiscal exige o mesmo
+    // FINANCEIRO_MOD view; editar o cadastro do cliente, edit.
+    if (spec.table === "fiscal_notes" || spec.table === "invoice_clients") {
+      if (spec.table === "fiscal_notes" && spec.action !== "select") {
+        return NextResponse.json(
+          { data: null, error: { message: "Notas fiscais são emitidas/alteradas só pela rota /api/financeiro/notas", code: "403" }, count: null },
+          { status: 403 }
+        );
+      }
+      const needed = spec.action === "select" ? "view" : "edit";
+      if (!hasPermission(userRole, "FINANCEIRO_MOD", needed)) {
+        return NextResponse.json(
+          { data: null, error: { message: "Sem permissão para este recurso", code: "403" }, count: null },
+          { status: 403 }
+        );
+      }
     }
 
     const model = getModel(spec.table);
