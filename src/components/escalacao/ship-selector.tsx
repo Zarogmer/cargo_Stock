@@ -158,7 +158,7 @@ export function ShipSelector({
             )}
           </div>
           <div className="px-3 py-2 bg-gray-50 border-t border-border text-[10px] text-text-light text-center">
-            {ships.length} navio(s) {showFinished ? "(inclui finalizados)" : "(Agendado / Em Operação)"}
+            {ships.length} navio(s) {showFinished ? "(inclui finalizados)" : "(pendentes)"}
           </div>
         </div>
       )}

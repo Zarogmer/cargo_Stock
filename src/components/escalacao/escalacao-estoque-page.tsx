@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { hasPermission, canViewStockValue, type Module } from "@/lib/rbac";
-import { releaseShipAllocationsNow } from "@/lib/release-finished-ships";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -20,6 +19,9 @@ interface Ship {
   departure_date: string | null;
   port: string | null;
   status: string;
+  // Embarque confirmado aqui na aba (independente do status do navio — quem
+  // abre/fecha o navio é a aba Navios; a Manutenção embarca no tempo dela).
+  embarked_at: string | null;
   assigned_team: string | null;
   cargo_type: string | null; // produto/carga — sai no "Produto" do Check List
   services?: string[] | null; // ["COSTADO"] = navio de Costado (sem kit/Retorno)
@@ -142,9 +144,9 @@ export function EscalacaoEstoquePage() {
 
   const [ships, setShips] = useState<Ship[]>([]);
   const [selectedShip, setSelectedShip] = useState<string>("");
-  // Mostrar navios finalizados (Concluído/Cancelado) no seletor — igual à aba
-  // Escalação. Por padrão só os ativos (Agendado / Em Operação) + os Concluídos
-  // que ainda não têm Retorno registrado (fechados direto na aba Navios).
+  // Mostrar navios finalizados no seletor — igual à aba Escalação. Por padrão
+  // só os pendentes: falta Embarque ou falta Retorno (mesmo que o usuário já
+  // tenha fechado o navio na aba Navios).
   const [showFinished, setShowFinished] = useState(false);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [kitItems, setKitItems] = useState<KitItem[]>([]);
@@ -176,9 +178,8 @@ export function EscalacaoEstoquePage() {
   const [savingReturn, setSavingReturn] = useState(false);
   const [sendingWhats, setSendingWhats] = useState(false);
   const [returnMsg, setReturnMsg] = useState<string | null>(null);
-  // Ao confirmar o retorno, pergunta a data de saída do navio pra fechar ele.
+  // Diálogo de confirmação do retorno (só confere material — não fecha navio).
   const [confirmReturnOpen, setConfirmReturnOpen] = useState(false);
-  const [closeDateDraft, setCloseDateDraft] = useState("");
 
   // Envio da lista de embarque pro grupo do WhatsApp (aba Embarque).
   const [sendingEmbarkList, setSendingEmbarkList] = useState(false);
@@ -215,17 +216,20 @@ export function EscalacaoEstoquePage() {
 
   useEffect(() => { loadData(); }, [loadData, pathname]);
 
-  // Navio "ativo" = ainda em andamento (Agendado / Em Operação). Finalizados
-  // (Concluído / Cancelado) só aparecem com o toggle "mostrar finalizados".
+  // Navio "ativo" = ainda em andamento (Em Operação; AGENDADO é legado).
+  // Finalizados (Concluído / Cancelado) só aparecem com "mostrar finalizados".
   const isActiveShip = (s: Ship) => s.status === "AGENDADO" || s.status === "EM_OPERACAO";
-  // Navio fechado direto na aba Navios (Concluído SEM Retorno registrado)
-  // continua na lista padrão: o Retorno pode ser feito depois do fechamento,
-  // e é ele que tira o navio daqui. Costado e navio sem equipe ficam de fora —
-  // não têm kit de material, logo nunca teriam Retorno pra registrar.
+  // Esta aba é o "tempo da Manutenção": o navio entra aqui assim que é criado
+  // e só sai quando o ciclo de material fecha (Embarque feito + Retorno
+  // confirmado) — não importa se o usuário já fechou o navio na aba Navios.
+  // Concluído sem Retorno segue pendente até a conferência. Costado e navio
+  // sem equipe ficam de fora — não têm kit de material.
   const shipHasReturn = (shipId: string) => returns.some((r) => r.ship_id === shipId);
   const isCostadoShip = (s: Ship) => (s.services || []).includes("COSTADO");
-  const isPendingShip = (s: Ship) => isActiveShip(s)
-    || (s.status === "CONCLUIDO" && !!s.assigned_team && !isCostadoShip(s) && !shipHasReturn(s.id));
+  const isPendingShip = (s: Ship) => s.status !== "CANCELADO"
+    && !isCostadoShip(s)
+    && (isActiveShip(s) || !!s.assigned_team)
+    && (!s.embarked_at || !shipHasReturn(s.id));
   const visibleShips = showFinished ? ships : ships.filter(isPendingShip);
 
   useEffect(() => {
@@ -244,16 +248,14 @@ export function EscalacaoEstoquePage() {
     ? currentShip.assigned_team
     : null) as "EQUIPE_1" | "EQUIPE_2" | "EQUIPE_3" | "EQUIPE_4" | null;
 
-  // Navio já EM OPERAÇÃO (embarque feito) abre direto na aba Retorno; agendado
-  // abre no Embarque. Concluído sem Retorno também abre no Retorno — é o que
-  // falta fazer nele. Só troca ao MUDAR de navio — respeita o clique manual.
+  // Abre na etapa que falta: sem embarque registrado abre no Embarque; com
+  // embarque feito abre no Retorno. Só troca ao MUDAR de navio — respeita o
+  // clique manual.
   const lastTabShipRef = useRef<string | null>(null);
   useEffect(() => {
     if (!currentShip || lastTabShipRef.current === currentShip.id) return;
     lastTabShipRef.current = currentShip.id;
-    const wantsReturn = currentShip.status === "EM_OPERACAO"
-      || (currentShip.status === "CONCLUIDO" && isPendingShip(currentShip));
-    setTab(wantsReturn ? "retorno" : "embarque");
+    setTab(currentShip.embarked_at ? "retorno" : "embarque");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentShip]);
 
@@ -649,15 +651,15 @@ export function EscalacaoEstoquePage() {
 
   async function handleEmbarcar() {
     if (!currentShip || !selectedTeam) return;
-    // Um embarque por navio: só embarca quem está AGENDADO. Depois de embarcar o
-    // navio vira EM_OPERACAO (e no fim CONCLUIDO), então clicar de novo não baixa
-    // o estoque duas vezes.
-    if (currentShip.status !== "AGENDADO") {
+    // Um embarque por navio: quem já tem embarked_at não embarca de novo (senão
+    // baixa o estoque duas vezes). O status do navio não entra na conta — o
+    // navio abre/fecha na aba Navios, o embarque é o "tempo da Manutenção".
+    if (currentShip.embarked_at || currentShip.status === "CANCELADO") {
       setConfirmEmbark(false);
       setEmbarkMsg(
-        currentShip.status === "CONCLUIDO"
-          ? "✅ Este navio já foi concluído — não dá pra embarcar de novo."
-          : "⚓ Este navio já embarcou (Em Operação) — não dá pra embarcar de novo. Se precisar, faça o Retorno.",
+        currentShip.status === "CANCELADO"
+          ? "🚫 Este navio foi cancelado — não dá pra embarcar."
+          : "⚓ Este navio já embarcou — não dá pra embarcar de novo. Se precisar, faça o Retorno.",
       );
       return;
     }
@@ -718,15 +720,16 @@ export function EscalacaoEstoquePage() {
       }
     }
 
-    // É AQUI que o embarque se fecha: o navio vira EM_OPERACAO, o botão
-    // Embarcar some e a aba Retorno abre. Se esta gravação falhar o estoque JÁ
-    // foi baixado, então não dá pra dizer "confirmado" e seguir — o navio
-    // ficaria agendado pra sempre e alguém embarcaria de novo. Avisa na tela.
+    // É AQUI que o embarque se fecha: grava o embarked_at, o botão Embarcar
+    // some e a aba Retorno abre. O status do navio NÃO muda — quem abre/fecha o
+    // navio é a aba Navios. Se esta gravação falhar o estoque JÁ foi baixado,
+    // então não dá pra dizer "confirmado" e seguir — sem o carimbo alguém
+    // embarcaria de novo. Avisa na tela.
     let statusWarn = "";
-    if (currentShip.status === "AGENDADO") {
-      const upd = (await db.from("ships").update({ status: "EM_OPERACAO" } as any).eq("id", selectedShip)) as any;
+    {
+      const upd = (await db.from("ships").update({ embarked_at: new Date().toISOString() } as any).eq("id", selectedShip)) as any;
       if (upd?.error) {
-        statusWarn = ` ⚠️ ATENÇÃO: o estoque foi baixado mas o navio NÃO entrou em operação (${upd.error.message}) — mude o status pra "Em Operação" na aba Navios, senão o Retorno não abre.`;
+        statusWarn = ` ⚠️ ATENÇÃO: o estoque foi baixado mas o embarque NÃO ficou registrado (${upd.error.message}) — NÃO clique em Embarcar de novo (baixaria o estoque duas vezes); avise a Tecnologia.`;
       }
     }
 
@@ -837,9 +840,9 @@ export function EscalacaoEstoquePage() {
     return out;
   }
 
-  // Abre o diálogo que pergunta a data de saída do navio antes de confirmar o
-  // retorno (é essa data que fecha o navio). Pré-preenche com a saída já
-  // cadastrada, ou a data de hoje.
+  // Abre o diálogo de confirmação do retorno. O retorno NÃO fecha mais o
+  // navio — quem fecha (data de saída, Financeiro, tripulação) é o usuário na
+  // aba Navios; aqui só se confere o material.
   function openConfirmReturn() {
     if (!currentShip || !selectedTeam) return;
     const rows = buildReturnRows();
@@ -847,15 +850,11 @@ export function EscalacaoEstoquePage() {
       setReturnMsg("Preencha quanto voltou ou quebrou em pelo menos um item.");
       return;
     }
-    const today = new Date().toISOString().split("T")[0];
-    setCloseDateDraft(
-      currentShip.departure_date ? String(currentShip.departure_date).slice(0, 10) : today,
-    );
     setReturnMsg(null);
     setConfirmReturnOpen(true);
   }
 
-  async function handleSaveReturn(overrideCloseDate?: string) {
+  async function handleSaveReturn() {
     if (!currentShip || !selectedTeam) return;
     const rows = buildReturnRows();
     if (rows.length === 0 && !existingReturn) {
@@ -1092,33 +1091,11 @@ export function EscalacaoEstoquePage() {
         autoNote += " ⚠️ Não consegui lançar a despesa de material perdido no navio.";
       }
 
-      // Retorno confirmado FECHA o navio de vez — mesmo fechamento do botão
-      // "Fechar" da aba Navios (handleClose), pra não precisar ir lá:
-      //   • marca CONCLUIDO + data de saída (departure_date);
-      //   • fecha o end_date do(s) job(s) — só assim o navio entra no Financeiro;
-      //   • solta a tripulação na hora (senão fica "Embarcado" o resto do dia).
-      // Também garante que não haja um 2º retorno (navio sai da lista ativa).
-      // Navio JÁ Concluído (fechado antes na aba Navios, sem Retorno) pula tudo
-      // isso: aqui só confere o material — e o navio sai da lista pendente.
+      // O retorno NÃO fecha mais o navio: o fechamento (data de saída,
+      // Financeiro, tripulação) é feito pelo usuário na aba Navios, no tempo
+      // dele. Aqui o ciclo de material se encerra — o navio sai desta lista.
       if (currentShip.status !== "CONCLUIDO") {
-        const closeDate = (overrideCloseDate && overrideCloseDate.slice(0, 10))
-          || (currentShip.departure_date ? String(currentShip.departure_date).slice(0, 10) : today);
-        // Confere o resultado do fechamento: se um update falhar (ex.: bloqueio
-        // de permissão no /api/db), o navio NÃO fecha — avisa em vez de dizer
-        // "concluído" sem ter fechado.
-        const shipClose: any = await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate } as any).eq("id", selectedShip);
-        const jobsClose: any = await db.from("jobs").update({ end_date: closeDate } as any).eq("ship_id", selectedShip);
-        if (shipClose?.error || jobsClose?.error) {
-          const why = shipClose?.error?.message || jobsClose?.error?.message || "erro desconhecido";
-          autoNote += ` ⚠️ Não consegui fechar o navio automaticamente (${why}). Feche manualmente em Controle › Navios.`;
-        } else {
-          try {
-            await releaseShipAllocationsNow(selectedShip, actor);
-          } catch (err) {
-            console.warn("[retorno] release on close failed:", (err as Error).message);
-          }
-          autoNote += " ✅ Navio concluído (data de saída, Financeiro e tripulação fechados).";
-        }
+        autoNote += " ℹ️ O navio segue aberto — o fechamento é feito na aba Navios.";
       }
 
       setReturnMsg(baseMsg + autoNote);
@@ -1206,8 +1183,8 @@ export function EscalacaoEstoquePage() {
   // O 1º envio é automático no ⚓ Embarcar; aqui é só pra mandar de novo depois.
   async function handleSendEmbarkList() {
     if (!currentShip || !selectedTeam) return;
-    if (currentShip.status === "AGENDADO") {
-      setEmbarkMsg("⚓ A lista vai pro grupo quando você confirmar o Embarcar — assim o navio entra em operação e o Retorno abre.");
+    if (!currentShip.embarked_at) {
+      setEmbarkMsg("⚓ A lista vai pro grupo quando você confirmar o Embarcar — assim o Retorno abre.");
       return;
     }
     setSendingEmbarkList(true);
@@ -1324,12 +1301,11 @@ export function EscalacaoEstoquePage() {
               {downloading === "xlsx" ? "Gerando..." : "📊 Excel"}
             </Button>
             {/* Dá pra embarcar mesmo com item faltando (o operacional pediu essa
-                flexibilidade): baixa só o que a equipe tem. Só embarca AGENDADO
-                (um embarque por navio); depois vira Em Operação/Concluído.
-                A lista só vai pro grupo NO embarque — antes disso não tem botão
-                de enviar, senão a equipe recebe a lista e o navio fica agendado
-                pra sempre (sem Retorno). Depois de embarcado sobra o reenvio. */}
-            {currentShip?.status === "AGENDADO" ? (
+                flexibilidade): baixa só o que a equipe tem. Um embarque por
+                navio (embarked_at) — o status do navio não manda mais aqui: a
+                Manutenção embarca no tempo dela, mesmo com o navio já fechado.
+                A lista só vai pro grupo NO embarque — depois sobra o reenvio. */}
+            {!currentShip?.embarked_at && currentShip?.status !== "CANCELADO" ? (
               <Button
                 size="sm"
                 variant="warning"
@@ -1344,19 +1320,17 @@ export function EscalacaoEstoquePage() {
               </Button>
             ) : (
               <>
-                {currentShip?.status === "EM_OPERACAO" && (
+                {currentShip?.embarked_at && currentShip?.status !== "CANCELADO" && (
                   <Button size="sm" variant="secondary" onClick={handleSendEmbarkList} disabled={sendingEmbarkList || embarking} title="Manda a lista de novo no grupo do WhatsApp com o PDF anexado">
                     {sendingEmbarkList ? "Enviando..." : "📨 Reenviar lista pro WhatsApp"}
                   </Button>
                 )}
                 <span className="text-xs font-medium px-3 py-2 rounded-lg bg-gray-100 text-text-light">
-                  {currentShip?.status === "CONCLUIDO"
-                    ? (shipHasReturn(currentShip.id)
-                      ? "✅ Navio concluído"
-                      : "✅ Navio concluído — falta o Retorno na aba ao lado")
-                    : currentShip?.status === "CANCELADO"
-                      ? "🚫 Navio cancelado"
-                      : "⚓ Já embarcado (Em Operação) — faça o Retorno na aba ao lado"}
+                  {currentShip?.status === "CANCELADO"
+                    ? "🚫 Navio cancelado"
+                    : shipHasReturn(currentShip?.id || "")
+                      ? "⚓ Embarque e Retorno feitos"
+                      : "⚓ Já embarcado — faça o Retorno na aba ao lado"}
                 </span>
               </>
             )}
@@ -1398,7 +1372,7 @@ export function EscalacaoEstoquePage() {
           saving={savingReturn}
           sending={sendingWhats}
           canEdit={canEmbarcar}
-          concluded={!!currentShip && !isActiveShip(currentShip) && (currentShip.status !== "CONCLUIDO" || !!existingReturn)}
+          concluded={!!currentShip && (currentShip.status === "CANCELADO" || (currentShip.status === "CONCLUIDO" && !!existingReturn))}
           closedPendingReturn={!!currentShip && currentShip.status === "CONCLUIDO" && !existingReturn}
           message={returnMsg}
           history={existingReturn ? [existingReturn] : []}
@@ -1756,50 +1730,30 @@ export function EscalacaoEstoquePage() {
         onClose={() => setConfirmEmbark(false)}
         onConfirm={handleEmbarcar}
         title="Confirmar Embarque"
-        message={`Embarcar ${selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"} no navio "${currentShip?.name}"? Os materiais do kit serão baixados do Estoque e a comida do Rancho desta equipe. A lista (com o PDF) vai automático pro grupo do WhatsApp e o navio passa pra Em Operação — aí abre a aba Retorno.${hasMissing ? ` ⚠️ Atenção: ${missingNames.length} item(ns) sem quantidade pra equipe (${missingSummary}) — só o que a equipe tem será baixado.` : ""}`}
+        message={`Embarcar ${selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"} no navio "${currentShip?.name}"? Os materiais do kit serão baixados do Estoque e a comida do Rancho desta equipe. A lista (com o PDF) vai automático pro grupo do WhatsApp e a aba Retorno abre (o status do navio não muda — ele abre/fecha na aba Navios).${hasMissing ? ` ⚠️ Atenção: ${missingNames.length} item(ns) sem quantidade pra equipe (${missingSummary}) — só o que a equipe tem será baixado.` : ""}`}
         confirmLabel="⚓ Confirmar Embarque"
         variant="warning"
         loading={embarking}
       />
 
-      {/* Confirmar retorno: pede a data de saída do navio, que fecha ele. Navio
-          já Concluído (fechado antes na aba Navios) não pede data nenhuma — o
-          retorno só confere o material e manda o resumo no WhatsApp. */}
+      {/* Confirmar retorno: só confere o material e manda o resumo no WhatsApp.
+          O navio NÃO é fechado aqui — o fechamento (data de saída, Financeiro,
+          tripulação) é feito pelo usuário na aba Navios. */}
       <Modal open={confirmReturnOpen} onClose={() => setConfirmReturnOpen(false)} title="Confirmar Retorno" maxWidth="max-w-md">
         <div className="space-y-4">
-          {currentShip?.status === "CONCLUIDO" ? (
-            <p className="text-sm text-text-light">
-              Confirmar o retorno de <strong>{selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"}</strong> no
-              navio <strong>{currentShip?.name}</strong>. O que voltou bom volta pro Estoque — o navio já está
-              <strong> Concluído</strong>, então nada muda no fechamento.
-            </p>
-          ) : (
-            <>
-              <p className="text-sm text-text-light">
-                Confirmar o retorno de <strong>{selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"}</strong> no
-                navio <strong>{currentShip?.name}</strong>. O que voltou bom volta pro Estoque e o navio é
-                <strong> fechado (Concluído)</strong> com a data abaixo.
-              </p>
-              <div>
-                <label className="block text-sm font-medium text-text mb-1">Data de saída do navio</label>
-                <input
-                  type="date"
-                  value={closeDateDraft}
-                  onChange={(e) => setCloseDateDraft(e.target.value)}
-                  className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
-                />
-                <p className="text-xs text-text-light mt-1">É essa a data que fecha o navio, entra no Financeiro e solta a tripulação.</p>
-              </div>
-            </>
-          )}
+          <p className="text-sm text-text-light">
+            Confirmar o retorno de <strong>{selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"}</strong> no
+            navio <strong>{currentShip?.name}</strong>. O que voltou bom volta pro Estoque.
+            {currentShip?.status !== "CONCLUIDO" && (
+              <> O navio <strong>não é fechado</strong> aqui — o fechamento fica na aba <strong>Navios</strong>.</>
+            )}
+          </p>
           <div className="flex justify-end gap-2 pt-1">
             <Button size="sm" variant="secondary" onClick={() => setConfirmReturnOpen(false)} disabled={savingReturn}>
               Cancelar
             </Button>
-            <Button size="sm" onClick={() => handleSaveReturn(closeDateDraft)} disabled={savingReturn || (currentShip?.status !== "CONCLUIDO" && !closeDateDraft)}>
-              {savingReturn
-                ? "Confirmando..."
-                : currentShip?.status === "CONCLUIDO" ? "✅ Confirmar Retorno" : "✅ Confirmar e fechar navio"}
+            <Button size="sm" onClick={() => handleSaveReturn()} disabled={savingReturn}>
+              {savingReturn ? "Confirmando..." : "✅ Confirmar Retorno"}
             </Button>
           </div>
         </div>
@@ -1834,8 +1788,9 @@ function RetornoSection({
   saving: boolean;
   sending: boolean;
   canEdit: boolean;
-  // true = navio já concluído (retorno confirmado): campos travados e sem
-  // reconfirmar (um retorno por navio).
+  // true = ciclo encerrado (navio Concluído COM retorno confirmado, ou
+  // Cancelado): campos travados e sem reconfirmar (um retorno por navio).
+  // Navio ainda aberto (mesmo com retorno salvo) segue editável.
   concluded: boolean;
   // true = navio fechado direto na aba Navios (Concluído) mas ainda SEM
   // Retorno: os campos seguem editáveis pra fazer o Retorno depois.

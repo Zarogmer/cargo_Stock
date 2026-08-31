@@ -515,7 +515,12 @@ model Ship {
   arrival_date   DateTime?     @db.Date
   departure_date DateTime?     @db.Date
   port           String?
-  status         ShipStatus    @default(AGENDADO)
+  // Navio já nasce EM_OPERACAO: quem abre/fecha é o usuário na aba Navios.
+  // AGENDADO ficou no enum só por histórico (nenhum navio novo usa).
+  status         ShipStatus    @default(EM_OPERACAO)
+  // Quando a Manutenção confirmou o Embarque (aba Embarque/Retorno). O embarque
+  // é independente do status do navio: null = ainda não embarcou o material.
+  embarked_at    DateTime?     @db.Timestamptz()
   assigned_team  String?
   notes          String?
   cargo_type     String?       // produto/carga: CARVÃO, CIMENTO, UREIA, etc.

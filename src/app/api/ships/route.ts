@@ -72,9 +72,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Navio novo já nasce Em Operação (AGENDADO saiu do fluxo — quem abre/fecha
+  // o navio é a aba Navios; o embarque de material corre em paralelo).
   const status: ShipStatus = body.status && VALID_STATUSES.includes(body.status)
     ? body.status
-    : "AGENDADO";
+    : "EM_OPERACAO";
 
   const ship = await prisma.ship.create({
     data: {

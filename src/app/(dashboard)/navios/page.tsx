@@ -25,6 +25,9 @@ interface Ship {
   departure_date: string | null;
   port: string | null;
   status: ShipStatus;
+  // Embarque do material confirmado pela Manutenção (aba Embarque/Retorno).
+  // Independente do status: o navio abre/fecha aqui, o embarque acontece lá.
+  embarked_at: string | null;
   assigned_team: string | null;
   notes: string | null;
   cargo_type: string | null;
@@ -70,7 +73,9 @@ interface Employee {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const STATUS_OPTIONS: ShipStatus[] = ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"];
+// AGENDADO saiu do fluxo (navio novo já nasce Em Operação) — fica só nos
+// labels/cores pra renderizar navio legado sem quebrar.
+const STATUS_OPTIONS: ShipStatus[] = ["EM_OPERACAO", "CONCLUIDO", "CANCELADO"];
 
 const STATUS_LABELS: Record<ShipStatus, string> = {
   AGENDADO: "Agendado",
@@ -106,7 +111,8 @@ const EMPTY_FORM = {
   arrival_date: "",
   departure_date: "",
   port: "",
-  status: "AGENDADO" as ShipStatus,
+  // Navio novo já nasce Em Operação — quem fecha é o usuário aqui na aba.
+  status: "EM_OPERACAO" as ShipStatus,
   assigned_team: "" as string,
   cargo_type: "",
   holds_count: "" as string, // stored as text in the form so the input can be empty
@@ -1435,7 +1441,7 @@ export default function NaviosPage() {
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {STATUS_OPTIONS.map((s) => {
           const count = ships.filter((sh) => sh.status === s).length;
           return (
@@ -1956,11 +1962,13 @@ export default function NaviosPage() {
                   <p className="text-xs text-emerald-900">
                     🏁 Registra a saída, marca como <strong>Concluído</strong> e libera o navio pro <strong>Financeiro</strong>. Puxe as compras acima antes, se precisar.
                   </p>
-                  {shipHasReturn === false && (
+                  {(shipHasReturn === false || !selectedShip.embarked_at) && (
                     <p className="text-xs text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2">
-                      ⚠️ Este navio ainda não tem <strong>Retorno</strong> registrado — dá pra fechar mesmo assim.
-                      Ele continua em <strong>Controle › Embarque/Retorno</strong> até o Retorno ser feito
-                      (a conferência do material e o resumo no WhatsApp podem ficar pra depois).
+                      ⚠️ Este navio ainda não tem {!selectedShip.embarked_at
+                        ? <><strong>Embarque</strong>{shipHasReturn === false ? <> nem <strong>Retorno</strong></> : null} de material registrado</>
+                        : <><strong>Retorno</strong> registrado</>} — dá pra fechar mesmo assim.
+                      Ele continua em <strong>Controle › Embarque/Retorno</strong> até a Manutenção concluir por lá
+                      (o embarque/conferência do material e o resumo no WhatsApp podem ficar pra depois).
                     </p>
                   )}
                   <div className="flex flex-col sm:flex-row sm:items-end gap-2">
@@ -2119,7 +2127,7 @@ export default function NaviosPage() {
                   />
                   <p className="text-[10px] text-text-light mt-1">
                     🏁 Navio já concluído — corrija o término aqui (a data também é atualizada no Financeiro).
-                    {" "}Apagar a data <strong>reabre</strong> o navio (volta pra Em Operação e aparece de novo no Embarque/Retorno).
+                    {" "}Apagar a data <strong>reabre</strong> o navio (volta pra Em Operação).
                   </p>
                 </div>
               )}
