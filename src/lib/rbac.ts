@@ -356,9 +356,6 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       { label: "Colaboradores", href: "/colaboradores?tab=colaboradores" },
       { label: "Funções", href: "/colaboradores?tab=funcoes" },
-      // Cadastro de logins de supervisor (papel SUPERVISOR, vinculado a um
-      // colaborador) — o RH cria/gerencia login e senha por aqui.
-      { label: "Usuários", href: "/colaboradores?tab=usuarios" },
       {
         label: "Documentos",
         href: "/colaboradores?tab=documentos",
@@ -384,6 +381,11 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Controle de Compras", href: "/solicitacoes?tab=compras", roles: COMPRAS_ROLES },
       { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos", roles: PRODUTOS_ROLES },
       { label: "Fornecedores", href: "/solicitacoes?tab=fornecedores", roles: FORNECEDORES_ROLES },
+      // Cadastro de logins de supervisor (papel SUPERVISOR, vinculado a um
+      // colaborador). Morava no Rh; movido pro Controle em 2026-09-01 (pedido do
+      // Guilherme). Manutenção fica de fora — a página (/colaboradores) e a API
+      // (/api/rh/usuarios) já exigem o módulo COLABORADORES, que ela não tem.
+      { label: "Usuários", href: "/colaboradores?tab=usuarios", roles: ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO", "RH"] },
       // "Embarque" (loadout: kit de embarque + rancho) veio da Escalação. Mantém
       // a visibilidade de quem tinha EMBARQUE (Gestor não enxergava) — sem isso,
       // ao herdar SOLICITACOES ele passaria a ver a aba que baixa estoque. A
