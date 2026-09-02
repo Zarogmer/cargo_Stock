@@ -350,7 +350,16 @@ export interface Job {
   created_at: string;
   updated_at: string;
   created_by: string;
-  ships?: { name: string } | null;
+  // Relação carregada junto quando o select pede (ex.: Financeiro traz
+  // port/client_name pro filtro cair no cadastro do navio quando o job não tem).
+  ships?: {
+    name: string;
+    status?: string | null;
+    holds_count?: number | null;
+    services?: string[] | null;
+    port?: string | null;
+    client_name?: string | null;
+  } | null;
 }
 
 export type AllocationStatus = "ATIVO" | "REMOVIDO" | "SUBSTITUIDO";

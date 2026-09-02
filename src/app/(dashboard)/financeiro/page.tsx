@@ -218,12 +218,23 @@ function jobStartYM(j: Job): { year: number; month: number } {
   const month = parseInt(parts[1], 10) - 1;
   return { year: Number.isFinite(year) ? year : 0, month: Number.isFinite(month) ? month : 0 };
 }
+// Porto/cliente EFETIVOS do job: o campo do próprio job ganha; vazio cai pro
+// cadastro do navio (ships.port / ships.client_name). Jobs antigos e os criados
+// por "Novo Pagamento" nem sempre preenchem — sem o fallback, esses navios
+// sumiam das opções do filtro e não eram achados ao filtrar pelo porto real.
+function jobPort(j: Job): string {
+  return (j.port || j.ships?.port || "").trim();
+}
+function jobClient(j: Job): string {
+  return (j.client || j.ships?.client_name || "").trim();
+}
 function jobMatchesPagamentoFilter(j: Job, f: PagamentoFilter): boolean {
   const { year, month } = jobStartYM(j);
   if (f.year !== "ALL" && year !== f.year) return false;
   if (f.month !== "ALL" && month !== f.month) return false;
-  if (f.port !== "ALL" && (j.port || "") !== f.port) return false;
-  if (f.client !== "ALL" && (j.client || "") !== f.client) return false;
+  // Comparação sem caixa/espaços: "Santos", "SANTOS" e "SANTOS " são o mesmo porto.
+  if (f.port !== "ALL" && jobPort(j).toUpperCase() !== f.port.trim().toUpperCase()) return false;
+  if (f.client !== "ALL" && jobClient(j).toUpperCase() !== f.client.trim().toUpperCase()) return false;
   return true;
 }
 function pagamentoPeriodLabel(f: PagamentoFilter): string {
@@ -610,18 +621,27 @@ export default function FinanceiroPage() {
 
   const filterOptions = useMemo(() => {
     const years = new Set<number>();
-    const ports = new Set<string>();
-    const clients = new Set<string>();
+    // Dedupe sem caixa ("Santos" = "SANTOS"): chave em caixa alta, mostra a
+    // primeira grafia vista. Porto/cliente vêm do job COM fallback pro navio
+    // (jobPort/jobClient) — sem isso, job sem porto escondia o navio do filtro.
+    const ports = new Map<string, string>();
+    const clients = new Map<string, string>();
+    const add = (map: Map<string, string>, value: string) => {
+      const v = value.trim();
+      if (!v) return;
+      const key = v.toUpperCase();
+      if (!map.has(key)) map.set(key, v);
+    };
     for (const j of jobs) {
       const { year } = jobStartYM(j);
       if (year) years.add(year);
-      if (j.port) ports.add(j.port.trim());
-      if (j.client) clients.add(j.client.trim());
+      add(ports, jobPort(j));
+      add(clients, jobClient(j));
     }
     return {
       years: [...years].sort((a, b) => b - a),
-      ports: [...ports].filter(Boolean).sort((a, b) => a.localeCompare(b, "pt-BR")),
-      clients: [...clients].filter(Boolean).sort((a, b) => a.localeCompare(b, "pt-BR")),
+      ports: [...ports.values()].sort((a, b) => a.localeCompare(b, "pt-BR")),
+      clients: [...clients.values()].sort((a, b) => a.localeCompare(b, "pt-BR")),
     };
   }, [jobs]);
 
@@ -634,7 +654,8 @@ export default function FinanceiroPage() {
       // `services` vem junto na relação: a lista `ships` abaixo é limitada às 50
       // chegadas mais recentes, então a Nota de um navio antigo perderia a
       // sugestão de serviços se dependesse dela.
-      db.from("jobs").select("*, ships(name, status, holds_count, services)").order("start_date", { ascending: false }),
+      // port/client_name do navio entram pro fallback do filtro (jobPort/jobClient).
+      db.from("jobs").select("*, ships(name, status, holds_count, services, port, client_name)").order("start_date", { ascending: false }),
       // Ordem FIXA (added_at, id): sem isso o Postgres devolve na ordem do heap
       // e a linha editada pulava de lugar na tabela do navio a cada save.
       db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)").order("added_at").order("id"),
@@ -826,7 +847,18 @@ export default function FinanceiroPage() {
   const activeTabLabel = financeiroTabs.find((t) => t.key === initialTab)?.label;
   const plabel = pagamentoPeriodLabel(pgFilter);
   const filterActive = pgFilter.month !== "ALL" || pgFilter.port !== "ALL" || pgFilter.client !== "ALL" || pgFilter.year !== "ALL";
-  const selectCls = "text-xs border border-border rounded-lg px-2 py-1.5 bg-card text-text focus:outline-none focus:ring-2 focus:ring-primary/40";
+  // Quantos navios sobram com o filtro atual — feedback imediato na barra.
+  const filteredCount = useMemo(
+    () => jobs.filter((j) => jobMatchesPagamentoFilter(j, pgFilter)).length,
+    [jobs, pgFilter],
+  );
+  // Select do filtro: quando o campo está ATIVO (≠ Todos) fica azul, pra bater
+  // o olho e saber o que está recortando a lista.
+  const filterSelectCls = (active: boolean) =>
+    `w-full text-xs font-medium border rounded-lg px-2 py-1.5 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40 ${
+      active ? "border-primary bg-blue-50 text-primary" : "border-border bg-card text-text hover:border-primary/50"
+    }`;
+  const filterLabelCls = "block text-[10px] font-semibold uppercase tracking-wider text-text-light mb-1";
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -850,63 +882,87 @@ export default function FinanceiroPage() {
 
       {/* Filtro de período/porto/cliente + KPIs — dirigem as listas de pagamento
           de navios. As abas que têm dados/filtros próprios (Controle, Relatório
-          de Vales, Demonstração) não usam, então some nelas. */}
+          de Vales, Demonstração) não usam, então some nelas.
+          Design: cartão destacado (borda/gradiente azul), um select por campo
+          com rótulo próprio; campo ativo fica azul e o contador mostra na hora
+          quantos navios sobram no recorte. Porto/cliente caem no cadastro do
+          navio quando o job não tem (jobPort/jobClient). */}
       {!["controle", "vales", "demonstracao"].includes(initialTab) && (<>
-      <div className="flex flex-wrap items-center gap-2 bg-card border border-border rounded-xl p-2">
-        <span className="text-xs font-semibold text-text-light px-1">🔎 Filtrar:</span>
-        <select
-          className={selectCls}
-          value={pgFilter.year === "ALL" ? "ALL" : String(pgFilter.year)}
-          onChange={(e) => setPgFilter((f) => ({ ...f, year: e.target.value === "ALL" ? "ALL" : parseInt(e.target.value, 10) }))}
-          title="Ano"
-        >
-          <option value="ALL">Todos os anos</option>
-          {filterOptions.years.map((y) => (
-            <option key={y} value={y}>{y}</option>
-          ))}
-        </select>
-        <select
-          className={selectCls}
-          value={pgFilter.month === "ALL" ? "ALL" : String(pgFilter.month)}
-          onChange={(e) => setPgFilter((f) => ({ ...f, month: e.target.value === "ALL" ? "ALL" : parseInt(e.target.value, 10) }))}
-          title="Mês"
-        >
-          <option value="ALL">Todos os meses</option>
-          {MONTHS_PT.map((m, i) => (
-            <option key={m} value={i}>{m}</option>
-          ))}
-        </select>
-        <select
-          className={selectCls}
-          value={pgFilter.port}
-          onChange={(e) => setPgFilter((f) => ({ ...f, port: e.target.value }))}
-          title="Porto"
-        >
-          <option value="ALL">Todos os portos</option>
-          {filterOptions.ports.map((p) => (
-            <option key={p} value={p}>{p}</option>
-          ))}
-        </select>
-        <select
-          className={selectCls}
-          value={pgFilter.client}
-          onChange={(e) => setPgFilter((f) => ({ ...f, client: e.target.value }))}
-          title="Cliente / equipe"
-        >
-          <option value="ALL">Todos os clientes</option>
-          {filterOptions.clients.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
-        {filterActive && (
-          <button
-            onClick={() => setPgFilter({ year: "ALL", month: "ALL", port: "ALL", client: "ALL" })}
-            className="text-xs px-2 py-1.5 rounded-lg bg-gray-100 text-text-light hover:bg-gray-200"
-            title="Limpar filtros"
-          >
-            ✕ Limpar
-          </button>
-        )}
+      <div className="rounded-xl border border-primary/25 bg-gradient-to-r from-blue-50/80 via-card to-card shadow-sm p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <span className="text-sm font-bold text-text">🔎 Filtrar navios</span>
+          <div className="flex items-center gap-2">
+            <span
+              className={`text-[11px] font-semibold px-2.5 py-1 rounded-full ${filterActive ? "bg-primary text-white" : "bg-blue-100 text-primary"}`}
+              title="Quantos navios entram no recorte atual (vale pras abas e pros KPIs abaixo)"
+            >
+              🚢 {filteredCount} {filteredCount === 1 ? "navio" : "navios"} · {plabel}
+            </span>
+            {filterActive && (
+              <button
+                onClick={() => setPgFilter({ year: "ALL", month: "ALL", port: "ALL", client: "ALL" })}
+                className="text-xs font-medium px-2.5 py-1 rounded-lg border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
+                title="Limpar todos os filtros"
+              >
+                ✕ Limpar
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <label className="block">
+            <span className={filterLabelCls}>📅 Ano</span>
+            <select
+              className={filterSelectCls(pgFilter.year !== "ALL")}
+              value={pgFilter.year === "ALL" ? "ALL" : String(pgFilter.year)}
+              onChange={(e) => setPgFilter((f) => ({ ...f, year: e.target.value === "ALL" ? "ALL" : parseInt(e.target.value, 10) }))}
+            >
+              <option value="ALL">Todos os anos</option>
+              {filterOptions.years.map((y) => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className={filterLabelCls}>🗓️ Mês</span>
+            <select
+              className={filterSelectCls(pgFilter.month !== "ALL")}
+              value={pgFilter.month === "ALL" ? "ALL" : String(pgFilter.month)}
+              onChange={(e) => setPgFilter((f) => ({ ...f, month: e.target.value === "ALL" ? "ALL" : parseInt(e.target.value, 10) }))}
+            >
+              <option value="ALL">Todos os meses</option>
+              {MONTHS_PT.map((m, i) => (
+                <option key={m} value={i}>{String(i + 1).padStart(2, "0")} · {m}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className={filterLabelCls}>⚓ Porto <span className="normal-case tracking-normal">({filterOptions.ports.length})</span></span>
+            <select
+              className={filterSelectCls(pgFilter.port !== "ALL")}
+              value={pgFilter.port}
+              onChange={(e) => setPgFilter((f) => ({ ...f, port: e.target.value }))}
+            >
+              <option value="ALL">Todos os portos</option>
+              {filterOptions.ports.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className={filterLabelCls}>🏢 Cliente <span className="normal-case tracking-normal">({filterOptions.clients.length})</span></span>
+            <select
+              className={filterSelectCls(pgFilter.client !== "ALL")}
+              value={pgFilter.client}
+              onChange={(e) => setPgFilter((f) => ({ ...f, client: e.target.value }))}
+            >
+              <option value="ALL">Todos os clientes</option>
+              {filterOptions.clients.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       {/* KPIs — refletem o período/porto/cliente selecionado acima */}
@@ -3167,19 +3223,18 @@ interface PurchaseOrderLite {
 // Resumo do material do navio (Embarque/Retorno) mostrado nas Despesas do
 // Pagamento de Navios. Fica no módulo pra ser constante entre renders.
 // `ids` = stock_item_ids que compõem a linha (agrupada por nome) — é neles que
-// o editor de valor unitário grava o unit_value do Almoxarifado.
-type ReturnLine = { name: string; qty: number; value: number; priced: boolean; ids: number[] };
+// o editor de valor unitário grava o valor DESTE navio (ship_material_values).
+// `overridden` = a linha usa valor próprio do navio (≠ estoque);
+// `stockUnit` = unitário do Almoxarifado, pro tooltip de quem tem override.
+type ReturnLine = { name: string; qty: number; value: number; priced: boolean; ids: number[]; overridden: boolean; stockUnit: number };
 interface MaterialSummary {
   lost: ReturnLine[];
   consumed: ReturnLine[];
   broken: ReturnLine[];
   hasReturn: boolean;
-  // Equipes com retorno neste navio — usadas pra re-sincronizar a despesa
-  // "Material perdido" quando o valor unitário é editado por aqui.
-  teams: string[];
 }
 const EMPTY_RET_SUMMARY: MaterialSummary = {
-  lost: [], consumed: [], broken: [], hasReturn: false, teams: [],
+  lost: [], consumed: [], broken: [], hasReturn: false,
 };
 
 function JobDetailModal({
@@ -3229,12 +3284,14 @@ function JobDetailModal({
   // Bump força o resumo a refazer a busca (após gravar um valor unitário).
   const [retTick, setRetTick] = useState(0);
   // Editor inline do valor unitário: chave da linha em edição (`secao-nome`) e
-  // rascunho digitado. Grava direto em stock_items.unit_value (Almoxarifado).
+  // rascunho digitado. Grava o valor SÓ deste navio (ship_material_values, via
+  // /api/retorno/valor) — o Almoxarifado e os outros navios não mudam.
   const [editUnitKey, setEditUnitKey] = useState<string | null>(null);
   const [unitDraft, setUnitDraft] = useState("");
   const [savingUnit, setSavingUnit] = useState(false);
   // Material do navio (Retorno de Material) mostrado nas Despesas, com o valor
-  // de estoque de cada item — a mesma quebra do aviso que vai pro WhatsApp:
+  // de estoque de cada item (ou o valor próprio do navio, quando editado aqui)
+  // — a mesma quebra do aviso que vai pro WhatsApp:
   //   ❌ PERDIDO  — não voltou: custo do navio, rateado pela equipe (MATERIAL_PERDIDO).
   //   🛢️ INSUMO   — consumido de propósito: não custa ao navio.
   //   🔧 AVARIADO — voltou quebrado (a equipe trouxe): não custa ao navio.
@@ -3263,31 +3320,48 @@ function JobDetailModal({
       const ids = Array.from(new Set(allItems.map((it) => it.stock_item_id).filter((x): x is number => x != null)));
       const valueById = new Map<number, number>();
       const ranchoIds = new Set<number>();
+      // Valor próprio DESTE navio (ship_material_values) — quando existe, ganha
+      // do valor de estoque. É o que o editor inline grava.
+      const shipValueById = new Map<number, number>();
       if (ids.length) {
-        const { data: sdata } = await db.from("stock_items").select("id, team, unit_value").in("id", ids);
+        const [{ data: sdata }, { data: odata }] = await Promise.all([
+          db.from("stock_items").select("id, team, unit_value").in("id", ids),
+          db.from("ship_material_values").select("stock_item_id, unit_value").eq("ship_id", shipId).in("stock_item_id", ids),
+        ]);
         for (const s of (sdata as { id: number; team: string | null; unit_value: number | null }[] | null) || []) {
           valueById.set(s.id, Number(s.unit_value || 0));
           if ((s.team || "").startsWith("EQUIPE_")) ranchoIds.add(s.id);
+        }
+        for (const o of (odata as { stock_item_id: number; unit_value: number | null }[] | null) || []) {
+          shipValueById.set(o.stock_item_id, Number(o.unit_value || 0));
         }
       }
       if (!active) return;
       const items = allItems.filter((it) => it.stock_item_id == null || !ranchoIds.has(it.stock_item_id));
       // Agrupa por nome do item, somando qtd e valor (unit_value × qtd).
       const acc = (pick: (it: RI) => number): ReturnLine[] => {
-        const m = new Map<string, { qty: number; value: number; priced: boolean; ids: Set<number> }>();
+        const m = new Map<string, { qty: number; value: number; stockValue: number; priced: boolean; overridden: boolean; ids: Set<number> }>();
         for (const it of items) {
           const q = pick(it) || 0;
           if (q <= 0) continue;
-          const unit = it.stock_item_id != null ? (valueById.get(it.stock_item_id) || 0) : 0;
-          const cur = m.get(it.item_name) || { qty: 0, value: 0, priced: false, ids: new Set<number>() };
+          const stockUnit = it.stock_item_id != null ? (valueById.get(it.stock_item_id) || 0) : 0;
+          const hasShipValue = it.stock_item_id != null && shipValueById.has(it.stock_item_id);
+          const unit = hasShipValue ? shipValueById.get(it.stock_item_id!)! : stockUnit;
+          const cur = m.get(it.item_name) || { qty: 0, value: 0, stockValue: 0, priced: false, overridden: false, ids: new Set<number>() };
           cur.qty += q;
           cur.value += unit * q;
+          cur.stockValue += stockUnit * q;
           cur.priced = cur.priced || unit > 0;
+          cur.overridden = cur.overridden || hasShipValue;
           if (it.stock_item_id != null) cur.ids.add(it.stock_item_id);
           m.set(it.item_name, cur);
         }
         return Array.from(m.entries())
-          .map(([name, v]) => ({ name, qty: v.qty, value: +v.value.toFixed(2), priced: v.priced, ids: Array.from(v.ids) }))
+          .map(([name, v]) => ({
+            name, qty: v.qty, value: +v.value.toFixed(2), priced: v.priced,
+            ids: Array.from(v.ids), overridden: v.overridden,
+            stockUnit: v.qty > 0 ? +(v.stockValue / v.qty).toFixed(2) : 0,
+          }))
           .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
       };
       setReturnSummary({
@@ -3297,35 +3371,36 @@ function JobDetailModal({
         // Conferido é conferido mesmo que só tenha rancho: o filtro acima é de
         // CUSTO, não de existência do retorno.
         hasReturn: allItems.length > 0,
-        teams: Array.from(new Set(rows.map((r) => r.team).filter((t): t is string => !!t))),
       });
     })().catch(() => { if (active) setReturnSummary(EMPTY_RET_SUMMARY); });
     return () => { active = false; };
   }, [open, job?.ship_id, retTick]);
 
-  // Grava o valor unitário digitado na tabela direto no Almoxarifado
-  // (stock_items.unit_value — vale pra TODO o sistema, não só este navio) e
-  // re-sincroniza a despesa "Material perdido" de cada equipe: ela foi lançada
-  // na confirmação do retorno com o valor da época (a rota é idempotente e
-  // recalcula lost × unit_value). Quem edita aqui está em STOCK_VALUE_ROLES,
-  // então o /api/db aceita a coluna.
+  // Grava o valor unitário digitado na tabela como valor DESTE navio
+  // (ship_material_values via /api/retorno/valor) — o Almoxarifado e os outros
+  // navios não mudam (antes gravava em stock_items.unit_value e o valor vazava
+  // pra todos os navios). A rota também re-sincroniza a despesa "Material
+  // perdido" de cada equipe (idempotente: recalcula lost × unitário efetivo).
+  // Campo APAGADO (vazio) numa linha com valor próprio = volta ao valor do
+  // estoque. Só STOCK_VALUE_ROLES passa na rota.
   async function saveUnitValue(line: ReturnLine) {
     if (savingUnit) return; // Enter já disparou o save; o blur do disable não grava de novo
-    const v = parseFloat(unitDraft.replace(",", "."));
+    const raw = unitDraft.trim();
+    const clearing = raw === "" && line.overridden; // vazio = remove o valor do navio
+    const v = parseFloat(raw.replace(",", "."));
     const cur = line.qty > 0 ? line.value / line.qty : 0;
-    if (!Number.isFinite(v) || v < 0 || Math.abs(v - cur) < 0.005) { setEditUnitKey(null); return; }
+    if (!clearing && (!Number.isFinite(v) || v < 0 || Math.abs(v - cur) < 0.005)) { setEditUnitKey(null); return; }
     setSavingUnit(true);
     try {
-      await db.from("stock_items").update({ unit_value: v }).in("id", line.ids);
-      await Promise.all(
-        returnSummary.teams.map((team) =>
-          fetch("/api/retorno/despesa", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ship_id: job?.ship_id, team }),
-          }).catch(() => null),
-        ),
-      );
+      await fetch("/api/retorno/valor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ship_id: job?.ship_id,
+          stock_item_ids: line.ids,
+          unit_value: clearing ? null : v,
+        }),
+      });
     } finally {
       setSavingUnit(false);
       setEditUnitKey(null);
@@ -5950,8 +6025,10 @@ function JobDetailModal({
               perdido/insumo/avariado. Item a item com valor de estoque
               (qtd × unitário) e subtotal por categoria. Só o PERDIDO custa ao
               navio. Item sem unit_value cadastrado aparece como R$ 0,00 e ganha
-              o selo "sem valor" — o unitário é editável na própria linha
-              (grava no Almoxarifado via saveUnitValue). */}
+              o selo "sem valor" — o unitário é editável na própria linha e vale
+              SÓ neste navio (ship_material_values via saveUnitValue; o estoque
+              não muda). Linha com valor próprio ganha o selo azul "deste navio";
+              apagar o campo volta ao valor do estoque. */}
           {(kindFilter === "EMBARQUE" || returnSummary.hasReturn) && (() => {
             const sum = (arr: { value: number }[]) => arr.reduce((s, it) => s + it.value, 0);
             const sections = [
@@ -5964,7 +6041,7 @@ function JobDetailModal({
             const nada = sections.length === 0;
             return (
               <div className="mb-2 rounded-lg border border-border bg-gray-50 p-3 text-xs">
-                <p className="font-semibold text-text">🔧 Retorno de material <span className="font-normal text-text-light">(valor de estoque · sem rancho)</span></p>
+                <p className="font-semibold text-text">🔧 Retorno de material <span className="font-normal text-text-light">(valor de estoque · sem rancho · editar o unitário vale só neste navio)</span></p>
                 {!returnSummary.hasReturn && (
                   <p className="mt-1 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-800">
                     ⚠️ Retorno ainda não conferido. Confira o material em <strong>Embarque/Retorno</strong> pra o perdido/insumo/avariado entrar aqui.
@@ -6002,10 +6079,18 @@ function JobDetailModal({
                           <tr key={lineKey} className="border-t border-border/60">
                             <td className="py-0.5 pl-4 pr-2">
                               {it.name}
-                              {!it.priced && <span className="ml-1 text-[10px] text-amber-700" title={unitEditable ? "Sem valor unitário no Almoxarifado — clique no valor pra cadastrar" : "Item sem valor unitário cadastrado no Almoxarifado"}>⚠️ sem valor</span>}
+                              {!it.priced && <span className="ml-1 text-[10px] text-amber-700" title={unitEditable ? "Sem valor unitário no Almoxarifado — clique no valor pra definir só neste navio" : "Item sem valor unitário cadastrado no Almoxarifado"}>⚠️ sem valor</span>}
+                              {it.overridden && (
+                                <span
+                                  className="ml-1 text-[10px] text-primary"
+                                  title={`Valor definido só pra este navio (estoque: ${brl(it.stockUnit)}). Pra voltar ao valor do estoque, clique no unitário, apague o número e dê Enter.`}
+                                >
+                                  📌 deste navio
+                                </span>
+                              )}
                             </td>
                             <td className="py-0.5 text-right tabular-nums whitespace-nowrap">×{it.qty}</td>
-                            <td className="py-0.5 text-right tabular-nums whitespace-nowrap text-text-light">
+                            <td className={`py-0.5 text-right tabular-nums whitespace-nowrap ${it.overridden ? "text-primary" : "text-text-light"}`}>
                               {editUnitKey === lineKey ? (
                                 <input
                                   type="number"
@@ -6020,6 +6105,7 @@ function JobDetailModal({
                                   }}
                                   autoFocus
                                   disabled={savingUnit}
+                                  placeholder={it.overridden ? "vazio = estoque" : undefined}
                                   className="w-16 px-1 py-0 border border-primary rounded text-right text-xs tabular-nums focus:outline-none"
                                 />
                               ) : unitEditable ? (
@@ -6027,7 +6113,9 @@ function JobDetailModal({
                                   type="button"
                                   onClick={() => { setUnitDraft(unit > 0 ? String(+unit.toFixed(2)) : ""); setEditUnitKey(lineKey); }}
                                   className="hover:bg-blue-50 hover:text-primary rounded px-1 cursor-text"
-                                  title="Clique pra editar o valor unitário (grava no Almoxarifado)"
+                                  title={it.overridden
+                                    ? `Valor só deste navio (estoque: ${brl(it.stockUnit)}) — apague o número e dê Enter pra voltar ao estoque`
+                                    : "Clique pra editar o valor unitário — vale só neste navio (o estoque não muda)"}
                                 >
                                   {brl(unit)} ✏️
                                 </button>
