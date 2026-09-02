@@ -3166,16 +3166,20 @@ interface PurchaseOrderLite {
 
 // Resumo do material do navio (Embarque/Retorno) mostrado nas Despesas do
 // Pagamento de Navios. Fica no módulo pra ser constante entre renders.
-type ReturnLine = { name: string; qty: number; value: number; priced: boolean };
+// `ids` = stock_item_ids que compõem a linha (agrupada por nome) — é neles que
+// o editor de valor unitário grava o unit_value do Almoxarifado.
+type ReturnLine = { name: string; qty: number; value: number; priced: boolean; ids: number[] };
 interface MaterialSummary {
   lost: ReturnLine[];
   consumed: ReturnLine[];
   broken: ReturnLine[];
   hasReturn: boolean;
-  unpriced: number;
+  // Equipes com retorno neste navio — usadas pra re-sincronizar a despesa
+  // "Material perdido" quando o valor unitário é editado por aqui.
+  teams: string[];
 }
 const EMPTY_RET_SUMMARY: MaterialSummary = {
-  lost: [], consumed: [], broken: [], hasReturn: false, unpriced: 0,
+  lost: [], consumed: [], broken: [], hasReturn: false, teams: [],
 };
 
 function JobDetailModal({
@@ -3222,6 +3226,13 @@ function JobDetailModal({
     : 1; // Costado: rate já é valor/turno, base = rate × qty.
 
   const [returnSummary, setReturnSummary] = useState<MaterialSummary>(EMPTY_RET_SUMMARY);
+  // Bump força o resumo a refazer a busca (após gravar um valor unitário).
+  const [retTick, setRetTick] = useState(0);
+  // Editor inline do valor unitário: chave da linha em edição (`secao-nome`) e
+  // rascunho digitado. Grava direto em stock_items.unit_value (Almoxarifado).
+  const [editUnitKey, setEditUnitKey] = useState<string | null>(null);
+  const [unitDraft, setUnitDraft] = useState("");
+  const [savingUnit, setSavingUnit] = useState(false);
   // Material do navio (Retorno de Material) mostrado nas Despesas, com o valor
   // de estoque de cada item — a mesma quebra do aviso que vai pro WhatsApp:
   //   ❌ PERDIDO  — não voltou: custo do navio, rateado pela equipe (MATERIAL_PERDIDO).
@@ -3238,11 +3249,11 @@ function JobDetailModal({
     (async () => {
       const { data } = await db
         .from("material_returns")
-        .select("material_return_items(item_name, stock_item_id, broken_qty, lost_qty, consumed_qty)")
+        .select("team, material_return_items(item_name, stock_item_id, broken_qty, lost_qty, consumed_qty)")
         .eq("ship_id", shipId);
       if (!active) return;
       type RI = { item_name: string; stock_item_id: number | null; broken_qty: number; lost_qty: number; consumed_qty: number };
-      const rows = (data as { material_return_items?: RI[] }[] | null) || [];
+      const rows = (data as { team?: string | null; material_return_items?: RI[] }[] | null) || [];
       const allItems = rows.flatMap((r) => r.material_return_items || []);
 
       // Valor unitário + setor do item. `team` separa material (GALPAO,
@@ -3261,23 +3272,22 @@ function JobDetailModal({
       }
       if (!active) return;
       const items = allItems.filter((it) => it.stock_item_id == null || !ranchoIds.has(it.stock_item_id));
-      const unpricedNames = new Set<string>();
       // Agrupa por nome do item, somando qtd e valor (unit_value × qtd).
       const acc = (pick: (it: RI) => number): ReturnLine[] => {
-        const m = new Map<string, { qty: number; value: number; priced: boolean }>();
+        const m = new Map<string, { qty: number; value: number; priced: boolean; ids: Set<number> }>();
         for (const it of items) {
           const q = pick(it) || 0;
           if (q <= 0) continue;
           const unit = it.stock_item_id != null ? (valueById.get(it.stock_item_id) || 0) : 0;
-          if (unit <= 0) unpricedNames.add(it.item_name);
-          const cur = m.get(it.item_name) || { qty: 0, value: 0, priced: false };
+          const cur = m.get(it.item_name) || { qty: 0, value: 0, priced: false, ids: new Set<number>() };
           cur.qty += q;
           cur.value += unit * q;
           cur.priced = cur.priced || unit > 0;
+          if (it.stock_item_id != null) cur.ids.add(it.stock_item_id);
           m.set(it.item_name, cur);
         }
         return Array.from(m.entries())
-          .map(([name, v]) => ({ name, qty: v.qty, value: +v.value.toFixed(2), priced: v.priced }))
+          .map(([name, v]) => ({ name, qty: v.qty, value: +v.value.toFixed(2), priced: v.priced, ids: Array.from(v.ids) }))
           .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
       };
       setReturnSummary({
@@ -3287,11 +3297,42 @@ function JobDetailModal({
         // Conferido é conferido mesmo que só tenha rancho: o filtro acima é de
         // CUSTO, não de existência do retorno.
         hasReturn: allItems.length > 0,
-        unpriced: unpricedNames.size,
+        teams: Array.from(new Set(rows.map((r) => r.team).filter((t): t is string => !!t))),
       });
     })().catch(() => { if (active) setReturnSummary(EMPTY_RET_SUMMARY); });
     return () => { active = false; };
-  }, [open, job?.ship_id]);
+  }, [open, job?.ship_id, retTick]);
+
+  // Grava o valor unitário digitado na tabela direto no Almoxarifado
+  // (stock_items.unit_value — vale pra TODO o sistema, não só este navio) e
+  // re-sincroniza a despesa "Material perdido" de cada equipe: ela foi lançada
+  // na confirmação do retorno com o valor da época (a rota é idempotente e
+  // recalcula lost × unit_value). Quem edita aqui está em STOCK_VALUE_ROLES,
+  // então o /api/db aceita a coluna.
+  async function saveUnitValue(line: ReturnLine) {
+    if (savingUnit) return; // Enter já disparou o save; o blur do disable não grava de novo
+    const v = parseFloat(unitDraft.replace(",", "."));
+    const cur = line.qty > 0 ? line.value / line.qty : 0;
+    if (!Number.isFinite(v) || v < 0 || Math.abs(v - cur) < 0.005) { setEditUnitKey(null); return; }
+    setSavingUnit(true);
+    try {
+      await db.from("stock_items").update({ unit_value: v }).in("id", line.ids);
+      await Promise.all(
+        returnSummary.teams.map((team) =>
+          fetch("/api/retorno/despesa", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ship_id: job?.ship_id, team }),
+          }).catch(() => null),
+        ),
+      );
+    } finally {
+      setSavingUnit(false);
+      setEditUnitKey(null);
+      setRetTick((t) => t + 1);
+      onChange(); // a despesa MATERIAL_PERDIDO (e o rateio) pode ter mudado
+    }
+  }
 
   // Desconto manual (Desc. Geral clicável) por alocação: qual está sendo editada
   // e o rascunho do valor. Salva em job_allocations.general_discount.
@@ -5859,8 +5900,9 @@ function JobDetailModal({
               Almoxarifado) e, quando o retorno já foi conferido, o que virou
               perdido/insumo/avariado. Item a item com valor de estoque
               (qtd × unitário) e subtotal por categoria. Só o PERDIDO custa ao
-              navio. Item sem unit_value cadastrado aparece como R$ 0,00 — o
-              aviso no rodapé diz quantos são. */}
+              navio. Item sem unit_value cadastrado aparece como R$ 0,00 e ganha
+              o selo "sem valor" — o unitário é editável na própria linha
+              (grava no Almoxarifado via saveUnitValue). */}
           {(kindFilter === "EMBARQUE" || returnSummary.hasReturn) && (() => {
             const sum = (arr: { value: number }[]) => arr.reduce((s, it) => s + it.value, 0);
             const sections = [
@@ -5901,17 +5943,53 @@ function JobDetailModal({
                           </td>
                           <td className={`pt-1.5 text-right font-semibold tabular-nums whitespace-nowrap ${s.cls}`}>{brl(sum(s.items))}</td>
                         </tr>
-                        {s.items.map((it) => (
-                          <tr key={`${s.key}-${it.name}`} className="border-t border-border/60">
+                        {s.items.map((it) => {
+                          const lineKey = `${s.key}-${it.name}`;
+                          const unit = it.qty > 0 ? it.value / it.qty : 0;
+                          // Sem stock_item_id não há onde gravar (item sumiu do
+                          // Almoxarifado) — a célula fica só-leitura.
+                          const unitEditable = canEdit && !isReadOnly && it.ids.length > 0;
+                          return (
+                          <tr key={lineKey} className="border-t border-border/60">
                             <td className="py-0.5 pl-4 pr-2">
                               {it.name}
-                              {!it.priced && <span className="ml-1 text-[10px] text-amber-700" title="Item sem valor unitário cadastrado no Almoxarifado">⚠️ sem valor</span>}
+                              {!it.priced && <span className="ml-1 text-[10px] text-amber-700" title={unitEditable ? "Sem valor unitário no Almoxarifado — clique no valor pra cadastrar" : "Item sem valor unitário cadastrado no Almoxarifado"}>⚠️ sem valor</span>}
                             </td>
                             <td className="py-0.5 text-right tabular-nums whitespace-nowrap">×{it.qty}</td>
-                            <td className="py-0.5 text-right tabular-nums whitespace-nowrap text-text-light">{brl(it.qty > 0 ? it.value / it.qty : 0)}</td>
+                            <td className="py-0.5 text-right tabular-nums whitespace-nowrap text-text-light">
+                              {editUnitKey === lineKey ? (
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  value={unitDraft}
+                                  onChange={(e) => setUnitDraft(e.target.value)}
+                                  onBlur={() => saveUnitValue(it)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") { e.preventDefault(); saveUnitValue(it); }
+                                    if (e.key === "Escape") setEditUnitKey(null);
+                                  }}
+                                  autoFocus
+                                  disabled={savingUnit}
+                                  className="w-16 px-1 py-0 border border-primary rounded text-right text-xs tabular-nums focus:outline-none"
+                                />
+                              ) : unitEditable ? (
+                                <button
+                                  type="button"
+                                  onClick={() => { setUnitDraft(unit > 0 ? String(+unit.toFixed(2)) : ""); setEditUnitKey(lineKey); }}
+                                  className="hover:bg-blue-50 hover:text-primary rounded px-1 cursor-text"
+                                  title="Clique pra editar o valor unitário (grava no Almoxarifado)"
+                                >
+                                  {brl(unit)} ✏️
+                                </button>
+                              ) : (
+                                brl(unit)
+                              )}
+                            </td>
                             <td className="py-0.5 text-right tabular-nums whitespace-nowrap font-medium">{brl(it.value)}</td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </Fragment>
                     ))}
                   </tbody>
@@ -5926,11 +6004,6 @@ function JobDetailModal({
                     </tr>
                   </tfoot>
                 </table>
-                )}
-                {returnSummary.unpriced > 0 && (
-                  <p className="mt-1.5 text-[11px] text-amber-800">
-                    ⚠️ {returnSummary.unpriced} {returnSummary.unpriced === 1 ? "item está" : "itens estão"} sem valor unitário no Almoxarifado — {returnSummary.unpriced === 1 ? "entra" : "entram"} como R$ 0,00. Cadastre o valor em <strong>Almoxarifado</strong> pra o custo do material ficar certo.
-                  </p>
                 )}
               </div>
             );
