@@ -125,6 +125,7 @@ model StockItem {
   embark_kit_items EmbarkKitItem[]
   embark_list_overrides EmbarkListOverride[]
   team_allocations MaterialTeamAllocation[]
+  ship_values      ShipMaterialValue[]
 
   @@index([category])
   @@map("stock_items")
@@ -545,8 +546,31 @@ model Ship {
   jobs           Job[]
   material_returns MaterialReturn[]
   embark_list_overrides EmbarkListOverride[]
+  material_values ShipMaterialValue[]
 
   @@map("ships")
+}
+
+// Valor unitário de material POR NAVIO (Pagamento de Navios › Retorno de
+// material). O padrão vem SEMPRE do Almoxarifado (stock_items.unit_value);
+// editar o unitário na tabela do navio grava AQUI e vale só pra ele — o
+// estoque e os outros navios não mudam. Tabela própria (e não coluna em
+// material_return_items) porque a edição do retorno APAGA e reinsere os itens
+// (escalacao-estoque-page) — aqui o valor sobrevive à reedição.
+model ShipMaterialValue {
+  id            Int       @id @default(autoincrement())
+  ship_id       String    @db.Uuid
+  ships         Ship      @relation(fields: [ship_id], references: [id], onDelete: Cascade)
+  stock_item_id Int
+  stock_items   StockItem @relation(fields: [stock_item_id], references: [id], onDelete: Cascade)
+  // Mesmo nome da coluna sensível do Almoxarifado de propósito: o /api/db
+  // esconde `unit_value` de quem não é STOCK_VALUE_ROLES (stripUnitValue).
+  unit_value    Float     @default(0)
+  updated_at    DateTime  @default(now()) @updatedAt @db.Timestamptz()
+  updated_by    String?
+
+  @@unique([ship_id, stock_item_id])
+  @@map("ship_material_values")
 }
 
 // ── Retorno de materiais (Embarque/Retorno) ──────────────────────────────────

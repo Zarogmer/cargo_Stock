@@ -45,6 +45,10 @@ const TABLE_MAP: Record<string, string> = {
   advance_discounts: "advanceDiscount",
   material_returns: "materialReturn",
   material_return_items: "materialReturnItem",
+  // Valor unitário de material POR NAVIO (Pagamento de Navios › Retorno de
+  // material) — a ESCRITA passa por /api/retorno/valor (re-sincroniza a
+  // despesa); aqui é só a leitura do modal.
+  ship_material_values: "shipMaterialValue",
   // Notas de Débito/Crédito: o cadastro fiscal do cliente é lido/editado pela
   // tela; a EMISSÃO da nota passa por /api/financeiro/notas (numeração).
   invoice_clients: "invoiceClient",
@@ -235,7 +239,10 @@ function convertDates(tableName: string, data: Record<string, unknown>): Record<
 // papéis de STOCK_VALUE_ROLES podem ver/gravar esse número — como todo o CRUD do
 // almoxarifado passa por este gateway, esconder a coluna na tela não bastaria:
 // qualquer usuário logado poderia ler o preço com um POST direto.
-const UNIT_VALUE_TABLES = new Set(["stock_items", "epis", "uniforms"]);
+// ship_material_values entra na mesma régua: a linha inteira é um preço
+// (valor de material por navio) — sem o filtro, qualquer papel leria o valor
+// que a coluna do Almoxarifado esconde.
+const UNIT_VALUE_TABLES = new Set(["stock_items", "epis", "uniforms", "ship_material_values"]);
 
 // Remove `unit_value` das linhas devolvidas (aceita 1 registro ou uma lista).
 function stripUnitValue(data: unknown): unknown {
