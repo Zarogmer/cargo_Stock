@@ -52,7 +52,6 @@ if (typeof window !== "undefined") {
 import { Fragment, useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { releaseShipAllocationsNow } from "@/lib/release-finished-ships";
 import { hasPermission, canAccessFinanceiroBanco } from "@/lib/rbac";
 import { db } from "@/lib/db";
 import { allocCountsAsWorked } from "@/lib/alloc-worked";
@@ -281,125 +280,31 @@ const COSTADO_NIGHT_SHIFT_PERIODS: ReadonlyArray<string> = ["19-01", "01-07"];
 
 // Fecha o navio a partir do Financeiro: marca CONCLUIDO + data de saída (igual
 // à aba Navios) e, diferente do Navios, grava o Valor do Contrato no pagamento.
-function CloseShipModal({
-  job, profileName, onClose, onClosed,
-}: {
-  job: Job | null;
-  profileName: string;
-  onClose: () => void;
-  onClosed: () => void;
-}) {
-  const [closeDate, setCloseDate] = useState(isoDate(new Date()));
-  const [contractValue, setContractValue] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  // Mesma trava da aba Navios: só fecha se o navio já tiver Retorno registrado.
-  // null = carregando/desconhecido; false = sem Retorno; true = ok.
-  const [shipHasReturn, setShipHasReturn] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    if (job) {
-      setCloseDate(job.end_date?.slice(0, 10) || isoDate(new Date()));
-      setContractValue(job.contract_value != null ? formatAmountBR(Number(job.contract_value)) : "");
-      setErr(null);
-      setShipHasReturn(null);
-      if (job.ship_id) {
-        (async () => {
-          const { data } = await db.from("material_returns").select("id").eq("ship_id", job.ship_id);
-          setShipHasReturn(Array.isArray(data) && data.length > 0);
-        })().catch(() => setShipHasReturn(null));
-      }
-    }
-  }, [job]);
-
-  if (!job) return null;
-
-  async function handleConfirm() {
-    if (!job!.ship_id) { setErr("Este pagamento não está ligado a um navio."); return; }
-    // Trava: sem Retorno registrado, o fechamento tem que ser feito na aba
-    // Embarque/Retorno (ao confirmar o retorno o navio fecha sozinho).
-    const { data: rets } = await db.from("material_returns").select("id").eq("ship_id", job!.ship_id);
-    if (!Array.isArray(rets) || rets.length === 0) {
-      setShipHasReturn(false);
-      setErr("Este navio ainda não tem Retorno. Faça o Retorno em Controle › Embarque/Retorno antes de fechar (ao confirmar o retorno o navio já fecha sozinho).");
-      return;
-    }
-    setSaving(true);
-    setErr(null);
-    try {
-      const cv = contractValue.trim() === "" ? null : parseBrlNumber(contractValue);
-      const shipRes = await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate }).eq("id", job!.ship_id);
-      if (shipRes.error) throw new Error(shipRes.error.message);
-      // Fecha a ponta dos pagamentos do navio e grava o contrato neste pagamento.
-      await db.from("jobs").update({ end_date: closeDate }).eq("ship_id", job!.ship_id);
-      await db.from("jobs").update({ contract_value: cv }).eq("id", job!.id);
-      // Solta a tripulação na hora (mesma regra do "Fechar" da aba Navios) —
-      // senão os escalados seguem "Embarcado" até a varredura por data rodar.
-      try {
-        await releaseShipAllocationsNow(job!.ship_id, profileName);
-      } catch (e2) {
-        console.warn("[financeiro] release on close failed:", (e2 as Error).message);
-      }
-      onClosed();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
-  return (
-    <Modal open={!!job} onClose={onClose} title={`Fechar navio · ${job.ships?.name || job.name}`} maxWidth="max-w-md">
-      <div className="space-y-4">
-        <p className="text-xs text-text-light">
-          Marca o navio como <strong>Concluído</strong> e registra a Data de Término (igual ao botão da aba
-          Navios). A diferença aqui é que você também grava o <strong>Valor do Contrato</strong> deste pagamento.
-        </p>
-        {shipHasReturn === false && (
-          <p className="text-xs text-red-700 bg-red-50 border border-red-300 rounded-lg px-3 py-2">
-            ⚠️ Este navio ainda não tem <strong>Retorno</strong> registrado. Faça o Retorno em{" "}
-            <strong>Controle › Embarque/Retorno</strong> antes de fechar (ao confirmar o retorno o navio já fecha sozinho).
-          </p>
-        )}
-        <div>
-          <label className="block text-sm font-medium mb-1">Data de Término *</label>
-          <input type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} className={inputCls} />
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Valor do Contrato (R$)</label>
-          <input
-            type="text"
-            inputMode="decimal"
-            value={contractValue}
-            onChange={(e) => setContractValue(e.target.value)}
-            onBlur={(e) => setContractValue(e.target.value.trim() ? formatAmountBR(parseBrlNumber(e.target.value)) : "")}
-            placeholder="0,00"
-            className={inputCls}
-          />
-          <p className="text-[11px] text-text-light mt-1">Quanto o cliente paga pela operação. Pode deixar em branco e preencher depois.</p>
-        </div>
-        {err && <p className="text-xs text-danger bg-red-50 border border-red-200 rounded-lg px-3 py-2">{err}</p>}
-        <div className="flex gap-3 justify-end pt-2">
-          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button
-            type="button"
-            onClick={handleConfirm}
-            disabled={saving || !closeDate || shipHasReturn === false}
-            title={shipHasReturn === false ? "Faça o Retorno em Embarque/Retorno antes de fechar" : undefined}
-          >
-            {saving ? "Fechando..." : "🏁 Fechar Navio"}
-          </Button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
+// Prazo padrão de pagamento do navio: término da operação + 20 dias (o prazo
+// usual do cliente — mesmo padrão do PayShipModal e do Painel Financeiro).
+const SHIP_PAYMENT_DAYS = 20;
 
 // "2026-06-26" + 20 dias → "2026-07-16" (prazo padrão de pagamento do navio).
 function addDaysIso(iso: string, days: number): string {
   const [y, m, d] = iso.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+// Linha "💰 Pagamento: dd/mm/aaaa" dos cards de navio — data prevista do
+// pagamento (término + 20 dias). Some quando o navio já foi pago (o badge
+// mostra a data real), foi cancelado ou ainda está em aberto (sem término).
+function PaymentDueLine({ job }: { job: Job }) {
+  if (job.status === "FECHADO" || job.status === "CANCELADO" || !job.end_date) return null;
+  const due = addDaysIso(job.end_date.slice(0, 10), SHIP_PAYMENT_DAYS);
+  const overdue = due < isoDate(new Date());
+  return (
+    <p
+      className={`text-xs mt-0.5 font-medium ${overdue ? "text-red-600" : "text-amber-700"}`}
+      title={`Término da operação + ${SHIP_PAYMENT_DAYS} dias`}
+    >
+      💰 Pagamento: {formatJobDate(due)}{overdue ? " · atrasado" : ""}
+    </p>
+  );
 }
 
 // Modal de PAGAMENTO do navio — o pessoal do Financeiro marca como Pago e
@@ -433,7 +338,7 @@ function PayShipModal({
       // usual de pagamento); sem data de fim, hoje.
       setPayDate(
         (job.closed_at || "").slice(0, 10) ||
-          (job.end_date ? addDaysIso(job.end_date.slice(0, 10), 20) : isoDate(new Date())),
+          (job.end_date ? addDaysIso(job.end_date.slice(0, 10), SHIP_PAYMENT_DAYS) : isoDate(new Date())),
       );
       setContractValue(job.contract_value != null ? formatAmountBR(Number(job.contract_value)) : "");
       setErr(null);
@@ -2691,7 +2596,6 @@ function TrabalhosTab({
   const [showJobForm, setShowJobForm] = useState(false);
   const [detailJob, setDetailJob] = useState<Job | null>(null);
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
-  const [closeShipJob, setCloseShipJob] = useState<Job | null>(null);
   const [payJob, setPayJob] = useState<Job | null>(null);
   // Nota de Débito/Crédito deste navio (Financeiro › Pagamento de Navios).
   const [noteJob, setNoteJob] = useState<Job | null>(null);
@@ -2821,6 +2725,7 @@ function TrabalhosTab({
                     <p className="text-xs text-text-light mt-1">
                       {formatJobDate(j.start_date)} {j.end_date ? `→ ${formatJobDate(j.end_date)}` : "→ em aberto"}
                     </p>
+                    <PaymentDueLine job={j} />
                     {/* Serviços do navio (Lavagem/Raspagem/Pintura) — Raspagem e
                         Pintura em destaque, que são os extras pagos por porão. */}
                     {(() => {
@@ -2860,15 +2765,6 @@ function TrabalhosTab({
                     )}
                     {canEdit && (
                       <div className="flex gap-1 items-center" onClick={(e) => e.stopPropagation()}>
-                        {j.ship_id && shipStatusOf(j) && shipStatusOf(j) !== "CONCLUIDO" && shipStatusOf(j) !== "CANCELADO" && (
-                          <button
-                            onClick={() => setCloseShipJob(j)}
-                            className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700"
-                            title="Fecha o navio (Concluído) e grava o valor do contrato"
-                          >
-                            🏁 Fechar Navio
-                          </button>
-                        )}
                         {j.status !== "CANCELADO" && (
                           <button
                             onClick={() => setPayJob(j)}
@@ -2941,13 +2837,6 @@ function TrabalhosTab({
         }}
         title="Excluir Pagamento"
         message={`Excluir "${deleteJob?.name}"? As alocações e ajustes vinculados também serão removidos.`}
-      />
-
-      <CloseShipModal
-        job={closeShipJob}
-        profileName={profileName}
-        onClose={() => setCloseShipJob(null)}
-        onClosed={() => { setCloseShipJob(null); onChange(); }}
       />
 
       <PayShipModal
@@ -3203,7 +3092,7 @@ function JobFormModal({
               <option value="EM_ANDAMENTO">Em Aberto</option>
               <option value="FECHADO">Pago</option>
             </select>
-            <p className="text-[11px] text-text-light mt-1">O valor do contrato agora é preenchido no botão 💰 Pagar (ou 🏁 Fechar Navio).</p>
+            <p className="text-[11px] text-text-light mt-1">O valor do contrato agora é preenchido no botão 💰 Pagar.</p>
           </div>
         </div>
 
@@ -7506,7 +7395,6 @@ function CostadoTab({
   const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("EM_ANDAMENTO");
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
-  const [closeShipJob, setCloseShipJob] = useState<Job | null>(null);
   const [payJob, setPayJob] = useState<Job | null>(null);
   // Nota de Débito/Crédito deste navio (Financeiro › Pagamento de Navios).
   const [noteJob, setNoteJob] = useState<Job | null>(null);
@@ -7616,6 +7504,7 @@ function CostadoTab({
                     <p className="text-xs text-text-light mt-1">
                       {formatJobDate(j.start_date)} {j.end_date ? `→ ${formatJobDate(j.end_date)}` : "→ em aberto"} · {allocs.length} aloc. · {shifts} turnos · {hours}h
                     </p>
+                    <PaymentDueLine job={j} />
                   </div>
                   <div className="flex gap-3 items-center text-xs flex-wrap">
                     <div>
@@ -7624,15 +7513,6 @@ function CostadoTab({
                     </div>
                     {canEdit && (
                       <div className="flex gap-1 items-center" onClick={(e) => e.stopPropagation()}>
-                        {j.ship_id && shipStatusOf(j) && shipStatusOf(j) !== "CONCLUIDO" && shipStatusOf(j) !== "CANCELADO" && (
-                          <button
-                            onClick={() => setCloseShipJob(j)}
-                            className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700"
-                            title="Fecha o navio (Concluído) e grava o valor do contrato"
-                          >
-                            🏁 Fechar Navio
-                          </button>
-                        )}
                         {j.status !== "CANCELADO" && (
                           <button
                             onClick={() => setPayJob(j)}
@@ -7721,13 +7601,6 @@ function CostadoTab({
         kindFilter="COSTADO"
         onClose={() => setDetailJob(null)}
         onChange={() => { onChange(); }}
-      />
-
-      <CloseShipModal
-        job={closeShipJob}
-        profileName={profileName}
-        onClose={() => setCloseShipJob(null)}
-        onClosed={() => { setCloseShipJob(null); onChange(); }}
       />
 
       <PayShipModal
