@@ -227,7 +227,7 @@ export function EscalacaoCostadoPage() {
           employee_id: a.employee_id,
           quantity: a.quantity,
           rate: a.rate, // mesmo valor por turno do período de origem
-          pluxee_value: 0,
+          pluxee_value: null, // folha começa indefinida (coluna Folha 0)
           status: "ATIVO",
           kind: "COSTADO",
           shift_date: selectedDate,
@@ -900,7 +900,7 @@ function AddCostadoCrewModal({
           employee_id: id,
           quantity: 1, // cada linha = 1 turno (data + período)
           rate: ratePerTurno, // valor fixo, único pra todos
-          pluxee_value: 0,
+          pluxee_value: null, // folha começa indefinida (coluna Folha 0)
           status: "ATIVO",
           kind: "COSTADO",
           shift_date: date,

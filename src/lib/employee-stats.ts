@@ -191,7 +191,10 @@ export function computeEmployeeStats(
     const extra = Number(a.extra_value || 0);
     // Pluxee: parte do ganho paga no cartão (vem do import da Relação de
     // Líquidos). O que sobra é o que sai na folha — mesma conta do modal.
+    // pluxee_value null = folha ainda não definida → a alocação conta 0 na
+    // folha (o Pagamento de Navios começa com Folha 0 desde 2026-09-02).
     const pluxee = Number(a.pluxee_value || 0);
+    const folhaSet = a.pluxee_value != null;
     s.jobIds.add(a.job_id);
     if (a.employee_id != null) {
       const md = Number(a.general_discount || 0);
@@ -205,7 +208,7 @@ export function computeEmployeeStats(
       const embRate = rate + Number(a.service_extra_rate || 0);
       const earnings = embRate * holds + extra;
       s.embarque.pluxee += pluxee;
-      s.embarque.folha += Math.max(0, earnings - pluxee);
+      s.embarque.folha += folhaSet ? Math.max(0, earnings - pluxee) : 0;
       const seen = embarqueJobSeen.get(a.employee_id) || new Set<string>();
       // Soma porões só uma vez por (employee, job) — várias alocações no mesmo
       // job não duplicam a contagem.
@@ -232,7 +235,7 @@ export function computeEmployeeStats(
       const qty = Math.max(1, a.quantity);
       const earnings = rate * qty + extra;
       s.costado.pluxee += pluxee;
-      s.costado.folha += Math.max(0, earnings - pluxee);
+      s.costado.folha += folhaSet ? Math.max(0, earnings - pluxee) : 0;
       s.costado.turnos += qty;
       if (a.shift_period && NIGHT_PERIODS.includes(a.shift_period)) {
         s.costado.noturnos += qty;

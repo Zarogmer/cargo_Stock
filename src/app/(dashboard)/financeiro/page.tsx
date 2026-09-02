@@ -3516,6 +3516,9 @@ function JobDetailModal({
       const rowPay = costadoRateLocal * qty;
       const extra = Number(a.extra_value || 0);
       const pluxee = Number(a.pluxee_value || 0);
+      // pluxee_value null = folha ainda não definida → a linha contribui 0
+      // pra folha (mesma regra da tabela de Embarque).
+      const folhaLinha = a.pluxee_value == null ? 0 : rowPay + extra - pluxee;
       if (!byEmp.has(key)) {
         byEmp.set(key, {
           employeeId: a.employee_id ?? null,
@@ -3533,9 +3536,9 @@ function JobDetailModal({
       row.shifts.push({ date: a.shift_date?.slice(0, 10) || null, period: a.shift_period, isNight });
       row.total += rowPay + extra;
       row.pluxee += pluxee;
+      row.folha += folhaLinha;
     }
     for (const row of byEmp.values()) {
-      row.folha = row.total - row.pluxee;
       row.shifts.sort((x, y) => (x.date || "").localeCompare(y.date || "") || (x.period || "").localeCompare(y.period || ""));
     }
     return Array.from(byEmp.values()).sort((a, b) => b.total - a.total);
@@ -3570,7 +3573,7 @@ function JobDetailModal({
         employee_id: e.id,
         quantity: 1,
         rate: Number(e.admin_ship_rate ?? 0) || 0,
-        pluxee_value: 0,
+        pluxee_value: null,
         status: "ATIVO",
         kind: "ADMINISTRATIVO",
       }));
@@ -3593,11 +3596,15 @@ function JobDetailModal({
   // categoria ADMIN_COSTADO no Costado).
   const adminActive = adminAllocations.filter((a) => a.status === "ATIVO");
   const adminTotal = adminActive.reduce((s, a) => s + Number(a.rate) + Number(a.extra_value || 0), 0);
-  // Folha = soma de (base + extra - pluxee) por funcionário = cost.base - pluxeeTotal.
-  // payroll_value no banco nunca é gravado, então o valor vem das próprias
-  // alocações pra refletir 1:1 a coluna Folha da tabela.
-  const pluxeeTotal = allocations.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
-  const folhaValue = cost.base - pluxeeTotal;
+  // Folha = soma de (base + extra - pluxee) por funcionário. payroll_value no
+  // banco nunca é gravado, então o valor vem das próprias alocações pra
+  // refletir 1:1 a coluna Folha da tabela. pluxee_value null = folha ainda não
+  // definida → a linha conta 0 na folha (desconta o total dela do cost.base).
+  const pluxeeEffectiveTotal = allocations.reduce(
+    (s, a) => s + (a.pluxee_value == null ? allocTotalPerson(a) : Number(a.pluxee_value || 0)),
+    0,
+  );
+  const folhaValue = cost.base - pluxeeEffectiveTotal;
   // Custo da operação inclui o administrativo (que não passa por folha/Pluxee).
   const custoTotal = cost.total + adminTotal;
   const custoBase = cost.base + adminTotal;
@@ -3687,7 +3694,9 @@ function JobDetailModal({
       employee_id: allocEmp ? parseInt(allocEmp) : null,
       quantity: parseInt(allocDays) || 1,
       rate: parseFloat(allocRate),
-      pluxee_value: allocPluxee ? parseFloat(allocPluxee) : 0,
+      // Folha começa indefinida (null → coluna Folha 0); Pluxee > 0 digitado
+      // no form ainda vale.
+      pluxee_value: allocPluxee && parseFloat(allocPluxee) > 0 ? parseFloat(allocPluxee) : null,
     };
     if (editAllocId) {
       await db.from("job_allocations").update(payload).eq("id", editAllocId);
@@ -3730,7 +3739,7 @@ function JobDetailModal({
       employee_id: empId,
       quantity: 1,
       rate: Number(emp?.admin_ship_rate ?? 0) || 0,
-      pluxee_value: 0,
+      pluxee_value: null,
       status: "ATIVO",
       kind: "ADMINISTRATIVO",
     });
@@ -4127,10 +4136,10 @@ function JobDetailModal({
       set("E7", "CONTA", styleHeader);
       set("F7", "ITAÚ/SANTANDER", styleHeader);
       set("G7", "PAGTO NA FOLHA", styleHeader);
-      // DESCONTO GERAL: material PERDIDO no navio dividido pela equipe. A antiga
-      // coluna "Perda de Material" saiu — a perda agora é rateada aqui (pedido
-      // do Guilherme, 2026-07-21).
-      set("H7", "DESCONTO GERAL", styleHeader);
+      // DESCONTO DE MATERIAL: material PERDIDO no navio dividido pela equipe.
+      // (Era "DESCONTO GERAL" até 2026-09-02; a antiga coluna "Perda de
+      // Material" saiu — a perda é rateada aqui desde 2026-07-21.)
+      set("H7", "DESCONTO DE MATERIAL", styleHeader);
       // ADIANTAMENTO: vale que a pessoa já pegou e volta agora. Vem dos vales
       // descontados neste navio (Relatório de Vales) — não do valor do navio.
       set("I7", "ADIANTAMENTO", styleHeader);
@@ -4143,6 +4152,9 @@ function JobDetailModal({
       // saber quanto depositar no Itaú e quanto no Santander, e quanto sacar pra
       // entregar em mãos a quem não tem conta.
       const porBanco: Record<BankBucket, number> = { ITAU: 0, SANTANDER: 0, TRAZER: 0, OUTROS: 0 };
+      // Detalhe por tipo de conta dentro do banco (`BUCKET|Tipo` → soma) pro
+      // rodapé mostrar quanto vai de Corrente, Poupança, Conta Salário…
+      const porTipo = new Map<string, number>();
       // Rateio da perda: cada colaborador paga a sua parte UMA vez (no Costado
       // a mesma pessoa aparece em várias linhas).
       const descGeralSeen = new Set<number>();
@@ -4150,8 +4162,10 @@ function JobDetailModal({
         const e = a.employees;
         const total = allocTotalPerson(a);
         // PAGTO NA FOLHA = líquido do Relatório de Líquidos (guardado como
-        // total - pluxee_value). Sem import, pluxee_value = 0 → folha = total.
-        const folha = +(total - Number(a.pluxee_value || 0)).toFixed(2);
+        // total - pluxee_value) ou digitado na coluna Folha do modal. Enquanto
+        // ninguém define (pluxee_value null), a folha sai 0 — o usuário edita
+        // na mão ou importa o PDF de líquidos.
+        const folha = a.pluxee_value == null ? 0 : +(total - Number(a.pluxee_value || 0)).toFixed(2);
         // Vale descontado neste navio. Sai do bolso da pessoa (ela já pegou o
         // dinheiro), então não entra em totalNavio — só na coluna ADIANTAMENTO.
         const adto = jobDiscountFor(job!.id, a.employee_id ?? null, advDiscounts);
@@ -4181,11 +4195,21 @@ function JobDetailModal({
         const bankCell = hasAccount
           ? formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null)
           : "S/CONTA - TRAZER SALÁRIO";
-        porBanco[bankBucket(e?.bank_name ?? null, hasAccount)] += folha;
+        const bucket = bankBucket(e?.bank_name ?? null, hasAccount);
+        porBanco[bucket] += folha;
+        if (bucket === "ITAU" || bucket === "SANTANDER") {
+          const tipo = e?.bank_account_type
+            ? (BANK_ACCOUNT_TYPE_LABELS[e.bank_account_type] ?? e.bank_account_type)
+            : "S/tipo";
+          const tipoKey = `${bucket}|${tipo}`;
+          porTipo.set(tipoKey, (porTipo.get(tipoKey) || 0) + folha);
+        }
         set(`B${row}`, idx + 1, styleCellCenter, "n");
         set(`C${row}`, e?.name || a.job_functions?.name || `#${a.function_id}`, styleCellCenter);
-        set(`D${row}`, e?.bank_agency || "", styleCellCenter);
-        set(`E${row}`, e?.bank_account || "", styleCellCenter);
+        // Sem conta bancária, AGÊNCIA e CONTA saem "S/CONTA" (em vez de vazio),
+        // pra bater o olho na planilha e ver quem recebe em mãos.
+        set(`D${row}`, hasAccount ? (e?.bank_agency || "") : "S/CONTA", styleCellCenter);
+        set(`E${row}`, hasAccount ? (e?.bank_account || "") : "S/CONTA", styleCellCenter);
         set(`F${row}`, bankCell, styleCellCenter);
         set(`G${row}`, folha, styleCellMoney, "n");
         set(`H${row}`, descGeral, styleCellMoney, "n");
@@ -4216,17 +4240,28 @@ function JobDetailModal({
       set(`F${row}`, "PAGTO NAVIO:", styleSummaryLabel);
       set(`G${row}`, totalNavio, styleSummaryMoney, "n"); row += 2;
 
-      // Quebra por banco do PAGTO NA FOLHA: quanto depositar em cada banco.
-      // Itaú e Santander sempre aparecem (mesmo zerados, pra a linha existir);
-      // "A TRAZER" e "OUTROS" só quando têm valor. A soma fecha com PAGTO FOLHA.
+      // Quebra por banco do PAGTO NA FOLHA: quanto depositar em cada banco,
+      // com o detalhe por tipo de conta (Corrente/Poupança/Conta Salário…)
+      // logo abaixo do total do banco. Itaú, Santander e A TRAZER sempre
+      // aparecem (mesmo zerados, pra linha existir); "OUTROS" só quando tem
+      // valor. A soma dos totais fecha com PAGTO FOLHA.
+      const writeTipos = (bucket: "ITAU" | "SANTANDER") => {
+        Array.from(porTipo.entries())
+          .filter(([k, v]) => k.startsWith(`${bucket}|`) && v > 0)
+          .sort(([x], [y]) => x.localeCompare(y, "pt-BR"))
+          .forEach(([k, v]) => {
+            set(`F${row}`, `${k.split("|")[1]}:`, styleSummaryLabel);
+            set(`G${row}`, v, styleSummaryMoney, "n"); row++;
+          });
+      };
       set(`F${row}`, "TOTAL ITAÚ:", styleTotalLabel);
       set(`G${row}`, porBanco.ITAU, styleTotalMoney, "n"); row++;
+      writeTipos("ITAU");
       set(`F${row}`, "TOTAL SANTANDER:", styleTotalLabel);
       set(`G${row}`, porBanco.SANTANDER, styleTotalMoney, "n"); row++;
-      if (porBanco.TRAZER > 0) {
-        set(`F${row}`, "TOTAL A TRAZER (s/ conta):", styleTotalLabel);
-        set(`G${row}`, porBanco.TRAZER, styleTotalMoney, "n"); row++;
-      }
+      writeTipos("SANTANDER");
+      set(`F${row}`, "TOTAL A TRAZER (s/ conta):", styleTotalLabel);
+      set(`G${row}`, porBanco.TRAZER, styleTotalMoney, "n"); row++;
       if (porBanco.OUTROS > 0) {
         set(`F${row}`, "TOTAL OUTROS BANCOS:", styleTotalLabel);
         set(`G${row}`, porBanco.OUTROS, styleTotalMoney, "n"); row++;
@@ -4737,7 +4772,7 @@ function JobDetailModal({
                   className={`text-xs px-2 py-1 rounded cursor-pointer ${pdfStatus.kind === "parsing" ? "bg-indigo-300 text-white" : "bg-indigo-600 text-white hover:bg-indigo-700"}`}
                   title="Importa o Relatório de Líquidos (PDF da contabilidade) e preenche o valor da folha de cada funcionário"
                 >
-                  {pdfStatus.kind === "parsing" ? "Lendo…" : "📄 Relatório Líquidos"}
+                  {pdfStatus.kind === "parsing" ? "Lendo…" : "📄 Relatório Líquidos PDF"}
                   <input
                     type="file"
                     accept="application/pdf"
@@ -4985,7 +5020,8 @@ function JobDetailModal({
                 employee_id: selectedEmp.id,
                 quantity: kindFilter === "EMBARQUE" ? 1 : (parseInt(allocDays) || 1),
                 rate: resolvedRate,
-                pluxee_value: 0,
+                // Folha começa indefinida (null → coluna Folha 0).
+                pluxee_value: null,
               };
               if (editAllocId) {
                 await db.from("job_allocations").update(payload).eq("id", editAllocId);
@@ -5240,7 +5276,7 @@ function JobDetailModal({
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light" title="Base = Valor/Porão × Porões. O Extra (valor especial + rateio) aparece em amarelo logo abaixo da base, quando houver.">Base</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Total</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-purple-700 whitespace-nowrap" title="PAGTO NA FOLHA — líquido do Relatório de Líquidos. Sem import, igual ao Total.">Folha</th>
-                    <th className="px-2 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap" title="DESCONTO GERAL — material perdido no navio (Embarque/Retorno › Perdido) dividido pela equipe. Avariado que a equipe trouxe de volta não entra aqui.">Desc. Geral</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap" title="DESCONTO DE MATERIAL — material perdido no navio (Embarque/Retorno › Perdido) dividido pela equipe. Avariado que a equipe trouxe de volta não entra aqui.">Desc. Geral</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-amber-700 whitespace-nowrap" title="ADIANTAMENTO — vale que o colaborador já pegou e está sendo descontado neste navio. Não muda o custo do navio, só o que ele recebe agora.">Adiant.</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-emerald-800 whitespace-nowrap" title="LÍQUIDO — o que o colaborador realmente recebe: Total − Desc. Geral − Adiantamento. Não altera o custo do navio.">Líquido</th>
                     {canEdit && !isReadOnly && !peopleReadOnly && <th className="w-14"></th>}
@@ -5291,9 +5327,10 @@ function JobDetailModal({
                     const rateioExtra = Number(a.extra_value || 0);
                     const extra = specialDelta + rateioExtra;
                     // PAGTO NA FOLHA = líquido do Relatório de Líquidos (guardado
-                    // como pluxee_value = total - folha). Sem import, folha = total.
-                    const pluxee = Number(a.pluxee_value || 0);
-                    const folha = base + extra - pluxee;
+                    // como pluxee_value = total - folha) ou digitado na coluna.
+                    // pluxee_value null = ninguém definiu ainda → folha começa 0
+                    // (o usuário edita na mão ou importa o PDF de líquidos).
+                    const folha = a.pluxee_value == null ? 0 : base + extra - Number(a.pluxee_value || 0);
                     return (
                       <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
                         <td className="px-2 py-2 text-text-light">{idx + 1}</td>
@@ -5678,7 +5715,19 @@ function JobDetailModal({
                       }
                       return s + rateio;
                     }, 0);
-                    const pluxeeTotal = totalAllocs.reduce((s, a) => s + Number(a.pluxee_value || 0), 0);
+                    // Soma da coluna Folha: linha com pluxee_value null ainda
+                    // não tem folha definida e conta 0 (mesma regra das linhas).
+                    const folhaColTotal = totalAllocs.reduce((s, a) => {
+                      if (a.pluxee_value == null) return s;
+                      const rowTotal = isEmbarque
+                        ? (baseRateOf(a) + Number(a.service_extra_rate || 0)) * holdsMultiplier
+                          + (Number(a.rate) - baseRateOf(a)) * holdsMultiplier
+                          + Number(a.extra_value || 0)
+                        : isCostado
+                          ? costadoRate * effectiveQty(a) + Number(a.extra_value || 0)
+                          : Number(a.rate) * a.quantity * holdsMultiplier + Number(a.extra_value || 0);
+                      return s + rowTotal - Number(a.pluxee_value || 0);
+                    }, 0);
                     // Somas de coluna estilo Excel (só Embarque, que é por porão):
                     //  • Valor/Porão = soma dos valores/porão (quanto custa por porão a limpeza);
                     //  • Raspagem/Pintura = soma dos extras/porão (por porão, NÃO × porões).
@@ -5721,7 +5770,7 @@ function JobDetailModal({
                           </div>
                         </td>
                         <td className="px-2 py-2 text-right text-emerald-700 whitespace-nowrap">{brl(baseTotal + extraTotal)}</td>
-                        <td className="px-2 py-2 text-right text-purple-700 whitespace-nowrap">{brl(baseTotal + extraTotal - pluxeeTotal)}</td>
+                        <td className="px-2 py-2 text-right text-purple-700 whitespace-nowrap">{brl(folhaColTotal)}</td>
                         {(() => {
                           // Desc. Geral somado entre as linhas visíveis (cada
                           // colaborador uma vez, como no rateio).
@@ -6126,11 +6175,24 @@ function JobDetailModal({
             </div>
           )}
 
-          {adjustments.length === 0 ? (
+          {(() => {
+          // A despesa automática do retorno (MATERIAL_PERDIDO, marcador
+          // "Retorno de material") NÃO aparece na lista: o bloco Retorno de
+          // material acima já mostra o perdido item a item e o total "Entra no
+          // custo do navio". Ela segue existindo no banco — conta no custo, no
+          // Desc. Geral e nos exports — só sai da listagem pra não duplicar.
+          const visibleAdjustments = adjustments.filter(
+            (a) =>
+              !(
+                (a.category === "MATERIAL_PERDIDO" || a.category === "MATERIAL_DANIFICADO") &&
+                a.description.startsWith("Retorno de material")
+              ),
+          );
+          return visibleAdjustments.length === 0 ? (
             <p className="text-xs text-text-light italic text-center py-2">Sem ajustes.</p>
           ) : (
             <div className="space-y-1">
-              {adjustments.map((a) => (
+              {visibleAdjustments.map((a) => (
                 <div key={a.id} className={`flex justify-between items-center px-3 py-2 rounded-lg border ${
                   a.type === "ADICIONAL" ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"
                 }`}>
@@ -6158,7 +6220,8 @@ function JobDetailModal({
                 </div>
               ))}
             </div>
-          )}
+          );
+          })()}
         </div>
 
         {job.notes && (

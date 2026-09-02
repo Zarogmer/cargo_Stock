@@ -740,7 +740,10 @@ model JobAllocation {
   employees     Employee?   @relation(fields: [employee_id], references: [id], onDelete: SetNull)
   quantity      Int         @default(1) // dias trabalhados
   rate          Decimal     @db.Decimal(10, 2) // valor diário aplicado
-  pluxee_value  Decimal?    @default(0) @db.Decimal(10, 2) // parte paga via Pluxee
+  // Parte paga via Pluxee (folha = total - pluxee_value). NULL = folha ainda
+  // não definida → a coluna Folha mostra 0 até editar/importar o Relatório de
+  // Líquidos (sem default desde 2026-09-02; antes DEFAULT 0 = folha cheia).
+  pluxee_value  Decimal?    @db.Decimal(10, 2)
   // Valor extra recebido por rateio (quando o time foi menor que o ideal e o
   // valor de quem faltou foi dividido entre os que foram). null/0 = sem rateio.
   extra_value   Decimal?    @default(0) @db.Decimal(10, 2)

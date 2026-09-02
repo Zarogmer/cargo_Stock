@@ -870,7 +870,7 @@ export default function NaviosPage() {
               employee_id: empId,
               quantity: 0,
               rate: fnDefaultRate,
-              pluxee_value: 0,
+              pluxee_value: null, // folha começa indefinida (coluna Folha 0)
               status: "ATIVO",
               kind: isCostado ? "COSTADO" : "EMBARQUE",
               added_by: profileName,
@@ -1347,7 +1347,7 @@ export default function NaviosPage() {
         employee_id: empIdNum,
         quantity: 0,
         rate,
-        pluxee_value: 0,
+        pluxee_value: null, // folha começa indefinida (coluna Folha 0)
         status: "ATIVO",
         kind: isCostado ? "COSTADO" : "EMBARQUE",
         added_by: profile?.full_name || "sistema",

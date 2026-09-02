@@ -685,7 +685,7 @@ function CrewFormModal({
           employee_id: parseInt(empId),
           quantity: item?.quantity ?? 0,
           rate: item?.rate ?? 0,
-          pluxee_value: item?.pluxee_value ?? 0,
+          pluxee_value: item?.pluxee_value ?? null,
         }).eq("id", item!.id);
         onSaved();
       } catch (err) {
@@ -736,7 +736,7 @@ function CrewFormModal({
           employee_id: id,
           quantity: 0,
           rate,
-          pluxee_value: 0,
+          pluxee_value: null, // folha começa indefinida (coluna Folha 0)
           status: "ATIVO",
           kind,
           added_by: profileName,
