@@ -56,6 +56,7 @@ import { releaseShipAllocationsNow } from "@/lib/release-finished-ships";
 import { hasPermission, canAccessFinanceiroBanco } from "@/lib/rbac";
 import { db } from "@/lib/db";
 import { allocCountsAsWorked } from "@/lib/alloc-worked";
+import { DEFAULT_PORTS, DEFAULT_CLIENTS } from "@/lib/port-client-options";
 import { Tabs } from "@/components/ui/tabs";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
@@ -622,12 +623,16 @@ export default function FinanceiroPage() {
   const filterOptions = useMemo(() => {
     const years = new Set<number>();
     // Dedupe sem caixa ("Santos" = "SANTOS"): chave em caixa alta, mostra a
-    // primeira grafia vista. Porto/cliente vêm do job COM fallback pro navio
-    // (jobPort/jobClient) — sem isso, job sem porto escondia o navio do filtro.
+    // primeira grafia vista. Porto/cliente vêm de TRÊS fontes, pra opção
+    // nenhuma da operação sumir do filtro:
+    // 1. jobs, com fallback pro navio (jobPort/jobClient);
+    // 2. navios cadastrados (aba Navios) — mesmo sem job com o campo;
+    // 3. sementes do sistema (DEFAULT_PORTS/DEFAULT_CLIENTS, as mesmas do
+    //    ComboBox do cadastro de navio).
     const ports = new Map<string, string>();
     const clients = new Map<string, string>();
-    const add = (map: Map<string, string>, value: string) => {
-      const v = value.trim();
+    const add = (map: Map<string, string>, value: string | null | undefined) => {
+      const v = (value || "").trim();
       if (!v) return;
       const key = v.toUpperCase();
       if (!map.has(key)) map.set(key, v);
@@ -638,12 +643,18 @@ export default function FinanceiroPage() {
       add(ports, jobPort(j));
       add(clients, jobClient(j));
     }
+    for (const s of ships) {
+      add(ports, s.port);
+      add(clients, s.client_name);
+    }
+    for (const p of DEFAULT_PORTS) add(ports, p);
+    for (const c of DEFAULT_CLIENTS) add(clients, c);
     return {
       years: [...years].sort((a, b) => b - a),
       ports: [...ports.values()].sort((a, b) => a.localeCompare(b, "pt-BR")),
       clients: [...clients.values()].sort((a, b) => a.localeCompare(b, "pt-BR")),
     };
-  }, [jobs]);
+  }, [jobs, ships]);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -660,7 +671,9 @@ export default function FinanceiroPage() {
       // e a linha editada pulava de lugar na tabela do navio a cada save.
       db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)").order("added_at").order("id"),
       db.from("job_adjustments").select("*").order("created_at", { ascending: false }),
-      db.from("ships").select("id, name, status, services").order("arrival_date", { ascending: false }).limit(50),
+      // port/client_name entram nas opções do filtro (portos/clientes da
+      // operação aparecem mesmo sem job antigo com o campo preenchido).
+      db.from("ships").select("id, name, status, services, port, client_name").order("arrival_date", { ascending: false }).limit(50),
       db.from("employees").select("id, name, role, cpf, birth_date, bank_name, bank_agency, bank_account, bank_account_type, status, sector, admin_ship_rate").order("name"),
       db.from("employee_function_rates").select("employee_id, function_id, rate"),
       db.from("employee_advances").select("*"),

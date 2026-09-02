@@ -219,6 +219,8 @@ export interface Ship {
   arrival_date: string | null;
   departure_date: string | null;
   port: string | null;
+  // Cliente que contratou o serviço (texto livre do cadastro do navio).
+  client_name?: string | null;
   status: "AGENDADO" | "EM_OPERACAO" | "CONCLUIDO" | "CANCELADO";
   // Embarque de material confirmado na aba Embarque/Retorno (independente do
   // status — o navio abre/fecha na aba Navios). Null = embarque pendente.

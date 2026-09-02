@@ -10,6 +10,7 @@ import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 import { SHIFT_PERIODS, type ShiftPeriod } from "@/types/database";
 import { payModeIsEscalable, payModeOfFunctionUnit, pickFunctionByName } from "@/lib/jobUnits";
+import { DEFAULT_PORTS, DEFAULT_CLIENTS } from "@/lib/port-client-options";
 import { Modal } from "@/components/ui/modal";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -137,12 +138,10 @@ const BOARDING_SITUATION_LABELS: Record<BoardingSituation, string> = {
 
 const CARGO_OPTIONS = ["CARVÃO", "CIMENTO", "UREIA", "SOJA", "MILHO", "AÇÚCAR"];
 
-// Sementes iniciais. A lista mostrada no ComboBox combina estes valores com
+// Sementes iniciais do ComboBox — a lista combina estes valores com
 // portos/clientes já usados em navios cadastrados (derivados em useMemo),
 // então qualquer porto/cliente novo digitado vira parte da lista assim que
-// o navio é salvo.
-const DEFAULT_PORTS = ["Santos", "Paranaguá", "São Francisco do Sul"];
-const DEFAULT_CLIENTS = ["Deep", "Transatlântica", "Continental", "Wilson"];
+// o navio é salvo. Moradia compartilhada com o filtro do Financeiro.
 
 // Categorias de despesa do navio — espelham as do Financeiro (job_adjustments).
 // Um gasto lançado aqui vira um JobAdjustment ADICIONAL no Job do navio, então
