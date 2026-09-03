@@ -186,6 +186,20 @@ export function Sidebar({ open, onClose, collapsed = false }: SidebarProps) {
   const searchParams = useSearchParams();
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
 
+  // iOS pinta topo/rodapé do Safari com o <meta name="theme-color">. Com a
+  // gaveta aberta no celular, as barras acompanham o azul-escuro da sidebar
+  // (senão sobra topo/rodapé branco destoando dela); ao fechar — ou navegar,
+  // que fecha a gaveta — volta a cor da rota.
+  useEffect(() => {
+    if (!open) return;
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (!meta) return;
+    const prev = meta.content;
+    meta.content =
+      getComputedStyle(document.documentElement).getPropertyValue("--color-sidebar").trim() || "#0f172a";
+    return () => { meta.content = prev; };
+  }, [open]);
+
   if (!profile) return null;
 
   const navItems = getNavItemsForRole(profile.role);
