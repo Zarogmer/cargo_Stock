@@ -16,9 +16,9 @@ import { ImagePicker } from "@/components/ui/image-picker";
 // também lê o CODE-128 do DANFE (chave da NF-e) e o QR da NFC-e. Boleto
 // preenche a Nova Compra com valor/pagamento/vencimento; NF preenche
 // fornecedor (pelo CNPJ do cadastro), descrição e chave.
-// Carregado sob demanda: a lib de leitura de código de barras (zxing) pesa
-// ~127 kB e quase ninguém abre o Controle pra escanear. Com o import estático
-// a página saltava de 136 kB pra 263 kB.
+// Carregado sob demanda: quase ninguém abre o Controle pra escanear, então o
+// chunk do leitor fica fora da página (o motor zxing-wasm ainda baixa o .wasm
+// de ~1,1 MB à parte, só quando o scanner abre de fato).
 import dynamic from "next/dynamic";
 import type { BoletoParsed } from "@/lib/services/boleto/linha-digitavel";
 import type { NfeChaveScan } from "@/lib/services/boleto/nfe-chave";
