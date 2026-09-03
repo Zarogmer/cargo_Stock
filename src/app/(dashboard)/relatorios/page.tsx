@@ -735,6 +735,13 @@ function ReportDetail({
     [holds]
   );
 
+  // Trava do "Concluir relatório": só libera com todos os porões/áreas em 100%
+  // (linhas sem nome não contam) — evita fechar o relatório num clique errado.
+  const holdsMissing = useMemo(
+    () => holds.filter((h) => h.label.trim() && (Number(h.completion_pct) || 0) < 100).length,
+    [holds]
+  );
+
   // Quem aparece na aba Avaliações: a equipe escalada SEM supervisor — o
   // supervisor avalia, não é avaliado (nem por ele mesmo, nem pela gestão).
   const evalTeam = useMemo(
@@ -1494,12 +1501,21 @@ function ReportDetail({
                 {savingReport ? "Salvando..." : "💾 Salvar relatório"}
               </Button>
             )}
+            {!locked && savedStatus !== "COMPLETO" && holdsMissing > 0 && (
+              <p className="w-full text-right text-xs text-text-light self-center">
+                🔒 Concluir libera quando {kind === "COSTADO" ? "todas as áreas" : "todos os porões"} chegarem a 100% — falta{holdsMissing > 1 ? "m" : ""} {holdsMissing}.
+              </p>
+            )}
             {!locked && savedStatus !== "COMPLETO" && (
               <Button
-                variant="success"
+                variant={holdsMissing > 0 ? "secondary" : "success"}
                 onClick={() => setConfirmConclude(true)}
-                disabled={savingReport}
-                title="Fecha o relatório: depois de concluído, o supervisor não edita mais (a gestão pode reabrir)"
+                disabled={savingReport || holdsMissing > 0}
+                title={
+                  holdsMissing > 0
+                    ? `Só dá pra concluir com ${kind === "COSTADO" ? "todas as áreas" : "todos os porões"} em 100%`
+                    : "Fecha o relatório: depois de concluído, o supervisor não edita mais (a gestão pode reabrir)"
+                }
               >
                 ✅ Concluir relatório
               </Button>
