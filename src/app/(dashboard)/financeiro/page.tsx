@@ -256,7 +256,7 @@ const EXPENSE_CATEGORIES = [
   { value: "ALIMENTACAO",        label: "Alimentação" },
   { value: "RESTAURANTE",        label: "Jantar/Restaurante" },
   // Nota de Crédito (o antigo "Repasse") — comissão devolvida ao cliente,
-  // lançada pelo modal "Pagar". O valor da categoria segue REPASSE no banco:
+  // lançada pelo modal "Fechar Navio". O valor da categoria segue REPASSE no banco:
   // renomear quebraria as despesas já gravadas. Só o rótulo mudou (2026-08-25).
   { value: "REPASSE",            label: "Nota de Crédito" },
   { value: "OUTROS",             label: "Outros" },
@@ -402,7 +402,7 @@ function PayShipModal({
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
   return (
-    <Modal open={!!job} onClose={onClose} title={`Pagamento · ${job.ships?.name || job.name}`} maxWidth="max-w-md">
+    <Modal open={!!job} onClose={onClose} title={`${paid ? "Pagamento" : "Fechar Navio"} · ${job.ships?.name || job.name}`} maxWidth="max-w-md">
       <div className="space-y-4">
         {paid && (
           <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-800">
@@ -411,7 +411,7 @@ function PayShipModal({
         )}
         {!paid && (
           <p className="text-xs text-text-light">
-            Marca este pagamento como <strong>Pago</strong> e registra a data. O navio passa a aparecer no filtro <strong>Pago</strong>.
+            Fecha o navio: marca o pagamento como <strong>Pago</strong> e registra a data. O navio passa a aparecer no filtro <strong>Pago</strong>.
           </p>
         )}
         {/* Valor do contrato — o que o cliente paga; editável aqui mesmo. */}
@@ -461,7 +461,7 @@ function PayShipModal({
           <div className="flex gap-2">
             <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
             <Button type="button" onClick={() => setPaid(true)} disabled={saving || !payDate}>
-              {saving ? "Salvando..." : paid ? "Salvar data" : "💰 Confirmar Pagamento"}
+              {saving ? "Salvando..." : paid ? "Salvar data" : "🔒 Fechar Navio"}
             </Button>
           </div>
         </div>
@@ -2766,15 +2766,23 @@ function TrabalhosTab({
                     )}
                     {canEdit && (
                       <div className="flex gap-1 items-center" onClick={(e) => e.stopPropagation()}>
-                        {j.status !== "CANCELADO" && (
-                          <button
-                            onClick={() => setPayJob(j)}
-                            className={`text-xs px-2 py-1 rounded ${j.status === "FECHADO" ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-emerald-600 text-white hover:bg-emerald-700"}`}
-                            title="Registrar/editar o pagamento do navio"
-                          >
-                            {j.status === "FECHADO" ? "💰 Pago" : "💰 Pagar"}
-                          </button>
-                        )}
+                        {j.status !== "CANCELADO" && (() => {
+                          const paid = j.status === "FECHADO";
+                          // Fechar só com o navio Concluído — é aí que existe a data
+                          // de pagamento. Sem navio vinculado não tem o que travar.
+                          const shipStatus = shipStatusOf(j);
+                          const canClose = paid || !shipStatus || shipStatus === "CONCLUIDO";
+                          return (
+                            <button
+                              onClick={() => canClose && setPayJob(j)}
+                              disabled={!canClose}
+                              className={`text-xs px-2 py-1 rounded ${paid ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : canClose ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-gray-200 text-gray-400 cursor-not-allowed"}`}
+                              title={paid ? "Ver/editar o pagamento do navio" : canClose ? "Fechar o navio: registrar valor e data do pagamento" : "Só navio Concluído pode ser fechado — finalize a operação primeiro"}
+                            >
+                              {paid ? "💰 Pago" : "🔒 Fechar Navio"}
+                            </button>
+                          );
+                        })()}
                         {j.status !== "CANCELADO" && (
                           <button
                             onClick={() => setNoteJob(j)}
@@ -3093,7 +3101,7 @@ function JobFormModal({
               <option value="EM_ANDAMENTO">Em Aberto</option>
               <option value="FECHADO">Pago</option>
             </select>
-            <p className="text-[11px] text-text-light mt-1">O valor do contrato agora é preenchido no botão 💰 Pagar.</p>
+            <p className="text-[11px] text-text-light mt-1">O valor do contrato agora é preenchido no botão 🔒 Fechar Navio.</p>
           </div>
         </div>
 
@@ -7514,15 +7522,23 @@ function CostadoTab({
                     </div>
                     {canEdit && (
                       <div className="flex gap-1 items-center" onClick={(e) => e.stopPropagation()}>
-                        {j.status !== "CANCELADO" && (
-                          <button
-                            onClick={() => setPayJob(j)}
-                            className={`text-xs px-2 py-1 rounded ${j.status === "FECHADO" ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-emerald-600 text-white hover:bg-emerald-700"}`}
-                            title="Registrar/editar o pagamento do navio"
-                          >
-                            {j.status === "FECHADO" ? "💰 Pago" : "💰 Pagar"}
-                          </button>
-                        )}
+                        {j.status !== "CANCELADO" && (() => {
+                          const paid = j.status === "FECHADO";
+                          // Fechar só com o navio Concluído — é aí que existe a data
+                          // de pagamento. Sem navio vinculado não tem o que travar.
+                          const shipStatus = shipStatusOf(j);
+                          const canClose = paid || !shipStatus || shipStatus === "CONCLUIDO";
+                          return (
+                            <button
+                              onClick={() => canClose && setPayJob(j)}
+                              disabled={!canClose}
+                              className={`text-xs px-2 py-1 rounded ${paid ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : canClose ? "bg-emerald-600 text-white hover:bg-emerald-700" : "bg-gray-200 text-gray-400 cursor-not-allowed"}`}
+                              title={paid ? "Ver/editar o pagamento do navio" : canClose ? "Fechar o navio: registrar valor e data do pagamento" : "Só navio Concluído pode ser fechado — finalize a operação primeiro"}
+                            >
+                              {paid ? "💰 Pago" : "🔒 Fechar Navio"}
+                            </button>
+                          );
+                        })()}
                         {j.status !== "CANCELADO" && (
                           <button
                             onClick={() => setNoteJob(j)}
