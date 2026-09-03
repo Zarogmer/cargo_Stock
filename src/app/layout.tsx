@@ -18,7 +18,9 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  themeColor: "#1e40af",
+  // Branco = cor do header mobile e do conteúdo; as rotas azuis (login/auth)
+  // sobrescrevem no layout delas pras barras do navegador acompanharem a página.
+  themeColor: "#ffffff",
 };
 
 export default function RootLayout({
