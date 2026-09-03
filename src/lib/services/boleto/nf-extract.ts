@@ -12,6 +12,7 @@
 
 import { extractPdfItems, type PdfItem } from "./pdf";
 import { findLinhaDigitavel, type BoletoParsed } from "./linha-digitavel";
+import { chaveDV, chaveFields } from "./nfe-chave";
 import { ocrPdf } from "./ocr";
 
 export interface NfeDuplicata {
@@ -46,19 +47,7 @@ export interface DocExtract {
   suggestedDescription: string;
 }
 
-// ── Chave de acesso ──────────────────────────────────────────────────────────
-
-// DV (mod 11) da chave de 44 dígitos — valida sobre os 43 primeiros.
-function chaveDV(k43: string): number {
-  let sum = 0;
-  let w = 2;
-  for (let i = k43.length - 1; i >= 0; i--) {
-    sum += Number(k43[i]) * w;
-    w = w === 9 ? 2 : w + 1;
-  }
-  const dv = 11 - (sum % 11);
-  return dv >= 10 ? 0 : dv;
-}
+// ── Chave de acesso (DV e campos em ./nfe-chave, compartilhado com o scanner) ─
 
 // Acha a chave: o DANFE imprime como 11 grupos de 4 dígitos. Pegamos o grupo
 // com modelo válido (55/65); preferimos o de DV correto.
@@ -75,19 +64,6 @@ function findChave(text: string): string | null {
   });
   const dvOk = valid.find((c) => chaveDV(c.slice(0, 43)) === Number(c[43]));
   return dvOk ?? valid[0] ?? null;
-}
-
-function parseChave(c: string): Omit<NfeParsed, "emissao" | "emitenteName" | "valor" | "duplicatas"> {
-  const aa = c.slice(2, 4);
-  const mm = c.slice(4, 6);
-  return {
-    chave: c,
-    cnpjEmitente: c.slice(6, 20),
-    modelo: c.slice(20, 22),
-    serie: String(Number(c.slice(22, 25))),
-    numero: String(Number(c.slice(25, 34))),
-    competencia: `20${aa}-${mm}`,
-  };
 }
 
 // ── Valor total por posição ─────────────────────────────────────────────────
@@ -307,7 +283,7 @@ function extractFromContent(text: string, items: PdfItem[], viaOcr: boolean): Do
   // 2) Nota fiscal? (chave de acesso)
   const chave = findChave(text);
   if (chave) {
-    const base = parseChave(chave);
+    const base = chaveFields(chave);
     const valor = valorPorPosicao(items) ?? valorPorTexto(text);
     const emitenteName = parseEmitente(text);
     const posDups = duplicatasPorPosicao(items);

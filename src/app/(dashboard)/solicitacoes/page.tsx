@@ -12,16 +12,20 @@ import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon, WhatsappIcon } from "@/components/icons";
 import { formatDateTime, formatCurrency, formatQty, parseDecimalBR, buildCodeMap, codeForName } from "@/lib/utils";
 import { ImagePicker } from "@/components/ui/image-picker";
-// Scanner de boleto pela câmera — o mesmo do Contas a Pagar. Aqui ele preenche
-// a Nova Compra (valor, forma de pagamento, vencimento na observação).
+// Scanner de boleto/NF pela câmera — o mesmo do Contas a Pagar, no modo que
+// também lê o CODE-128 do DANFE (chave da NF-e) e o QR da NFC-e. Boleto
+// preenche a Nova Compra com valor/pagamento/vencimento; NF preenche
+// fornecedor (pelo CNPJ do cadastro), descrição e chave.
 // Carregado sob demanda: a lib de leitura de código de barras (zxing) pesa
 // ~127 kB e quase ninguém abre o Controle pra escanear. Com o import estático
 // a página saltava de 136 kB pra 263 kB.
 import dynamic from "next/dynamic";
 import type { BoletoParsed } from "@/lib/services/boleto/linha-digitavel";
+import type { NfeChaveScan } from "@/lib/services/boleto/nfe-chave";
+import type { DocScan } from "@/components/financeiro/boleto-scanner";
 
-const BoletoScannerModal = dynamic(
-  () => import("@/components/financeiro/boleto-scanner").then((m) => m.BoletoScannerModal),
+const DocScannerModal = dynamic(
+  () => import("@/components/financeiro/boleto-scanner").then((m) => m.DocScannerModal),
   { ssr: false },
 );
 
@@ -438,12 +442,14 @@ export default function SolicitacoesPage() {
   const [showPurchaseForm, setShowPurchaseForm] = useState(false);
   const [editPurchase, setEditPurchase] = useState<PurchaseOrder | null>(null);
   const [purchaseFromRequest, setPurchaseFromRequest] = useState<ToolRequest | null>(null);
-  // Abre o form já disparando o seletor de NF (botão "Importar NF" ao lado de Nova Compra).
+  // Abre o form já disparando o seletor de PDF (botão "Importar PDF" ao lado de Nova Compra).
   const [purchaseAutoNf, setPurchaseAutoNf] = useState(false);
-  // Scanner de boleto (câmera) do Controle de Compras. `purchaseScanned` leva o
-  // boleto lido pro formulário, que preenche os campos em branco.
+  // Scanner de boleto/NF (câmera) do Controle de Compras. `purchaseScanned`
+  // leva o boleto lido pro formulário e `purchaseScannedNfe` a chave da NF —
+  // cada um preenche os campos em branco do seu jeito.
   const [scanOpen, setScanOpen] = useState(false);
   const [purchaseScanned, setPurchaseScanned] = useState<BoletoParsed | null>(null);
+  const [purchaseScannedNfe, setPurchaseScannedNfe] = useState<NfeChaveScan | null>(null);
   const [deletePurchase, setDeletePurchase] = useState<PurchaseOrder | null>(null);
   // "Armazenar no Estoque": lança uma solicitação já comprada no estoque do galpão.
   const [stockRequest, setStockRequest] = useState<ToolRequest | null>(null);
@@ -988,9 +994,10 @@ export default function SolicitacoesPage() {
     return card;
   }, [profile, bankAccounts]);
 
-  // Boleto lido pela câmera: abre a Nova Compra já preenchida (ou completa a
-  // que estiver aberta). Mesmo fluxo do "Escanear" do Contas a Pagar.
-  function applyScannedBoleto(boleto: BoletoParsed) {
+  // Documento lido pela câmera (boleto OU NF): abre a Nova Compra já
+  // preenchida (ou completa a que estiver aberta). Boleto segue o fluxo do
+  // "Escanear" do Contas a Pagar; NF preenche fornecedor/descrição/chave.
+  function applyScannedDoc(scan: DocScan) {
     setScanOpen(false);
     if (!showPurchaseForm) {
       setEditPurchase(null);
@@ -999,8 +1006,9 @@ export default function SolicitacoesPage() {
       setShowPurchaseForm(true);
     }
     // Objeto novo a cada leitura — o formulário observa a identidade pra saber
-    // que chegou um boleto novo (escanear duas vezes seguidas tem que aplicar).
-    setPurchaseScanned({ ...boleto });
+    // que chegou uma leitura nova (escanear duas vezes seguidas tem que aplicar).
+    if (scan.kind === "BOLETO") setPurchaseScanned({ ...scan.boleto });
+    else setPurchaseScannedNfe({ ...scan.nfe });
   }
 
   async function handleSavePurchase(
@@ -1488,19 +1496,25 @@ export default function SolicitacoesPage() {
           <div className="flex flex-wrap justify-between items-center gap-3">
             <p className="text-sm text-text-light">Registro das compras realizadas, por mês — inspirado na planilha oficial de compras</p>
             {canManagePurchases && (
-              // Mesmos atalhos do Contas a Pagar: ler o boleto pela câmera ou a
-              // NF em PDF pra não redigitar valor/fornecedor.
+              // Atalhos pra não redigitar: a câmera lê boleto (código de
+              // barras) E nota fiscal (CODE-128 do DANFE / QR da NFC-e); o
+              // import de PDF detecta sozinho se o arquivo é NF ou boleto.
               <div className="flex items-center gap-2 flex-wrap">
                 <Button
                   size="sm"
                   variant="secondary"
                   onClick={() => setScanOpen(true)}
-                  title="Ler o código de barras do boleto com a câmera e abrir a compra já preenchida"
+                  title="Ler com a câmera o código de barras do boleto ou da NF (DANFE), ou o QR code da NFC-e, e abrir a compra já preenchida"
                 >
-                  📷 Escanear
+                  📷 Escanear boleto/NF
                 </Button>
-                <Button size="sm" variant="secondary" onClick={() => { setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(true); setShowPurchaseForm(true); }}>
-                  📄 Importar NF (PDF)
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => { setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(true); setShowPurchaseForm(true); }}
+                  title="Importar o PDF da nota fiscal ou do boleto — o sistema detecta sozinho e preenche a compra"
+                >
+                  📄 Importar PDF (NF/boleto)
                 </Button>
                 <Button size="sm" onClick={() => { setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(false); setShowPurchaseForm(true); }}>
                   <PlusIcon className="w-4 h-4" />Nova Compra
@@ -2008,12 +2022,13 @@ export default function SolicitacoesPage() {
       {/* Purchase Form Modal */}
       <PurchaseFormModal
         open={showPurchaseForm}
-        onClose={() => { setShowPurchaseForm(false); setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(false); setPurchaseScanned(null); }}
+        onClose={() => { setShowPurchaseForm(false); setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(false); setPurchaseScanned(null); setPurchaseScannedNfe(null); }}
         onSave={handleSavePurchase}
         item={editPurchase}
         fromRequest={purchaseFromRequest}
         autoOpenNf={purchaseAutoNf}
         scanned={purchaseScanned}
+        scannedNfe={purchaseScannedNfe}
         onScanRequest={() => setScanOpen(true)}
         suppliers={suppliers}
         ships={ships}
@@ -2023,14 +2038,14 @@ export default function SolicitacoesPage() {
         saving={saving}
       />
 
-      {/* Scanner de boleto (câmera/foto) — preenche a Nova Compra. Só é montado
-          quando abre: assim o chunk do leitor de código de barras só baixa pra
-          quem clica em "Escanear". O componente desliga a câmera ao desmontar. */}
+      {/* Scanner de boleto/NF (câmera/foto) — preenche a Nova Compra. Só é
+          montado quando abre: assim o chunk do leitor de código de barras só
+          baixa pra quem clica em "Escanear". Desliga a câmera ao desmontar. */}
       {scanOpen && (
-        <BoletoScannerModal
+        <DocScannerModal
           open
           onClose={() => setScanOpen(false)}
-          onDetected={applyScannedBoleto}
+          onDetected={applyScannedDoc}
         />
       )}
 
@@ -2634,7 +2649,7 @@ function fmtISODate(iso: string): string {
   return y && m && d ? `${d}/${m}/${y}` : "";
 }
 
-function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenNf, scanned, onScanRequest, suppliers, ships, cards, bankAccounts, onCreateCard, saving }: {
+function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenNf, scanned, scannedNfe, onScanRequest, suppliers, ships, cards, bankAccounts, onCreateCard, saving }: {
   open: boolean; onClose: () => void;
   onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null) => void;
   item: PurchaseOrder | null;
@@ -2642,7 +2657,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   autoOpenNf?: boolean;
   // Boleto lido pela câmera (botão "Escanear"): preenche os campos em branco.
   scanned?: BoletoParsed | null;
-  // Abre o scanner de boleto (fica no nível da página, junto do da tela toda).
+  // Chave de NF lida pela câmera (mesmo botão): fornecedor/descrição/chave.
+  scannedNfe?: NfeChaveScan | null;
+  // Abre o scanner de boleto/NF (fica no nível da página, junto do da tela toda).
   onScanRequest?: () => void;
   suppliers: Supplier[];
   ships: Ship[];
@@ -2687,9 +2704,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   const [newCardClosing, setNewCardClosing] = useState("");
   const [newCardLabel, setNewCardLabel] = useState("");
   const [savingCard, setSavingCard] = useState(false);
-  // Leitura da NF em PDF (pré-preenche os campos, igual ao Contas a Pagar).
-  const [readingNf, setReadingNf] = useState(false);
-  const nfInputRef = useRef<HTMLInputElement>(null);
+  // Leitura de PDF (NF ou boleto — pré-preenche os campos, igual ao Contas a Pagar).
+  const [readingPdf, setReadingPdf] = useState(false);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -2747,10 +2764,10 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     }
   }, [item, fromRequest, open]);
 
-  // "Importar NF" (atalho ao lado de Nova Compra): abre o seletor de arquivo assim
-  // que o form aparece, pra ir direto pra nota fiscal sem um clique a mais.
+  // "Importar PDF" (atalho ao lado de Nova Compra): abre o seletor de arquivo
+  // assim que o form aparece, pra ir direto pro PDF sem um clique a mais.
   useEffect(() => {
-    if (open && autoOpenNf) nfInputRef.current?.click();
+    if (open && autoOpenNf) pdfInputRef.current?.click();
   }, [open, autoOpenNf]);
 
   // Boleto lido pela câmera: preenche o que estiver EM BRANCO (mesma regra do
@@ -2784,17 +2801,37 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     }
   }, [open, scanned]);
 
-  // Lê uma NF em PDF e pré-preenche descrição, valor, fornecedor e observação
-  // (mesmo leitor do Contas a Pagar). Não grava nada — só preenche o form.
-  async function handleReadNf(file: File) {
-    setReadingNf(true);
+  // Chave de NF lida pela câmera (CODE-128 do DANFE ou QR da NFC-e): a chave
+  // identifica fornecedor (CNPJ → cadastro), número/série e competência — o
+  // valor só vem no QR offline da NFC-e; no resto fica pro usuário conferir.
+  // Mesma regra do boleto: só preenche o que estiver em branco.
+  useEffect(() => {
+    if (!open || !scannedNfe) return;
+    const n = scannedNfe;
+    const sup = suppliers.find((s) => s.cnpj && s.cnpj === n.cnpjEmitente);
+    if (sup) setSupplier((prev) => (prev.trim() ? prev : sup.name));
+    setDescription((prev) => (prev.trim() ? prev : `NF ${n.numero}${sup ? ` - ${sup.name}` : ""}`));
+    if (n.valor != null) {
+      const valor = n.valor;
+      setUnitValue((prev) => (prev.trim() ? prev : String(valor).replace(".", ",")));
+      setQuantity((q) => q || "1");
+    }
+    const line = `NF ${n.numero} série ${n.serie} · chave ${n.chave}`;
+    setNotes((prev) => (prev.includes(n.chave) ? prev : prev ? `${prev} · ${line}` : line));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, scannedNfe]);
+
+  // Lê um PDF (nota fiscal OU boleto — o leitor detecta sozinho, mesmo do
+  // Contas a Pagar) e pré-preenche o formulário. Não grava nada.
+  async function handleReadPdf(file: File) {
+    setReadingPdf(true);
     try {
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch("/api/financeiro/contas/analisar-pdf", { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert(data.error || "Erro ao ler a NF");
+        alert(data.error || "Erro ao ler o PDF");
         return;
       }
       const p = data.parsed || {};
@@ -2809,15 +2846,37 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       if (supName) setSupplier((prev) => prev.trim() ? prev : supName);
       if (p.digitable_line) setDigitableLine((prev) => prev.trim() ? prev : p.digitable_line);
       if (p.notes) setNotes((prev) => (prev ? `${prev} · ${p.notes}` : p.notes));
+      if (p.kind === "BOLETO") {
+        // Boleto: já marca a forma de pagamento e leva o vencimento pra
+        // observação (a compra só tem vencimento próprio no FATURADO).
+        setPaymentMethod((prev) => prev || "BOLETO");
+        if (p.due_date) {
+          const line = `Vencimento ${fmtISODate(p.due_date)}`;
+          setNotes((prev) => (prev.includes(line) ? prev : prev ? `${prev} · ${line}` : line));
+        }
+      } else if (p.kind === "NFE") {
+        // NF: a data da compra é a emissão (só em compra nova — editar não
+        // mexe na data já salva)...
+        if (!item && p.emissao) setPurchaseDate(p.emissao);
+        // ...e o quadro FATURA/DUPLICATA vira FATURADO com os vencimentos
+        // preenchidos (cada parcela vira um título no Contas a Pagar).
+        const vencs: string[] = Array.isArray(p.duplicatas)
+          ? p.duplicatas.map((d: { vencimento?: string }) => d?.vencimento).filter((v: unknown): v is string => typeof v === "string" && !!v)
+          : [];
+        if (vencs.length > 0) {
+          setPaymentMethod((prev) => prev || "FATURADO");
+          setPaymentDueDates((prev) => (prev.some((x) => x.trim()) ? prev : vencs));
+        }
+      }
       if (p.scanned) {
         alert("PDF escaneado (sem texto). Confira/preencha os campos à mão.");
       } else if (p.ocr) {
-        alert("NF lida por OCR — confira os campos antes de salvar.");
+        alert("PDF lido por OCR — confira os campos antes de salvar.");
       } else if (p.amount == null) {
-        alert("Li a NF, mas não achei o valor com segurança. Confira e preencha.");
+        alert("Li o documento, mas não achei o valor com segurança. Confira e preencha.");
       }
     } finally {
-      setReadingNf(false);
+      setReadingPdf(false);
     }
   }
 
@@ -2926,38 +2985,48 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
           </div>
         )}
         <ProductLinkField link={link} onLinkChange={setLink} onData={applyPreview} open={open} />
-        {/* Atalhos de leitura: boleto pela câmera e NF em PDF — os dois só
-            preenchem os campos, quem salva é você. */}
+        {/* Atalhos de leitura: câmera (boleto ou NF) e PDF (NF ou boleto) —
+            os dois só preenchem os campos, quem salva é você. */}
         <div className="flex items-center gap-2 flex-wrap">
           {onScanRequest && (
             <button
               type="button"
               onClick={onScanRequest}
               className="bg-gray-100 hover:bg-gray-200 text-text text-xs font-medium px-3 py-1.5 rounded-lg"
-              title="Ler o código de barras do boleto com a câmera"
+              title="Ler com a câmera o código de barras do boleto ou da NF (DANFE), ou o QR code da NFC-e"
             >
-              📷 Escanear boleto
+              📷 Escanear boleto/NF
             </button>
           )}
-          <label className={`inline-flex items-center ${readingNf ? "opacity-50" : "cursor-pointer"}`}>
+          <label className={`inline-flex items-center ${readingPdf ? "opacity-50" : "cursor-pointer"}`}>
             <span className="bg-gray-100 hover:bg-gray-200 text-text text-xs font-medium px-3 py-1.5 rounded-lg">
-              {readingNf ? "Lendo NF..." : "📄 Importar NF (PDF)"}
+              {readingPdf ? "Lendo PDF..." : "📄 Importar PDF (NF/boleto)"}
             </span>
             <input
-              ref={nfInputRef}
+              ref={pdfInputRef}
               type="file"
               accept="application/pdf"
               className="hidden"
-              disabled={readingNf}
+              disabled={readingPdf}
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f) handleReadNf(f);
+                if (f) handleReadPdf(f);
                 e.target.value = "";
               }}
             />
           </label>
           <span className="text-[11px] text-text-light">Preenche os campos sozinho. Revise antes de salvar.</span>
         </div>
+        {/* NF lida pela câmera: o código traz a identificação da nota, mas o
+            valor só vem no QR offline da NFC-e — avisa pra não salvar zerado. */}
+        {scannedNfe && (
+          <div className="bg-sky-50 border border-sky-200 rounded-lg px-3 py-2 text-xs text-sky-800">
+            📷 NF <strong>{scannedNfe.numero}</strong> lida pela câmera.{" "}
+            {scannedNfe.valor == null
+              ? "O código não traz o valor — preencha o valor e a forma de pagamento."
+              : "Confira os campos antes de salvar."}
+          </div>
+        )}
         <div>
           <label className="block text-sm font-medium mb-1">Descrição *</label>
           <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} required

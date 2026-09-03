@@ -45,6 +45,10 @@ export async function POST(request: NextRequest) {
       digitable_line: doc.digitableLine,
       supplier_id: supplierId,
       notes,
+      // NF: emissão e parcelas do quadro FATURA/DUPLICATA — o Controle de
+      // Compras usa pra sugerir a data da compra e o FATURADO com vencimentos.
+      emissao: doc.nfe?.emissao ?? null,
+      duplicatas: doc.nfe?.duplicatas ?? [],
     },
   });
 }

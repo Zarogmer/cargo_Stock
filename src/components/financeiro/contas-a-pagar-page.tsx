@@ -1125,7 +1125,7 @@ export function ContasAPagarPage() {
             </button>
             <label className={`inline-flex items-center ${importingPdf ? "opacity-50" : "cursor-pointer"}`}>
               <span className="bg-gray-100 hover:bg-gray-200 text-text text-sm font-medium px-4 py-2.5 rounded-lg transition">
-                {importingPdf ? "Importando..." : "📄 Importar NF (PDF)"}
+                {importingPdf ? "Importando..." : "📄 Importar PDF (NF/boleto)"}
               </span>
               <input
                 type="file"
