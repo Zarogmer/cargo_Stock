@@ -479,9 +479,9 @@ export default function SolicitacoesPage() {
   const canEditRequests = hasPermission(role, "SOLICITACOES", "edit");
   const canDeleteRequests = hasPermission(role, "SOLICITACOES", "delete");
   // Gerir compras (Registrar Compra, Armazenar no estoque, Nova/editar compra) é
-  // dos papéis de gestão — os mesmos que veem a aba Controle de Compras. Manutenção
-  // tem permissão "create" em SOLICITACOES só pra ABRIR pedidos, então NÃO basta
-  // checar a permissão: separamos pelo COMPRAS_ROLES pra Manutenção só pedir.
+  // dos papéis que veem a aba Controle de Compras (COMPRAS_ROLES) — a lista é a
+  // fonte única, separada da permissão de SOLICITACOES (que só abre pedidos).
+  // 2026-09: Manutenção entrou na lista, então também registra/gere compras.
   const canManagePurchases = COMPRAS_ROLES.includes(role);
 
   const [dbError, setDbError] = useState<string | null>(null);

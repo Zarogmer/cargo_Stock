@@ -241,12 +241,11 @@ export interface NavSubItem {
 }
 
 // Papéis que enxergam "Controle de Compras" (o registro/ledger de compras).
-// Manutenção fica de fora de propósito: o pessoal de manutenção usa a aba
-// Solicitações só pra PEDIR material — quem controla as compras é a gestão.
-// 2026-06: RH foi liberado no Controle (ganhou SOLICITACOES completo), então
-// passa a entrar também aqui.
+// 2026-06: RH foi liberado no Controle (ganhou SOLICITACOES completo).
+// 2026-09: Manutenção entrou também (pedido do Guilherme) — além de pedir
+// material, passa a registrar e gerir compras como os demais papéis.
 // Fonte única: o menu (rbac) e a própria página de Solicitações filtram por isto.
-export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO", "RH"];
+export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO", "RH", "MANUTENCAO"];
 
 // Papéis que enxergam "Lista de Produtos" (catálogo de produtos do Controle).
 // Era exclusivo da Tecnologia; depois Executivo e Financeiro; em 2026-06 o RH
@@ -254,10 +253,11 @@ export const COMPRAS_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNO
 export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "ESTAGIO", "EXECUTIVO", "COMERCIAL", "FINANCEIRO", "RH"];
 
 // Papéis que enxergam "Fornecedores" (cadastro de fornecedores do Controle).
-// Manutenção fica de fora (pedido de 2026-07): solicita material e opera o
-// Embarque/Retorno, mas não gerencia o cadastro de fornecedores/produtos.
+// 2026-09: Manutenção entrou (pedido do Guilherme; revertendo a exclusão de
+// 2026-07) — vê o cadastro/contatos e chama no WhatsApp. Gerenciar o cadastro
+// (novo/editar/excluir) segue com canManageLinks na página, como o RH.
 // Fonte única: o menu (rbac) e a página de Solicitações filtram por isto.
-export const FORNECEDORES_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO", "RH"];
+export const FORNECEDORES_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO", "RH", "MANUTENCAO"];
 
 // Papéis que acessam o módulo bancário do Financeiro (Contas a Pagar,
 // Conciliação Bancária e o Painel financeiro). Dados de
