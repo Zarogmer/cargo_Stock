@@ -2,39 +2,70 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-// Cotação do dólar (AwesomeAPI). Nasceu no Dashboard e virou componente próprio
-// porque o Pagamento de Navios também mostra a cotação — os navios são cobrados
-// em dólar, então o câmbio precisa estar à mão nas duas telas.
+// Cotação do dólar — PTAX do Banco Central (API aberta Olinda). Antes vinha da
+// AwesomeAPI (dólar comercial em tempo real), mas o cliente confere a cotação
+// na página do BC — então o sistema mostra o MESMO número: o fechamento PTAX
+// do último dia útil (sai ~13h10; antes disso vale o do dia anterior).
 //
-// 4 casas decimais: a cotação move na 3ª/4ª casa e arredondar pra 2 escondia a
-// variação que interessa pra fechar o valor do navio (pedido do Guilherme).
+// Nasceu no Dashboard e virou componente próprio porque o Pagamento de Navios
+// também mostra a cotação — os navios são cobrados em dólar, então o câmbio
+// precisa estar à mão nas duas telas.
+//
+// 4 casas decimais: é assim que o BC publica a PTAX.
 export interface DollarQuote {
-  bid: string;
-  ask: string;
-  high: string;
-  low: string;
-  pctChange: string;
-  timestamp: string;
+  compra: string;
+  venda: string;
+  date: string; // dd/mm do dia útil da PTAX exibida
+  pctChange: string; // variação da venda sobre a PTAX do dia útil anterior
 }
 
 const USD_DECIMALS = 4;
 const REFRESH_MS = 5 * 60 * 1000;
+
+// PTAX só existe em dia útil — pede os últimos 10 dias e usa as 2 mais
+// recentes (atual + anterior, pra variação). Datas no formato MM-DD-YYYY.
+function ptaxUrl(): string {
+  const fmt = (d: Date) =>
+    `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}-${d.getFullYear()}`;
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - 10);
+  return (
+    "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/" +
+    "CotacaoDolarPeriodo(dataInicial=@dataInicial,dataFinalCotacao=@dataFinalCotacao)" +
+    `?@dataInicial='${fmt(start)}'&@dataFinalCotacao='${fmt(end)}'` +
+    "&$format=json&$select=cotacaoCompra,cotacaoVenda,dataHoraCotacao"
+  );
+}
+
+interface PtaxRow {
+  cotacaoCompra: number;
+  cotacaoVenda: number;
+  dataHoraCotacao: string; // "2026-09-02 13:02:37.601302"
+}
 
 export function useDollarQuote(): DollarQuote | null {
   const [dollar, setDollar] = useState<DollarQuote | null>(null);
 
   const fetchDollar = useCallback(async () => {
     try {
-      const res = await fetch("https://economia.awesomeapi.com.br/json/last/USD-BRL");
+      const res = await fetch(ptaxUrl(), { cache: "no-store" });
       const data = await res.json();
-      const usd = data.USDBRL;
+      const rows: PtaxRow[] = (data.value ?? [])
+        .slice()
+        .sort((a: PtaxRow, b: PtaxRow) => a.dataHoraCotacao.localeCompare(b.dataHoraCotacao));
+      const last = rows[rows.length - 1];
+      if (!last) return;
+      const prev = rows[rows.length - 2];
+      const pct = prev
+        ? ((last.cotacaoVenda - prev.cotacaoVenda) / prev.cotacaoVenda) * 100
+        : 0;
+      const day = last.dataHoraCotacao.slice(0, 10); // yyyy-mm-dd
       setDollar({
-        bid: parseFloat(usd.bid).toFixed(USD_DECIMALS),
-        ask: parseFloat(usd.ask).toFixed(USD_DECIMALS),
-        high: parseFloat(usd.high).toFixed(USD_DECIMALS),
-        low: parseFloat(usd.low).toFixed(USD_DECIMALS),
-        pctChange: usd.pctChange,
-        timestamp: usd.create_date,
+        compra: last.cotacaoCompra.toFixed(USD_DECIMALS),
+        venda: last.cotacaoVenda.toFixed(USD_DECIMALS),
+        date: `${day.slice(8, 10)}/${day.slice(5, 7)}`,
+        pctChange: pct.toFixed(2),
       });
     } catch {
       console.error("Failed to fetch dollar quote");
@@ -68,9 +99,13 @@ export function DollarTicker({ dollar, size = "lg" }: { dollar: DollarQuote | nu
   return (
     <div className="inline-flex items-baseline gap-3 self-start sm:self-end">
       <div className="flex items-baseline gap-1.5">
-        <span className={`${labelCls} font-semibold uppercase tracking-wider text-text-light`}>USD</span>
-        <span className={`${valueCls} text-text tabular-nums`} title={`Compra R$ ${dollar.bid} · Venda R$ ${dollar.ask}`}>
-          R$ {dollar.bid}
+        <span className={`${labelCls} font-semibold uppercase tracking-wider text-text-light`}>USD PTAX</span>
+        {/* Venda em destaque: é a taxa usada pra converter a cobrança em dólar. */}
+        <span
+          className={`${valueCls} text-text tabular-nums`}
+          title={`PTAX do Banco Central (${dollar.date}) — Compra R$ ${dollar.compra} · Venda R$ ${dollar.venda}`}
+        >
+          R$ {dollar.venda}
         </span>
       </div>
       <span
@@ -82,7 +117,7 @@ export function DollarTicker({ dollar, size = "lg" }: { dollar: DollarQuote | nu
         {Math.abs(pct).toFixed(2)}%
       </span>
       <span className={`hidden md:inline ${labelCls} text-text-light tabular-nums`}>
-        L {dollar.low} · H {dollar.high}
+        {dollar.date} · Compra {dollar.compra}
       </span>
     </div>
   );
