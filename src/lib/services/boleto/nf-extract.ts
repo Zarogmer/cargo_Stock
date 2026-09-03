@@ -21,6 +21,17 @@ export interface NfeDuplicata {
   valor: number | null;
 }
 
+// Linha do quadro DADOS DO PRODUTO/SERVIÇO do DANFE (melhor esforço, por
+// posição — layout varia por emissor; linha sem quantidade E sem unitário é
+// descartada).
+export interface NfeProduto {
+  descricao: string;
+  quantidade: number | null;
+  valorUnit: number | null;
+  valorTotal: number | null; // quantidade × unitário (arredondado)
+  unidade: string | null; // "UN", "KG"...
+}
+
 export interface NfeParsed {
   chave: string; // 44 dígitos
   cnpjEmitente: string; // 14 dígitos
@@ -32,6 +43,7 @@ export interface NfeParsed {
   emitenteName: string | null;
   valor: number | null; // valor total da nota (sugerido)
   duplicatas: NfeDuplicata[]; // quadro FATURA/DUPLICATA (vazio se a NF não fatura)
+  produtos: NfeProduto[]; // itens da nota (vazio quando o layout não deixou ler)
 }
 
 export interface DocExtract {
@@ -166,6 +178,108 @@ function duplicatasPorTexto(text: string): NfeDuplicata[] {
   return dups;
 }
 
+// ── Produtos (quadro DADOS DO PRODUTO/SERVIÇO) ──────────────────────────────
+//
+// POR POSIÇÃO, como o valor total: âncora nos rótulos do cabeçalho da tabela
+// (DESCRIÇÃO, QUANT, VLR/VALOR UNIT...) e leitura das linhas abaixo, casando
+// cada célula pela coluna (x) mais próxima. Layout varia por emissor — linha
+// que não tem quantidade nem unitário legível fica de fora; é sugestão
+// revisável, nunca substitui a conferência.
+
+// Valor unitário BR: 2 a 6 decimais com vírgula ("38,9900", "2,37833").
+function brUnit(s: string): number | null {
+  if (!/^\d{1,3}(?:\.\d{3})*,\d{2,6}$|^\d+,\d{2,6}$/.test(s)) return null;
+  const v = parseFloat(s.replace(/\./g, "").replace(",", "."));
+  return Number.isFinite(v) ? v : null;
+}
+
+// Quantidade BR: aceita também inteiros ("50", "400") e milhar ("1.000").
+function brQty(s: string): number | null {
+  if (!/^\d{1,3}(?:\.\d{3})*(?:,\d{1,6})?$|^\d{1,6}(?:,\d{1,6})?$/.test(s)) return null;
+  const v = parseFloat(s.replace(/\./g, "").replace(",", "."));
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+function produtosPorPosicao(items: PdfItem[]): NfeProduto[] {
+  // Âncora: rótulo DESCRIÇÃO da tabela de itens.
+  const header =
+    items.find((it) => /^DESCRI/i.test(it.s.trim()) && /PRODUTO|SERVI/i.test(it.s)) ||
+    items.find((it) => /^DESCRI[ÇC][ÃA]O/i.test(it.s.trim()));
+  if (!header) return [];
+  const page = items.filter((it) => it.page === header.page);
+  // Rótulos de coluna na MESMA faixa do cabeçalho (vários layouts quebram o
+  // rótulo em duas linhas — "VALOR" em cima, "UNIT"/"UNITARIO" embaixo — por
+  // isso a tolerância de 12pt e os fallbacks só com a 2ª linha).
+  const headerRow = (re: RegExp) =>
+    page.find((it) => Math.abs(it.y - header.y) < 12 && re.test(it.s.trim()));
+  const quantH = headerRow(/^QUANT\.?$/i) || headerRow(/^QUANT(?!IDADE)/i);
+  const unitH =
+    headerRow(/^(VLR|VALOR)\.?\s*UNIT/i) || headerRow(/^UNIT[ÁA]RIO$/i) || headerRow(/^UNIT\.?$/i);
+  const unH = headerRow(/^UN(ID)?\.?$/i);
+  const ncmH = headerRow(/^NCM/i);
+  if (!quantH || !unitH) return [];
+
+  // Fim da tabela: rótulo do quadro seguinte (ou 520pt abaixo do cabeçalho).
+  const bottom = page
+    .filter((it) => it.y < header.y - 4 && /DADOS ADICIONAIS|INFORMA[ÇC][ÕO]ES COMPLEMENTARES|C[ÁA]LCULO DO ISSQN/i.test(it.s))
+    .sort((a, b) => b.y - a.y)[0];
+  const yMin = bottom ? bottom.y + 6 : header.y - 520;
+  const body = page.filter((it) => it.y < header.y - 4 && it.y > yMin);
+
+  // Agrupa em linhas por y (5pt de tolerância — descrição e números da mesma
+  // linha às vezes vêm 2-3pt deslocados).
+  const rows: { y: number; items: PdfItem[] }[] = [];
+  for (const it of body.slice().sort((a, b) => b.y - a.y)) {
+    const row = rows.find((r) => Math.abs(r.y - it.y) < 5);
+    if (row) row.items.push(it);
+    else rows.push({ y: it.y, items: [it] });
+  }
+
+  // Descrição: tudo à esquerda da coluna seguinte (NCM ou QUANT) que não seja
+  // número puro — o código do produto/EAN é numérico e fica de fora sozinho.
+  // Não ancora no x do rótulo DESCRIÇÃO: ele é centralizado e o texto das
+  // linhas começa mais à esquerda.
+  const descEndX = (ncmH ? ncmH.x : quantH.x) - 8;
+  const cell = (row: PdfItem[], x: number, tol: number) =>
+    row
+      .map((it) => ({ it, dx: Math.abs(it.x - x) }))
+      .filter((c) => c.dx < tol)
+      .sort((a, b) => a.dx - b.dx)[0]?.it;
+
+  const out: NfeProduto[] = [];
+  for (const row of rows) {
+    // Quantidade PRIMEIRO e fora dos candidatos a unitário: em colunas
+    // alinhadas à direita a quantidade cai mais perto do rótulo "VALOR
+    // UNITÁRIO" que o próprio unitário.
+    const quantIt = cell(row.items, quantH.x, 40);
+    const unitIt = cell(row.items.filter((it) => it !== quantIt), unitH.x, 45);
+    const valorUnit = unitIt ? brUnit(unitIt.s.trim()) : null;
+    // Unitário é o sinal mais forte de "linha de produto" — sem ele é linha de
+    // continuação (GTIN/EAN, lote) ou cabeçalho de outra coluna.
+    if (valorUnit == null) continue;
+    const quantidade = quantIt ? brQty(quantIt.s.trim()) : null;
+    const descricao = row.items
+      .filter((it) => it.x < descEndX && !/^[\d.,/]+$/.test(it.s.trim()))
+      .sort((a, b) => a.x - b.x)
+      .map((it) => it.s.trim())
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!descricao) continue;
+    const unIt = unH ? cell(row.items, unH.x, 15) : undefined;
+    out.push({
+      descricao: descricao.slice(0, 120),
+      quantidade,
+      valorUnit,
+      valorTotal:
+        quantidade != null ? Math.round(quantidade * valorUnit * 100) / 100 : null,
+      unidade: unIt && /^[A-Za-zÇç]{1,4}\d?$/.test(unIt.s.trim()) ? unIt.s.trim().toUpperCase() : null,
+    });
+    if (out.length >= 40) break;
+  }
+  return out;
+}
+
 // Resumo pro campo Observações — compartilhado pelas rotas de análise/import.
 export function nfeNoteSummary(nfe: NfeParsed): string {
   let s = `NF ${nfe.numero} série ${nfe.serie} · emissão ${nfe.emissao || nfe.competencia} · chave ${nfe.chave}`;
@@ -294,6 +408,7 @@ function extractFromContent(text: string, items: PdfItem[], viaOcr: boolean): Do
       emitenteName,
       valor,
       duplicatas,
+      produtos: produtosPorPosicao(items),
     };
     const nome = emitenteName || formatCnpj(base.cnpjEmitente);
     return {

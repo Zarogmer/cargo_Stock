@@ -2649,6 +2649,32 @@ function fmtISODate(iso: string): string {
   return y && m && d ? `${d}/${m}/${y}` : "";
 }
 
+// Item da NF e payload devolvido pelo analisar-pdf / nfe-lookup (mesmo shape
+// nas duas rotas — o form aplica tudo por um caminho só).
+interface ParsedProduto {
+  descricao: string;
+  quantidade: number | null;
+  valorUnit: number | null;
+  valorTotal: number | null;
+  unidade: string | null;
+}
+interface ParsedDocPayload {
+  kind?: string;
+  scanned?: boolean;
+  ocr?: boolean;
+  description?: string | null;
+  amount?: number | null;
+  due_date?: string | null;
+  payee_name?: string | null;
+  supplier_id?: number | null;
+  digitable_line?: string | null;
+  notes?: string | null;
+  chave?: string | null;
+  emissao?: string | null;
+  duplicatas?: { vencimento?: string }[] | null;
+  produtos?: ParsedProduto[] | null;
+}
+
 function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenNf, scanned, scannedNfe, onScanRequest, suppliers, ships, cards, bankAccounts, onCreateCard, saving }: {
   open: boolean; onClose: () => void;
   onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null) => void;
@@ -2707,6 +2733,10 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   // Leitura de PDF (NF ou boleto — pré-preenche os campos, igual ao Contas a Pagar).
   const [readingPdf, setReadingPdf] = useState(false);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  // Consulta da NF escaneada no sistema (Contas a Pagar) e aviso de NF que já
+  // virou compra no Controle.
+  const [nfeLookup, setNfeLookup] = useState<null | "pending" | "parsed" | "invoice" | "none">(null);
+  const [dupPurchase, setDupPurchase] = useState<{ description: string; purchase_date: string | null; total_value: number } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -2714,6 +2744,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     // Formulário de cartão novo sempre começa fechado/limpo.
     setShowNewCard(false); setNewCardBankId(""); setNewCardLast4(""); setNewCardClosing(""); setNewCardLabel("");
+    // Estados da leitura de NF (consulta/aviso) também zeram a cada abertura.
+    setNfeLookup(null); setDupPurchase(null);
     if (item) {
       setDescription(item.description || "");
       setLink(item.product_url || "");
@@ -2801,16 +2833,150 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     }
   }, [open, scanned]);
 
-  // Chave de NF lida pela câmera (CODE-128 do DANFE ou QR da NFC-e): a chave
-  // identifica fornecedor (CNPJ → cadastro), número/série e competência — o
-  // valor só vem no QR offline da NFC-e; no resto fica pro usuário conferir.
-  // Mesma regra do boleto: só preenche o que estiver em branco.
+  // Aplica um documento analisado (PDF importado, ou a NF que o scanner achou
+  // no Contas a Pagar — a rota nfe-lookup devolve o MESMO shape). Preenche só
+  // o que está em branco; `replaceableDesc` permite trocar a descrição
+  // provisória do scan ("NF 123 - Fornecedor") por uma melhor (o produto).
+  function applyParsedDoc(p: ParsedDocPayload, replaceableDesc?: string) {
+    const produtos = Array.isArray(p.produtos) ? p.produtos : [];
+    // Descrição: NF de UM item usa o próprio produto; senão o resumo da nota.
+    const desc = p.kind === "NFE" && produtos.length === 1 && produtos[0].descricao
+      ? produtos[0].descricao
+      : p.description;
+    if (desc) setDescription((prev) => (!prev.trim() || prev === replaceableDesc ? desc : prev));
+    // Valor: NF de um item cujo total bate com a nota entra como qtd ×
+    // unitário de verdade; qualquer outro caso fica 1 × total (o total é o que
+    // vira título no Contas a Pagar).
+    const single = produtos.length === 1 ? produtos[0] : null;
+    if (
+      p.kind === "NFE" && single && single.quantidade != null && single.valorUnit != null &&
+      p.amount != null && single.valorTotal != null && Math.abs(single.valorTotal - p.amount) < 0.05
+    ) {
+      const q = single.quantidade, u = single.valorUnit;
+      setQuantity((prev) => (prev.trim() && prev !== "1" ? prev : String(q).replace(".", ",")));
+      setUnitValue((prev) => (prev.trim() ? prev : String(u).replace(".", ",")));
+    } else if (p.amount != null) {
+      setUnitValue(String(p.amount).replace(".", ","));
+      setQuantity((q) => q || "1");
+    }
+    // Fornecedor: casa pelo cadastro (supplier_id) ou usa o nome do emitente.
+    const matched = p.supplier_id ? suppliers.find((s) => s.id === p.supplier_id) : null;
+    const supName = matched?.name || p.payee_name;
+    if (supName) setSupplier((prev) => prev.trim() ? prev : supName);
+    if (p.digitable_line) {
+      const dl = p.digitable_line;
+      setDigitableLine((prev) => prev.trim() ? prev : dl);
+    }
+    // Observação: resumo da NF/OCR. Se o scan já deixou a linha básica
+    // ("NF n série s · chave c"), a versão completa (com emissão/parcelas)
+    // SUBSTITUI em vez de duplicar.
+    if (p.notes) {
+      const incoming = p.notes;
+      setNotes((prev) => {
+        if (!prev.trim()) return incoming;
+        if (prev.includes(incoming)) return prev;
+        const chave = p.chave || incoming.match(/chave (\d{44})/)?.[1];
+        if (chave && incoming.includes(chave)) {
+          const basic = new RegExp(`NF [^·]+ série [^·]+ · chave ${chave}`);
+          if (basic.test(prev)) return prev.replace(basic, incoming);
+          if (prev.includes(chave)) return prev; // já tem a chave de outra forma
+        }
+        return `${prev} · ${incoming}`;
+      });
+    }
+    if (p.kind === "BOLETO") {
+      // Boleto: já marca a forma de pagamento e leva o vencimento pra
+      // observação (a compra só tem vencimento próprio no FATURADO).
+      setPaymentMethod((prev) => prev || "BOLETO");
+      if (p.due_date) {
+        const line = `Vencimento ${fmtISODate(p.due_date)}`;
+        setNotes((prev) => (prev.includes(line) ? prev : prev ? `${prev} · ${line}` : line));
+      }
+    } else if (p.kind === "NFE") {
+      // NF: a data da compra é a emissão (só em compra nova — editar não mexe
+      // na data já salva)...
+      if (!item && p.emissao) setPurchaseDate(p.emissao);
+      // ...o quadro FATURA/DUPLICATA vira FATURADO com os vencimentos
+      // preenchidos (cada parcela vira um título no Contas a Pagar)...
+      const vencs = (Array.isArray(p.duplicatas) ? p.duplicatas : [])
+        .map((d) => d?.vencimento)
+        .filter((v): v is string => typeof v === "string" && !!v);
+      if (vencs.length > 0) {
+        setPaymentMethod((prev) => prev || "FATURADO");
+        setPaymentDueDates((prev) => (prev.some((x) => x.trim()) ? prev : vencs));
+      }
+      // ...e a nota com VÁRIOS itens leva a lista pra observação (a compra é
+      // uma linha só — o detalhe fica registrado sem redigitar).
+      if (produtos.length > 1) {
+        const fmtQ = (n: number) => String(n).replace(".", ",");
+        const list = produtos
+          .slice(0, 8)
+          .map((it) =>
+            `${it.quantidade != null ? `${fmtQ(it.quantidade)}${it.unidade ? ` ${it.unidade}` : "x"} ` : ""}${it.descricao}` +
+            (it.valorUnit != null ? ` R$ ${it.valorUnit.toFixed(2).replace(".", ",")}` : ""),
+          )
+          .join(" · ");
+        const line = `Itens: ${list}${produtos.length > 8 ? ` · e mais ${produtos.length - 8}` : ""}`;
+        setNotes((prev) => (prev.includes("Itens: ") ? prev : prev ? `${prev} · ${line}` : line));
+      }
+    }
+  }
+
+  // Consulta a chave no sistema (fornecedor, título do Contas a Pagar com o
+  // PDF anexado, compra já registrada). `full` reprocessa o anexo — usado pelo
+  // scanner, que só tem a chave; o import de PDF chama com full=0 só pra
+  // descobrir duplicidade e forma de pagamento.
+  async function lookupChave(chave: string, full: boolean, replaceableDesc?: string): Promise<void> {
+    try {
+      const res = await fetch(`/api/solicitacoes/nfe-lookup?chave=${chave}&full=${full ? "1" : "0"}`);
+      if (!res.ok) { setNfeLookup((s) => (s === "pending" ? "none" : s)); return; }
+      const data = await res.json();
+      if (data.existing_purchase) setDupPurchase(data.existing_purchase);
+      if (full && data.parsed) {
+        applyParsedDoc(data.parsed as ParsedDocPayload, replaceableDesc);
+        setNfeLookup("parsed");
+      } else if (data.invoice) {
+        const inv = data.invoice as { amount: number; due_date: string | null; payment_method: string | null; supplier_name: string | null };
+        if (full) {
+          if (inv.amount > 0) {
+            setUnitValue((prev) => (prev.trim() ? prev : String(inv.amount).replace(".", ",")));
+            setQuantity((q) => q || "1");
+          }
+          if (inv.supplier_name) {
+            const nm = inv.supplier_name;
+            setSupplier((prev) => (prev.trim() ? prev : nm));
+          }
+          if (inv.due_date) {
+            const line = `Vencimento ${fmtISODate(inv.due_date)}`;
+            setNotes((prev) => (prev.includes(line) ? prev : prev ? `${prev} · ${line}` : line));
+          }
+        }
+        if (inv.payment_method) setPaymentMethod((prev) => prev || inv.payment_method!);
+        setNfeLookup((s) => (s === "pending" ? "invoice" : s));
+      } else {
+        if (full && data.supplier?.name) {
+          const nm = data.supplier.name as string;
+          setSupplier((prev) => (prev.trim() ? prev : nm));
+        }
+        setNfeLookup((s) => (s === "pending" ? "none" : s));
+      }
+    } catch {
+      setNfeLookup((s) => (s === "pending" ? "none" : s));
+    }
+  }
+
+  // Chave de NF lida pela câmera (CODE-128 do DANFE ou QR da NFC-e): o código
+  // de barras carrega SÓ a identificação (CNPJ, número, série, competência) —
+  // valor/produtos não vêm nele. Preenche o básico na hora e busca o resto no
+  // sistema: se a NF já entrou no Contas a Pagar (import por e-mail/PDF), o
+  // PDF anexado é reprocessado e o form recebe valor, data, parcelas e itens.
   useEffect(() => {
     if (!open || !scannedNfe) return;
     const n = scannedNfe;
     const sup = suppliers.find((s) => s.cnpj && s.cnpj === n.cnpjEmitente);
     if (sup) setSupplier((prev) => (prev.trim() ? prev : sup.name));
-    setDescription((prev) => (prev.trim() ? prev : `NF ${n.numero}${sup ? ` - ${sup.name}` : ""}`));
+    const basicDesc = `NF ${n.numero}${sup ? ` - ${sup.name}` : ""}`;
+    setDescription((prev) => (prev.trim() ? prev : basicDesc));
     if (n.valor != null) {
       const valor = n.valor;
       setUnitValue((prev) => (prev.trim() ? prev : String(valor).replace(".", ",")));
@@ -2818,6 +2984,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     }
     const line = `NF ${n.numero} série ${n.serie} · chave ${n.chave}`;
     setNotes((prev) => (prev.includes(n.chave) ? prev : prev ? `${prev} · ${line}` : line));
+    setDupPurchase(null);
+    setNfeLookup("pending");
+    lookupChave(n.chave, true, basicDesc);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, scannedNfe]);
 
@@ -2834,39 +3003,12 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
         alert(data.error || "Erro ao ler o PDF");
         return;
       }
-      const p = data.parsed || {};
-      if (p.description) setDescription((prev) => prev.trim() ? prev : p.description);
-      if (p.amount != null) {
-        setUnitValue(String(p.amount).replace(".", ","));
-        setQuantity((q) => q || "1");
-      }
-      // Fornecedor: casa pelo cadastro (supplier_id) ou usa o nome do emitente.
-      const matched = p.supplier_id ? suppliers.find((s) => s.id === p.supplier_id) : null;
-      const supName = matched?.name || p.payee_name;
-      if (supName) setSupplier((prev) => prev.trim() ? prev : supName);
-      if (p.digitable_line) setDigitableLine((prev) => prev.trim() ? prev : p.digitable_line);
-      if (p.notes) setNotes((prev) => (prev ? `${prev} · ${p.notes}` : p.notes));
-      if (p.kind === "BOLETO") {
-        // Boleto: já marca a forma de pagamento e leva o vencimento pra
-        // observação (a compra só tem vencimento próprio no FATURADO).
-        setPaymentMethod((prev) => prev || "BOLETO");
-        if (p.due_date) {
-          const line = `Vencimento ${fmtISODate(p.due_date)}`;
-          setNotes((prev) => (prev.includes(line) ? prev : prev ? `${prev} · ${line}` : line));
-        }
-      } else if (p.kind === "NFE") {
-        // NF: a data da compra é a emissão (só em compra nova — editar não
-        // mexe na data já salva)...
-        if (!item && p.emissao) setPurchaseDate(p.emissao);
-        // ...e o quadro FATURA/DUPLICATA vira FATURADO com os vencimentos
-        // preenchidos (cada parcela vira um título no Contas a Pagar).
-        const vencs: string[] = Array.isArray(p.duplicatas)
-          ? p.duplicatas.map((d: { vencimento?: string }) => d?.vencimento).filter((v: unknown): v is string => typeof v === "string" && !!v)
-          : [];
-        if (vencs.length > 0) {
-          setPaymentMethod((prev) => prev || "FATURADO");
-          setPaymentDueDates((prev) => (prev.some((x) => x.trim()) ? prev : vencs));
-        }
+      const p = (data.parsed || {}) as ParsedDocPayload;
+      applyParsedDoc(p);
+      // NF: confere no sistema se ela já virou compra/título (só aviso).
+      if (p.kind === "NFE" && p.chave) {
+        setDupPurchase(null);
+        lookupChave(p.chave, false);
       }
       if (p.scanned) {
         alert("PDF escaneado (sem texto). Confira/preencha os campos à mão.");
@@ -3017,14 +3159,29 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
           </label>
           <span className="text-[11px] text-text-light">Preenche os campos sozinho. Revise antes de salvar.</span>
         </div>
-        {/* NF lida pela câmera: o código traz a identificação da nota, mas o
-            valor só vem no QR offline da NFC-e — avisa pra não salvar zerado. */}
+        {/* NF lida pela câmera: o código de barras traz SÓ a identificação —
+            o resto vem do cruzamento com o Contas a Pagar (nfe-lookup). */}
         {scannedNfe && (
           <div className="bg-sky-50 border border-sky-200 rounded-lg px-3 py-2 text-xs text-sky-800">
             📷 NF <strong>{scannedNfe.numero}</strong> lida pela câmera.{" "}
-            {scannedNfe.valor == null
-              ? "O código não traz o valor — preencha o valor e a forma de pagamento."
-              : "Confira os campos antes de salvar."}
+            {nfeLookup === "pending"
+              ? "Buscando esta NF no sistema…"
+              : nfeLookup === "parsed"
+                ? "Encontrei a nota no Contas a Pagar: valor, data, parcelas e itens vieram do PDF anexado lá — revise antes de salvar."
+                : nfeLookup === "invoice"
+                  ? "Encontrei o título desta NF no Contas a Pagar — valor preenchido de lá; revise antes de salvar."
+                  : scannedNfe.valor == null
+                    ? "O código de barras só traz a identificação da nota — preencha valor e forma de pagamento, ou use o Importar PDF."
+                    : "Confira os campos antes de salvar."}
+          </div>
+        )}
+        {/* NF que já virou compra no Controle — só avisa, quem decide é você. */}
+        {dupPurchase && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
+            ⚠️ Esta NF já tem compra registrada: “{dupPurchase.description}”
+            {dupPurchase.purchase_date ? ` em ${fmtISODate(dupPurchase.purchase_date)}` : ""}
+            {dupPurchase.total_value ? ` (${formatCurrency(dupPurchase.total_value)})` : ""}.
+            Salvar de novo cria uma compra duplicada.
           </div>
         )}
         <div>
