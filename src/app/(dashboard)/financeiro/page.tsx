@@ -800,12 +800,13 @@ export default function FinanceiroPage() {
 
       {/* Filtro de período/porto/cliente + KPIs — dirigem as listas de pagamento
           de navios. As abas que têm dados/filtros próprios (Controle, Relatório
-          de Vales, Demonstração) não usam, então some nelas.
+          de Vales, Demonstração) não usam, então some nelas — e Pagamentos e
+          Valores (funcoes) também não: é só o catálogo de funções/valores.
           Design: cartão destacado (borda/gradiente azul), um select por campo
           com rótulo próprio; campo ativo fica azul e o contador mostra na hora
           quantos navios sobram no recorte. Porto/cliente caem no cadastro do
           navio quando o job não tem (jobPort/jobClient). */}
-      {!["controle", "vales", "demonstracao"].includes(initialTab) && (<>
+      {!["funcoes", "controle", "vales", "demonstracao"].includes(initialTab) && (<>
       <div className="rounded-xl border border-primary/25 bg-gradient-to-r from-blue-50/80 via-card to-card shadow-sm p-3">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
           <span className="text-sm font-bold text-text">🔎 Filtrar navios</span>

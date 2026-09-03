@@ -5,4 +5,4 @@
 //   filtro só porque não tem navio na lista atual.
 // Valor novo digitado num navio vira opção em todo lugar assim que salvo.
 export const DEFAULT_PORTS = ["Santos", "Paranaguá", "São Francisco do Sul"];
-export const DEFAULT_CLIENTS = ["Deep", "Transatlântica", "Continental", "Wilson"];
+export const DEFAULT_CLIENTS = ["Deep", "Transatlântica", "Continental", "Wilson Sons"];

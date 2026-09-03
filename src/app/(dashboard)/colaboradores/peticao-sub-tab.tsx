@@ -23,7 +23,7 @@ interface Ship {
 
 // Sementes de agência = mesmos clientes-semente da aba Navios (DEFAULT_CLIENTS),
 // pra a lista abrir com as opções conhecidas mesmo sem navio cadastrado.
-const DEFAULT_AGENCIES = ["Deep", "Transatlântica", "Continental", "Wilson"];
+const DEFAULT_AGENCIES = ["Deep", "Transatlântica", "Continental", "Wilson Sons"];
 
 // Navios que ainda aparecem na sugestão do campo Navio: só os no ciclo de vida
 // ativo (Agendado / Em Operação). Finalizados e cancelados ficam de fora.
