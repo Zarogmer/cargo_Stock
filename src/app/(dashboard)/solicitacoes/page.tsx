@@ -22,6 +22,7 @@ import { ImagePicker } from "@/components/ui/image-picker";
 import dynamic from "next/dynamic";
 import type { BoletoParsed } from "@/lib/services/boleto/linha-digitavel";
 import type { NfeChaveScan } from "@/lib/services/boleto/nfe-chave";
+import { formatCnpj } from "@/lib/services/boleto/cnpj-receita";
 import type { DocScan } from "@/components/financeiro/boleto-scanner";
 
 const DocScannerModal = dynamic(
@@ -2737,6 +2738,10 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   // virou compra no Controle.
   const [nfeLookup, setNfeLookup] = useState<null | "pending" | "parsed" | "invoice" | "none">(null);
   const [dupPurchase, setDupPurchase] = useState<{ description: string; purchase_date: string | null; total_value: number } | null>(null);
+  // Fornecedor descoberto pelo CNPJ da chave escaneada — e de onde ele veio
+  // (cadastro; criado agora pela Receita; CNPJ vinculado a um cadastro sem
+  // CNPJ; ou só identificado na Receita, sem gravar).
+  const [scanSupplier, setScanSupplier] = useState<{ name: string; status: "cadastro" | "novo" | "vinculado" | "receita" } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -2745,7 +2750,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     // Formulário de cartão novo sempre começa fechado/limpo.
     setShowNewCard(false); setNewCardBankId(""); setNewCardLast4(""); setNewCardClosing(""); setNewCardLabel("");
     // Estados da leitura de NF (consulta/aviso) também zeram a cada abertura.
-    setNfeLookup(null); setDupPurchase(null);
+    setNfeLookup(null); setDupPurchase(null); setScanSupplier(null);
     if (item) {
       setDescription(item.description || "");
       setLink(item.product_url || "");
@@ -2877,7 +2882,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
         if (prev.includes(incoming)) return prev;
         const chave = p.chave || incoming.match(/chave (\d{44})/)?.[1];
         if (chave && incoming.includes(chave)) {
-          const basic = new RegExp(`NF [^·]+ série [^·]+ · chave ${chave}`);
+          // Linha básica do scan (pode ter emissão/emitente entre a série e a
+          // chave) — a versão completa do PDF substitui, sem duplicar.
+          const basic = new RegExp(`NF [^·]+ série [^·]+(?: · emissão [^·]+)?(?: · emitente [^·]+)? · chave ${chave}`);
           if (basic.test(prev)) return prev.replace(basic, incoming);
           if (prev.includes(chave)) return prev; // já tem a chave de outra forma
         }
@@ -2954,9 +2961,22 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
         if (inv.payment_method) setPaymentMethod((prev) => prev || inv.payment_method!);
         setNfeLookup((s) => (s === "pending" ? "invoice" : s));
       } else {
-        if (full && data.supplier?.name) {
-          const nm = data.supplier.name as string;
-          setSupplier((prev) => (prev.trim() ? prev : nm));
+        // NF não está no sistema. O fornecedor ainda pode vir: do cadastro
+        // (CNPJ já vinculado), da Receita com cadastro/vínculo automático
+        // (supplier.created/linked) ou só como dado da Receita (ambíguo).
+        const supFromServer = (data.supplier ?? null) as { name: string; created?: boolean; linked?: boolean } | null;
+        const rec = (data.receita ?? null) as { razao: string; fantasia: string | null } | null;
+        const supName = supFromServer?.name || rec?.fantasia || rec?.razao || null;
+        if (full && supName) {
+          setSupplier((prev) => (prev.trim() ? prev : supName));
+          // A descrição provisória do scan ("NF 123") ganha o fornecedor.
+          if (replaceableDesc) {
+            setDescription((prev) => (prev === replaceableDesc && !prev.includes(" - ") ? `${prev} - ${supName}` : prev));
+          }
+          setScanSupplier({
+            name: supName,
+            status: supFromServer?.created ? "novo" : supFromServer?.linked ? "vinculado" : supFromServer ? "cadastro" : "receita",
+          });
         }
         setNfeLookup((s) => (s === "pending" ? "none" : s));
       }
@@ -2975,6 +2995,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     const n = scannedNfe;
     const sup = suppliers.find((s) => s.cnpj && s.cnpj === n.cnpjEmitente);
     if (sup) setSupplier((prev) => (prev.trim() ? prev : sup.name));
+    setScanSupplier(sup ? { name: sup.name, status: "cadastro" } : null);
     const basicDesc = `NF ${n.numero}${sup ? ` - ${sup.name}` : ""}`;
     setDescription((prev) => (prev.trim() ? prev : basicDesc));
     if (n.valor != null) {
@@ -2982,7 +3003,10 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       setUnitValue((prev) => (prev.trim() ? prev : String(valor).replace(".", ",")));
       setQuantity((q) => q || "1");
     }
-    const line = `NF ${n.numero} série ${n.serie} · chave ${n.chave}`;
+    // Tudo que a chave carrega vai pra observação: número/série, competência
+    // de emissão (AAMM da chave), CNPJ do emitente e a própria chave.
+    const [compY, compM] = n.competencia.split("-");
+    const line = `NF ${n.numero} série ${n.serie} · emissão ${compM}/${compY} · emitente CNPJ ${formatCnpj(n.cnpjEmitente)} · chave ${n.chave}`;
     setNotes((prev) => (prev.includes(n.chave) ? prev : prev ? `${prev} · ${line}` : line));
     setDupPurchase(null);
     setNfeLookup("pending");
@@ -3173,6 +3197,18 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
                   : scannedNfe.valor == null
                     ? "O código de barras só traz a identificação da nota — preencha valor e forma de pagamento, ou use o Importar PDF."
                     : "Confira os campos antes de salvar."}
+            {scanSupplier && (
+              <>
+                {" "}Fornecedor: <strong>{scanSupplier.name}</strong>
+                {scanSupplier.status === "novo"
+                  ? " — cadastrado agora pelo CNPJ da nota (Receita Federal)."
+                  : scanSupplier.status === "vinculado"
+                    ? " — CNPJ da nota vinculado a este cadastro."
+                    : scanSupplier.status === "receita"
+                      ? " — identificado na Receita Federal."
+                      : " (cadastro de Fornecedores)."}
+              </>
+            )}
           </div>
         )}
         {/* NF que já virou compra no Controle — só avisa, quem decide é você. */}
