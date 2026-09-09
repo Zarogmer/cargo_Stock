@@ -20,8 +20,8 @@ export function ShipSelector({
   ships: Ship[];
   selectedShip: string;
   onSelect: (id: string) => void;
-  // Opcionais: quando passados, mostra o toggle "Ver navios finalizados" pra
-  // consultar escalações antigas (navios CONCLUIDO/CANCELADO).
+  // Opcionais: quando passados, mostra o toggle "Mostrar concluídos" pra
+  // consultar escalações antigas (a lista vira só os navios CONCLUIDO).
   showFinished?: boolean;
   onToggleFinished?: (v: boolean) => void;
 }) {
@@ -72,7 +72,7 @@ export function ShipSelector({
               onChange={(e) => onToggleFinished(e.target.checked)}
               className="w-3.5 h-3.5 accent-primary"
             />
-            Ver navios finalizados
+            Mostrar concluídos
           </label>
         )}
       </div>
@@ -158,7 +158,7 @@ export function ShipSelector({
             )}
           </div>
           <div className="px-3 py-2 bg-gray-50 border-t border-border text-[10px] text-text-light text-center">
-            {ships.length} navio(s) {showFinished ? "(inclui finalizados)" : "(pendentes)"}
+            {ships.length} navio(s) {showFinished ? "concluído(s)" : "em operação"}
           </div>
         </div>
       )}

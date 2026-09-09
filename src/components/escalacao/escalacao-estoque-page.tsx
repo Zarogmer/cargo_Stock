@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
@@ -145,10 +145,9 @@ export function EscalacaoEstoquePage() {
 
   const [ships, setShips] = useState<Ship[]>([]);
   const [selectedShip, setSelectedShip] = useState<string>("");
-  // Mostrar navios finalizados no seletor — igual à aba Escalação. Por padrão
-  // só os pendentes: falta Embarque ou falta Retorno (mesmo que o usuário já
-  // tenha fechado o navio na aba Navios). Lista do mais novo pro mais antigo
-  // (sortShipsNewestFirst): o navio da vez fica em cima, sem rolar até o fim.
+  // "Mostrar concluídos" no seletor — igual à aba Escalação. Desligado: só os
+  // navios em operação; ligado: só os concluídos (regra em visibleShips). Lista
+  // do mais novo pro mais antigo (sortShipsNewestFirst): o navio da vez em cima.
   const [showFinished, setShowFinished] = useState(false);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [kitItems, setKitItems] = useState<KitItem[]>([]);
@@ -218,30 +217,30 @@ export function EscalacaoEstoquePage() {
 
   useEffect(() => { loadData(); }, [loadData, pathname]);
 
-  // Navio "ativo" = ainda em andamento (Em Operação; AGENDADO é legado).
-  // Finalizados (Concluído / Cancelado) só aparecem com "mostrar finalizados".
+  // Regra do seletor: desligado, SÓ os navios em operação (AGENDADO é legado e
+  // conta como em operação); "Mostrar concluídos" liga e a lista vira SÓ os
+  // concluídos. Cancelado não entra em nenhuma. Costado fica de fora — não tem
+  // kit de material (tem aba própria). Navio concluído que ainda não teve o
+  // Retorno conferido continua acessível pelo toggle (o Retorno segue aberto).
   const isActiveShip = (s: Ship) => s.status === "AGENDADO" || s.status === "EM_OPERACAO";
-  // Esta aba é o "tempo da Manutenção": o navio entra aqui assim que é criado
-  // e só sai quando o ciclo de material fecha (Embarque feito + Retorno
-  // confirmado) — não importa se o usuário já fechou o navio na aba Navios.
-  // Concluído sem Retorno segue pendente até a conferência. Costado e navio
-  // sem equipe ficam de fora — não têm kit de material.
-  const shipHasReturn = (shipId: string) => returns.some((r) => r.ship_id === shipId);
   const isCostadoShip = (s: Ship) => (s.services || []).includes("COSTADO");
-  const isPendingShip = (s: Ship) => s.status !== "CANCELADO"
-    && !isCostadoShip(s)
-    && (isActiveShip(s) || !!s.assigned_team)
-    && (!s.embarked_at || !shipHasReturn(s.id));
-  const visibleShips = showFinished ? ships : ships.filter(isPendingShip);
+  const shipHasReturn = (shipId: string) => returns.some((r) => r.ship_id === shipId);
+  const visibleShips = useMemo(
+    () => ships.filter((s) => !isCostadoShip(s) && (showFinished ? s.status === "CONCLUIDO" : isActiveShip(s))),
+    [ships, showFinished],
+  );
 
+  // Seleciona o 1º navio visível (o mais novo); se o selecionado saiu da lista
+  // (trocou o toggle), cai pro 1º visível. Lista vazia limpa a seleção.
   useEffect(() => {
-    // Auto-seleciona o 1º navio pendente (não um finalizado que veio junto na query).
-    if (!selectedShip) {
-      const first = ships.find(isPendingShip) || ships[0];
-      if (first) setSelectedShip(first.id);
+    if (visibleShips.length === 0) {
+      if (selectedShip) setSelectedShip("");
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ships, returns, selectedShip]);
+    if (!selectedShip || !visibleShips.some((s) => s.id === selectedShip)) {
+      setSelectedShip(visibleShips[0].id);
+    }
+  }, [visibleShips, selectedShip]);
 
   const currentShip = ships.find((s) => s.id === selectedShip);
   // A equipe vem do cadastro do navio (aba Navios) — não se escolhe aqui.
@@ -1095,7 +1094,7 @@ export function EscalacaoEstoquePage() {
 
       // O retorno NÃO fecha mais o navio: o fechamento (data de saída,
       // Financeiro, tripulação) é feito pelo usuário na aba Navios, no tempo
-      // dele. Aqui o ciclo de material se encerra — o navio sai desta lista.
+      // dele. Aqui o ciclo de material se encerra.
       if (currentShip.status !== "CONCLUIDO") {
         autoNote += " ℹ️ O navio segue aberto — o fechamento é feito na aba Navios.";
       }
@@ -1989,13 +1988,13 @@ function RetornoSection({
 
         {concluded ? (
           <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-            ✅ Navio finalizado — o retorno já foi fechado (aparece em &ldquo;mostrar finalizados&rdquo;).
+            ✅ Navio concluído — o retorno já foi fechado (aparece em &ldquo;Mostrar concluídos&rdquo;).
             Os campos ficam só pra consulta.
           </p>
         ) : closedPendingReturn ? (
           <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
             🏁 Navio já fechado (<strong>Concluído</strong>) — falta o <strong>Retorno</strong> do material.
-            Confira abaixo e confirme: o resumo vai pro WhatsApp normalmente e o navio sai desta lista.
+            Confira abaixo e confirme: o resumo vai pro WhatsApp normalmente.
           </p>
         ) : editing && (
           <p className="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
@@ -2294,7 +2293,7 @@ function ShipSelector({
           </div>
           <div className="px-3 py-2 bg-gray-50 border-t border-border flex items-center justify-between gap-2">
             <span className="text-[10px] text-text-light">
-              {ships.length} navio(s) {showFinished ? "(inclui finalizados)" : "(Agendado / Em Operação / aguardando Retorno)"}
+              {ships.length} navio(s) {showFinished ? "concluído(s)" : "em operação"}
             </span>
             <label className="flex items-center gap-1.5 text-[11px] text-text-light cursor-pointer select-none">
               <input
@@ -2303,7 +2302,7 @@ function ShipSelector({
                 onChange={(e) => onToggleFinished(e.target.checked)}
                 className="w-3.5 h-3.5"
               />
-              Mostrar finalizados
+              Mostrar concluídos
             </label>
           </div>
         </div>

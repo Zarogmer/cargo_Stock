@@ -68,7 +68,7 @@ export function EscalacaoCostadoPage() {
 
   const [ships, setShips] = useState<Ship[]>([]);
   const [selectedShip, setSelectedShip] = useState<string>("");
-  // Ver navios finalizados (CONCLUIDO/CANCELADO) pra consultar escalações antigas.
+  // "Mostrar concluídos": troca a lista pelos navios CONCLUIDO (escalações antigas).
   const [showFinished, setShowFinished] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string>(todayISO());
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -109,10 +109,11 @@ export function EscalacaoCostadoPage() {
 
   useEffect(() => { loadData(); }, [loadData, pathname]);
 
-  // Navios finalizados só entram no seletor com o toggle ligado.
+  // Desligado: só os navios em operação (AGENDADO é legado e conta como em
+  // operação). "Mostrar concluídos": só os concluídos. Cancelado não aparece.
   const isActiveShip = (s: Ship) => s.status === "AGENDADO" || s.status === "EM_OPERACAO";
   const visibleShips = useMemo(
-    () => (showFinished ? ships : ships.filter(isActiveShip)),
+    () => ships.filter((s) => (showFinished ? s.status === "CONCLUIDO" : isActiveShip(s))),
     [ships, showFinished],
   );
 

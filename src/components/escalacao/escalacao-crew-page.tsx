@@ -52,8 +52,8 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
 
   const [ships, setShips] = useState<Ship[]>([]);
   const [selectedShip, setSelectedShip] = useState<string>("");
-  // Mostrar navios finalizados (CONCLUIDO/CANCELADO) pra consultar escalações
-  // antigas. Por padrão off — o dia a dia é só navio agendado/em operação.
+  // "Mostrar concluídos": troca a lista pelos navios CONCLUIDO pra consultar
+  // escalações antigas. Por padrão off — o dia a dia é só navio em operação.
   const [showFinished, setShowFinished] = useState(false);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [functions, setFunctions] = useState<JobFunction[]>([]);
@@ -96,10 +96,11 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
 
   useEffect(() => { loadData(); }, [loadData, pathname]);
 
-  // Navios finalizados só entram no seletor com o toggle ligado.
+  // Desligado: só os navios em operação (AGENDADO é legado e conta como em
+  // operação). "Mostrar concluídos": só os concluídos. Cancelado não aparece.
   const isActiveShip = (s: Ship) => s.status === "AGENDADO" || s.status === "EM_OPERACAO";
   const visibleShips = useMemo(
-    () => (showFinished ? ships : ships.filter(isActiveShip)),
+    () => ships.filter((s) => (showFinished ? s.status === "CONCLUIDO" : isActiveShip(s))),
     [ships, showFinished],
   );
 
@@ -241,7 +242,7 @@ function ShipSelector({
         <label className="block text-xs font-semibold text-text-light uppercase tracking-wider">
           🚢 Navio
         </label>
-        {/* Consultar escalações antigas: traz navios finalizados pro seletor. */}
+        {/* Consultar escalações antigas: troca a lista pelos navios concluídos. */}
         <label className="flex items-center gap-1.5 text-xs text-text-light cursor-pointer">
           <input
             type="checkbox"
@@ -249,7 +250,7 @@ function ShipSelector({
             onChange={(e) => onToggleFinished(e.target.checked)}
             className="w-3.5 h-3.5 accent-primary"
           />
-          Ver navios finalizados
+          Mostrar concluídos
         </label>
       </div>
 
@@ -352,7 +353,7 @@ function ShipSelector({
             )}
           </div>
           <div className="px-3 py-2 bg-gray-50 border-t border-border text-[10px] text-text-light text-center">
-            {ships.length} navio(s) {showFinished ? "(inclui finalizados)" : "(Agendado / Em Operação)"}
+            {ships.length} navio(s) {showFinished ? "concluído(s)" : "em operação"}
           </div>
         </div>
       )}
