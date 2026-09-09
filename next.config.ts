@@ -15,6 +15,21 @@ const nextConfig: NextConfig = {
     ignoreDuringBuilds: true,
   },
 
+  // www.cargostock.app → cargostock.app: o sistema vive num host só. AUTH_URL e
+  // os cookies do login são do domínio sem www, então no www o login não
+  // "pegaria". O Railway precisa ter o www cadastrado como domínio custom pra
+  // esta regra chegar a rodar (senão ele responde 404 antes do app).
+  async redirects() {
+    return [
+      {
+        source: "/:path*",
+        has: [{ type: "host", value: "www.cargostock.app" }],
+        destination: "https://cargostock.app/:path*",
+        permanent: true,
+      },
+    ];
+  },
+
   // PWA headers
   async headers() {
     return [
