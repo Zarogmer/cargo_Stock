@@ -90,7 +90,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         </button>
 
         {/* Top bar (mobile) */}
-        <header className="md:hidden flex items-center justify-between bg-white border-b border-border px-4 py-3 sticky top-0 z-30 shadow-sm">
+        <header className="md:hidden flex items-center justify-between bg-white border-b border-border px-4 pb-3 pt-safe-3 sticky top-0 z-30 shadow-sm">
           <button
             onClick={() => setSidebarOpen(true)}
             className="p-2 hover:bg-gray-100 rounded-lg transition"
@@ -107,7 +107,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         </header>
 
         {/* Main content */}
-        <main className="flex-1 p-4 md:p-8 overflow-y-auto animate-fade-in">
+        <main className="flex-1 p-4 md:p-8 pb-safe-4 md:pb-safe-8 overflow-y-auto animate-fade-in">
           {children}
         </main>
       </div>

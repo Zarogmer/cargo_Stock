@@ -2072,7 +2072,7 @@ export default function SolicitacoesPage() {
       {/* Image Lightbox */}
       {lightboxImage && (
         <div
-          className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4"
+          className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-safe-4"
           onClick={() => setLightboxImage(null)}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}

@@ -68,7 +68,7 @@ export function ChangePasswordModal({ open, onClose }: ChangePasswordModalProps)
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-safe-4"
       onClick={onClose}
     >
       <div

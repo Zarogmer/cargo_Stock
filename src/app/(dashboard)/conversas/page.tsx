@@ -300,7 +300,7 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
   return (
     <div
       onClick={onClose}
-      className="fixed inset-0 z-[100] bg-black/85 flex items-center justify-center p-4 cursor-zoom-out"
+      className="fixed inset-0 z-[100] bg-black/85 flex items-center justify-center p-safe-4 cursor-zoom-out"
       role="dialog"
       aria-label="Imagem ampliada"
     >
@@ -1180,7 +1180,7 @@ export default function ConversasPage() {
         loading={deleting}
       />
       {deleteErr && (
-        <p className="fixed bottom-4 right-4 bg-red-600 text-white text-sm px-3 py-2 rounded shadow-lg">
+        <p className="fixed bottom-safe-4 right-4 bg-red-600 text-white text-sm px-3 py-2 rounded shadow-lg">
           {deleteErr}
         </p>
       )}
@@ -1200,7 +1200,7 @@ export default function ConversasPage() {
         loading={deletingMsg}
       />
       {msgDeleteErr && (
-        <p className="fixed bottom-4 right-4 bg-red-600 text-white text-sm px-3 py-2 rounded shadow-lg z-[60] max-w-sm">
+        <p className="fixed bottom-safe-4 right-4 bg-red-600 text-white text-sm px-3 py-2 rounded shadow-lg z-[60] max-w-sm">
           {msgDeleteErr}
         </p>
       )}

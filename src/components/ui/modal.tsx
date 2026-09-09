@@ -35,9 +35,9 @@ export function Modal({
     // Clicar no fundo (overlay) NÃO fecha o modal de propósito: evita perder o
     // que foi digitado num clique fora sem querer. Fecha só pelo botão "Cancelar"
     // ou pelo X do cabeçalho — ações deliberadas.
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-safe-4">
       <div
-        className={`bg-white rounded-2xl shadow-xl w-full ${maxWidth} max-h-[90vh] flex flex-col animate-in fade-in zoom-in-95 duration-200`}
+        className={`bg-white rounded-2xl shadow-xl w-full ${maxWidth} max-h-[min(90vh,100%)] flex flex-col animate-in fade-in zoom-in-95 duration-200`}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">

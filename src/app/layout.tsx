@@ -18,6 +18,10 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
+  // cover: a pagina passa por baixo das barras de vidro do Safari (iOS 26) e da
+  // barra de gestos do Android; quem precisa se afastar delas usa as classes
+  // *-safe (env(safe-area-inset-*)) do globals.css.
+  viewportFit: "cover",
   // Branco = cor do header mobile e do conteúdo; as rotas azuis (login/auth)
   // sobrescrevem no layout delas pras barras do navegador acompanharem a página.
   themeColor: "#ffffff",

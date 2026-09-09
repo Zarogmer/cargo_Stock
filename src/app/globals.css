@@ -76,3 +76,23 @@ body {
 .animate-fade-in {
   animation: fadeIn 0.3s ease-out;
 }
+
+/* ---- Barras do navegador/sistema por cima da pagina (viewport-fit=cover) ----
+   No iOS 26 o Safari desenha topo e rodape como vidro translucido POR CIMA do
+   conteudo (e o Android novo faz o mesmo com a barra de gestos). Com
+   viewport-fit=cover a pagina passa por baixo delas — a gaveta do menu pinta
+   topo/rodape de azul — e env(safe-area-inset-*) diz quanto recuar pra nada
+   ficar escondido atras da barra. No desktop e em navegadores sem barra por
+   cima, env() vale 0 e as classes nao mudam nada. */
+@utility pt-safe { padding-top: env(safe-area-inset-top); }
+@utility pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+@utility pt-safe-3 { padding-top: calc(0.75rem + env(safe-area-inset-top)); }
+@utility pb-safe-4 { padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
+@utility pb-safe-8 { padding-bottom: calc(2rem + env(safe-area-inset-bottom)); }
+/* p-4 de overlay em tela cheia (modais, lightbox, login) somando o recuo de cada lado */
+@utility p-safe-4 {
+  padding: calc(1rem + env(safe-area-inset-top)) calc(1rem + env(safe-area-inset-right))
+    calc(1rem + env(safe-area-inset-bottom)) calc(1rem + env(safe-area-inset-left));
+}
+/* bottom-4 que fica acima da barra inferior (toasts fixos) */
+@utility bottom-safe-4 { bottom: calc(1rem + env(safe-area-inset-bottom)); }

@@ -7566,7 +7566,7 @@ function CostadoTab({
       )}
 
       {deleteErr && (
-        <p className="fixed bottom-4 right-4 bg-red-600 text-white text-sm px-3 py-2 rounded shadow-lg z-50">
+        <p className="fixed bottom-safe-4 right-4 bg-red-600 text-white text-sm px-3 py-2 rounded shadow-lg z-50">
           {deleteErr}
         </p>
       )}

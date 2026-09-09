@@ -189,7 +189,9 @@ export function Sidebar({ open, onClose, collapsed = false }: SidebarProps) {
   // iOS pinta topo/rodapé do Safari com o <meta name="theme-color">. Com a
   // gaveta aberta no celular, as barras acompanham o azul-escuro da sidebar
   // (senão sobra topo/rodapé branco destoando dela); ao fechar — ou navegar,
-  // que fecha a gaveta — volta a cor da rota.
+  // que fecha a gaveta — volta a cor da rota. No iOS 26 (barras de vidro) o
+  // theme-color nao tinge mais nada: ali quem pinta topo/rodape e a propria
+  // gaveta passando por baixo das barras (viewport-fit=cover no layout raiz).
   useEffect(() => {
     if (!open) return;
     const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
@@ -242,7 +244,10 @@ export function Sidebar({ open, onClose, collapsed = false }: SidebarProps) {
       >
         {/* Largura fixa interna: quando o aside recolhe pra 0 o conteúdo é
             cortado (overflow-hidden) em vez de reflowar/espremer. */}
-        <div className="flex flex-col h-full w-64">
+        {/* pt/pb-safe: com viewport-fit=cover a gaveta passa por baixo das barras
+            de vidro do Safari/Android (topo e rodape ficam azuis); o recuo deixa
+            o cabecalho e o Sair fora delas. */}
+        <div className="flex flex-col h-full w-64 pt-safe pb-safe">
           {/* Header */}
           <div className="flex items-center justify-between p-5 border-b border-white/5">
             <Link
