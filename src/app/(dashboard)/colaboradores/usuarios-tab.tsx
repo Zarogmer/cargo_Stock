@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatDateTime, matchSearch } from "@/lib/utils";
+import { formatDateTime, matchSearch, employeeHasRole, employeeRolesLabel } from "@/lib/utils";
 import type { Employee } from "@/types/database";
 
 // Aba Rh › Usuários: o RH cria logins de SUPERVISOR (login = email + senha),
@@ -20,7 +20,7 @@ interface SupervisorUser {
   full_name: string;
   employee_id: number | null;
   created_at: string;
-  employees: { name: string; role: string | null } | null;
+  employees: { name: string; role: string | null; secondary_role: string | null } | null;
 }
 
 interface FormState {
@@ -180,13 +180,14 @@ export function UsuariosTab({ employees, canManage }: { employees: Employee[]; c
     matchSearch(`${u.full_name} ${u.email} ${u.employees?.name || ""}`, search)
   );
 
-  // Só quem tem a função SUPERVISOR no cadastro entra na lista: este login É o
-  // acesso do supervisor de bordo. Mostrar a empresa inteira só dava chance de
-  // vincular a pessoa errada — e um não-supervisor não assina o Cleaning Report
-  // nem lança avaliação. Editando um usuário antigo, o colaborador já vinculado
-  // continua na lista mesmo que a função dele tenha mudado (senão o select
-  // abriria vazio e o formulário travaria no "obrigatório").
-  const isSupervisor = (e: Employee) => (e.role || "").trim().toUpperCase() === "SUPERVISOR";
+  // Só quem tem a função SUPERVISOR no cadastro entra na lista — como função
+  // principal OU como 2ª função (um WAP que também sobe como supervisor): este
+  // login É o acesso do supervisor de bordo. Mostrar a empresa inteira só dava
+  // chance de vincular a pessoa errada — e um não-supervisor não assina o
+  // Cleaning Report nem lança avaliação. Editando um usuário antigo, o
+  // colaborador já vinculado continua na lista mesmo que a função dele tenha
+  // mudado (senão o select abriria vazio e o formulário travaria no "obrigatório").
+  const isSupervisor = (e: Employee) => employeeHasRole(e, "SUPERVISOR");
   const linkedId = editUser?.employee_id ?? null;
   // Ativos primeiro; inativos ficam no fim, marcados.
   const employeeOptions = employees
@@ -216,7 +217,7 @@ export function UsuariosTab({ employees, canManage }: { employees: Employee[]; c
         u.employees ? (
           <div>
             <p className="text-sm text-text">{u.employees.name}</p>
-            {u.employees.role && <p className="text-xs text-text-light">{u.employees.role}</p>}
+            {employeeRolesLabel(u.employees) && <p className="text-xs text-text-light">{employeeRolesLabel(u.employees)}</p>}
           </div>
         ) : (
           <span className="text-xs text-amber-600 font-medium">⚠️ sem vínculo — não vê navios</span>
@@ -314,18 +315,18 @@ export function UsuariosTab({ employees, canManage }: { employees: Employee[]; c
               {employeeOptions.map((emp) => (
                 <option key={emp.id} value={emp.id}>
                   {emp.name}
-                  {emp.role ? ` — ${emp.role}` : ""}
+                  {employeeRolesLabel(emp) ? ` — ${employeeRolesLabel(emp)}` : ""}
                   {emp.status === "INATIVO" ? " (inativo)" : ""}
                 </option>
               ))}
             </select>
             {employeeOptions.length === 0 ? (
               <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 mt-1">
-                ⚠️ Nenhum colaborador com a função <strong>SUPERVISOR</strong> no cadastro. Ajuste a função dele na aba Colaboradores pra poder criar o login.
+                ⚠️ Nenhum colaborador com a função <strong>SUPERVISOR</strong> no cadastro (nem como 2ª função). Ajuste a função dele na aba Colaboradores pra poder criar o login.
               </p>
             ) : (
               <p className="text-xs text-text-light mt-1">
-                Só colaboradores com a função <strong>SUPERVISOR</strong> aparecem aqui. O supervisor verá os navios em que ESTE colaborador estiver escalado.
+                Só colaboradores com a função <strong>SUPERVISOR</strong> (principal ou 2ª função) aparecem aqui. O supervisor verá os navios em que ESTE colaborador estiver escalado.
               </p>
             )}
           </div>

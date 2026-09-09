@@ -10,7 +10,7 @@ import { countsAsWorked, isAutoRelease } from "@/lib/release-finished-ships";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EditIcon, TrashIcon } from "@/components/icons";
-import { formatDate } from "@/lib/utils";
+import { formatDate, employeeRolesLabel } from "@/lib/utils";
 import { payModeIsEscalable, payModeOfFunctionUnit, pickFunctionByName } from "@/lib/jobUnits";
 import type {
   JobFunction,
@@ -69,7 +69,7 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
     try {
       const [shipsRes, empRes, fnRes, jobsRes, allocsRes, unitsRes] = await Promise.all([
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]),
-        db.from("employees").select("id, name, role, status, sector, escala_unavailable, bank_name, bank_agency, bank_account, bank_account_type").order("name"),
+        db.from("employees").select("id, name, role, secondary_role, status, sector, escala_unavailable, bank_name, bank_agency, bank_account, bank_account_type").order("name"),
         db.from("job_functions").select("*").order("name"),
         db.from("jobs").select("*"),
         db.from("job_allocations").select("*, job_functions(name, unit), employees(name, bank_name, bank_agency, bank_account, bank_account_type)").order("added_at", { ascending: true }),
@@ -624,7 +624,8 @@ function CrewFormModal({
     .filter((e) => {
       if (!search.trim()) return true;
       const q = search.toLowerCase();
-      return e.name.toLowerCase().includes(q) || (e.role || "").toLowerCase().includes(q);
+      // Busca também pela 2ª função ("supervisor" acha o WAP que sobe como supervisor).
+      return e.name.toLowerCase().includes(q) || employeeRolesLabel(e).toLowerCase().includes(q);
     });
 
   // Verifica se um candidato esta bloqueado por outra operacao ativa.
@@ -797,7 +798,7 @@ function CrewFormModal({
                 <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5">
                   <div>
                     <p className="font-semibold text-emerald-900">{selectedEmp.name}</p>
-                    {selectedEmp.role && <p className="text-xs text-emerald-700">{selectedEmp.role}</p>}
+                    {employeeRolesLabel(selectedEmp) && <p className="text-xs text-emerald-700">{employeeRolesLabel(selectedEmp)}</p>}
                   </div>
                   <button type="button" onClick={clearSelection} className="text-xs text-emerald-700 hover:text-emerald-900 underline">
                     Trocar
@@ -839,7 +840,7 @@ function CrewFormModal({
                           >
                             <div className="flex-1 min-w-0">
                               <p className={`text-sm font-medium ${isOccupied ? "text-text-light" : ""}`}>{e.name}</p>
-                              {e.role && <p className="text-[10px] text-text-light">{e.role}</p>}
+                              {employeeRolesLabel(e) && <p className="text-[10px] text-text-light">{employeeRolesLabel(e)}</p>}
                             </div>
                             {isOccupied && (
                               <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${
@@ -958,7 +959,7 @@ function CrewFormModal({
                         />
                         <div className="flex-1 min-w-0">
                           <p className={`text-sm font-medium truncate ${isOccupied ? "text-text-light" : ""}`}>{e.name}</p>
-                          {e.role && <p className="text-[10px] text-text-light">{e.role}</p>}
+                          {employeeRolesLabel(e) && <p className="text-[10px] text-text-light">{employeeRolesLabel(e)}</p>}
                         </div>
                         {isOccupied && (
                           <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${

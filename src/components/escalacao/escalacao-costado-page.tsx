@@ -8,6 +8,7 @@ import { sortShipsNewestFirst } from "@/lib/ship-order";
 import { hasPermission } from "@/lib/rbac";
 import { countsAsWorked } from "@/lib/release-finished-ships";
 import { pickCostadoFunction } from "@/lib/jobUnits";
+import { employeeRolesLabel } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { TrashIcon } from "@/components/icons";
@@ -86,7 +87,7 @@ export function EscalacaoCostadoPage() {
     try {
       const [shipsRes, empRes, fnRes, jobsRes, allocsRes, marksRes] = await Promise.all([
         db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]),
-        db.from("employees").select("id, name, role, status, sector, escala_unavailable").order("name"),
+        db.from("employees").select("id, name, role, secondary_role, status, sector, escala_unavailable").order("name"),
         db.from("job_functions").select("*").order("name"),
         db.from("jobs").select("*"),
         db.from("job_allocations").select("*, job_functions(name, unit), employees(name)").order("added_at", { ascending: true }),
@@ -860,7 +861,7 @@ function AddCostadoCrewModal({
     .filter((e) => {
       if (!search.trim()) return true;
       const q = search.toLowerCase();
-      return e.name.toLowerCase().includes(q) || (e.role || "").toLowerCase().includes(q);
+      return e.name.toLowerCase().includes(q) || employeeRolesLabel(e).toLowerCase().includes(q);
     });
 
   function toggleEmployee(emp: Employee) {
@@ -1027,7 +1028,7 @@ function AddCostadoCrewModal({
                     />
                     <div className="flex-1 min-w-0">
                       <p className={`text-sm font-medium truncate ${isOccupied ? "text-text-light" : ""}`}>{e.name}</p>
-                      {e.role && <p className="text-[10px] text-text-light">{e.role}</p>}
+                      {employeeRolesLabel(e) && <p className="text-[10px] text-text-light">{employeeRolesLabel(e)}</p>}
                     </div>
                     {isOccupied && (
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${

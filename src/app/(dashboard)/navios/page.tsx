@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { hasPermission } from "@/lib/rbac";
 import { db } from "@/lib/db";
+import { employeeRolesLabel } from "@/lib/utils";
 import { releaseFinishedShipAllocations, releaseShipAllocationsNow } from "@/lib/release-finished-ships";
 import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
@@ -67,6 +68,8 @@ interface Employee {
   phone: string | null;
   status: string | null;
   role: string | null;
+  // 2ª função (opcional) — só dica na lista; a sugestão de função usa a principal.
+  secondary_role: string | null;
   sector: "OPERACIONAL" | "ADMINISTRATIVO" | null;
   // "Inativo na escalação" (férias/afastamento): não pode ser escalado.
   escala_unavailable: boolean | null;
@@ -369,7 +372,7 @@ export default function NaviosPage() {
     try {
       const { data } = await db
         .from("employees")
-        .select("id, name, team, phone, status, role, sector, escala_unavailable")
+        .select("id, name, team, phone, status, role, secondary_role, sector, escala_unavailable")
         .order("name");
       setEmployees((data as any[]) || []);
     } catch (err) {
@@ -1686,7 +1689,7 @@ export default function NaviosPage() {
                         const occKind = occupiedEmployeeKind.get(emp.id) || null;
                         return (
                           <option key={emp.id} value={emp.id} disabled={!!occKind}>
-                            {emp.name}{emp.role ? ` · ${emp.role}` : ""}
+                            {emp.name}{employeeRolesLabel(emp) ? ` · ${employeeRolesLabel(emp)}` : ""}
                             {occKind ? (occKind === "COSTADO" ? " — em costado" : " — embarcado") : ""}
                           </option>
                         );
@@ -2738,7 +2741,7 @@ export default function NaviosPage() {
                                   />
                                   <div className="flex-1 min-w-0">
                                     <p className={`text-sm font-medium truncate ${isOccupied ? "text-text-light" : "text-text"}`}>{emp.name}</p>
-                                    <p className="text-[10px] text-text-light">{emp.phone}{emp.role ? ` · ${emp.role}` : ""}</p>
+                                    <p className="text-[10px] text-text-light">{emp.phone}{employeeRolesLabel(emp) ? ` · ${employeeRolesLabel(emp)}` : ""}</p>
                                   </div>
                                   {isOccupied && (
                                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${

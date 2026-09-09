@@ -240,6 +240,10 @@ model Employee {
   status               String?   @default("ATIVO")           // ATIVO, INATIVO, PENDENCIA
   sector               String?                                // OPERACIONAL, ADMINISTRATIVO
   role                 String?                                // WAP, AJUDANTE, ESFREGAO, ANALISTA_RH, OPERACIONAL...
+  // 2ª função (opcional): um WAP que também sobe como SUPERVISOR/ESFREGÃO.
+  // Conta junto com `role` onde se pergunta "quem é X?" (ex.: lista de
+  // supervisores em Rh › Usuários). Ver employeeRoles em src/lib/utils.ts.
+  secondary_role       String?
   salary               Decimal?  @db.Decimal(10, 2)           // futuro: cálculo de folha
   // Valor fixo POR NAVIO do pessoal administrativo (setor ADMINISTRATIVO):
   // entra automático no custo de cada operação (Embarque/Costado), fora da

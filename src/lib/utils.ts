@@ -276,6 +276,33 @@ export function hasExpiredTraining(emp: TrainingFields): boolean {
   return false;
 }
 
+// ── Funções do colaborador ──────────────────────────────────────────────────
+// Todo colaborador tem a função principal (employees.role) e pode ter uma 2ª
+// função (employees.secondary_role): na prática um WAP às vezes sobe como
+// SUPERVISOR ou ESFREGÃO. As duas contam onde se pergunta "quem é X?" (ex.:
+// lista de supervisores em Rh › Usuários); a escalação continua sugerindo a
+// principal e mostra a 2ª só como dica.
+type EmployeeRoleFields = { role?: string | null; secondary_role?: string | null };
+
+export function employeeRoles(e: EmployeeRoleFields): string[] {
+  const out: string[] = [];
+  for (const r of [e.role, e.secondary_role]) {
+    const v = (r || "").trim();
+    if (v && !out.some((x) => x.toUpperCase() === v.toUpperCase())) out.push(v);
+  }
+  return out;
+}
+
+export function employeeHasRole(e: EmployeeRoleFields, roleName: string): boolean {
+  const want = roleName.trim().toUpperCase();
+  return employeeRoles(e).some((r) => r.toUpperCase() === want);
+}
+
+// "WAP / SUPERVISOR" — pra listas e selects. Vazio se não tem função.
+export function employeeRolesLabel(e: EmployeeRoleFields): string {
+  return employeeRoles(e).join(" / ");
+}
+
 // PENDENCIA is forced when training expired — INATIVO is never overridden.
 export function effectiveEmployeeStatus(
   emp: TrainingFields & { status: string | null }

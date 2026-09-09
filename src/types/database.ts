@@ -103,6 +103,8 @@ export interface Employee {
   status: "ATIVO" | "INATIVO" | "PENDENCIA" | null;
   sector: "OPERACIONAL" | "ADMINISTRATIVO" | null;
   role: string | null;
+  // 2ª função (opcional) — ex.: WAP que também vai como SUPERVISOR.
+  secondary_role: string | null;
   salary: string | number | null;
   // Valor fixo por navio do administrativo (setor ADMINISTRATIVO) — entra
   // automático no custo de cada operação; gravado pelo 💾 do Pagamento de Navios.

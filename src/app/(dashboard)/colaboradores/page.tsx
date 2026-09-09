@@ -11,7 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
-import { formatPhone, formatDateTime, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, MOVEMENT_TYPE_LABELS, type NrCode } from "@/lib/utils";
+import { formatPhone, formatDateTime, matchSearch, parseLegacyDate, parseNrsWithDates, formatNrsWithDates, VALID_NRS, hasExpiredTraining, effectiveEmployeeStatus, employeeStatusLabel, employeeHasRole, MOVEMENT_TYPE_LABELS, type NrCode } from "@/lib/utils";
 import { releaseFinishedShipAllocations } from "@/lib/release-finished-ships";
 import {
   unitLabel, normalizeUnit, unitToOption, unitEmoji, unitHint, buildUnitSections, isAdminCarrierFn,
@@ -269,6 +269,7 @@ export default function ColaboradoresPage() {
         ASO: e.aso_status ?? "",
         "REALIZA LIMPEZA": e.realiza_limpeza === true ? "SIM" : e.realiza_limpeza === false ? "NÃO" : "",
         FUNÇÃO: e.role ?? "",
+        "2ª FUNÇÃO": e.secondary_role ?? "",
         CONTRATO: e.contract_type ?? "",
         SETOR: e.sector ?? "",
       }));
@@ -406,6 +407,7 @@ export default function ColaboradoresPage() {
           {/* Mobile-only inline info — desktop has dedicated columns */}
           <div className="md:hidden flex flex-wrap gap-1 text-[10px]">
             {e.role && <span className="px-1.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700">{e.role}</span>}
+            {e.secondary_role && <span className="px-1.5 py-0.5 rounded-full font-medium bg-blue-50 text-blue-600 border border-blue-200" title="2ª função">2ª: {e.secondary_role}</span>}
             {e.team && <span className={`px-1.5 py-0.5 rounded-full font-medium ${teamColors[e.team] || ""}`}>{teamLabels[e.team]}</span>}
             {k === "EMBARQUE" && <span className="px-1.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">⚓ Embarcado</span>}
             {k === "COSTADO" && <span className="px-1.5 py-0.5 rounded-full font-medium bg-cyan-100 text-cyan-700">⛏️ Costado</span>}
@@ -432,7 +434,13 @@ export default function ColaboradoresPage() {
         </span>
       );
     }},
-    { key: "role", label: "Função", hideOnMobile: true, render: (e: Employee) => e.role ? <span className="text-xs font-medium">{e.role}</span> : <span className="text-text-light text-xs">—</span> },
+    // Função principal + 2ª função (quando houver): "WAP / SUPERVISOR".
+    { key: "role", label: "Função", hideOnMobile: true, render: (e: Employee) => (e.role || e.secondary_role) ? (
+      <span className="text-xs font-medium">
+        {e.role || "—"}
+        {e.secondary_role && <span className="text-text-light font-normal" title="2ª função"> / {e.secondary_role}</span>}
+      </span>
+    ) : <span className="text-text-light text-xs">—</span> },
     { key: "contract_type", label: "Contrato", hideOnMobile: true, render: (e: Employee) => {
       if (!e.contract_type) return <span className="text-text-light text-xs">—</span>;
       const cls = e.contract_type === "REGISTRADO" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700";
@@ -466,8 +474,10 @@ export default function ColaboradoresPage() {
       content: (() => {
         // Funções disponíveis para o filtro — derivadas dos próprios dados, então
         // sempre refletem o que está cadastrado (inclusive valores personalizados).
+        // Inclui a 2ª função: filtrar "SUPERVISOR" traz também quem é WAP com
+        // 2ª função SUPERVISOR.
         const availableRoles = Array.from(
-          new Set(employees.map((e) => (e.role || "").trim()).filter(Boolean))
+          new Set(employees.flatMap((e) => [(e.role || "").trim(), (e.secondary_role || "").trim()]).filter(Boolean))
         ).sort((a, b) => a.localeCompare(b, "pt-BR"));
         const filteredEmployees = employees.filter((e) => {
           const nameMatch = matchSearch(e.name, empSearch);
@@ -487,7 +497,7 @@ export default function ColaboradoresPage() {
             empEscalaFilter === "COSTADO" ? k === "COSTADO" :
             // "Inativo" = indisponível e não escalado nem demitido.
             empEscalaFilter === "INATIVO" ? (!k && effectiveEmployeeStatus(e) !== "INATIVO" && !!e.escala_unavailable) : true;
-          const roleMatch = empRoleFilter === "Todos" ? true : (e.role || "").trim() === empRoleFilter;
+          const roleMatch = empRoleFilter === "Todos" ? true : employeeHasRole(e, empRoleFilter);
           const accountMatch = empAccountFilter === "Todos" ? true :
             empAccountFilter === "SEM" ? !e.bank_account_type :
             e.bank_account_type === empAccountFilter;
@@ -732,6 +742,7 @@ export default function ColaboradoresPage() {
                 );
               })()}
               {selectedEmp.role && <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700 font-medium">{selectedEmp.role}</span>}
+              {selectedEmp.secondary_role && <span className="text-xs px-2 py-1 rounded-full bg-blue-50 text-blue-600 border border-blue-200 font-medium" title="2ª função">2ª função: {selectedEmp.secondary_role}</span>}
               {selectedEmp.contract_type && (
                 <span className={`text-xs px-2 py-1 rounded-full font-medium ${
                   selectedEmp.contract_type === "REGISTRADO" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700"
@@ -963,6 +974,34 @@ function effectivePaga(
   return { rate, isSpecial: special != null, functionId: fn.id };
 }
 
+// Opções de função agrupadas por UNIDADE (EMBARQUE / COSTADO / MENSALISTA / ...)
+// pra não ficar uma lista única confusa. Usado nos selects de Função e de 2ª
+// Função do modal; `exclude` tira uma função (a 2ª não pode repetir a principal).
+function FunctionOptionGroups({ functions, exclude }: { functions: JobFunction[]; exclude?: string }) {
+  const map = new Map<string, string[]>();
+  for (const f of functions) {
+    if (exclude && f.name === exclude) continue;
+    const g = unitToOption(f.unit);
+    const arr = map.get(g) || [];
+    arr.push(f.name);
+    map.set(g, arr);
+  }
+  const order = (k: string) => (k === "EMBARQUE" ? 0 : k === "COSTADO" ? 1 : k === "MENSALISTA" ? 99 : 50);
+  return (
+    <>
+      {[...map.keys()]
+        .sort((a, b) => order(a) - order(b) || a.localeCompare(b, "pt-BR"))
+        .map((k) => (
+          <optgroup key={k} label={`${unitEmoji(k)} ${unitLabel(k)}`}>
+            {map.get(k)!
+              .sort((a, b) => a.localeCompare(b, "pt-BR"))
+              .map((n) => <option key={n} value={n}>{n}</option>)}
+          </optgroup>
+        ))}
+    </>
+  );
+}
+
 // ─── Aba Funções (RH) ───────────────────────────────────────────────────────
 // O RH cria e organiza as funções (nome + tipo). Grava na MESMA tabela
 // job_functions que a aba Valores do Financeiro (fonte única), mas nunca toca no
@@ -1170,6 +1209,7 @@ function FuncoesRHTab({
               // Excluída de vez: tira a função dos colaboradores que a usavam
               // (employees.role casa com job_functions.name por texto, sem FK).
               await db.from("employees").update({ role: null }).eq("role", deleteFn.name);
+              await db.from("employees").update({ secondary_role: null }).eq("secondary_role", deleteFn.name);
             }
           }
           setDeleteFn(null); onChange();
@@ -1289,6 +1329,8 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
   const [status, setStatus] = useState<string>("ATIVO");
   const [sector, setSector] = useState<string>("");
   const [role, setRole] = useState("");
+  // 2ª função (opcional): ex. WAP que também sobe como SUPERVISOR.
+  const [secondaryRole, setSecondaryRole] = useState("");
   // "Paga" — valor por função (especial do colaborador ou padrão da função).
   // Substitui o antigo campo "Salário" no formulário.
   const [paga, setPaga] = useState("");
@@ -1332,6 +1374,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       setStatus(item.status || "ATIVO");
       setSector(item.sector || "");
       setRole(item.role || "");
+      setSecondaryRole(item.secondary_role || "");
       { const p = effectivePaga(functions, specialRates, item.id, item.role); setPaga(p ? formatRateBR(p.rate) : ""); }
       setAdmissionDate(item.admission_date?.slice(0, 10) || "");
       setVacationLimitDate(item.vacation_limit_date?.slice(0, 10) || "");
@@ -1357,7 +1400,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       setName(""); setTeam(""); setPhone(""); setEmail(""); setBirthDate("");
       setFamilyPhone(""); setNotes("");
       setCpf(""); setRg(""); setIspsCode(""); setESocial("");
-      setStatus("ATIVO"); setSector(""); setRole(""); setPaga(""); setAdmissionDate(""); setVacationLimitDate(""); setDismissalDate(""); setContractType("");
+      setStatus("ATIVO"); setSector(""); setRole(""); setSecondaryRole(""); setPaga(""); setAdmissionDate(""); setVacationLimitDate(""); setDismissalDate(""); setContractType("");
       setBankName(""); setBankAgency(""); setBankAccount(""); setBankAccountType("");
       setHasVaccinationCard(false); setHasCnh(false);
       setNrsTraining(""); setMeioAmbienteTraining("");
@@ -1417,6 +1460,8 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
       status: (status as any) || "ATIVO",
       sector: (sector as any) || null,
       role: role || null,
+      // 2ª função nunca repete a principal (o select já esconde, mas garante).
+      secondary_role: secondaryRole && secondaryRole !== role ? secondaryRole : null,
       admission_date: admissionDate || null,
       vacation_limit_date: vacationLimitDate || null,
       // Só guarda data de demissão quando o status é Demitido (INATIVO). Se o
@@ -1530,6 +1575,8 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
                 onChange={(e) => {
                   const newRole = e.target.value;
                   setRole(newRole);
+                  // A 2ª função não pode repetir a principal.
+                  if (newRole && newRole === secondaryRole) setSecondaryRole("");
                   // A Paga acompanha a função: puxa o valor especial do colaborador
                   // nessa função ou, na falta dele, o valor padrão da função.
                   const p = effectivePaga(functions, specialRates, item?.id ?? null, newRole);
@@ -1538,27 +1585,7 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
                 className={inputCls}
               >
                 <option value="">Selecionar...</option>
-                {/* Agrupado por UNIDADE (EMBARQUE / COSTADO / MENSALISTA / ...)
-                    pra não ficar uma lista única confusa. */}
-                {(() => {
-                  const map = new Map<string, string[]>();
-                  for (const f of functions) {
-                    const g = unitToOption(f.unit);
-                    const arr = map.get(g) || [];
-                    arr.push(f.name);
-                    map.set(g, arr);
-                  }
-                  const order = (k: string) => (k === "EMBARQUE" ? 0 : k === "COSTADO" ? 1 : k === "MENSALISTA" ? 99 : 50);
-                  return [...map.keys()]
-                    .sort((a, b) => order(a) - order(b) || a.localeCompare(b, "pt-BR"))
-                    .map((k) => (
-                      <optgroup key={k} label={`${unitEmoji(k)} ${unitLabel(k)}`}>
-                        {map.get(k)!
-                          .sort((a, b) => a.localeCompare(b, "pt-BR"))
-                          .map((n) => <option key={n} value={n}>{n}</option>)}
-                      </optgroup>
-                    ));
-                })()}
+                <FunctionOptionGroups functions={functions} />
                 {/* Mantém o valor atual visível mesmo que não esteja na lista de
                     funções do Financeiro (cadastro antigo ainda não ajustado). */}
                 {role && !roleOptions.includes(role) && <option value={role}>{role}</option>}
@@ -1600,6 +1627,39 @@ function EmployeeFormModal({ open, onClose, onSave, item, saving, roleOptions, f
                     ? "Selecione a função pra ver/editar a paga."
                     : "Vazio ou igual ao padrão remove o valor especial."}
               </p>
+            </div>
+          </div>
+          {/* 2ª Função (opcional): a mesma pessoa vai em outra função em alguns
+              navios (WAP que sobe como SUPERVISOR/ESFREGÃO). Conta como função
+              na lista de supervisores (Rh › Usuários) e aparece como dica nas
+              telas de escalação. A paga dela é só leitura aqui (o valor
+              especial por função continua sendo editado na função principal). */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1 flex items-center gap-2">
+                2ª Função
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-slate-100 text-slate-600">opcional</span>
+              </label>
+              <select value={secondaryRole} onChange={(e) => setSecondaryRole(e.target.value)} className={inputCls}>
+                <option value="">Nenhuma</option>
+                <FunctionOptionGroups functions={functions} exclude={role} />
+                {secondaryRole && secondaryRole !== role && !roleOptions.includes(secondaryRole) && <option value={secondaryRole}>{secondaryRole}</option>}
+              </select>
+              <p className="text-[10px] text-text-light mt-1">
+                Quando o colaborador também vai em outra função (ex.: WAP que sobe como SUPERVISOR). Vale pra lista de supervisores em Usuários.
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Paga da 2ª função (R$)</label>
+              <input
+                type="text"
+                value={(() => { const p = effectivePaga(functions, specialRates, item?.id ?? null, secondaryRole); return p ? formatRateBR(p.rate) : ""; })()}
+                readOnly
+                disabled
+                placeholder="—"
+                className={`${inputCls} bg-gray-50 text-text-light cursor-not-allowed`}
+              />
+              <p className="text-[10px] text-text-light mt-1">Somente leitura · valor da 2ª função (especial do colaborador, se houver, ou padrão).</p>
             </div>
           </div>
           <div>
@@ -1831,6 +1891,7 @@ const SHEET_COLUMNS: { key: keyof Employee | "__index" | "actions"; label: strin
   { key: "aso_status", label: "ASO", w: "w-16" },
   { key: "realiza_limpeza", label: "Limpeza", w: "w-20" },
   { key: "role", label: "Função", w: "w-28" },
+  { key: "secondary_role", label: "2ª Função", w: "w-28" },
   { key: "contract_type", label: "Contrato", w: "w-28" },
   { key: "sector", label: "Setor", w: "w-32" },
 ];

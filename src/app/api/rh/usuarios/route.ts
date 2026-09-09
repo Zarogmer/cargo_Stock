@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/rbac";
+import { employeeHasRole } from "@/lib/utils";
 import type { Role } from "@/types/database";
 import bcrypt from "bcryptjs";
 
@@ -36,21 +37,22 @@ function rejectForeignDomain(email: string): NextResponse | null {
 }
 
 // O login de bordo é do SUPERVISOR: só colaborador com essa função no cadastro
-// pode ser vinculado. Mesma régua do resto dos Relatórios de Bordo (assinatura
-// do Cleaning Report e quem fica de fora das avaliações). A tela já filtra o
+// (principal OU 2ª função — um WAP que sobe como supervisor) pode ser
+// vinculado. Mesma régua do resto dos Relatórios de Bordo (assinatura do
+// Cleaning Report e quem fica de fora das avaliações). A tela já filtra o
 // select; aqui é a blindagem pra chamada direta na API.
 async function rejectNonSupervisor(employeeId: number | null): Promise<NextResponse | null> {
   if (!employeeId) return null;
   const emp = await prisma.employee.findUnique({
     where: { id: employeeId },
-    select: { role: true },
+    select: { role: true, secondary_role: true },
   });
   if (!emp) {
     return NextResponse.json({ error: "Colaborador não encontrado." }, { status: 400 });
   }
-  if ((emp.role || "").trim().toUpperCase() !== "SUPERVISOR") {
+  if (!employeeHasRole(emp, "SUPERVISOR")) {
     return NextResponse.json(
-      { error: "Só colaborador com a função SUPERVISOR pode ter login de supervisor." },
+      { error: "Só colaborador com a função SUPERVISOR (principal ou 2ª função) pode ter login de supervisor." },
       { status: 400 }
     );
   }
@@ -63,7 +65,7 @@ const SELECT = {
   full_name: true,
   employee_id: true,
   created_at: true,
-  employees: { select: { name: true, role: true } },
+  employees: { select: { name: true, role: true, secondary_role: true } },
 } as const;
 
 export async function GET() {
