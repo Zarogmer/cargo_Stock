@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
+import { sortShipsNewestFirst } from "@/lib/ship-order";
 import { hasPermission } from "@/lib/rbac";
 import { countsAsWorked } from "@/lib/release-finished-ships";
 import { pickCostadoFunction } from "@/lib/jobUnits";
@@ -84,7 +85,7 @@ export function EscalacaoCostadoPage() {
     setLoading(true);
     try {
       const [shipsRes, empRes, fnRes, jobsRes, allocsRes, marksRes] = await Promise.all([
-        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]).order("arrival_date"),
+        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]),
         db.from("employees").select("id, name, role, status, sector, escala_unavailable").order("name"),
         db.from("job_functions").select("*").order("name"),
         db.from("jobs").select("*"),
@@ -93,7 +94,7 @@ export function EscalacaoCostadoPage() {
       ]);
       // Costado tab shows only ships marked as Costado (services array includes "COSTADO").
       const allShips = (shipsRes.data as Ship[]) || [];
-      setShips(allShips.filter((s) => (s.services || []).includes("COSTADO")));
+      setShips(sortShipsNewestFirst(allShips.filter((s) => (s.services || []).includes("COSTADO"))));
       setEmployees((empRes.data as Employee[]) || []);
       setFunctions((fnRes.data as JobFunction[]) || []);
       setJobs((jobsRes.data as Job[]) || []);

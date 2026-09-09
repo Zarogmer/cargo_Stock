@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
+import { sortShipsNewestFirst } from "@/lib/ship-order";
 import { hasPermission } from "@/lib/rbac";
 import { countsAsWorked, isAutoRelease } from "@/lib/release-finished-ships";
 import { Button } from "@/components/ui/button";
@@ -67,7 +68,7 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
     setLoading(true);
     try {
       const [shipsRes, empRes, fnRes, jobsRes, allocsRes, unitsRes] = await Promise.all([
-        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]).order("arrival_date"),
+        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]),
         db.from("employees").select("id, name, role, status, sector, escala_unavailable, bank_name, bank_agency, bank_account, bank_account_type").order("name"),
         db.from("job_functions").select("*").order("name"),
         db.from("jobs").select("*"),
@@ -76,7 +77,7 @@ export function EscalacaoCrewPage({ config }: { config: CrewPageConfig }) {
       ]);
       // Embarque tab shows only ships that are NOT costado (services array doesn't include "COSTADO").
       const allShips = (shipsRes.data as Ship[]) || [];
-      setShips(allShips.filter((s) => !(s.services || []).includes("COSTADO")));
+      setShips(sortShipsNewestFirst(allShips.filter((s) => !(s.services || []).includes("COSTADO"))));
       setEmployees((empRes.data as Employee[]) || []);
       setFunctions((fnRes.data as JobFunction[]) || []);
       setJobs((jobsRes.data as Job[]) || []);

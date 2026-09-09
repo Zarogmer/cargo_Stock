@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
+import { sortShipsNewestFirst } from "@/lib/ship-order";
 import { hasPermission, canViewStockValue, type Module } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
@@ -146,7 +147,8 @@ export function EscalacaoEstoquePage() {
   const [selectedShip, setSelectedShip] = useState<string>("");
   // Mostrar navios finalizados no seletor — igual à aba Escalação. Por padrão
   // só os pendentes: falta Embarque ou falta Retorno (mesmo que o usuário já
-  // tenha fechado o navio na aba Navios).
+  // tenha fechado o navio na aba Navios). Lista do mais novo pro mais antigo
+  // (sortShipsNewestFirst): o navio da vez fica em cima, sem rolar até o fim.
   const [showFinished, setShowFinished] = useState(false);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [kitItems, setKitItems] = useState<KitItem[]>([]);
@@ -194,14 +196,14 @@ export function EscalacaoEstoquePage() {
     setLoading(true);
     try {
       const [shipsRes, stockRes, kitRes, retRes, ovrRes, allocRes] = await Promise.all([
-        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]).order("arrival_date"),
+        db.from("ships").select("*").in("status", ["AGENDADO", "EM_OPERACAO", "CONCLUIDO", "CANCELADO"]),
         db.from("stock_items").select("*").order("name"),
         db.from("embark_kit_items").select("*, stock_items(id, name, quantity, location, unit)"),
         db.from("material_returns").select("*, material_return_items(id, return_id, stock_item_id, item_name, went_qty, returned_qty, broken_qty, lost_qty, consumed_qty, note)").order("created_at", { ascending: false }),
         db.from("embark_list_overrides").select("*"),
         db.from("material_team_allocations").select("*"),
       ]);
-      setShips((shipsRes.data as Ship[]) || []);
+      setShips(sortShipsNewestFirst((shipsRes.data as Ship[]) || []));
       setStockItems(stockRes.data || []);
       setKitItems((kitRes.data as KitItem[]) || []);
       setReturns((retRes.data as MaterialReturn[]) || []);
