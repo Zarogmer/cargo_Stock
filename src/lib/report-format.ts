@@ -83,7 +83,29 @@ export interface HoldRow {
   salt_end: string | null;
   fresh_start: string | null;
   fresh_end: string | null;
+  // Data (ISO yyyy-mm-dd) de cada horário — a operação atravessa a noite, então
+  // início e término podem cair em dias diferentes.
+  start_date: string | null;
+  end_date: string | null;
+  salt_start_date: string | null;
+  salt_end_date: string | null;
+  fresh_start_date: string | null;
+  fresh_end_date: string | null;
   completion_pct: number;
+}
+
+// "2026-09-12" → "12/09" (dia/mês curto, pra caber ao lado da hora).
+export function formatDayMonth(iso: string | null | undefined): string {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}` : "";
+}
+
+// Hora com a data na frente quando tem: "12/09 15:00". Sem data, só a hora.
+export function formatDateTime(date: string | null | undefined, time: string | null | undefined): string {
+  const t = String(time || "").trim();
+  const d = formatDayMonth(date);
+  if (!t) return "";
+  return d ? `${d} ${t}` : t;
 }
 
 export interface ActivityRow {

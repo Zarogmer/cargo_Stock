@@ -208,6 +208,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
   // tem ≤ ~9 porões e algumas dezenas de atividades; 60 linhas sobra.
   const MAX_ROWS = 60;
   const clip = (v: unknown, max: number) => (v ? String(v).slice(0, max) : null);
+  // Data dos horários do porão: só ISO yyyy-mm-dd; qualquer outra coisa vira null.
+  const isoDate = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : null);
   const holds = (Array.isArray(body.holds) ? body.holds : []).slice(0, MAX_ROWS);
   const activities = (Array.isArray(body.activities) ? body.activities : []).slice(0, MAX_ROWS);
 
@@ -262,6 +264,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
           salt_end: clip(h.salt_end, 40),
           fresh_start: clip(h.fresh_start, 40),
           fresh_end: clip(h.fresh_end, 40),
+          start_date: isoDate(h.start_date),
+          end_date: isoDate(h.end_date),
+          salt_start_date: isoDate(h.salt_start_date),
+          salt_end_date: isoDate(h.salt_end_date),
+          fresh_start_date: isoDate(h.fresh_start_date),
+          fresh_end_date: isoDate(h.fresh_end_date),
           completion_pct: Math.max(0, Math.min(100, Number(h.completion_pct) || 0)),
           sort_order: i,
         })),

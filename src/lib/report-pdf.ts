@@ -20,6 +20,7 @@ import {
   EVAL_CRITERIA,
   EvaluationPrintRow,
   HoldRow,
+  formatDayMonth,
   HOLD_STATUS_EN,
   PhotoMeta,
   REPORT_KINDS,
@@ -266,6 +267,15 @@ export async function buildCleaningReportPdf(opts: {
   const hasPhases =
     info.waterPhases && opts.holds.some((h) => h.salt_start || h.salt_end || h.fresh_start || h.fresh_end);
   const range = (a: string | null, b: string | null) => (a || b ? `${a || "..."} - ${b || "..."}` : "-");
+  // Linha de datas embaixo do horário ("12/09 - 13/09"), só quando o porão tem
+  // data gravada — a operação vira a noite e a hora sozinha não dizia o dia.
+  const dates = (a: string | null, b: string | null) => {
+    const x = formatDayMonth(a);
+    const y = formatDayMonth(b);
+    if (!x && !y) return "";
+    if (x && y && x === y) return x;
+    return `${x || "..."} - ${y || "..."}`;
+  };
   const holdCols = [0.26, 0.16, 0.21, 0.21, 0.16].map((f) => f * CONTENT_W);
   const holdHead = hasPhases
     ? [areaCol, "STATUS", "SALT WATER WASH", "FRESH WATER RINSE", "COMPLETION %"]
@@ -293,20 +303,38 @@ export async function buildCleaningReportPdf(opts: {
     d.y -= 20;
   }
   for (const h of opts.holds) {
-    paginate(24);
     const phases = hasPhases
       ? [range(h.salt_start, h.salt_end), range(h.fresh_start, h.fresh_end)]
       : [h.start_time || "-", h.end_time || "-"];
+    const phaseDates = hasPhases
+      ? [dates(h.salt_start_date, h.salt_end_date), dates(h.fresh_start_date, h.fresh_end_date)]
+      : [formatDayMonth(h.start_date), formatDayMonth(h.end_date)];
     // Linha sem fase mas com horário legado: o intervalo geral não pode sumir.
     if (hasPhases && !(h.salt_start || h.salt_end || h.fresh_start || h.fresh_end) && (h.start_time || h.end_time)) {
       phases[0] = `${range(h.start_time, h.end_time)} (overall)`;
       phases[1] = "";
+      phaseDates[0] = dates(h.start_date, h.end_date);
+      phaseDates[1] = "";
     }
+    const hasDates = Boolean(phaseDates[0] || phaseDates[1]);
+    paginate(hasDates ? 32 : 24);
     drawRow([h.label, HOLD_STATUS_EN[h.status] || h.status, phases[0], phases[1], `${h.completion_pct}%`], holdCols, d.y - 12, {
       center: [2, 3, 4],
     });
-    d.rect(M, d.y - 17, CONTENT_W, 0.7, LINE);
-    d.y -= 19;
+    if (hasDates) {
+      // Datas em linha própria, menor e apagada, centralizada sob cada horário.
+      let x = M + holdCols[0] + holdCols[1];
+      phaseDates.forEach((txt, i) => {
+        if (txt) {
+          const o: TextOpts = { size: 7, color: MUTED };
+          d.text(txt, x + (holdCols[2 + i] - d.width(txt, o)) / 2, d.y - 21, o);
+        }
+        x += holdCols[2 + i];
+      });
+    }
+    const rowH = hasDates ? 27 : 19;
+    d.rect(M, d.y - rowH + 2, CONTENT_W, 0.7, LINE);
+    d.y -= rowH;
   }
 
   // 2. Atividades

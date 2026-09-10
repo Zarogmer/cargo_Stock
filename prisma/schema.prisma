@@ -894,6 +894,14 @@ model ShipReportHold {
   salt_end       String?
   fresh_start    String?
   fresh_end      String?
+  // Data (ISO yyyy-mm-dd) de cada horário acima: a operação vira a noite e
+  // o "15:00 - 02:00" precisa dizer de que dia é cada ponta.
+  start_date       String?
+  end_date         String?
+  salt_start_date  String?
+  salt_end_date    String?
+  fresh_start_date String?
+  fresh_end_date   String?
   completion_pct Int        @default(0)
   sort_order     Int        @default(0)
 
