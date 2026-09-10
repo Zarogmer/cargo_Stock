@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const role = session.user.role as Role;
-  // Mesma permissão de quem confirma o retorno na tela de Embarque/Retorno.
+  // Mesma permissão de quem confirma o retorno na tela de Checklist.
   if (!hasPermission(role, "EMBARQUE", "embarcar")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }

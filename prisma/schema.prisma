@@ -168,7 +168,7 @@ model EmbarkKitItem {
   @@map("embark_kit_items")
 }
 
-// Ajuste da lista de embarque POR NAVIO (aba Embarque/Retorno): muda quanto a
+// Ajuste da lista de embarque POR NAVIO (aba Checklist): muda quanto a
 // equipe leva de um item do kit/rancho SÓ naquele navio (em caso de falta, ou
 // pra levar mais), ou adiciona um item do Estoque/Rancho que não está na lista
 // padrão. O kit oficial (embark_kit_items) e o padrão do Rancho ficam intactos.
@@ -523,7 +523,7 @@ model Ship {
   // Navio já nasce EM_OPERACAO: quem abre/fecha é o usuário na aba Navios.
   // AGENDADO ficou no enum só por histórico (nenhum navio novo usa).
   status         ShipStatus    @default(EM_OPERACAO)
-  // Quando a Manutenção confirmou o Embarque (aba Embarque/Retorno). O embarque
+  // Quando a Manutenção confirmou o Embarque (aba Checklist). O embarque
   // é independente do status do navio: null = ainda não embarcou o material.
   embarked_at    DateTime?     @db.Timestamptz()
   assigned_team  String?
@@ -577,7 +577,7 @@ model ShipMaterialValue {
   @@map("ship_material_values")
 }
 
-// ── Retorno de materiais (Embarque/Retorno) ──────────────────────────────────
+// ── Retorno de materiais (Checklist) ──────────────────────────────────
 // Quando o navio volta, a manutenção confere o material que embarcou: quanto
 // voltou bom e quanto voltou quebrado, item por item. O que volta bom credita o
 // Estoque de novo (movimento de ENTRADA); o quebrado fica de fora e é anotado.

@@ -483,7 +483,7 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
           </label>
           {equipamentos.length === 0 ? (
             <p className="text-[11px] text-amber-700 mt-1">
-              Esta equipe não tem kit de embarque cadastrado. Monte o kit em Controle › Embarque/Retorno.
+              Esta equipe não tem kit de embarque cadastrado. Monte o kit em Controle › Checklist.
             </p>
           ) : (
             <div className="mt-1 max-h-40 overflow-y-auto border border-border rounded-lg text-xs">

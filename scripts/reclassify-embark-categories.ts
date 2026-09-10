@@ -3,7 +3,7 @@
  * Almoxarifado. As categorias antigas do import ("Embarque", "Hidrojato",
  * "Pistola e Caneta", "EPI e Químicos"...) não existem mais no menu — hoje o
  * Estoque é dividido em Utensílios, Fluídos, Maquinário, Ferramenta e Elétrica
- * (aba = stock_items.team) e a tela Embarque/Retorno mostra stock_items.location
+ * (aba = stock_items.team) e a tela Checklist mostra stock_items.location
  * como "Categoria".
  *
  * Este script move cada item pra aba certa (team) e grava a etiqueta certa

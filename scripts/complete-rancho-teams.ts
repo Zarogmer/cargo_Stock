@@ -5,7 +5,7 @@
  *
  * Por quê: cada alimento do Rancho é uma linha por equipe (stock_items.team).
  * A Equipe Turbo nasceu depois e ficou com só 2 alimentos, então a conferência
- * de volta (Embarque/Retorno › Retorno) não tinha o que checar — só aparecia
+ * de volta (Checklist › Retorno) não tinha o que checar — só aparecia
  * o que a lista do navio mandou levar. Com a lista completa dá pra registrar
  * qualquer item que voltou, estragou ou sumiu.
  *

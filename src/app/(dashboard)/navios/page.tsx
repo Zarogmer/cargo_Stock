@@ -27,7 +27,7 @@ interface Ship {
   departure_date: string | null;
   port: string | null;
   status: ShipStatus;
-  // Embarque do material confirmado pela Manutenção (aba Embarque/Retorno).
+  // Embarque do material confirmado pela Manutenção (aba Checklist).
   // Independente do status: o navio abre/fecha aqui, o embarque acontece lá.
   embarked_at: string | null;
   assigned_team: string | null;
@@ -328,7 +328,7 @@ export default function NaviosPage() {
   // "Fechar" navio Em Operação: a Data de Saída é informada no resumo do navio
   // (modal de detalhe), onde também dá pra puxar as compras antes de fechar.
   const [closeDate, setCloseDate] = useState("");
-  // Se o navio ainda não tem Retorno registrado (aba Embarque/Retorno), o
+  // Se o navio ainda não tem Retorno registrado (aba Checklist), o
   // "Fechar" avisa que a conferência fica pendente — mas não trava o fechamento.
   // null = ainda carregando essa informação.
   const [shipHasReturn, setShipHasReturn] = useState<boolean | null>(null);
@@ -353,7 +353,7 @@ export default function NaviosPage() {
       }
 
       // (Removido) Antes o navio virava "Em Operação" sozinho quando a data de
-      // embarque chegava. Agora só o EMBARQUE confirmado (aba Embarque/Retorno)
+      // embarque chegava. Agora só o EMBARQUE confirmado (aba Checklist)
       // tira o navio de "Agendado" — a data não muda mais o status.
 
       const { data } = await db
@@ -704,7 +704,7 @@ export default function NaviosPage() {
         ? form.boarding_custom_text.trim()
         : null;
     // Reabrir navio: um navio CONCLUIDO que teve a Data de Término apagada volta
-    // a ATIVO (EM_OPERACAO) — reaparece no Embarque/Retorno e o job perde o
+    // a ATIVO (EM_OPERACAO) — reaparece no Checklist e o job perde o
     // end_date (sai do fechamento do Financeiro). Só quando o usuário não mudou
     // o status na mão (deixou CONCLUIDO e limpou o término).
     const reopening = !!editingShip
@@ -1101,7 +1101,7 @@ export default function NaviosPage() {
   // Fecha o navio: registra a data de saída, marca CONCLUIDO e fecha a ponta
   // do(s) job(s) (end_date). Só depois disso o navio aparece no Financeiro.
   // Retorno NÃO é obrigatório pra fechar: sem Retorno o navio continua na aba
-  // Embarque/Retorno (mesmo Concluído) até a conferência de material ser feita lá.
+  // Checklist (mesmo Concluído) até a conferência de material ser feita lá.
   async function handleClose() {
     if (!selectedShip || !closeDate) return;
     await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate }).eq("id", selectedShip.id);
@@ -1969,7 +1969,7 @@ export default function NaviosPage() {
                       ⚠️ Este navio ainda não tem {!selectedShip.embarked_at
                         ? <><strong>Embarque</strong>{shipHasReturn === false ? <> nem <strong>Retorno</strong></> : null} de material registrado</>
                         : <><strong>Retorno</strong> registrado</>} — dá pra fechar mesmo assim.
-                      Ele continua em <strong>Controle › Embarque/Retorno</strong> até a Manutenção concluir por lá
+                      Ele continua em <strong>Controle › Checklist</strong> até a Manutenção concluir por lá
                       (o embarque/conferência do material e o resumo no WhatsApp podem ficar pra depois).
                     </p>
                   )}

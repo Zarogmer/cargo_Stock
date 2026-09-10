@@ -249,7 +249,7 @@ const EXPENSE_CATEGORIES = [
   { value: "COMPRAS",            label: "Compras" },
   { value: "QUIMICA",            label: "Química" },
   { value: "MATERIAL_DANIFICADO", label: "Material danificado" },
-  // Material que NÃO voltou do navio (Embarque/Retorno › Perdido). Lançado
+  // Material que NÃO voltou do navio (Checklist › Perdido). Lançado
   // sozinho pelo /api/retorno/despesa e dividido pela equipe (Desc. Geral).
   { value: "MATERIAL_PERDIDO",   label: "Material perdido" },
   { value: "AJUDA_DE_CUSTO",     label: "Ajuda de custo" },
@@ -3131,7 +3131,7 @@ interface PurchaseOrderLite {
   ship_name: string | null;
 }
 
-// Resumo do material do navio (Embarque/Retorno) mostrado nas Despesas do
+// Resumo do material do navio (Checklist) mostrado nas Despesas do
 // Pagamento de Navios. Fica no módulo pra ser constante entre renders.
 // `ids` = stock_item_ids que compõem a linha (agrupada por nome) — é neles que
 // o editor de valor unitário grava o valor DESTE navio (ship_material_values).
@@ -3598,7 +3598,7 @@ function JobDetailModal({
   const liquidValue = custoTotal - folhaValue;
 
   // ── Desconto Geral: material PERDIDO dividido pela equipe ────────────────
-  // O que não voltou do navio (Embarque/Retorno › Perdido) vira despesa
+  // O que não voltou do navio (Checklist › Perdido) vira despesa
   // MATERIAL_PERDIDO e o prejuízo é rateado entre quem trabalhou na operação.
   // Legado: antes de 2026-07-21 essa despesa nascia como MATERIAL_DANIFICADO,
   // então o marcador da descrição também conta.
@@ -5262,7 +5262,7 @@ function JobDetailModal({
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light" title="Base = Valor/Porão × Porões. O Extra (valor especial + rateio) aparece em amarelo logo abaixo da base, quando houver.">Base</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Total</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-purple-700 whitespace-nowrap" title="PAGTO NA FOLHA — líquido do Relatório de Líquidos. Sem import, igual ao Total.">Folha</th>
-                    <th className="px-2 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap" title="DESCONTO DE MATERIAL — material perdido no navio (Embarque/Retorno › Perdido) dividido pela equipe. Avariado que a equipe trouxe de volta não entra aqui.">Desc. Geral</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap" title="DESCONTO DE MATERIAL — material perdido no navio (Checklist › Perdido) dividido pela equipe. Avariado que a equipe trouxe de volta não entra aqui.">Desc. Geral</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-amber-700 whitespace-nowrap" title="ADIANTAMENTO — vale que o colaborador já pegou e está sendo descontado neste navio. Não muda o custo do navio, só o que ele recebe agora.">Adiant.</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-emerald-800 whitespace-nowrap" title="LÍQUIDO — o que o colaborador realmente recebe: Total − Desc. Geral − Adiantamento. Não altera o custo do navio.">Líquido</th>
                     {canEdit && !isReadOnly && !peopleReadOnly && <th className="w-14"></th>}
@@ -5955,7 +5955,7 @@ function JobDetailModal({
                 <p className="font-semibold text-text">🔧 Retorno de material <span className="font-normal text-text-light">(valor de estoque · sem rancho · editar o unitário vale só neste navio)</span></p>
                 {!returnSummary.hasReturn && (
                   <p className="mt-1 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-800">
-                    ⚠️ Retorno ainda não conferido. Confira o material em <strong>Embarque/Retorno</strong> pra o perdido/insumo/avariado entrar aqui.
+                    ⚠️ Retorno ainda não conferido. Confira o material em <strong>Checklist</strong> pra o perdido/insumo/avariado entrar aqui.
                   </p>
                 )}
                 {nada ? (

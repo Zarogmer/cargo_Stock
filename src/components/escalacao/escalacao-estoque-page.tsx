@@ -1237,7 +1237,7 @@ export function EscalacaoEstoquePage() {
   if (ships.length === 0) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-bold text-text">Embarque/Retorno 📦</h1>
+        <h1 className="text-2xl font-bold text-text">Checklist 📋</h1>
         <div className="bg-card rounded-xl shadow-sm border border-border p-8 text-center text-text-light">
           <span className="text-4xl block mb-3">🚢</span>
           <p className="font-medium text-text mb-1">Nenhum navio agendado ou em operação</p>
@@ -1249,7 +1249,7 @@ export function EscalacaoEstoquePage() {
 
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-bold text-text">Embarque/Retorno 📦</h1>
+      <h1 className="text-2xl font-bold text-text">Checklist 📋</h1>
 
       <ShipSelector
         ships={visibleShips}

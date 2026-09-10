@@ -91,7 +91,7 @@ const PERMISSIONS: Record<Role, Partial<Record<Module, Permission[]>>> = {
   MANUTENCAO: {
     DASHBOARD: ["view"],
     ALMOXARIFADO: ["view"],
-    // 2026-07: Manutenção opera o Embarque/Retorno (Controle). Só "embarcar",
+    // 2026-07: Manutenção opera o Checklist (Controle). Só "embarcar",
     // SEM "view" — com "view" o menu Escalação (Costado/Embarque) apareceria.
     EMBARQUE: ["embarcar"],
     ESTOQUE: ["view", "create", "edit", "delete", "baixar"],
@@ -391,7 +391,7 @@ export const NAV_ITEMS: NavItem[] = [
       // ao herdar SOLICITACOES ele passaria a ver a aba que baixa estoque. A
       // rota segue /escalacao/estoque. Manutenção entrou em 2026-07 (ganhou
       // "embarcar" no módulo EMBARQUE, sem "view").
-      { label: "Embarque/Retorno", href: "/escalacao/estoque", roles: ["EXECUTIVO", "COMERCIAL", "FINANCEIRO", "RH", "TECNOLOGIA", "ESTAGIO", "MANUTENCAO"] },
+      { label: "Checklist", href: "/escalacao/estoque", roles: ["EXECUTIVO", "COMERCIAL", "FINANCEIRO", "RH", "TECNOLOGIA", "ESTAGIO", "MANUTENCAO"] },
     ],
   },
   {

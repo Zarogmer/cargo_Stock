@@ -26,7 +26,7 @@ export interface NotifyTarget {
   functions: string[];
 }
 
-// Destino dos avisos de Embarque/Retorno: liga/desliga próprio, o GRUPO como
+// Destino dos avisos de Checklist: liga/desliga próprio, o GRUPO como
 // destino principal e uma caixinha opcional que também manda por DM pro
 // pessoal ATIVO do setor ADMINISTRATIVO (não se escolhe função aqui).
 export interface RetornoNotifyTarget extends NotifyTarget {
@@ -40,7 +40,7 @@ export interface NotifyConfig {
   novaSolicitacao: NotifyTarget;
   // Disparado quando uma compra é concluída/aprovada (/api/solicitacoes/notify-compras).
   compraConcluida: NotifyTarget;
-  // Disparado pelo "Enviar quebrados pro WhatsApp" do Embarque/Retorno
+  // Disparado pelo "Enviar quebrados pro WhatsApp" do Checklist
   // (/api/retorno/notify).
   retornoMaterial: RetornoNotifyTarget;
   // Disparado pelo "Enviar lista pro WhatsApp" da aba Embarque

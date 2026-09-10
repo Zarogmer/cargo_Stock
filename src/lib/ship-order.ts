@@ -1,4 +1,4 @@
-// Ordem dos seletores de navio (Escalação, Embarque/Retorno, Costado): o mais
+// Ordem dos seletores de navio (Escalação, Checklist, Costado): o mais
 // novo sempre em cima. Quem abre a aba quer o navio da vez — não rolar até o
 // fim da lista pra achá-lo. Chegada mais recente primeiro; empate (mesmo dia)
 // pelo cadastro mais recente; navio sem data de chegada vai pro fim.

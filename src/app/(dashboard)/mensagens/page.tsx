@@ -1199,7 +1199,7 @@ export default function MensagensPage() {
               <div>
                 <p className="text-sm font-semibold">🛠️ Retorno de material (quebrados)</p>
                 <p className="text-[11px] text-text-light">
-                  Disparado pelo botão &ldquo;Enviar quebrados pro WhatsApp&rdquo; da tela Controle › Embarque/Retorno.
+                  Disparado pelo botão &ldquo;Enviar quebrados pro WhatsApp&rdquo; da tela Controle › Checklist.
                 </p>
               </div>
 
