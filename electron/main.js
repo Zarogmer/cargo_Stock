@@ -1,8 +1,26 @@
 const { app, BrowserWindow, shell, Menu, Tray, nativeImage } = require("electron");
 const path = require("path");
 
-// URL do site deployado no Railway
-const APP_URL = "https://cargostock-production.up.railway.app";
+// URL oficial do sistema. Precisa ser o MESMO host do AUTH_URL do Railway
+// (https://cargostock.app): o NextAuth monta os redirects de login/logout em
+// cima do AUTH_URL, então se o app carregasse outro host (ex.: o domínio
+// *.up.railway.app), o "/login" pós-sessão-expirada cairia como link "externo"
+// e abria no navegador em vez de dentro do app.
+const APP_URL = "https://cargostock.app";
+
+// Hosts que fazem parte do sistema e nunca devem sair pro navegador externo.
+// Inclui o domínio antigo do Railway pra qualquer redirect legado continuar
+// dentro da janela.
+const APP_HOSTS = new Set([
+  "cargostock.app",
+  "www.cargostock.app",
+  "cargostock-production.up.railway.app",
+]);
+
+// Depois de tanto tempo com a janela escondida na bandeja, recarrega a página
+// ao reabrir: se a sessão (8h) venceu, o middleware manda pro /login dentro do
+// próprio app em vez de deixar a tela antiga "morta" respondendo 401.
+const RELOAD_AFTER_HIDDEN_MS = 30 * 60 * 1000;
 
 let mainWindow;
 let tray;
@@ -35,7 +53,16 @@ function createWindow() {
   // Só manda pro navegador padrão o que for http/https de fora do app. Sem esse
   // filtro, um "about:blank" caía no shell.openExternal e o Windows abria a
   // caixa "Você precisa de um novo app para abrir este link about".
-  const isExternalLink = (url) => /^https?:\/\//i.test(url) && !url.startsWith(APP_URL);
+  // Compara pelo host (não por prefixo de string) pra qualquer rota dos
+  // domínios do sistema — /login, /api/auth/..., com ou sem www — ficar aqui.
+  const isExternalLink = (url) => {
+    if (!/^https?:\/\//i.test(url)) return false;
+    try {
+      return !APP_HOSTS.has(new URL(url).hostname.toLowerCase());
+    } catch {
+      return false;
+    }
+  };
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isExternalLink(url)) {
@@ -60,6 +87,34 @@ function createWindow() {
       event.preventDefault();
       mainWindow.hide();
     }
+  });
+
+  // Ao voltar da bandeja depois de muito tempo, recarrega (ver RELOAD_AFTER_HIDDEN_MS).
+  let hiddenAt = null;
+  mainWindow.on("hide", () => {
+    hiddenAt = Date.now();
+  });
+  mainWindow.on("show", () => {
+    const hiddenFor = hiddenAt ? Date.now() - hiddenAt : 0;
+    hiddenAt = null;
+    if (hiddenFor >= RELOAD_AFTER_HIDDEN_MS) {
+      mainWindow.webContents.reload();
+    }
+  });
+
+  // Sem internet / servidor fora: mostra uma tela simples com "Tentar de novo"
+  // em vez da página em branco do Chromium (que não tem como voltar pro app).
+  mainWindow.webContents.on("did-fail-load", (_event, code, desc, url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return; // -3 = ERR_ABORTED (navegação cancelada)
+    const target = url && !isExternalLink(url) ? url : APP_URL;
+    const retry = `location.replace(${JSON.stringify(target)})`.replace(/"/g, "&quot;");
+    const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Cargo Stock</title>
+<style>body{margin:0;font-family:system-ui,Segoe UI,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;height:100vh}
+.box{text-align:center;max-width:420px;padding:32px}h1{font-size:20px;margin:0 0 8px}p{color:#94a3b8;margin:0 0 24px;font-size:14px}
+button{background:#2563eb;color:#fff;border:0;border-radius:8px;padding:10px 20px;font-size:14px;cursor:pointer}button:hover{background:#1d4ed8}</style></head>
+<body><div class="box"><h1>Sem conexão com o Cargo Stock</h1><p>Não foi possível carregar o sistema. Verifique a internet e tente novamente.</p>
+<button onclick="${retry}">Tentar de novo</button></div></body></html>`;
+    mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
   });
 
   mainWindow.on("closed", () => {

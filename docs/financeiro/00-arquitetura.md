@@ -12,7 +12,7 @@
 | ORM | Prisma 6.9, provider **postgresql** (`prisma/schema.prisma`) |
 | Banco | Postgres no Railway — **atenção: o `.env` local aponta pro banco de PRODUÇÃO** |
 | Auth | NextAuth v5 beta, Credentials + bcryptjs, sessão JWT com `maxAge` de 5 min |
-| Desktop | Electron 42 — é só uma casca: `electron/main.js` carrega a URL do Railway (`cargostock-production.up.railway.app`). **Nada roda localmente no desktop** |
+| Desktop | Electron 42 — é só uma casca: `electron/main.js` carrega a URL oficial (`cargostock.app`, o mesmo host do AUTH_URL). **Nada roda localmente no desktop** |
 | Deploy | Railway (NIXPACKS). `railway.json`: build = `npm install && npx prisma generate && npm run build`; start = `npx prisma db push --accept-data-loss && npx next start` |
 | Libs úteis já instaladas | `pdfjs-dist` (já usada no client em `financeiro/page.tsx`), `bcryptjs`, `docx`/`docxtemplater`/`xlsx`, `ws` |
 
