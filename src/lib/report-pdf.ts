@@ -20,7 +20,11 @@ import {
   EVAL_CRITERIA,
   EvaluationPrintRow,
   HoldRow,
-  formatDayMonth,
+  formatMinutes,
+  formatPeriod,
+  holdMinutes,
+  holdPhasePeriods,
+  periodsMinutes,
   HOLD_STATUS_EN,
   PhotoMeta,
   REPORT_KINDS,
@@ -263,31 +267,28 @@ export async function buildCleaningReportPdf(opts: {
     d.y
   );
 
-  // Raspagem e pintura não têm fase de água — a tabela sai com início/término.
-  const hasPhases =
-    info.waterPhases && opts.holds.some((h) => h.salt_start || h.salt_end || h.fresh_start || h.fresh_end);
-  const range = (a: string | null, b: string | null) => (a || b ? `${a || "..."} - ${b || "..."}` : "-");
-  // Linha de datas embaixo do horário ("12/09 - 13/09"), só quando o porão tem
-  // data gravada — a operação vira a noite e a hora sozinha não dizia o dia.
-  const dates = (a: string | null, b: string | null) => {
-    const x = formatDayMonth(a);
-    const y = formatDayMonth(b);
-    if (!x && !y) return "";
-    if (x && y && x === y) return x;
-    return `${x || "..."} - ${y || "..."}`;
-  };
+  // Lavagem: uma coluna por fase de água (salgada/doce). Raspagem e pintura
+  // não têm fase — sai a lista de dias trabalhados e o total de horas.
+  const water = info.waterPhases;
   const holdCols = [0.26, 0.16, 0.21, 0.21, 0.16].map((f) => f * CONTENT_W);
-  const holdHead = hasPhases
+  const holdHead = water
     ? [areaCol, "STATUS", "SALT WATER WASH", "FRESH WATER RINSE", "COMPLETION %"]
-    : [areaCol, "STATUS", "START TIME", "COMPLETION TIME", "COMPLETION %"];
+    : [areaCol, "STATUS", "WORK PERIODS", "HOURS WORKED", "COMPLETION %"];
 
-  const drawRow = (cells: string[], cols: number[], y: number, o: { head?: boolean; center?: number[] } = {}) => {
+  // Linhas de total ("Total 8h30" / "Worked 8h30") saem menores e em destaque.
+  const isTotalLine = (cell: string) => /^(Total|Worked) /.test(cell);
+  const drawRow = (cells: string[], cols: number[], y: number, o: { head?: boolean; center?: number[]; sub?: boolean } = {}) => {
     let x = M;
     cells.forEach((cell, i) => {
       const center = (o.center || []).includes(i);
+      const last = i === cells.length - 1;
       const opts2: TextOpts = o.head
         ? { size: 7, bold: true, color: MUTED }
-        : { size: 9, color: i === cells.length - 1 ? BRAND_DK : INK, bold: i === cells.length - 1 };
+        : o.sub
+          ? isTotalLine(cell)
+            ? { size: 7.5, bold: true, color: BRAND_DK }
+            : { size: 8, color: INK }
+          : { size: 9, color: last ? BRAND_DK : INK, bold: last };
       const w = d.width(cell, opts2);
       d.text(cell, center ? x + (cols[i] - w) / 2 : x + 4, y, opts2);
       x += cols[i];
@@ -302,37 +303,42 @@ export async function buildCleaningReportPdf(opts: {
     d.text("No data.", M + 4, d.y - 12, { size: 9, color: MUTED });
     d.y -= 20;
   }
+  const LINE_H = 10;
   for (const h of opts.holds) {
-    const phases = hasPhases
-      ? [range(h.salt_start, h.salt_end), range(h.fresh_start, h.fresh_end)]
-      : [h.start_time || "-", h.end_time || "-"];
-    const phaseDates = hasPhases
-      ? [dates(h.salt_start_date, h.salt_end_date), dates(h.fresh_start_date, h.fresh_end_date)]
-      : [formatDayMonth(h.start_date), formatDayMonth(h.end_date)];
-    // Linha sem fase mas com horário legado: o intervalo geral não pode sumir.
-    if (hasPhases && !(h.salt_start || h.salt_end || h.fresh_start || h.fresh_end) && (h.start_time || h.end_time)) {
-      phases[0] = `${range(h.start_time, h.end_time)} (overall)`;
-      phases[1] = "";
-      phaseDates[0] = dates(h.start_date, h.end_date);
-      phaseDates[1] = "";
+    // Cada dia trabalhado vira uma linha ("12/09 15:00 - 18:00"); a fase
+    // fecha com o total de horas. Sem período: "-".
+    const lines = (ps: HoldRow["periods"], suffix = "") => ps.map((p) => `${formatPeriod(p)}${suffix}`);
+    let colA: string[];
+    let colB: string[];
+    if (water) {
+      const salt = holdPhasePeriods(h, "SALT");
+      const fresh = holdPhasePeriods(h, "FRESH");
+      const legacy = holdPhasePeriods(h, "GERAL");
+      colA = [...lines(salt), ...lines(legacy, " (overall)")];
+      colB = lines(fresh);
+      const ta = formatMinutes(periodsMinutes([...salt, ...legacy]));
+      const tb = formatMinutes(periodsMinutes(fresh));
+      if (ta && colA.length > 1) colA.push(`Total ${ta}`);
+      if (tb && colB.length > 1) colB.push(`Total ${tb}`);
+    } else {
+      colA = lines(h.periods);
+      colB = [formatMinutes(holdMinutes(h)) || "-"];
     }
-    const hasDates = Boolean(phaseDates[0] || phaseDates[1]);
-    paginate(hasDates ? 32 : 24);
-    drawRow([h.label, HOLD_STATUS_EN[h.status] || h.status, phases[0], phases[1], `${h.completion_pct}%`], holdCols, d.y - 12, {
-      center: [2, 3, 4],
-    });
-    if (hasDates) {
-      // Datas em linha própria, menor e apagada, centralizada sob cada horário.
-      let x = M + holdCols[0] + holdCols[1];
-      phaseDates.forEach((txt, i) => {
-        if (txt) {
-          const o: TextOpts = { size: 7, color: MUTED };
-          d.text(txt, x + (holdCols[2 + i] - d.width(txt, o)) / 2, d.y - 21, o);
-        }
-        x += holdCols[2 + i];
-      });
+    if (!colA.length) colA = ["-"];
+    if (!colB.length) colB = ["-"];
+    const total = formatMinutes(holdMinutes(h));
+    const labelLines = water && total ? [h.label, `Worked ${total}`] : [h.label];
+    const nLines = Math.max(labelLines.length, colA.length, colB.length);
+    const rowH = 19 + (nLines - 1) * LINE_H;
+    paginate(rowH + 5);
+    for (let li = 0; li < nLines; li++) {
+      drawRow(
+        [labelLines[li] || "", li === 0 ? HOLD_STATUS_EN[h.status] || h.status : "", colA[li] || "", colB[li] || "", li === 0 ? `${h.completion_pct}%` : ""],
+        holdCols,
+        d.y - 12 - li * LINE_H,
+        { center: [2, 3, 4], sub: li > 0 }
+      );
     }
-    const rowH = hasDates ? 27 : 19;
     d.rect(M, d.y - rowH + 2, CONTENT_W, 0.7, LINE);
     d.y -= rowH;
   }

@@ -8,7 +8,8 @@ import {
   siblingBlockReportIds,
   WORKED_ALLOC_WHERE,
 } from "@/lib/report-scope";
-import { SHARED_BLOCK_LABELS } from "@/lib/report-format";
+import { SHARED_BLOCK_LABELS, parsePeriods } from "@/lib/report-format";
+import type { Prisma } from "@prisma/client";
 
 // GET /api/relatorios/[jobId]?kind=EMBARQUE|COSTADO|RASPAGEM|PINTURA
 // Tudo que a tela do relatório precisa: navio, relatório (porões + atividades),
@@ -208,8 +209,6 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
   // tem ≤ ~9 porões e algumas dezenas de atividades; 60 linhas sobra.
   const MAX_ROWS = 60;
   const clip = (v: unknown, max: number) => (v ? String(v).slice(0, max) : null);
-  // Data dos horários do porão: só ISO yyyy-mm-dd; qualquer outra coisa vira null.
-  const isoDate = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : null);
   const holds = (Array.isArray(body.holds) ? body.holds : []).slice(0, MAX_ROWS);
   const activities = (Array.isArray(body.activities) ? body.activities : []).slice(0, MAX_ROWS);
 
@@ -258,18 +257,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
           status: ["PENDENTE", "EM_ANDAMENTO", "COMPLETO"].includes(String(h.status))
             ? String(h.status)
             : "PENDENTE",
-          start_time: clip(h.start_time, 40),
-          end_time: clip(h.end_time, 40),
-          salt_start: clip(h.salt_start, 40),
-          salt_end: clip(h.salt_end, 40),
-          fresh_start: clip(h.fresh_start, 40),
-          fresh_end: clip(h.fresh_end, 40),
-          start_date: isoDate(h.start_date),
-          end_date: isoDate(h.end_date),
-          salt_start_date: isoDate(h.salt_start_date),
-          salt_end_date: isoDate(h.salt_end_date),
-          fresh_start_date: isoDate(h.fresh_start_date),
-          fresh_end_date: isoDate(h.fresh_end_date),
+          // Dias trabalhados no porão (dia + início + término), validados e
+          // com teto — mesmo motivo do MAX_ROWS.
+          periods: parsePeriods(h.periods).slice(0, MAX_ROWS) as unknown as Prisma.InputJsonValue,
           completion_pct: Math.max(0, Math.min(100, Number(h.completion_pct) || 0)),
           sort_order: i,
         })),

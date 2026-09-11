@@ -30,8 +30,13 @@ import {
   EVAL_CRITERIA,
   PHOTO_PLACES,
   REPORT_KINDS,
-  formatDateTime,
+  formatDayMonth,
   formatEtcDate,
+  formatMinutes,
+  holdMinutes,
+  holdPhasePeriods,
+  parsePeriods,
+  periodsMinutes,
   isSharedPhotoBlock,
   photoBlockKey,
   photoPlaceRank,
@@ -39,6 +44,8 @@ import {
   SHARED_PHOTO_KINDS,
   GENERAL_BLOCK,
   type ActivityRow,
+  type HoldPeriod,
+  type HoldPhase,
   type HoldRow,
   type PhotoMeta,
   type ReportKindName,
@@ -307,22 +314,19 @@ function buildWhatsText(opts: {
   };
   // Uma linha por fase, com nome por extenso — só emoji não dava pra saber
   // qual era a salgada e qual era a doce.
-  // A data entra na frente da hora ("12/09 15:00 às 13/09 02:00") — a operação
-  // vira a noite e só a hora não dizia de que dia era cada ponta.
-  const phase = (
-    emoji: string,
-    name: string,
-    start: string | null,
-    end: string | null,
-    startDate: string | null,
-    endDate: string | null
-  ) => {
-    if (!start && !end) return null;
-    const a = formatDateTime(startDate, start);
-    const b = formatDateTime(endDate, end);
-    if (start && end) return `${emoji} ${name}: ${a} às ${b}`;
-    if (start) return `${emoji} ${name}: iniciou às ${a}`;
-    return `${emoji} ${name}: terminou às ${b}`;
+  // Um dia por trecho ("12/09 15:00 às 18:00 · 13/09 07:00 às 12:00") e o
+  // total de horas da fase no fim — o escritório quer saber quanto se
+  // trabalhou em cada porão.
+  const phase = (emoji: string, name: string, ps: HoldPeriod[]) => {
+    if (!ps.length) return null;
+    const parts = ps.map((p) => {
+      const d = formatDayMonth(p.date);
+      const when =
+        p.start && p.end ? `${p.start} às ${p.end}` : p.start ? `iniciou às ${p.start}` : `terminou às ${p.end}`;
+      return d ? `${d} ${when}` : when;
+    });
+    const total = formatMinutes(periodsMinutes(ps));
+    return `${emoji} ${name}: ${parts.join(" · ")}${total ? ` (${total})` : ""}`;
   };
 
   const L: string[] = [];
@@ -345,12 +349,14 @@ function buildWhatsText(opts: {
       // horário só (início → término).
       const water = REPORT_KINDS[opts.kind].waterPhases;
       for (const line of [
-        water ? phase("🌊", "Água salgada", h.salt_start, h.salt_end, h.salt_start_date, h.salt_end_date) : null,
-        water ? phase("💧", "Água doce", h.fresh_start, h.fresh_end, h.fresh_start_date, h.fresh_end_date) : null,
-        phase("🕐", water ? "Horário geral" : "Horário", h.start_time, h.end_time, h.start_date, h.end_date),
+        water ? phase("🌊", "Água salgada", holdPhasePeriods(h, "SALT")) : null,
+        water ? phase("💧", "Água doce", holdPhasePeriods(h, "FRESH")) : null,
+        phase("🕐", water ? "Horário geral" : "Horário", holdPhasePeriods(h, "GERAL")),
       ]) {
         if (line) L.push(`   ${line}`);
       }
+      const total = formatMinutes(holdMinutes(h));
+      if (water && total) L.push(`   ⏱ Total trabalhado: ${total}`);
     }
   }
 
@@ -368,31 +374,21 @@ function buildWhatsText(opts: {
 }
 
 function emptyHold(label: string): HoldRow {
-  return {
-    label,
-    status: "PENDENTE",
-    start_time: null,
-    end_time: null,
-    salt_start: null,
-    salt_end: null,
-    fresh_start: null,
-    fresh_end: null,
-    start_date: null,
-    end_date: null,
-    salt_start_date: null,
-    salt_end_date: null,
-    fresh_start_date: null,
-    fresh_end_date: null,
-    completion_pct: 0,
-  };
+  return { label, status: "PENDENTE", periods: [], completion_pct: 0 };
 }
 
-type HoldTimeField = "salt_start" | "salt_end" | "fresh_start" | "fresh_end" | "start_time" | "end_time";
-type HoldDateField = "salt_start_date" | "salt_end_date" | "fresh_start_date" | "fresh_end_date" | "start_date" | "end_date";
+// Porão vindo da API: periods é JSON cru — valida antes de entrar no estado.
+function normalizeHold(h: HoldRow & { periods?: unknown }): HoldRow {
+  return { ...h, periods: parsePeriods(h.periods) };
+}
 
-// Campo de data que acompanha cada horário do porão.
-function dateFieldOf(field: HoldTimeField): HoldDateField {
-  return `${field.replace(/_time$/, "")}_date` as HoldDateField;
+// "2026-09-12" → "2026-09-13": o dia seguinte, pro próximo período do porão já
+// vir com a data certa (o pessoal parou às 18h e volta amanhã).
+function nextDayIso(iso: string): string {
+  const d = new Date(`${iso}T12:00:00`);
+  if (isNaN(d.getTime())) return iso;
+  d.setDate(d.getDate() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 // EMBARQUE com nº de porões no cadastro (aba Navios): a lista do relatório É a
@@ -683,9 +679,9 @@ function ReportDetail({
       if (kind !== "COSTADO" && d.ship?.holds_count) {
         // A lista de porões vem do cadastro do navio (aba Navios) — vale pra
         // lavagem, raspagem e pintura (são os mesmos porões do navio).
-        setHolds(mergeShipHolds(r?.holds ?? [], d.ship.holds_count));
+        setHolds(mergeShipHolds((r?.holds ?? []).map(normalizeHold), d.ship.holds_count));
       } else if (r && r.holds.length > 0) {
-        setHolds(r.holds.map((h) => ({ ...h })));
+        setHolds(r.holds.map(normalizeHold));
       } else {
         setHolds([]);
       }
@@ -1273,47 +1269,63 @@ function ReportDetail({
               {holds.map((h, i) => {
                 const patch = (p: Partial<HoldRow>) =>
                   setHolds((prev) => prev.map((x, j) => (j === i ? { ...x, ...p } : x)));
-                // Horário preenchido em porão pendente → "Em andamento" sozinho.
-                // Raspagem e pintura têm um horário só: marcou o término, o
-                // serviço daquele porão acabou → "Completo" e 100%. Na lavagem
-                // são duas fases (salgada + doce), então o término de uma não
-                // fecha o porão — lá continua manual.
-                // Cada horário tem a sua data: preencheu a hora sem data, a
-                // data do relatório entra sozinha — o supervisor só mexe nela
-                // quando a operação virou a noite e a ponta caiu no dia
-                // seguinte. Limpou a hora, a data vai junto.
-                const patchTime = (field: HoldTimeField, v: string) => {
-                  const finishes = !kindInfo.waterPhases && field === "end_time";
-                  const dateField = dateFieldOf(field);
-                  patch({
-                    [field]: v || null,
-                    [dateField]: !v ? null : h[dateField] || header.report_date || null,
-                    ...(v && finishes
-                      ? { status: "COMPLETO", completion_pct: 100 }
-                      : v && h.status === "PENDENTE"
-                        ? { status: "EM_ANDAMENTO" }
-                        : {}),
-                  } as Partial<HoldRow>);
-                };
                 // Linha do cadastro do navio: nome fixo e sem exclusão. Linhas
                 // além do cadastro (legado) seguem editáveis pra dar baixa.
                 const fixed = lockedHolds > 0 && i < lockedHolds;
-                // Data + hora de uma ponta (início ou término) do porão.
-                const timeAt = (field: HoldTimeField, title: string) => {
-                  const dateField = dateFieldOf(field);
+                // Uma fase do porão (salgada, doce ou o horário único de
+                // raspagem/pintura): lista de dias trabalhados, cada um com
+                // data + início + término, e o total de horas da fase. O
+                // pessoal para às 18h e volta no dia seguinte — "+ dia" já
+                // vem com a data seguinte. Horário em porão pendente → "Em
+                // andamento" sozinho; Completo continua manual (o fim de um
+                // dia não é o fim do serviço).
+                const phaseBlock = (phase: HoldPhase, emoji: string, name: string, legacy = false) => {
+                  const idxs = h.periods.map((p, k) => (p.phase === phase ? k : -1)).filter((k) => k >= 0);
+                  const total = formatMinutes(periodsMinutes(holdPhasePeriods(h, phase)));
+                  const patchPeriod = (k: number, p: Partial<HoldPeriod>) =>
+                    patch({
+                      periods: h.periods.map((x, j) => (j === k ? { ...x, ...p } : x)),
+                      ...((p.start || p.end) && h.status === "PENDENTE" ? { status: "EM_ANDAMENTO" } : {}),
+                    });
+                  const addPeriod = () => {
+                    const last = idxs.length ? h.periods[idxs[idxs.length - 1]] : null;
+                    const date = last?.date ? nextDayIso(last.date) : header.report_date || null;
+                    patch({ periods: [...h.periods, { phase, date, start: null, end: null }] });
+                  };
+                  const removePeriod = (k: number) => patch({ periods: h.periods.filter((_, j) => j !== k) });
                   return (
-                    <div className="flex items-center gap-1 min-w-0 flex-1">
-                      <input
-                        type="date"
-                        value={h[dateField] || ""}
-                        onChange={(e) => patch({ [dateField]: e.target.value || null } as Partial<HoldRow>)}
-                        className={`${inputCls} !w-auto min-w-[8.5rem]`}
-                        title={`Data do ${title.toLowerCase()}`}
-                      />
-                      <input type="time" value={normalizeTime(h[field])} onChange={(e) => patchTime(field, e.target.value)} className={inputCls} title={title} />
+                    <div className="flex flex-col sm:flex-row sm:items-start gap-1.5">
+                      <span className={`text-xs w-24 shrink-0 sm:pt-2 ${legacy ? "text-amber-700" : "text-text-light"}`} title={legacy ? "Registrado antes da divisão por fases" : undefined}>
+                        {emoji} {name}
+                      </span>
+                      <div className="flex-1 min-w-0 space-y-1.5">
+                        {idxs.map((k) => {
+                          const p = h.periods[k];
+                          return (
+                            <div key={k} className="flex items-center gap-1.5">
+                              <input type="date" value={p.date || ""} onChange={(e) => patchPeriod(k, { date: e.target.value || null })} className={`${inputCls} !w-auto min-w-[8.5rem]`} title="Dia" />
+                              <input type="time" value={normalizeTime(p.start)} onChange={(e) => patchPeriod(k, { start: e.target.value || null })} className={inputCls} title="Início" />
+                              <span className="text-xs text-text-light shrink-0">→</span>
+                              <input type="time" value={normalizeTime(p.end)} onChange={(e) => patchPeriod(k, { end: e.target.value || null })} className={inputCls} title="Término — ou a hora em que pararam nesse dia" />
+                              <button type="button" onClick={() => removePeriod(k)} title="Remover este dia" className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition shrink-0">
+                                <TrashIcon className="w-4 h-4" />
+                              </button>
+                            </div>
+                          );
+                        })}
+                        <div className="flex items-center gap-3 min-h-[1.5rem]">
+                          {!legacy && (
+                            <button type="button" onClick={addPeriod} className="text-xs font-medium text-primary hover:underline">
+                              + {idxs.length ? "Adicionar outro dia" : "Adicionar dia"}
+                            </button>
+                          )}
+                          {total && <span className="text-xs text-text-light">⏱ {total} trabalhadas</span>}
+                        </div>
+                      </div>
                     </div>
                   );
                 };
+                const holdTotal = formatMinutes(holdMinutes(h));
                 return (
                   <div key={i} className="bg-gray-50 rounded-lg p-2.5 space-y-2">
                     <div className="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_150px_90px_36px] gap-2 items-center">
@@ -1358,44 +1370,21 @@ function ReportDetail({
                     {kindInfo.waterPhases ? (
                       <>
                         {/* Fases da lavagem: água salgada (lavagem) e doce
-                            (enxágue). Empilha até lg — em ~768-850px as metades
-                            espremiam os inputs de horário a ~40px (ilegível). */}
-                        <div className="grid grid-cols-1 2xl:grid-cols-2 gap-2">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs text-text-light w-24 shrink-0">🌊 Água salgada</span>
-                            {timeAt("salt_start", "Início")}
-                            <span className="text-xs text-text-light shrink-0">→</span>
-                            {timeAt("salt_end", "Término")}
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs text-text-light w-24 shrink-0">💧 Água doce</span>
-                            {timeAt("fresh_start", "Início")}
-                            <span className="text-xs text-text-light shrink-0">→</span>
-                            {timeAt("fresh_end", "Término")}
-                          </div>
-                        </div>
+                            (enxágue), cada uma com os seus dias. */}
+                        {phaseBlock("SALT", "🌊", "Água salgada")}
+                        {phaseBlock("FRESH", "💧", "Água doce")}
                         {/* Horário geral legado (relatório salvo antes das
                             fases): só aparece quando tem valor — dá pra ver,
-                            corrigir ou limpar (limpou e salvou → some de vez). */}
-                        {(h.start_time || h.end_time) && (
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs text-amber-700 w-24 shrink-0" title="Registrado antes da divisão por fases">🕐 Horário geral</span>
-                            <input type="text" value={h.start_time || ""} onChange={(e) => patch({ start_time: e.target.value })} className={inputCls} placeholder="Início" />
-                            <input type="text" value={h.end_time || ""} onChange={(e) => patch({ end_time: e.target.value })} className={inputCls} placeholder="Término" />
-                          </div>
+                            corrigir ou remover (removeu e salvou → some de vez). */}
+                        {holdPhasePeriods(h, "GERAL").length > 0 && phaseBlock("GERAL", "🕐", "Horário geral", true)}
+                        {holdTotal && (
+                          <p className="text-xs font-medium text-text text-right">⏱ Total do {kind === "COSTADO" ? "área" : "porão"}: {holdTotal}</p>
                         )}
                       </>
                     ) : (
-                      // Raspagem e pintura não têm fase de água: um horário só
-                      // (início → término), gravado nos mesmos campos gerais.
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-text-light w-24 shrink-0">
-                          {kindInfo.emoji} {kind === "PINTURA" ? "Pintura" : "Raspagem"}
-                        </span>
-                        {timeAt("start_time", "Início")}
-                        <span className="text-xs text-text-light shrink-0">→</span>
-                        {timeAt("end_time", "Término")}
-                      </div>
+                      // Raspagem e pintura não têm fase de água: um horário
+                      // por dia, gravado na fase GERAL.
+                      phaseBlock("GERAL", kindInfo.emoji, kind === "PINTURA" ? "Pintura" : "Raspagem")
                     )}
                   </div>
                 );

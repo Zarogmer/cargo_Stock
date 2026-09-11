@@ -885,23 +885,11 @@ model ShipReportHold {
   reports        ShipReport @relation(fields: [report_id], references: [id], onDelete: Cascade)
   label          String // "Porão 1", "Costado BB"...
   status         String     @default("PENDENTE") // PENDENTE | EM_ANDAMENTO | COMPLETO
-  // Legado (relatórios de antes das fases): horário geral início/término.
-  start_time     String?
-  end_time       String?
-  // Fases da lavagem, com horários próprios: água salgada (lavagem) e água
-  // doce (enxágue). O PDF mostra as duas colunas quando preenchidas.
-  salt_start     String?
-  salt_end       String?
-  fresh_start    String?
-  fresh_end      String?
-  // Data (ISO yyyy-mm-dd) de cada horário acima: a operação vira a noite e
-  // o "15:00 - 02:00" precisa dizer de que dia é cada ponta.
-  start_date       String?
-  end_date         String?
-  salt_start_date  String?
-  salt_end_date    String?
-  fresh_start_date String?
-  fresh_end_date   String?
+  // Períodos trabalhados no porão: [{phase, date, start, end}] — um por dia
+  // (o pessoal para às 18h e volta no dia seguinte). phase = SALT | FRESH
+  // (fases da lavagem) | GERAL (raspagem/pintura, e o horário geral legado).
+  // Formato/validação em src/lib/report-format.ts (HoldPeriod, parsePeriods).
+  periods        Json       @default("[]")
   completion_pct Int        @default(0)
   sort_order     Int        @default(0)
 

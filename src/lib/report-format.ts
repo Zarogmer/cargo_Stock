@@ -72,26 +72,89 @@ export const REPORT_KINDS: Record<ReportKindName, ReportKindInfo> = {
   },
 };
 
+// Fase de um período: SALT/FRESH são as duas fases da lavagem (água salgada e
+// doce); GERAL é o horário único de raspagem/pintura — e também o "horário
+// geral" legado dos relatórios de lavagem de antes das fases.
+export type HoldPhase = "SALT" | "FRESH" | "GERAL";
+
+// Um dia de trabalho no porão: o pessoal para (às 18h, por exemplo) e volta no
+// dia seguinte, então cada dia tem o seu início e término. Término antes do
+// início = virou a noite (22:00 → 02:00).
+export interface HoldPeriod {
+  phase: HoldPhase;
+  date: string | null; // ISO yyyy-mm-dd
+  start: string | null; // HH:MM
+  end: string | null; // HH:MM
+}
+
 export interface HoldRow {
   label: string;
   status: string; // PENDENTE | EM_ANDAMENTO | COMPLETO
-  // Legado: horário geral (relatórios de antes das fases de água).
-  start_time: string | null;
-  end_time: string | null;
-  // Fases da lavagem: água salgada (lavagem) e água doce (enxágue).
-  salt_start: string | null;
-  salt_end: string | null;
-  fresh_start: string | null;
-  fresh_end: string | null;
-  // Data (ISO yyyy-mm-dd) de cada horário — a operação atravessa a noite, então
-  // início e término podem cair em dias diferentes.
-  start_date: string | null;
-  end_date: string | null;
-  salt_start_date: string | null;
-  salt_end_date: string | null;
-  fresh_start_date: string | null;
-  fresh_end_date: string | null;
+  periods: HoldPeriod[];
   completion_pct: number;
+}
+
+const PHASES: HoldPhase[] = ["SALT", "FRESH", "GERAL"];
+
+// "22h", "22.00", "7:5" → "22:00"/"07:05"; o que não é hora vira null.
+export function normalizeClock(v: unknown): string | null {
+  const m = String(v ?? "").trim().match(/^(\d{1,2})[:hH.](\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  if (h > 23 || Number(m[2]) > 59) return null;
+  return `${String(h).padStart(2, "0")}:${m[2]}`;
+}
+
+// Lê o JSON gravado em ship_report_holds.periods (ou o que veio do cliente)
+// e devolve só períodos válidos — fase conhecida e pelo menos um dos campos.
+export function parsePeriods(v: unknown): HoldPeriod[] {
+  if (!Array.isArray(v)) return [];
+  const out: HoldPeriod[] = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    const phase = String(o.phase || "GERAL") as HoldPhase;
+    if (!PHASES.includes(phase)) continue;
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(o.date || "")) ? String(o.date) : null;
+    const start = normalizeClock(o.start);
+    const end = normalizeClock(o.end);
+    if (!date && !start && !end) continue;
+    out.push({ phase, date, start, end });
+  }
+  return out;
+}
+
+// Minutos de um período. Só conta com início E término; término menor que o
+// início = atravessou a meia-noite.
+export function periodMinutes(p: HoldPeriod): number {
+  const a = normalizeClock(p.start);
+  const b = normalizeClock(p.end);
+  if (!a || !b) return 0;
+  const [ah, am] = a.split(":").map(Number);
+  const [bh, bm] = b.split(":").map(Number);
+  const diff = bh * 60 + bm - (ah * 60 + am);
+  return diff < 0 ? diff + 24 * 60 : diff;
+}
+
+export function periodsMinutes(ps: HoldPeriod[]): number {
+  return ps.reduce((acc, p) => acc + periodMinutes(p), 0);
+}
+
+export function holdPhasePeriods(h: HoldRow, phase: HoldPhase): HoldPeriod[] {
+  return (h.periods || []).filter((p) => p.phase === phase);
+}
+
+// Total do porão = soma de todas as fases.
+export function holdMinutes(h: HoldRow): number {
+  return periodsMinutes(h.periods || []);
+}
+
+// 510 → "8h30"; 45 → "0h45"; 0 → "" (nada trabalhado ainda).
+export function formatMinutes(min: number): string {
+  if (!min || min <= 0) return "";
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${h}h${String(m).padStart(2, "0")}`;
 }
 
 // "2026-09-12" → "12/09" (dia/mês curto, pra caber ao lado da hora).
@@ -100,12 +163,11 @@ export function formatDayMonth(iso: string | null | undefined): string {
   return m ? `${m[3]}/${m[2]}` : "";
 }
 
-// Hora com a data na frente quando tem: "12/09 15:00". Sem data, só a hora.
-export function formatDateTime(date: string | null | undefined, time: string | null | undefined): string {
-  const t = String(time || "").trim();
-  const d = formatDayMonth(date);
-  if (!t) return "";
-  return d ? `${d} ${t}` : t;
+// "12/09 15:00 - 18:00" (data na frente quando tem; ponta que falta vira "...").
+export function formatPeriod(p: HoldPeriod, sep = " - "): string {
+  const d = formatDayMonth(p.date);
+  const range = `${p.start || "..."}${sep}${p.end || "..."}`;
+  return d ? `${d} ${range}` : range;
 }
 
 export interface ActivityRow {

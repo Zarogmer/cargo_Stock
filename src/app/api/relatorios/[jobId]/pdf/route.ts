@@ -17,6 +17,7 @@ import {
   SHARED_BLOCK_LABELS,
   SectionMeta,
   formatDayMonthYear,
+  parsePeriods,
   reportFileName,
 } from "@/lib/report-format";
 
@@ -75,7 +76,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
         reportDate: report?.report_date?.toISOString() ?? null,
         port: report?.port || job.ships?.port || null,
         complete: report?.status === "COMPLETO",
-        holds: report?.holds ?? [],
+        holds: (report?.holds ?? []).map((h) => ({ ...h, periods: parsePeriods(h.periods) })),
         activities: report?.activities ?? [],
         remarks: report?.remarks ?? null,
         etcDate: report?.etc_date ?? null,
