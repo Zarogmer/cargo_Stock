@@ -12,6 +12,7 @@ import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 import { SHIFT_PERIODS, type ShiftPeriod } from "@/types/database";
 import { payModeIsEscalable, payModeOfFunctionUnit, pickFunctionByName } from "@/lib/jobUnits";
 import { DEFAULT_PORTS, DEFAULT_CLIENTS } from "@/lib/port-client-options";
+import { computeShipYearNumbers, formatShipNumber } from "@/lib/ship-number";
 import { Modal } from "@/components/ui/modal";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -526,6 +527,10 @@ export default function NaviosPage() {
   }, [loadShips, loadEmployees, loadJobFunctions, loadOccupied, loadSituationTemplates, pathname]);
 
   // ── Filter ─────────────────────────────────────────────────────────────────
+
+  // Nº do navio no ano (1º que chegou em janeiro = 1) — mesma numeração da
+  // planilha "1 NAVIOS <ano>" e dos cards do Financeiro.
+  const shipNumbers = useMemo(() => computeShipYearNumbers(ships), [ships]);
 
   const filtered = ships.filter((s) => {
     const matchSearch =
@@ -1507,6 +1512,14 @@ export default function NaviosPage() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
+                        {shipNumbers.get(ship.id) && (
+                          <span
+                            className="inline-flex items-center rounded-md bg-slate-800 text-white text-[11px] font-bold px-1.5 py-0.5 tabular-nums shrink-0"
+                            title={`${shipNumbers.get(ship.id)!.n}º navio de ${shipNumbers.get(ship.id)!.year} (${shipNumbers.get(ship.id)!.total} até agora)`}
+                          >
+                            {formatShipNumber(shipNumbers.get(ship.id))}
+                          </span>
+                        )}
                         <h3 className="font-semibold text-text truncate">{ship.name}</h3>
                         <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${STATUS_COLORS[ship.status]}`}>
                           {STATUS_LABELS[ship.status]}

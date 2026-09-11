@@ -77,6 +77,8 @@ import {
   EMBARQUE_SERVICE_LABELS, isServiceExtra, calcJobCost, prepareFinanceAllocations,
 } from "@/lib/job-cost";
 import { computeEmployeeStats, type EmployeeStats } from "@/lib/employee-stats";
+import { computeShipYearNumbers, formatShipNumber, type ShipYearNumber } from "@/lib/ship-number";
+import type { AnnualShipRow } from "@/lib/relatorios-anuais-xlsx";
 import { EmployeeDetailDrawer } from "@/components/financeiro/employee-detail-modal";
 import type {
   JobFunction,
@@ -148,6 +150,21 @@ function ShipStatusBadge({ status }: { status?: string | null }) {
   return (
     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${SHIP_STATUS_COLORS[status] || "bg-gray-100 text-gray-600"}`} title="Situação do navio">
       {SHIP_STATUS_LABELS[status] || status}
+    </span>
+  );
+}
+
+// Nº do navio no ano — o "Nº" da coluna A da planilha "1 NAVIOS <ano>" da
+// diretoria. Fica à ESQUERDA do nome do navio nos cards pra se saber de cara
+// qual navio do ano é aquele. Calculado em memória (src/lib/ship-number.ts).
+function ShipNumberBadge({ num }: { num?: ShipYearNumber | null }) {
+  if (!num) return null;
+  return (
+    <span
+      className="inline-flex items-center rounded-md bg-slate-800 text-white text-[11px] font-bold px-1.5 py-0.5 tabular-nums shrink-0"
+      title={`${num.n}º navio de ${num.year} (${num.total} até agora)`}
+    >
+      {formatShipNumber(num)}
     </span>
   );
 }
@@ -504,6 +521,10 @@ export default function FinanceiroPage() {
   const [allocations, setAllocations] = useState<JobAllocation[]>([]);
   const [adjustments, setAdjustments] = useState<JobAdjustment[]>([]);
   const [ships, setShips] = useState<Ship[]>([]);
+  // Lista LEVE de TODOS os navios (a `ships` acima para nas 50 chegadas mais
+  // recentes): dá o Nº do navio no ano nos cards e alimenta as planilhas
+  // anuais da diretoria (1 NAVIOS, 2 FUNCIONARIOS X NAVIOS, 3 PAGAMENTOS).
+  const [shipsAll, setShipsAll] = useState<AnnualShipRow[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   // Map<"empId-fnId", rate> — overrides do employee_function_rates carregados
   // junto com o resto, pra que qualquer modal já tenha o lookup pronto e
@@ -563,7 +584,7 @@ export default function FinanceiroPage() {
 
   const loadAll = useCallback(async () => {
     setLoading(true);
-    const [fnRes, unRes, rtRes, jbRes, alRes, adRes, shRes, emRes, srRes, avRes, adcRes] = await Promise.all([
+    const [fnRes, unRes, rtRes, jbRes, alRes, adRes, shRes, saRes, emRes, srRes, avRes, adcRes] = await Promise.all([
       db.from("job_functions").select("*").order("name"),
       db.from("job_units").select("*"),
       db.from("job_function_rates").select("*").order("valid_from", { ascending: false }),
@@ -579,7 +600,10 @@ export default function FinanceiroPage() {
       // port/client_name entram nas opções do filtro (portos/clientes da
       // operação aparecem mesmo sem job antigo com o campo preenchido).
       db.from("ships").select("id, name, status, services, port, client_name").order("arrival_date", { ascending: false }).limit(50),
-      db.from("employees").select("id, name, role, cpf, birth_date, bank_name, bank_agency, bank_account, bank_account_type, status, sector, admin_ship_rate").order("name"),
+      // Todos os navios, só os campos das planilhas anuais + numeração no ano.
+      db.from("ships").select("id, name, arrival_date, departure_date, created_at, status, port, client_name, cargo_type, holds_count, services").order("arrival_date", { ascending: false }),
+      // admission_date: coluna ADMISSÃO da planilha "3 PAGAMENTOS DOS FUNCIONÁRIOS".
+      db.from("employees").select("id, name, role, cpf, birth_date, bank_name, bank_agency, bank_account, bank_account_type, status, sector, admin_ship_rate, admission_date").order("name"),
       db.from("employee_function_rates").select("employee_id, function_id, rate"),
       db.from("employee_advances").select("*"),
       db.from("advance_discounts").select("*"),
@@ -636,6 +660,7 @@ export default function FinanceiroPage() {
     setAllocations(prepareFinanceAllocations(rawAllocs, emps, allFunctions, srMap, rawJobs, shipsData));
     setAdjustments((adRes.data as JobAdjustment[]) || []);
     setShips(shipsData);
+    setShipsAll((saRes.data as AnnualShipRow[]) || []);
     setAdvances((avRes.data as Advance[]) || []);
     setAdvDiscounts((adcRes.data as AdvanceDiscountRow[]) || []);
     setLoading(false);
@@ -706,6 +731,7 @@ export default function FinanceiroPage() {
           adjustments={adjustments}
           functions={functions}
           ships={ships}
+          shipsAll={shipsAll}
           employees={employees}
           specialRates={specialRates}
           canEdit={canEdit}
@@ -2476,7 +2502,7 @@ function EmployeeRatesModal({
 // ─── PAGAMENTO DE NAVIOS (Embarque + Costado numa aba só) ────────────────────
 
 function PagamentoNaviosTab({
-  initialTipo, jobs, allocations, adjustments, functions, ships, employees, specialRates, canEdit, canEditFunction, profileName, filter, onChange, loading,
+  initialTipo, jobs, allocations, adjustments, functions, ships, shipsAll, employees, specialRates, canEdit, canEditFunction, profileName, filter, onChange, loading,
 }: {
   initialTipo: "EMBARQUE" | "COSTADO";
   jobs: Job[];
@@ -2484,6 +2510,7 @@ function PagamentoNaviosTab({
   adjustments: JobAdjustment[];
   functions: JobFunction[];
   ships: Ship[];
+  shipsAll: AnnualShipRow[];
   employees: Employee[];
   specialRates: Map<string, number>;
   canEdit: boolean;
@@ -2505,6 +2532,7 @@ function PagamentoNaviosTab({
       adjustments={adjustments}
       functions={functions}
       ships={ships}
+      shipsAll={shipsAll}
       employees={employees}
       specialRates={specialRates}
       canEdit={canEdit}
@@ -2522,6 +2550,7 @@ function PagamentoNaviosTab({
       adjustments={adjustments}
       functions={functions}
       ships={ships}
+      shipsAll={shipsAll}
       employees={employees}
       specialRates={specialRates}
       canEdit={canEdit}
@@ -2577,13 +2606,14 @@ function PagamentoNaviosTab({
 // ─── TRABALHOS TAB ──────────────────────────────────────────────────────────
 
 function TrabalhosTab({
-  jobs, allocations, adjustments, functions, ships, employees, specialRates, canEdit, canEditFunction, profileName, filter, onChange, loading,
+  jobs, allocations, adjustments, functions, ships, shipsAll, employees, specialRates, canEdit, canEditFunction, profileName, filter, onChange, loading,
 }: {
   jobs: Job[];
   allocations: JobAllocation[];
   adjustments: JobAdjustment[];
   functions: JobFunction[];
   ships: Ship[];
+  shipsAll: AnnualShipRow[];
   employees: Employee[];
   specialRates: Map<string, number>;
   canEdit: boolean;
@@ -2605,6 +2635,50 @@ function TrabalhosTab({
   const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("EM_ANDAMENTO");
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  // Nº do navio no ano (badge à esquerda do nome) — mesma numeração da aba Navios.
+  const shipNumbers = useMemo(() => computeShipYearNumbers(shipsAll), [shipsAll]);
+
+  // ── Planilhas anuais da diretoria ("02 - CONTROLE DE PAGAMENTO/<ano>") ──
+  // Geradas do que já está carregado: numeração dos navios + o mesmo cálculo
+  // de ganho do Controle de Funcionários. Ano = o do filtro (todos = ano atual).
+  const [sheetMenu, setSheetMenu] = useState(false);
+  const [sheetBusy, setSheetBusy] = useState<string | null>(null);
+  const sheetYear = filter.year === "ALL" ? new Date().getFullYear() : filter.year;
+  async function downloadAnnualSheet(kind: "NAVIOS" | "FUNCIONARIOS" | "PAGAMENTOS") {
+    setSheetMenu(false);
+    setSheetBusy(kind);
+    try {
+      const mod = await import("@/lib/relatorios-anuais-xlsx");
+      let out: ArrayBuffer;
+      let filename: string;
+      if (kind === "NAVIOS") {
+        out = mod.buildNaviosXlsx(sheetYear, shipsAll, shipNumbers);
+        filename = `1 NAVIOS ${sheetYear}.xlsx`;
+      } else {
+        // Vales não entram nas planilhas (só Ganho), então advances/advDiscounts
+        // vazios não mudam nenhum valor exportado.
+        const stats = computeEmployeeStats(
+          { employees, allocations, adjustments, advances: [], advDiscounts: [], jobs, ships: shipsAll, functions },
+          { year: sheetYear, month: "TODOS", status: "TODOS" },
+        );
+        if (kind === "FUNCIONARIOS") {
+          out = mod.buildFuncionariosNaviosXlsx(sheetYear, stats, jobs, shipsAll, shipNumbers);
+          filename = `2 FUNCIONARIOS X NAVIOS ${sheetYear}.xlsx`;
+        } else {
+          out = mod.buildPagamentosXlsx(sheetYear, stats);
+          filename = `3 PAGAMENTOS DOS FUNCIONÁRIOS ${sheetYear}.xlsx`;
+        }
+      }
+      triggerBlobDownload(
+        new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+        filename,
+      );
+    } catch (err) {
+      alert(`Erro ao gerar a planilha: ${(err as Error).message}`);
+    } finally {
+      setSheetBusy(null);
+    }
+  }
 
   // Administrativo = alocações kind=ADMINISTRATIVO do job, independente da
   // função-carregador (houve duas ADMINISTRATIVO no banco — filtrar por uma id
@@ -2664,22 +2738,56 @@ function TrabalhosTab({
             </button>
           ))}
         </div>
-        {canEdit && (
-          <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <div className="relative">
             <Button
               size="sm"
               variant="secondary"
-              onClick={handleSyncShips}
-              disabled={syncing}
-              title="Cria Pagamento para todo navio que ainda não tem um"
+              onClick={() => setSheetMenu((v) => !v)}
+              disabled={!!sheetBusy || loading}
+              title={`Planilhas anuais da diretoria (ano ${sheetYear})`}
             >
-              {syncing ? "Sincronizando..." : "🔄 Sincronizar navios"}
+              {sheetBusy ? "Gerando..." : `📊 Planilhas ${sheetYear} ▾`}
             </Button>
-            <Button size="sm" onClick={() => { setEditJob(null); setShowJobForm(true); }}>
-              <PlusIcon className="w-4 h-4" />Novo Pagamento
-            </Button>
+            {sheetMenu && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setSheetMenu(false)} />
+                <div className="absolute right-0 mt-1 z-20 w-72 bg-card border border-border rounded-lg shadow-lg overflow-hidden">
+                  {([
+                    ["NAVIOS", `1 NAVIOS ${sheetYear}`, "Lista numerada dos navios do ano"],
+                    ["FUNCIONARIOS", `2 FUNCIONARIOS X NAVIOS ${sheetYear}`, "Uma aba por colaborador, valor no mês"],
+                    ["PAGAMENTOS", `3 PAGAMENTOS DOS FUNCIONÁRIOS ${sheetYear}`, "Navios, porões e valor no ano por pessoa"],
+                  ] as const).map(([kind, label, hint]) => (
+                    <button
+                      key={kind}
+                      onClick={() => downloadAnnualSheet(kind)}
+                      className="w-full text-left px-3 py-2 hover:bg-gray-50 border-b border-border last:border-b-0"
+                    >
+                      <p className="text-xs font-semibold">{label}.xlsx</p>
+                      <p className="text-[11px] text-text-light">{hint}</p>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
-        )}
+          {canEdit && (
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={handleSyncShips}
+                disabled={syncing}
+                title="Cria Pagamento para todo navio que ainda não tem um"
+              >
+                {syncing ? "Sincronizando..." : "🔄 Sincronizar navios"}
+              </Button>
+              <Button size="sm" onClick={() => { setEditJob(null); setShowJobForm(true); }}>
+                <PlusIcon className="w-4 h-4" />Novo Pagamento
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       {syncMessage && (
@@ -2711,6 +2819,7 @@ function TrabalhosTab({
                 <div className="flex flex-col sm:flex-row sm:flex-wrap sm:justify-between sm:items-start gap-2">
                   <div className="min-w-0 sm:flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
+                      <ShipNumberBadge num={j.ship_id ? shipNumbers.get(j.ship_id) : null} />
                       <h3 className="font-semibold">{j.name}</h3>
                       <ShipStatusBadge status={shipStatusOf(j)} />
                       {/* Situação operacional (Concluído) + status de PAGAMENTO
@@ -7383,13 +7492,14 @@ function FaturamentoModal({
 // ─── COSTADO TAB ────────────────────────────────────────────────────────────
 
 function CostadoTab({
-  jobs, allocations, adjustments, functions, ships, employees, specialRates, canEdit, profileName, filter, onChange, loading,
+  jobs, allocations, adjustments, functions, ships, shipsAll, employees, specialRates, canEdit, profileName, filter, onChange, loading,
 }: {
   jobs: Job[];
   allocations: JobAllocation[];
   adjustments: JobAdjustment[];
   functions: JobFunction[];
   ships: Ship[];
+  shipsAll: AnnualShipRow[];
   employees: Employee[];
   specialRates: Map<string, number>;
   canEdit: boolean;
@@ -7402,6 +7512,7 @@ function CostadoTab({
   // Começa em "Em Aberto": navio Pago (FECHADO) sai da visão padrão — some da
   // lista assim que é pago (fica acessível no filtro "Pago").
   const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("EM_ANDAMENTO");
+  const shipNumbers = useMemo(() => computeShipYearNumbers(shipsAll), [shipsAll]);
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
   const [payJob, setPayJob] = useState<Job | null>(null);
@@ -7500,6 +7611,7 @@ function CostadoTab({
                 <div className="flex flex-col sm:flex-row sm:flex-wrap sm:justify-between sm:items-start gap-2">
                   <div className="min-w-0 sm:flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
+                      <ShipNumberBadge num={j.ship_id ? shipNumbers.get(j.ship_id) : null} />
                       <h3 className="font-semibold">{j.name}</h3>
                       <ShipStatusBadge status={shipStatusOf(j)} />
                       {/* Situação operacional + status de PAGAMENTO (A pagar / Pago). */}
