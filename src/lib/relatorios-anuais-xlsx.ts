@@ -25,6 +25,8 @@ export interface AnnualShipRow {
   cargo_type: string | null;
   services: string[] | null;
   status: string | null;
+  // Nº oficial da planilha da diretoria (computeShipYearNumbers usa como fonte).
+  year_number?: number | null;
   // Desempate da numeração (computeShipYearNumbers); não vai pra planilha.
   created_at?: string | null;
 }

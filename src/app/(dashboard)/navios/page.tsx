@@ -24,6 +24,9 @@ type BoardingSituation = "VISTORIA" | "IMEDIATO" | "AGENDADO" | "PERSONALIZADO";
 interface Ship {
   id: string;
   name: string;
+  // Nº do navio no ano na planilha de fechamento da diretoria ("27 - M/V ...").
+  // Null = numeração calculada por ordem de chegada (src/lib/ship-number.ts).
+  year_number: number | null;
   arrival_date: string | null;
   departure_date: string | null;
   port: string | null;
@@ -113,6 +116,9 @@ const TEAM_COLORS: Record<string, string> = {
 
 const EMPTY_FORM = {
   name: "",
+  // Nº do navio no ano (planilha da diretoria). Vazio = deixa o sistema calcular
+  // pelo próximo número livre do ano.
+  year_number: "" as string,
   arrival_date: "",
   departure_date: "",
   port: "",
@@ -532,6 +538,21 @@ export default function NaviosPage() {
   // planilha "1 NAVIOS <ano>" e dos cards do Financeiro.
   const shipNumbers = useMemo(() => computeShipYearNumbers(ships), [ships]);
 
+  // Placeholder do campo "Nº no ano": o próximo número livre do ano da chegada
+  // que o usuário está digitando (o mesmo que o sistema atribuiria sozinho).
+  const nextFreeShipNumber = useMemo(() => {
+    const year = parseInt((form.arrival_date || "").slice(0, 4), 10) || new Date().getFullYear();
+    const taken = new Set(
+      ships
+        .filter((sh) => sh.id !== editingShip?.id)
+        .map((sh) => (shipNumbers.get(sh.id)?.year === year ? shipNumbers.get(sh.id)!.n : 0))
+        .filter((n) => n > 0),
+    );
+    let n = 1;
+    while (taken.has(n)) n++;
+    return String(n);
+  }, [ships, shipNumbers, form.arrival_date, editingShip?.id]);
+
   const filtered = ships.filter((s) => {
     const matchSearch =
       s.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -587,6 +608,7 @@ export default function NaviosPage() {
       assigned_team: ship.assigned_team || "",
       cargo_type: ship.cargo_type || "",
       holds_count: ship.holds_count != null ? String(ship.holds_count) : "",
+      year_number: ship.year_number != null ? String(ship.year_number) : "",
       client_name: ship.client_name || "",
       operation_type: opType,
       services: (ship.services || []).filter((s) => s !== "COSTADO"),
@@ -693,6 +715,14 @@ export default function NaviosPage() {
       return;
     }
 
+    // Nº do navio no ano: vazio = o sistema calcula (próximo livre do ano).
+    const yearNumberParsed = form.year_number.trim() ? Number.parseInt(form.year_number, 10) : null;
+    if (yearNumberParsed != null && (Number.isNaN(yearNumberParsed) || yearNumberParsed < 1)) {
+      setFormError("Nº do navio inválido.");
+      setSaving(false);
+      return;
+    }
+
     // Costado não usa porão — força null pra não persistir lixo se o usuário
     // tiver preenchido antes de trocar pra Costado. Produto/Carga agora vale
     // pros dois tipos (Costado também guarda o produto do navio).
@@ -720,6 +750,7 @@ export default function NaviosPage() {
       // Nome do navio SEMPRE em caixa alta — telas, WhatsApp, documentos e o
       // Job financeiro (que copia este nome) contam com isso.
       name: form.name.trim().toUpperCase(),
+      year_number: yearNumberParsed,
       arrival_date: form.arrival_date || null,
       departure_date: form.departure_date || null,
       port: form.port.trim() || null,
@@ -1515,7 +1546,7 @@ export default function NaviosPage() {
                         {shipNumbers.get(ship.id) && (
                           <span
                             className="inline-flex items-center rounded-md bg-slate-800 text-white text-[11px] font-bold px-1.5 py-0.5 tabular-nums shrink-0"
-                            title={`${shipNumbers.get(ship.id)!.n}º navio de ${shipNumbers.get(ship.id)!.year} (${shipNumbers.get(ship.id)!.total} até agora)`}
+                            title={`${shipNumbers.get(ship.id)!.n}º navio de ${shipNumbers.get(ship.id)!.year} (${shipNumbers.get(ship.id)!.total} até agora) — ${shipNumbers.get(ship.id)!.official ? "nº da planilha da diretoria" : "calculado pela ordem de chegada"}`}
                           >
                             {formatShipNumber(shipNumbers.get(ship.id))}
                           </span>
@@ -1621,6 +1652,17 @@ export default function NaviosPage() {
             <div className="space-y-1.5 text-sm">
               {selectedShip.port && (
                 <p><span className="text-text-light">Porto:</span> <span className="font-medium">{selectedShip.port}</span></p>
+              )}
+              {shipNumbers.get(selectedShip.id) && (
+                <p>
+                  <span className="text-text-light">Nº no ano:</span>{" "}
+                  <span className="font-medium tabular-nums">
+                    {shipNumbers.get(selectedShip.id)!.n} de {shipNumbers.get(selectedShip.id)!.total} em {shipNumbers.get(selectedShip.id)!.year}
+                  </span>
+                  {!shipNumbers.get(selectedShip.id)!.official && (
+                    <span className="text-text-light text-xs"> (calculado)</span>
+                  )}
+                </p>
               )}
               {selectedShip.arrival_date && (
                 <p><span className="text-text-light">Início da Operação:</span> <span className="font-medium">{formatDate(selectedShip.arrival_date)}</span></p>
@@ -2023,15 +2065,32 @@ export default function NaviosPage() {
               <button onClick={() => setShowModal(false)} className="p-1.5 hover:bg-gray-100 rounded-lg transition text-text-light">✕</button>
             </div>
             <div className="p-5 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-text mb-1">Nome do Navio *</label>
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="Ex: MV Nordic Star"
-                  className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
-                />
+              <div className="grid grid-cols-[1fr_6rem] gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-text mb-1">Nome do Navio *</label>
+                  <input
+                    type="text"
+                    value={form.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    placeholder="Ex: MV Nordic Star"
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                  />
+                </div>
+                {/* Nº do navio no ano — o número que abre o fechamento da
+                    diretoria ("27 - M/V FEDERAL IMABARI - ..."). Deixar vazio faz
+                    o sistema pegar o próximo número livre do ano. */}
+                <div>
+                  <label className="block text-sm font-medium text-text mb-1">Nº no ano</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={form.year_number}
+                    onChange={(e) => setForm({ ...form, year_number: e.target.value })}
+                    placeholder={nextFreeShipNumber}
+                    title="Número do navio na planilha da diretoria. Vazio = o sistema calcula."
+                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm tabular-nums"
+                  />
+                </div>
               </div>
 
               {/* Tipo da Operação vem logo após o nome (2º campo) — define o

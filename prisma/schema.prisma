@@ -517,6 +517,10 @@ model MissionStandardItem {
 model Ship {
   id             String        @id @default(uuid()) @db.Uuid
   name           String
+  // Nº do navio no ano — o número da planilha de fechamento da diretoria
+  // ("27 - M/V FEDERAL IMABARI - ..."). Fonte oficial; null = cai na numeração
+  // calculada por ordem de chegada (src/lib/ship-number.ts).
+  year_number    Int?
   arrival_date   DateTime?     @db.Date
   departure_date DateTime?     @db.Date
   port           String?

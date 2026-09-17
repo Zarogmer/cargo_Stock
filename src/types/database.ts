@@ -218,6 +218,9 @@ export interface MissionStandardItem {
 export interface Ship {
   id: string;
   name: string;
+  // Nº do navio no ano na planilha de fechamento da diretoria ("27 - M/V ...").
+  // Null = numeração calculada por ordem de chegada (src/lib/ship-number.ts).
+  year_number?: number | null;
   arrival_date: string | null;
   departure_date: string | null;
   port: string | null;

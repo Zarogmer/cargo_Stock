@@ -601,7 +601,7 @@ export default function FinanceiroPage() {
       // operação aparecem mesmo sem job antigo com o campo preenchido).
       db.from("ships").select("id, name, status, services, port, client_name").order("arrival_date", { ascending: false }).limit(50),
       // Todos os navios, só os campos das planilhas anuais + numeração no ano.
-      db.from("ships").select("id, name, arrival_date, departure_date, created_at, status, port, client_name, cargo_type, holds_count, services").order("arrival_date", { ascending: false }),
+      db.from("ships").select("id, name, year_number, arrival_date, departure_date, created_at, status, port, client_name, cargo_type, holds_count, services").order("arrival_date", { ascending: false }),
       // admission_date: coluna ADMISSÃO da planilha "3 PAGAMENTOS DOS FUNCIONÁRIOS".
       db.from("employees").select("id, name, role, cpf, birth_date, bank_name, bank_agency, bank_account, bank_account_type, status, sector, admin_ship_rate, admission_date").order("name"),
       db.from("employee_function_rates").select("employee_id, function_id, rate"),
