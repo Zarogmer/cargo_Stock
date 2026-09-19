@@ -11,12 +11,15 @@ import { useCallback, useEffect, useState } from "react";
 // também mostra a cotação — os navios são cobrados em dólar, então o câmbio
 // precisa estar à mão nas duas telas.
 //
+// A taxa em destaque é a de COMPRA (coluna "Compra (R$)" na página do BC);
+// a de venda fica como informação secundária.
+//
 // 4 casas decimais: é assim que o BC publica a PTAX.
 export interface DollarQuote {
   compra: string;
   venda: string;
   date: string; // dd/mm do dia útil da PTAX exibida
-  pctChange: string; // variação da venda sobre a PTAX do dia útil anterior
+  pctChange: string; // variação da compra sobre a PTAX do dia útil anterior
 }
 
 const USD_DECIMALS = 4;
@@ -58,7 +61,7 @@ export function useDollarQuote(): DollarQuote | null {
       if (!last) return;
       const prev = rows[rows.length - 2];
       const pct = prev
-        ? ((last.cotacaoVenda - prev.cotacaoVenda) / prev.cotacaoVenda) * 100
+        ? ((last.cotacaoCompra - prev.cotacaoCompra) / prev.cotacaoCompra) * 100
         : 0;
       const day = last.dataHoraCotacao.slice(0, 10); // yyyy-mm-dd
       setDollar({
@@ -100,12 +103,12 @@ export function DollarTicker({ dollar, size = "lg" }: { dollar: DollarQuote | nu
     <div className="inline-flex items-baseline gap-3 self-start sm:self-end">
       <div className="flex items-baseline gap-1.5">
         <span className={`${labelCls} font-semibold uppercase tracking-wider text-text-light`}>USD PTAX</span>
-        {/* Venda em destaque: é a taxa usada pra converter a cobrança em dólar. */}
+        {/* Compra em destaque: é a taxa que a empresa usa pra converter a cobrança em dólar. */}
         <span
           className={`${valueCls} text-text tabular-nums`}
           title={`PTAX do Banco Central (${dollar.date}) — Compra R$ ${dollar.compra} · Venda R$ ${dollar.venda}`}
         >
-          R$ {dollar.venda}
+          R$ {dollar.compra}
         </span>
       </div>
       <span
@@ -117,7 +120,7 @@ export function DollarTicker({ dollar, size = "lg" }: { dollar: DollarQuote | nu
         {Math.abs(pct).toFixed(2)}%
       </span>
       <span className={`hidden md:inline ${labelCls} text-text-light tabular-nums`}>
-        {dollar.date} · Compra {dollar.compra}
+        {dollar.date} · Venda {dollar.venda}
       </span>
     </div>
   );
