@@ -1112,6 +1112,18 @@ export function EscalacaoEstoquePage() {
     if (!currentShip || !selectedTeam) return;
     let brokenItems = buildIncidentItems(buildReturnRows());
     let notesToSend = returnNotes.trim() || null;
+    // Tabela preenchida mas retorno AINDA NÃO confirmado: mandar só o WhatsApp
+    // deixava o Financeiro no escuro — nada era gravado, e o Resultado do Navio
+    // ficava sem o material (aconteceu no MV EUROPAN GRAECA, 10/09/2026: as
+    // ocorrências foram pro grupo, mas o retorno nunca foi confirmado). Agora
+    // o envio passa pelo Confirmar Retorno, que grava e já manda o resumo com
+    // as ocorrências pro WhatsApp. O botão continua servindo pra REENVIAR as
+    // ocorrências de um retorno já salvo.
+    if (brokenItems.length > 0 && !existingReturn) {
+      setReturnMsg("⚠️ O retorno ainda não foi confirmado. Confirme primeiro — o resumo com as ocorrências vai pro WhatsApp automaticamente e o material entra no Resultado do Navio.");
+      setConfirmReturnOpen(true);
+      return;
+    }
     // Tabela zerada (ex.: acabou de salvar o retorno, que limpa o rascunho):
     // manda as ocorrências do ÚLTIMO retorno salvo deste navio/equipe — é o
     // fluxo natural de "salvar e depois enviar".
@@ -1744,7 +1756,8 @@ export function EscalacaoEstoquePage() {
         <div className="space-y-4">
           <p className="text-sm text-text-light">
             Confirmar o retorno de <strong>{selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"}</strong> no
-            navio <strong>{currentShip?.name}</strong>. O que voltou bom volta pro Estoque.
+            navio <strong>{currentShip?.name}</strong>. O que voltou bom volta pro Estoque; o resumo com
+            perdido/insumo/avariado vai pro WhatsApp e entra no <strong>Resultado do Navio</strong> (Financeiro).
             {currentShip?.status !== "CONCLUIDO" && (
               <> O navio <strong>não é fechado</strong> aqui — o fechamento fica na aba <strong>Navios</strong>.</>
             )}
