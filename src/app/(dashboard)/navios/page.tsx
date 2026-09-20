@@ -11,7 +11,7 @@ import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
 import { SHIFT_PERIODS, type ShiftPeriod } from "@/types/database";
 import { payModeIsEscalable, payModeOfFunctionUnit, pickFunctionByName } from "@/lib/jobUnits";
-import { DEFAULT_PORTS, DEFAULT_CLIENTS } from "@/lib/port-client-options";
+import { DEFAULT_PORTS, DEFAULT_CLIENTS, canonicalPort, uniquePortOptions } from "@/lib/port-client-options";
 import { computeShipYearNumbers, formatShipNumber } from "@/lib/ship-number";
 import { Modal } from "@/components/ui/modal";
 
@@ -484,19 +484,13 @@ export default function NaviosPage() {
     return employees.filter((e) => e.team === ship.assigned_team);
   }, [employees]);
 
-  // Combobox lists: seeds + valores únicos já usados em navios cadastrados.
-  // Dedup é case-insensitive mas preserva a primeira capitalização vista —
-  // assim "Santos" e "santos" não duplicam, mas mostramos como foi digitado.
-  const knownPorts = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const p of DEFAULT_PORTS) map.set(p.toLowerCase(), p);
-    for (const s of ships) {
-      const v = (s.port || "").trim();
-      if (v && !map.has(v.toLowerCase())) map.set(v.toLowerCase(), v);
-    }
-    return Array.from(map.values()).sort((a, b) => a.localeCompare(b, "pt-BR"));
-  }, [ships]);
-
+  // Combobox de portos: seeds + portos já usados em navios, sempre no nome
+  // padronizado (uniquePortOptions) — "Paranagua" e "Paranaguá" viram um só.
+  const knownPorts = useMemo(
+    () => uniquePortOptions([...DEFAULT_PORTS, ...ships.map((s) => s.port)]),
+    [ships],
+  );
+  // Clientes: dedup case-insensitive preservando a primeira capitalização vista.
   const knownClients = useMemo(() => {
     const map = new Map<string, string>();
     for (const c of DEFAULT_CLIENTS) map.set(c.toLowerCase(), c);
@@ -753,7 +747,8 @@ export default function NaviosPage() {
       year_number: yearNumberParsed,
       arrival_date: form.arrival_date || null,
       departure_date: form.departure_date || null,
-      port: form.port.trim() || null,
+      // Porto gravado no nome padronizado (ver src/lib/port-client-options.ts).
+      port: canonicalPort(form.port) || null,
       status: reopening ? "EM_OPERACAO" : form.status,
       assigned_team: form.assigned_team || null,
       cargo_type: form.cargo_type.trim() || null,

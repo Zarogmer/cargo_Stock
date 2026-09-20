@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/rbac";
+import { canonicalPort } from "@/lib/port-client-options";
 import type { Role, ShipStatus } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
@@ -83,7 +84,7 @@ export async function POST(request: NextRequest) {
       name,
       arrival_date: parseDate(body.arrival_date),
       departure_date: parseDate(body.departure_date),
-      port: body.port?.trim() || null,
+      port: canonicalPort(body.port) || null,
       status,
       assigned_team: body.assigned_team || null,
       notes: body.notes?.trim() || null,

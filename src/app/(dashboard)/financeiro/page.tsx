@@ -55,7 +55,7 @@ import { useAuth } from "@/lib/auth-context";
 import { hasPermission, canAccessFinanceiroBanco } from "@/lib/rbac";
 import { db } from "@/lib/db";
 import { allocCountsAsWorked } from "@/lib/alloc-worked";
-import { DEFAULT_PORTS, DEFAULT_CLIENTS } from "@/lib/port-client-options";
+import { DEFAULT_PORTS, DEFAULT_CLIENTS, canonicalPort, portKey, uniquePortOptions } from "@/lib/port-client-options";
 import { Tabs } from "@/components/ui/tabs";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
@@ -239,8 +239,10 @@ function jobStartYM(j: Job): { year: number; month: number } {
 // cadastro do navio (ships.port / ships.client_name). Jobs antigos e os criados
 // por "Novo Pagamento" nem sempre preenchem — sem o fallback, esses navios
 // sumiam das opções do filtro e não eram achados ao filtrar pelo porto real.
+// Sempre no nome padronizado (canonicalPort): "Paranagua" e "Paranaguá" são
+// o mesmo porto, dentro e fora do filtro.
 function jobPort(j: Job): string {
-  return (j.port || j.ships?.port || "").trim();
+  return canonicalPort(j.port || j.ships?.port);
 }
 function jobClient(j: Job): string {
   return (j.client || j.ships?.client_name || "").trim();
@@ -249,8 +251,9 @@ function jobMatchesPagamentoFilter(j: Job, f: PagamentoFilter): boolean {
   const { year, month } = jobStartYM(j);
   if (f.year !== "ALL" && year !== f.year) return false;
   if (f.month !== "ALL" && month !== f.month) return false;
-  // Comparação sem caixa/espaços: "Santos", "SANTOS" e "SANTOS " são o mesmo porto.
-  if (f.port !== "ALL" && jobPort(j).toUpperCase() !== f.port.trim().toUpperCase()) return false;
+  // Porto compara pela chave padronizada (portKey): caixa, acento, espaços e
+  // apelidos ("PORTO AÇU" = "Porto do Açu") não separam o mesmo porto.
+  if (f.port !== "ALL" && portKey(jobPort(j)) !== portKey(f.port)) return false;
   if (f.client !== "ALL" && jobClient(j).toUpperCase() !== f.client.trim().toUpperCase()) return false;
   return true;
 }
@@ -548,14 +551,15 @@ export default function FinanceiroPage() {
 
   const filterOptions = useMemo(() => {
     const years = new Set<number>();
-    // Dedupe sem caixa ("Santos" = "SANTOS"): chave em caixa alta, mostra a
-    // primeira grafia vista. Porto/cliente vêm de TRÊS fontes, pra opção
-    // nenhuma da operação sumir do filtro:
+    // Porto: nome padronizado (uniquePortOptions) — grafias diferentes do
+    // mesmo porto viram UMA opção. Cliente: dedupe sem caixa ("Deep" = "DEEP"),
+    // mostra a primeira grafia vista. Porto/cliente vêm de TRÊS fontes, pra
+    // opção nenhuma da operação sumir do filtro:
     // 1. jobs, com fallback pro navio (jobPort/jobClient);
     // 2. navios cadastrados (aba Navios) — mesmo sem job com o campo;
     // 3. sementes do sistema (DEFAULT_PORTS/DEFAULT_CLIENTS, as mesmas do
     //    ComboBox do cadastro de navio).
-    const ports = new Map<string, string>();
+    const ports: string[] = [];
     const clients = new Map<string, string>();
     const add = (map: Map<string, string>, value: string | null | undefined) => {
       const v = (value || "").trim();
@@ -566,18 +570,18 @@ export default function FinanceiroPage() {
     for (const j of jobs) {
       const { year } = jobStartYM(j);
       if (year) years.add(year);
-      add(ports, jobPort(j));
+      ports.push(jobPort(j));
       add(clients, jobClient(j));
     }
     for (const s of ships) {
-      add(ports, s.port);
+      ports.push(s.port || "");
       add(clients, s.client_name);
     }
-    for (const p of DEFAULT_PORTS) add(ports, p);
+    ports.push(...DEFAULT_PORTS);
     for (const c of DEFAULT_CLIENTS) add(clients, c);
     return {
       years: [...years].sort((a, b) => b - a),
-      ports: [...ports.values()].sort((a, b) => a.localeCompare(b, "pt-BR")),
+      ports: uniquePortOptions(ports),
       clients: [...clients.values()].sort((a, b) => a.localeCompare(b, "pt-BR")),
     };
   }, [jobs, ships]);
