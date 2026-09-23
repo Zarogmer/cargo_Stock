@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EditIcon, TrashIcon } from "@/components/icons";
 import { formatDate, employeeRolesLabel } from "@/lib/utils";
-import { payModeIsEscalable, payModeOfFunctionUnit, pickFunctionByName } from "@/lib/jobUnits";
+import { payModeIsEscalable, payModeOfFunctionUnit, pickFunctionByName, isAdminCarrierFn } from "@/lib/jobUnits";
 import type {
   JobFunction,
   Job,
@@ -1098,7 +1098,9 @@ function QuickAddEmployeeModal({
             placeholder="WAP, AJUDANTE, ESFREGÃO..."
           />
           <datalist id="quick-role-options">
-            {functions.map((f) => <option key={f.id} value={f.name} />)}
+            {/* Só função de verdade: a ADMINISTRATIVO é carregador interno do
+                custo por navio (setor Administrativo), ninguém escala por ela. */}
+            {functions.filter((f) => !isAdminCarrierFn(f)).map((f) => <option key={f.id} value={f.name} />)}
           </datalist>
         </div>
         <div>

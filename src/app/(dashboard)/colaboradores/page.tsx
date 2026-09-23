@@ -990,6 +990,11 @@ function FunctionOptionGroups({ functions, exclude }: { functions: JobFunction[]
   const map = new Map<string, string[]>();
   for (const f of functions) {
     if (exclude && f.name === exclude) continue;
+    // Só as funções cadastradas pelo RH. A ADMINISTRATIVO fica de fora: não é
+    // função, é o carregador interno de job_allocations.function_id (o pessoal
+    // de escritório entra no custo do navio pelo SETOR Administrativo). Mesma
+    // régua da aba RH › Funções e da lista de cargos (jobRoleOptions).
+    if (isAdminCarrierFn(f)) continue;
     const g = unitToOption(f.unit);
     const arr = map.get(g) || [];
     arr.push(f.name);

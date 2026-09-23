@@ -5484,7 +5484,9 @@ function JobDetailModal({
                                   title="Trocar a função só neste navio — o valor passa a ser o da função escolhida"
                                 >
                                   {functions
-                                    .filter((f) => f.name.trim().toUpperCase() !== "COSTADO")
+                                    // Fora da lista: COSTADO (função principal do Costado) e a
+                                    // carregadora ADMINISTRATIVO — administrativo é setor, não função.
+                                    .filter((f) => f.name.trim().toUpperCase() !== "COSTADO" && !isAdminCarrierFn(f))
                                     .map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
                                 </select>
                                 {a.function_locked && (
