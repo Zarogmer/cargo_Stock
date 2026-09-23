@@ -73,7 +73,9 @@ const ITEMS: Array<[string, number, number, number, number]> = [
       }
     }
     return ret;
-  });
+  // Banco remoto (Railway) + ~25 gravações em sequência passam fácil dos 5s
+  // padrão da transação interativa (P2028 em 23/09/2026) — dá folga.
+  }, { timeout: 180_000, maxWait: 30_000 });
   console.log("Retorno criado id", ret.id);
   const sync = await syncRetornoDespesa(SHIP_ID, TEAM, ACTOR);
   console.log("syncRetornoDespesa:", JSON.stringify(sync));
