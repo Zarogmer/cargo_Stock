@@ -18,6 +18,7 @@ import {
   FiscalNoteInput,
   NOTE_LABELS,
   calcFiscalNoteTotals,
+  depositLines,
   formatIssueCity,
   formatNoteDate,
   formatNoteNumber,
@@ -147,9 +148,15 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
   // ── Faixa do tipo da nota + número ────────────────────────────────────────
   const bandH = 14;
   rect(ctx, left, y - bandH, innerW, bandH, HEAD_BG);
-  const title = isDebit ? L.debito : L.credito;
+  // Em inglês (Wilson Sons) o número vai junto do título, centralizado —
+  // "DEBIT NOTE 063/26", como nas notas atuais; em português fica à direita.
+  const title = note.language === "EN"
+    ? `${isDebit ? L.debito : L.credito} ${formatNoteNumber(note.number, note.year)}`
+    : isDebit ? L.debito : L.credito;
   text(ctx, ascii(title), left + innerW / 2 - bold.widthOfTextAtSize(ascii(title), 8.5) / 2, y - bandH + 4, 8.5, true);
-  textRight(ctx, formatNoteNumber(note.number, note.year), right - 6, y - bandH + 4, 8.5, true);
+  if (note.language !== "EN") {
+    textRight(ctx, formatNoteNumber(note.number, note.year), right - 6, y - bandH + 4, 8.5, true);
+  }
   y -= bandH;
 
   // ── Destinatário + "Valor total a Fatura" ─────────────────────────────────
@@ -341,13 +348,7 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
   ensure(boxH + 14); // caixa + linha/nome da assinatura (y-34/y-45)
   rect(ctx, right - boxW, y - boxH, boxW, boxH);
   let by = y - 12;
-  for (const l of [
-    L.deposit,
-    CARGO_ISSUER.bank,
-    `AG: ${CARGO_ISSUER.agency}`,
-    `C/C: ${CARGO_ISSUER.account}`,
-    `PIX: ${CARGO_ISSUER.pix}`,
-  ]) {
+  for (const l of [L.deposit, ...depositLines(note.deposit_bank)]) {
     text(ctx, ascii(l), right - boxW + 6, by, 7, true);
     by -= 9;
   }

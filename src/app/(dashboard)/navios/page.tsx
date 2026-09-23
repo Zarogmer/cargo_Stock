@@ -219,6 +219,9 @@ export default function NaviosPage() {
   // Agências cadastradas na Petição (RH › Documentos › Petição). Entram na mesma
   // lista de clientes do cadastro de navio — as duas telas compartilham a lista.
   const [peticaoAgencias, setPeticaoAgencias] = useState<string[]>([]);
+  // Clientes do cadastro fiscal (Financeiro › Dados dos Clientes). Entram no
+  // combo com a grafia do cadastro — é ela que faz a nota abrir preenchida.
+  const [invoiceClients, setInvoiceClients] = useState<string[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   // IDs de funcionarios que ja tem job_allocation ATIVA em qualquer navio.
   // Usado pra esconder eles da lista de selecao no modal de novo navio --
@@ -494,6 +497,10 @@ export default function NaviosPage() {
   const knownClients = useMemo(() => {
     const map = new Map<string, string>();
     for (const c of DEFAULT_CLIENTS) map.set(c.toLowerCase(), c);
+    for (const c of invoiceClients) {
+      const v = (c || "").trim();
+      if (v) map.set(v.toLowerCase(), v);
+    }
     for (const s of ships) {
       const v = (s.client_name || "").trim();
       if (v && !map.has(v.toLowerCase())) map.set(v.toLowerCase(), v);
@@ -504,7 +511,7 @@ export default function NaviosPage() {
       if (v && !map.has(v.toLowerCase())) map.set(v.toLowerCase(), v);
     }
     return Array.from(map.values()).sort((a, b) => a.localeCompare(b, "pt-BR"));
-  }, [ships, peticaoAgencias]);
+  }, [ships, peticaoAgencias, invoiceClients]);
   // Produtos: seeds + cargas já usadas em navios, sempre em maiúsculas.
   const knownCargos = useMemo(() => {
     const set = new Set<string>(CARGO_OPTIONS);
@@ -531,6 +538,15 @@ export default function NaviosPage() {
         }
       } catch {
         /* silencioso — a lista de clientes cai só pros navios já cadastrados */
+      }
+    })();
+    // Cadastro fiscal — quem não enxerga o Financeiro só não ganha essas opções.
+    (async () => {
+      try {
+        const { data } = await db.from("invoice_clients").select("name");
+        if (Array.isArray(data)) setInvoiceClients((data as { name: string }[]).map((c) => c.name));
+      } catch {
+        /* silencioso */
       }
     })();
   }, [loadShips, loadEmployees, loadJobFunctions, loadOccupied, loadSituationTemplates, pathname]);

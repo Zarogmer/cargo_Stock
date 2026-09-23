@@ -1713,6 +1713,13 @@ model InvoiceClient {
   language      String   @default("PT")
   // Moeda padrão das notas deste cliente: BRL ou USD.
   default_currency String @default("BRL")
+  // Só a Wilson Sons trabalha com OI (ordem de serviço da agência): o campo OI
+  // aparece no modal da nota apenas pra cliente com esta flag.
+  requires_oi   Boolean  @default(false)
+  // Dados para depósito impressos na nota DESTE cliente, uma linha por
+  // informação (banco, agência, conta, PIX). Em branco = Itaú da CARGO_ISSUER.
+  // A Deep recebe a nota com a conta Santander.
+  deposit_bank  String?
   notes         String?
   created_by    String
   updated_at    DateTime @default(now()) @db.Timestamptz()

@@ -63,6 +63,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PlusIcon, EditIcon, TrashIcon } from "@/components/icons";
 import { DollarTicker, useDollarQuote } from "@/components/dollar-ticker";
 import { FiscalNoteModal } from "@/components/financeiro/fiscal-note-modal";
+import { InvoiceClientsTab } from "@/components/financeiro/invoice-clients-tab";
 import { DemonstracaoFinanceiraPage } from "@/components/financeiro/demonstracao-financeira-page";
 import { RelatorioValesPage } from "@/components/financeiro/relatorio-vales-page";
 import {
@@ -782,6 +783,13 @@ export default function FinanceiroPage() {
       label: "🧾 Relatório de Vales",
       content: <RelatorioValesPage canEdit={canEdit} profileName={profile?.full_name || "Sistema"} />,
     },
+    // Cadastro fiscal dos clientes — cabeçalho, idioma, moeda, OI e dados de
+    // depósito das Notas de Débito/Crédito.
+    {
+      key: "clientes",
+      label: "🏢 Dados dos Clientes",
+      content: <InvoiceClientsTab canEdit={canEdit} profileName={profile?.full_name || "Sistema"} />,
+    },
     // Espelho da planilha da diretoria (import por script, tela só leitura).
     // Restrita como o módulo bancário — mostra folha e distribuição aos sócios.
     ...(canSeeDemonstracao
@@ -837,7 +845,7 @@ export default function FinanceiroPage() {
           com rótulo próprio; campo ativo fica azul e o contador mostra na hora
           quantos navios sobram no recorte. Porto/cliente caem no cadastro do
           navio quando o job não tem (jobPort/jobClient). */}
-      {!["funcoes", "controle", "vales", "demonstracao"].includes(initialTab) && (<>
+      {!["funcoes", "controle", "vales", "demonstracao", "clientes"].includes(initialTab) && (<>
       <div className="rounded-xl border border-primary/25 bg-gradient-to-r from-blue-50/80 via-card to-card shadow-sm p-3">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
           <span className="text-sm font-bold text-text">🔎 Filtrar navios</span>

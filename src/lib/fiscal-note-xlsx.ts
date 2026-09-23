@@ -12,6 +12,7 @@ import {
   FiscalNoteInput,
   NOTE_LABELS,
   calcFiscalNoteTotals,
+  depositLines,
   formatIssueCity,
   formatNoteDate,
   formatNoteNumber,
@@ -249,13 +250,7 @@ export function buildFiscalNoteXlsx(note: FiscalNoteInput): ArrayBuffer {
   row += 3;
 
   // ── Depósito ──────────────────────────────────────────────────────────────
-  for (const l of [
-    L.deposit,
-    CARGO_ISSUER.bank,
-    `Agência: ${CARGO_ISSUER.agency}`,
-    `Conta Corrente: ${CARGO_ISSUER.account}`,
-    `PIX: ${CARGO_ISSUER.pix}`,
-  ]) {
+  for (const l of [L.deposit, ...depositLines(note.deposit_bank)]) {
     set(`E${row}`, l, S.deposit);
     merge(4, row - 1, 5, row - 1);
     row++;

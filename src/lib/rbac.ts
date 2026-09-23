@@ -410,6 +410,8 @@ export const NAV_ITEMS: NavItem[] = [
       { label: "Resultado do Navio", href: "/financeiro?tab=navios" },
       { label: "Controle de Funcionários", href: "/financeiro?tab=controle" },
       { label: "Relatório de Vales", href: "/financeiro?tab=vales" },
+      // Cadastro fiscal dos clientes (cabeçalho das Notas de Débito/Crédito).
+      { label: "Dados dos Clientes", href: "/financeiro?tab=clientes" },
       // Módulo bancário (fornecedores/bancos) — sub-rotas reais, restritas a
       // FINANCEIRO_BANCO_ROLES (Estágio fica de fora). Ver docs/financeiro/.
       { label: "Contas a Pagar", href: "/financeiro/contas", roles: FINANCEIRO_BANCO_ROLES },

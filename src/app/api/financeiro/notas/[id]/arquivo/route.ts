@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/rbac";
 import { buildFiscalNotePdf } from "@/lib/fiscal-note-pdf";
 import { buildFiscalNoteXlsx } from "@/lib/fiscal-note-xlsx";
-import { fiscalNoteFileName, type FiscalNoteInput } from "@/lib/fiscal-note";
+import { clientKey, fiscalNoteFileName, type FiscalNoteInput } from "@/lib/fiscal-note";
 import type { Role } from "@/types/database";
 
 // GET /api/financeiro/notas/[id]/arquivo?formato=pdf|xlsx
@@ -67,6 +67,10 @@ export async function GET(
   if (!note) return NextResponse.json({ error: "Nota não encontrada" }, { status: 404 });
 
   const input = toInput(note as unknown as Record<string, any>);
+  // Dados para depósito vêm do cadastro ATUAL do cliente (não é snapshot: se a
+  // conta mudar, toda nota do cliente passa a sair com a conta nova).
+  const clients = await prisma.invoiceClient.findMany({ select: { name: true, deposit_bank: true } });
+  input.deposit_bank = clients.find((c) => clientKey(c.name) === clientKey(input.client_name))?.deposit_bank ?? null;
   const base = fiscalNoteFileName(input.kind, input.number, input.year, input.ship_name);
   const formato = (request.nextUrl.searchParams.get("formato") || "pdf").toLowerCase();
 

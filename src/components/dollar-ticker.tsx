@@ -47,6 +47,22 @@ interface PtaxRow {
   dataHoraCotacao: string; // "2026-09-02 13:02:37.601302"
 }
 
+// PTAX de COMPRA mais recente, avulsa — o modal da Nota de Débito usa como
+// sugestão da taxa do dólar quando o navio ainda não tem nota com taxa.
+export async function fetchPtaxCompra(): Promise<string | null> {
+  try {
+    const res = await fetch(ptaxUrl(), { cache: "no-store" });
+    const data = await res.json();
+    const rows: PtaxRow[] = (data.value ?? [])
+      .slice()
+      .sort((a: PtaxRow, b: PtaxRow) => a.dataHoraCotacao.localeCompare(b.dataHoraCotacao));
+    const last = rows[rows.length - 1];
+    return last ? last.cotacaoCompra.toFixed(USD_DECIMALS) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function useDollarQuote(): DollarQuote | null {
   const [dollar, setDollar] = useState<DollarQuote | null>(null);
 

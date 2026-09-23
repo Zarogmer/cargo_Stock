@@ -5,39 +5,34 @@ import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { db } from "@/lib/db";
 import { parseDecimalBR } from "@/lib/utils";
+import { fetchPtaxCompra } from "@/components/dollar-ticker";
 import {
   calcFiscalNoteTotals,
+  findInvoiceClient,
   formatMoney,
   formatNoteNumber,
   resolveHeaderLine,
   type FiscalNoteCurrency,
   type FiscalNoteKind,
   type FiscalNoteLanguage,
+  type InvoiceClientRow,
 } from "@/lib/fiscal-note";
 
 // Emissão da Nota de Débito / Crédito a partir do Pagamento de Navios.
 //
 // O que o SISTEMA já sabe entra pré-preenchido (navio, cliente, porto, entrada/
-// saída, porões, serviços contratados). O que só vem de fora é digitado:
-//   • OI — número da ordem de serviço da agência;
+// saída, porões, serviços contratados, cadastro fiscal do cliente — Financeiro ›
+// Dados dos Clientes). O que só vem de fora é digitado:
+//   • OI — número da ordem de serviço da agência. Só a Wilson Sons trabalha
+//     com OI, então o campo aparece só pra cliente com `requires_oi`;
 //   • ISS do mês — vem da CONTABILIDADE, por isso é sempre perguntado;
-//   • taxa do dólar negociada e o valor de cada serviço.
+//   • valor de cada serviço.
+// A taxa do dólar vem sugerida: a mesma da última nota DESTE navio (a Wilson
+// Sons recebe lavagem e lancha em notas separadas, com a mesma taxa) ou, sem
+// nota ainda, a PTAX de compra do dia — e pode ser trocada pela negociada.
 //
 // Uma nota por documento: pra faturar lavagem e lancha em notas separadas (como
 // a Wilson Sons exige), emite-se duas, cada uma com seus itens.
-
-interface InvoiceClient {
-  id: number;
-  name: string;
-  legal_name: string | null;
-  address: string | null;
-  cnpj: string | null;
-  ie: string | null;
-  municipal_reg: string | null;
-  header_line: string | null;
-  language: string;
-  default_currency: string;
-}
 
 interface ExistingNote {
   id: string;
@@ -48,6 +43,7 @@ interface ExistingNote {
   issue_date: string;
   currency: string;
   total: string | number;
+  exchange_rate: string | number | null;
 }
 
 interface ItemDraft {
@@ -81,6 +77,12 @@ function todayISO(): string {
 // como milhar quando há vírgula — "5.15" é 5.15, não 515.
 const parseBR = parseDecimalBR;
 
+// Taxa gravada (4 casas) → texto pt-BR do campo ("5,1508").
+function rateToText(v: string | number | null | undefined): string {
+  const n = Number(v);
+  return n > 0 ? n.toFixed(4).replace(".", ",") : "";
+}
+
 export function FiscalNoteModal({
   open, job, services, onClose, onSaved,
 }: {
@@ -92,7 +94,7 @@ export function FiscalNoteModal({
   onSaved: () => void;
 }) {
   const [kind, setKind] = useState<FiscalNoteKind>("DEBITO");
-  const [clients, setClients] = useState<InvoiceClient[]>([]);
+  const [clients, setClients] = useState<InvoiceClientRow[]>([]);
   const [notes, setNotes] = useState<ExistingNote[]>([]);
   const [nextDebito, setNextDebito] = useState(1);
   const [nextCredito, setNextCredito] = useState(1);
@@ -106,17 +108,20 @@ export function FiscalNoteModal({
   const [currency, setCurrency] = useState<FiscalNoteCurrency>("BRL");
   const [language, setLanguage] = useState<FiscalNoteLanguage>("PT");
   const [exchangeRate, setExchangeRate] = useState("");
+  // De onde veio a taxa sugerida — só pra avisar o usuário no campo.
+  const [rateSource, setRateSource] = useState<"NOTA" | "PTAX" | null>(null);
   const [issPercent, setIssPercent] = useState("");
   const [obs, setObs] = useState("");
   const [items, setItems] = useState<ItemDraft[]>([]);
   // Cadastro fiscal do cliente, editável na hora (o que for digitado é gravado
-  // no cadastro pra próxima nota já vir pronta).
+  // no cadastro pra próxima nota já vir pronta — o mesmo de Dados dos Clientes).
   const [legalName, setLegalName] = useState("");
   const [address, setAddress] = useState("");
   const [cnpj, setCnpj] = useState("");
   const [ie, setIe] = useState("");
   const [municipal, setMunicipal] = useState("");
   const [headerLine, setHeaderLine] = useState("");
+  const [requiresOi, setRequiresOi] = useState(false);
 
   const year = Number(issueDate.slice(0, 4)) || new Date().getFullYear();
 
@@ -139,16 +144,17 @@ export function FiscalNoteModal({
   // Notas do navio + próximo número da sequência DO ANO. Separado do loadAll
   // porque o ano acompanha a data de emissão: se o usuário retroagir a data pra
   // outro ano, o "Sai como NNN/YY" precisa ser refeito pra sequência daquele ano.
-  const loadNotes = useCallback(async () => {
-    if (!job) return;
+  const loadNotes = useCallback(async (): Promise<ExistingNote[]> => {
+    if (!job) return [];
     const res = await fetch(`/api/financeiro/notas?job_id=${encodeURIComponent(job.id)}&year=${year}`)
       .then((r) => r.json())
       .catch(() => null);
-    if (res) {
-      setNotes(res.notes || []);
-      setNextDebito(res.nextDebito || 1);
-      setNextCredito(res.nextCredito || 1);
-    }
+    if (!res) return [];
+    const list: ExistingNote[] = res.notes || [];
+    setNotes(list);
+    setNextDebito(res.nextDebito || 1);
+    setNextCredito(res.nextCredito || 1);
+    return list;
   }, [job, year]);
 
   useEffect(() => {
@@ -163,20 +169,39 @@ export function FiscalNoteModal({
     if (!job) return;
     setError(null);
     const { data: clientRows } = await db.from("invoice_clients").select("*");
-    const list = (clientRows as InvoiceClient[] | null) || [];
+    const list = (clientRows as InvoiceClientRow[] | null) || [];
     setClients(list);
-    const match = list.find(
-      (c) => c.name.trim().toUpperCase() === (job.client || "").trim().toUpperCase(),
-    );
+    const match = findInvoiceClient(list, job.client);
     setLegalName(match?.legal_name || "");
     setAddress(match?.address || "");
     setCnpj(match?.cnpj || "");
     setIe(match?.ie || "");
     setMunicipal(match?.municipal_reg || "");
     setHeaderLine(match?.header_line || "");
+    setRequiresOi(!!match?.requires_oi);
     setLanguage((match?.language === "EN" ? "EN" : "PT") as FiscalNoteLanguage);
     setCurrency((match?.default_currency === "USD" ? "USD" : "BRL") as FiscalNoteCurrency);
   }, [job]);
+
+  // Sugestão da taxa do dólar: última nota deste navio com taxa; senão PTAX
+  // de compra do dia. Só preenche se o campo ainda estiver vazio (o usuário
+  // pode ter digitado a negociada enquanto a PTAX carregava).
+  const suggestRate = useCallback(async (shipNotes: ExistingNote[]) => {
+    const fromNote = shipNotes
+      .slice()
+      .sort((a, b) => String(b.issue_date).localeCompare(String(a.issue_date)))
+      .find((n) => Number(n.exchange_rate) > 0);
+    if (fromNote) {
+      setExchangeRate((cur) => cur || rateToText(fromNote.exchange_rate));
+      setRateSource("NOTA");
+      return;
+    }
+    const ptax = await fetchPtaxCompra();
+    if (ptax) {
+      setExchangeRate((cur) => cur || rateToText(ptax));
+      setRateSource("PTAX");
+    }
+  }, []);
 
   useEffect(() => {
     if (!open || !job) return;
@@ -186,10 +211,12 @@ export function FiscalNoteModal({
     setDueDate("");
     setOi("");
     setExchangeRate("");
+    setRateSource(null);
     setIssPercent("");
     setObs("");
     setItems(suggestedItems());
     loadAll();
+    loadNotes().then(suggestRate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, job?.id]);
 
@@ -226,11 +253,11 @@ export function FiscalNoteModal({
       // Grava/atualiza o cadastro fiscal do cliente pra próxima nota já vir pronta.
       const clientName = (job.client || "").trim();
       if (clientName) {
-        const existing = clients.find((c) => c.name.trim().toUpperCase() === clientName.toUpperCase());
+        const existing = findInvoiceClient(clients, clientName);
         const payload = {
           legal_name: legalName || null, address: address || null, cnpj: cnpj || null,
           ie: ie || null, municipal_reg: municipal || null, header_line: headerLine || null,
-          language, default_currency: currency,
+          language, default_currency: currency, requires_oi: requiresOi,
         };
         if (existing) await db.from("invoice_clients").update(payload as never).eq("id", existing.id);
         else await db.from("invoice_clients").insert({ name: clientName, ...payload, created_by: "Sistema" } as never);
@@ -253,7 +280,7 @@ export function FiscalNoteModal({
           client_municipal: municipal || null,
           header_line: headerLine || null,
           language,
-          oi: oi || null,
+          oi: requiresOi && oi ? oi : null,
           port: job.port || null,
           arrival_date: job.start_date,
           departure_date: job.end_date,
@@ -317,22 +344,24 @@ export function FiscalNoteModal({
           </div>
         )}
 
-        {/* Tipo + numeração */}
+        {/* Numeração à esquerda + tipo + datas. O número vem em branco (próximo
+            do ano) — digitar um número serve pra emitir a segunda nota do mesmo
+            navio em sequência (058/26 lavagem, 059/26 lancha). */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div>
+            <label className={labelCls}>Número</label>
+            <input type="number" min="1" value={number} onChange={(e) => setNumber(e.target.value)}
+              placeholder={String(kind === "DEBITO" ? nextDebito : nextCredito)} className={`${inputCls} font-semibold`} />
+            <p className="text-[10px] text-text-light mt-0.5">
+              Sai como <strong>{formatNoteNumber(effectiveNumber, year)}</strong> — em branco usa o próximo do ano.
+            </p>
+          </div>
           <div>
             <label className={labelCls}>Tipo *</label>
             <select value={kind} onChange={(e) => setKind(e.target.value as FiscalNoteKind)} className={inputCls}>
               <option value="DEBITO">Nota de Débito (cobrança)</option>
               <option value="CREDITO">Nota de Crédito (repasse)</option>
             </select>
-          </div>
-          <div>
-            <label className={labelCls}>Número</label>
-            <input type="number" min="1" value={number} onChange={(e) => setNumber(e.target.value)}
-              placeholder={String(kind === "DEBITO" ? nextDebito : nextCredito)} className={inputCls} />
-            <p className="text-[10px] text-text-light mt-0.5">
-              Sai como <strong>{formatNoteNumber(effectiveNumber, year)}</strong> — em branco usa o próximo do ano.
-            </p>
           </div>
           <div>
             <label className={labelCls}>Emissão *</label>
@@ -344,12 +373,8 @@ export function FiscalNoteModal({
           </div>
         </div>
 
-        {/* Dados que só existem fora do sistema */}
+        {/* Moeda, taxa e ISS — a taxa vem sugerida; o ISS vem de fora */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div>
-            <label className={labelCls}>OI (ordem da agência)</label>
-            <input type="text" value={oi} onChange={(e) => setOi(e.target.value)} placeholder="AGVSSZ260673" className={inputCls} />
-          </div>
           <div>
             <label className={labelCls}>Moeda</label>
             <select value={currency} onChange={(e) => setCurrency(e.target.value as FiscalNoteCurrency)} className={inputCls}>
@@ -359,7 +384,13 @@ export function FiscalNoteModal({
           </div>
           <div>
             <label className={labelCls}>Taxa do dólar negociada</label>
-            <input type="text" value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)} placeholder="5,1508" className={inputCls} />
+            <input type="text" value={exchangeRate} onChange={(e) => { setExchangeRate(e.target.value); setRateSource(null); }}
+              placeholder="5,1508" className={inputCls} />
+            {rateSource && exchangeRate && (
+              <p className="text-[10px] text-text-light mt-0.5">
+                {rateSource === "NOTA" ? "Mesma taxa da última nota deste navio." : "PTAX de compra do dia (Banco Central) — troque pela negociada."}
+              </p>
+            )}
           </div>
           <div>
             <label className={labelCls}>ISS do mês (%)</label>
@@ -367,6 +398,18 @@ export function FiscalNoteModal({
             <p className="text-[10px] text-amber-700 mt-0.5">Vem da contabilidade — abate do total.</p>
           </div>
         </div>
+
+        {/* OI — só pra cliente que trabalha com ordem da agência (Wilson Sons).
+            Fica embaixo, separado, porque os demais clientes não têm. */}
+        {requiresOi && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="col-span-2">
+              <label className={labelCls}>OI (ordem da agência) — {job.client}</label>
+              <input type="text" value={oi} onChange={(e) => setOi(e.target.value)} placeholder="AGVSSZ260673" className={inputCls} />
+              <p className="text-[10px] text-text-light mt-0.5">Sai na nota como <strong>OI: {oi || "…"}</strong>, logo abaixo do navio.</p>
+            </div>
+          </div>
+        )}
 
         {/* Itens */}
         <div>
@@ -397,10 +440,11 @@ export function FiscalNoteModal({
           </p>
         </div>
 
-        {/* Cadastro fiscal do cliente */}
+        {/* Cadastro fiscal do cliente — vem de Financeiro › Dados dos Clientes;
+            o que for corrigido aqui volta pro cadastro. */}
         <details className="rounded-lg border border-border p-3" open={!cnpj}>
           <summary className="text-xs font-semibold cursor-pointer">
-            🏢 Dados do cliente {job.client ? `(${job.client})` : ""} — salvos pro próximo navio
+            🏢 Dados do cliente {job.client ? `(${job.client})` : ""} — do cadastro em Dados dos Clientes
           </summary>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
             <div className="col-span-2 md:col-span-3">
@@ -426,7 +470,13 @@ export function FiscalNoteModal({
                 <option value="PT">Português</option>
                 <option value="EN">Inglês (DEBIT NOTE / BARTHED / SAILED)</option>
               </select></div>
-            <div className="col-span-2"><label className={labelCls}>Observação na nota</label>
+            <div className="flex items-end">
+              <label className="inline-flex items-center gap-2 text-sm cursor-pointer pb-2">
+                <input type="checkbox" checked={requiresOi} onChange={(e) => setRequiresOi(e.target.checked)} className="w-4 h-4" />
+                Nota com OI (ordem da agência)
+              </label>
+            </div>
+            <div className="col-span-2 md:col-span-1"><label className={labelCls}>Observação na nota</label>
               <input type="text" value={obs} onChange={(e) => setObs(e.target.value)} className={inputCls} /></div>
           </div>
         </details>

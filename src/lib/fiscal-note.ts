@@ -14,6 +14,51 @@
 // Puro/sem Prisma — roda no cliente e no servidor.
 
 export type FiscalNoteKind = "DEBITO" | "CREDITO";
+
+// Linha da tabela invoice_clients (Financeiro › Dados dos Clientes).
+export interface InvoiceClientRow {
+  id: number;
+  name: string;
+  legal_name: string | null;
+  address: string | null;
+  cnpj: string | null;
+  ie: string | null;
+  municipal_reg: string | null;
+  header_line: string | null;
+  language: string;
+  default_currency: string;
+  // Só a Wilson Sons trabalha com OI — o campo aparece no modal só pra ela.
+  requires_oi: boolean;
+  // Dados para depósito da nota deste cliente (uma linha por informação).
+  // NULL = Itaú padrão da CARGO_ISSUER. A Deep recebe a conta Santander.
+  deposit_bank: string | null;
+  notes: string | null;
+}
+
+// Chave pra casar o cliente do navio com o cadastro fiscal: sem acento, caixa
+// ou espaços extras ("Transatlântica" = "TRANSATLANTICA ").
+export function clientKey(name: string | null | undefined): string {
+  return (name || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
+}
+
+export function findInvoiceClient<T extends { name: string }>(list: T[], name: string | null | undefined): T | undefined {
+  const k = clientKey(name);
+  if (!k) return undefined;
+  return list.find((c) => clientKey(c.name) === k);
+}
+
+// Linhas do bloco "Dados para depósito": as do cadastro do cliente quando
+// preenchidas, senão o Itaú padrão.
+export function depositLines(depositBank: string | null | undefined): string[] {
+  const custom = (depositBank || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (custom.length) return custom;
+  return [
+    CARGO_ISSUER.bank,
+    `AG: ${CARGO_ISSUER.agency}`,
+    `C/C: ${CARGO_ISSUER.account}`,
+    `PIX: ${CARGO_ISSUER.pix}`,
+  ];
+}
 export type FiscalNoteCurrency = "BRL" | "USD";
 export type FiscalNoteLanguage = "PT" | "EN";
 
@@ -51,6 +96,8 @@ export interface FiscalNoteInput {
   exchange_rate?: number | null;
   iss_percent?: number | null;
   notes?: string | null;
+  // Dados para depósito do cliente (cadastro). Vazio = Itaú padrão.
+  deposit_bank?: string | null;
   items: FiscalNoteItemInput[];
 }
 
