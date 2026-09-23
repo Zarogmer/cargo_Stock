@@ -718,7 +718,16 @@ export default function ColaboradoresPage() {
 
       {/* Employee Form */}
       <EmployeeFormModal open={empForm} onClose={() => { setEmpForm(false); setEditEmp(null); }} onSave={saveEmployee} item={editEmp} saving={saving} roleOptions={jobRoleOptions} functions={jobFunctions} specialRates={specialRates} canEditPaga={canEditPaga} />
-      <ConfirmDialog open={!!deleteEmp} onClose={() => setDeleteEmp(null)} onConfirm={async () => { setSaving(true); await db.from("employees").delete().eq("id", deleteEmp!.id); setSaving(false); setDeleteEmp(null); loadAll(); }} title="Excluir Colaborador" message={`Excluir "${deleteEmp?.name}"?`} loading={saving} />
+      <ConfirmDialog open={!!deleteEmp} onClose={() => setDeleteEmp(null)} onConfirm={async () => {
+        setSaving(true);
+        // Apagar o colaborador zera o employee_id das alocações (SetNull). No
+        // operacional a linha ainda vale como histórico (guarda a função), mas
+        // a ADMINISTRATIVA fica um "—" fantasma na seção Administrativo do
+        // Resultado do Navio: sem pessoa, não há custo de escritório pra somar.
+        await db.from("job_allocations").delete().eq("employee_id", deleteEmp!.id).eq("kind", "ADMINISTRATIVO");
+        await db.from("employees").delete().eq("id", deleteEmp!.id);
+        setSaving(false); setDeleteEmp(null); loadAll();
+      }} title="Excluir Colaborador" message={`Excluir "${deleteEmp?.name}"?`} loading={saving} />
 
       {/* Employee Detail */}
       <Modal open={!!selectedEmp} onClose={() => setSelectedEmp(null)} title={selectedEmp?.name || ""}>
