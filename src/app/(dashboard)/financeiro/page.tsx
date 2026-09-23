@@ -77,6 +77,7 @@ import {
   EMBARQUE_SERVICE_LABELS, isServiceExtra, calcJobCost, prepareFinanceAllocations,
 } from "@/lib/job-cost";
 import { computeEmployeeStats, type EmployeeStats } from "@/lib/employee-stats";
+import { writeXlsxWithLogo } from "@/lib/xlsx-logo";
 import { computeShipYearNumbers, formatShipNumber, type ShipYearNumber } from "@/lib/ship-number";
 import type { AnnualShipRow } from "@/lib/relatorios-anuais-xlsx";
 import { EmployeeDetailDrawer } from "@/components/financeiro/employee-detail-modal";
@@ -4150,6 +4151,16 @@ function JobDetailModal({
       const dateLabel = formatDateBR(job!.end_date) || formatDateBR(job!.start_date);
       const shipLabel = `${job!.name}${job!.holds_count ? ` - ${job!.holds_count} PORÕES` : ""}${job!.cargo_type ? `-${job!.cargo_type}` : ""}${job!.port ? `-${job!.port}` : ""}${job!.start_date ? ` ${formatDateBR(job!.start_date)}` : ""}${job!.end_date ? ` a ${formatDateBR(job!.end_date)}` : ""}${dateLabel ? ` - VENCTO: ${dateLabel}` : ""}`;
 
+      // Cabeçalho: navio sem as datas (elas vão na linha do período) e a linha
+      // "PERÍODO … PAGAMENTO EM …". O rótulo completo com vencimento continua
+      // no cabeçalho da coluna J (MV 1).
+      const shipHeader = `${job!.name}${job!.holds_count ? ` - ${job!.holds_count} PORÕES` : ""}${job!.cargo_type ? ` - ${job!.cargo_type}` : ""}${job!.port ? ` - ${job!.port}` : ""}`;
+      const periodLabel = job!.start_date
+        ? `PERÍODO: ${formatDateBR(job!.start_date)}${job!.end_date ? ` a ${formatDateBR(job!.end_date)}` : ""}`
+        : "";
+      const payLabel = dateLabel ? `PAGAMENTO EM ${dateLabel}` : "";
+      const headerPeriodo = [periodLabel, payLabel].filter(Boolean).join("     ");
+
       // Estilos reutilizáveis (xlsx-js-style aceita objeto `s` em cada célula).
       const thin = { style: "thin", color: { rgb: "000000" } };
       const allBorders = { top: thin, bottom: thin, left: thin, right: thin };
@@ -4160,6 +4171,10 @@ function JobDetailModal({
       };
       const styleClient = {
         font: { bold: true, sz: 12, color: { rgb: "1F4E78" } },
+        alignment: { horizontal: "center", vertical: "center" },
+      };
+      const styleHeaderInfo = {
+        font: { bold: true, sz: 11, color: { rgb: "1F4E78" } },
         alignment: { horizontal: "center", vertical: "center" },
       };
       const styleHeader = {
@@ -4224,8 +4239,14 @@ function JobDetailModal({
         ws[addr] = { t, v, s };
       };
 
-      // Linha 3: título "PAGAMENTO EM ..." (mesclado D3:G3 pra caber o texto inteiro)
-      set("D3", `PAGAMENTO EM ${dateLabel || ""}`, styleTitle);
+      // Cabeçalho (linhas 1-5): o logo da empresa entra em A1 (injetado no zip
+      // do XLSX lá embaixo, por writeXlsxWithLogo) e, ao lado, navio, cliente,
+      // período e data de pagamento — quem recebe a planilha precisa saber de
+      // que navio e de que cliente ela é sem abrir o sistema.
+      set("D2", "FOLHA DE PAGAMENTO", styleTitle);
+      set("D3", `NAVIO: ${shipHeader}`, styleHeaderInfo);
+      set("D4", `CLIENTE: ${job!.client || "-"}`, styleHeaderInfo);
+      set("D5", headerPeriodo, styleHeaderInfo);
       // Linha 6: rótulos C=FUNCIONÁRIOS, J=cliente
       set("C6", "FUNCIONÁRIOS", styleSummaryTitle);
       set("K6", job!.client || "", styleClient);
@@ -4384,7 +4405,11 @@ function JobDetailModal({
       ];
       ws["!rows"] = Array.from({ length: row + 2 }, (_, i) => (i === 6 ? { hpt: 38 } : { hpt: 18 }));
       ws["!merges"] = [
-        { s: { c: 3, r: 2 }, e: { c: 6, r: 2 } }, // D3:G3 título mesclado
+        // Cabeçalho: cada linha de informação ocupa D:J (o logo fica em A:C).
+        { s: { c: 3, r: 1 }, e: { c: 9, r: 1 } }, // D2:J2  FOLHA DE PAGAMENTO
+        { s: { c: 3, r: 2 }, e: { c: 9, r: 2 } }, // D3:J3  NAVIO
+        { s: { c: 3, r: 3 }, e: { c: 9, r: 3 } }, // D4:J4  CLIENTE
+        { s: { c: 3, r: 4 }, e: { c: 9, r: 4 } }, // D5:J5  PERÍODO / PAGAMENTO
       ];
       // Filtro na planilha (cabeçalho C7:J7 + funcionários): permite filtrar a
       // coluna ITAÚ/SANTANDER pra mandar a folha só do Itaú, só do Santander ou
@@ -4397,7 +4422,11 @@ function JobDetailModal({
       XLSX.utils.book_append_sheet(wb, ws, "PLANILHA BASE");
       const safeName = (job!.name || "planilha").replace(/[^a-zA-Z0-9_-]+/g, "_");
       const dateForFile = (job!.end_date || job!.start_date || "").slice(0, 10);
-      XLSX.writeFile(wb, `${dateForFile}_${safeName}.xlsx`);
+      // Logo ancorado em A1, dimensionado na proporção do arquivo (541x141) pra
+      // caber nas colunas A:C e nas 4 primeiras linhas do cabeçalho.
+      await writeXlsxWithLogo(wb, `${dateForFile}_${safeName}.xlsx`, {
+        col: 0, row: 0, widthPx: 292, heightPx: 76, offsetXPx: 6, offsetYPx: 6,
+      });
     } catch (err) {
       alert("Falha ao gerar XLSX: " + (err as Error).message);
     } finally {
