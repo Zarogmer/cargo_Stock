@@ -4246,10 +4246,10 @@ function JobDetailModal({
 
       // Funcionários começam na linha 9 (linha 8 fica em branco como no template)
       let row = 9;
-      let totalFolha = 0, totalNavio = 0, totalAdto = 0, totalDescGeral = 0;
-      // Quanto vai pra cada banco (soma do PAGTO NA FOLHA) — o financeiro precisa
-      // saber quanto depositar no Itaú e quanto no Santander, e quanto sacar pra
-      // entregar em mãos a quem não tem conta.
+      let totalFolha = 0, totalNavio = 0, totalAdto = 0, totalDescGeral = 0, totalLiquido = 0;
+      // Quanto vai pra cada banco (soma do líquido a depositar) — o financeiro
+      // precisa saber quanto depositar no Itaú e quanto no Santander, e quanto
+      // sacar pra entregar em mãos a quem não tem conta.
       const porBanco: Record<BankBucket, number> = { ITAU: 0, SANTANDER: 0, TRAZER: 0, OUTROS: 0 };
       // Detalhe por tipo de conta dentro do banco (`BUCKET|Tipo` → soma) pro
       // rodapé mostrar quanto vai de Corrente, Poupança, Conta Salário…
@@ -4280,6 +4280,14 @@ function JobDetailModal({
         totalNavio += total;
         totalAdto += adto;
         totalDescGeral += descGeral;
+        // Líquido que a empresa deposita/entrega HOJE por este navio: o valor do
+        // navio menos a folha (paga à parte pela contabilidade), o desconto de
+        // material e o adiantamento que a pessoa já pegou. É essa quantia que o
+        // rodapé divide entre Itaú, Santander e "a trazer" — antes o rateio saía
+        // da coluna PAGTO NA FOLHA e ficava tudo zerado enquanto a folha não
+        // fosse preenchida.
+        const liquido = +(total - folha - descGeral - adto).toFixed(2);
+        totalLiquido += liquido;
         // Coluna ITAÚ/SANTANDER: banco + TIPO DA CONTA (conta salário, corrente,
         // poupança, digital). Sem conta bancária o pagamento é em espécie —
         // "S/CONTA - TRAZER SALÁRIO". É por essa coluna que a folha é filtrada.
@@ -4295,13 +4303,13 @@ function JobDetailModal({
           ? formatBankLabel(e?.bank_name ?? null, e?.bank_account_type ?? null)
           : "S/CONTA - TRAZER SALÁRIO";
         const bucket = bankBucket(e?.bank_name ?? null, hasAccount);
-        porBanco[bucket] += folha;
+        porBanco[bucket] += liquido;
         if (bucket === "ITAU" || bucket === "SANTANDER") {
           const tipo = e?.bank_account_type
             ? (BANK_ACCOUNT_TYPE_LABELS[e.bank_account_type] ?? e.bank_account_type)
             : "S/tipo";
           const tipoKey = `${bucket}|${tipo}`;
-          porTipo.set(tipoKey, (porTipo.get(tipoKey) || 0) + folha);
+          porTipo.set(tipoKey, (porTipo.get(tipoKey) || 0) + liquido);
         }
         set(`B${row}`, idx + 1, styleCellCenter, "n");
         set(`C${row}`, e?.name || a.job_functions?.name || `#${a.function_id}`, styleCellCenter);
@@ -4339,11 +4347,11 @@ function JobDetailModal({
       set(`F${row}`, "PAGTO NAVIO:", styleSummaryLabel);
       set(`G${row}`, totalNavio, styleSummaryMoney, "n"); row += 2;
 
-      // Quebra por banco do PAGTO NA FOLHA: quanto depositar em cada banco,
-      // com o detalhe por tipo de conta (Corrente/Poupança/Conta Salário…)
-      // logo abaixo do total do banco. Itaú, Santander e A TRAZER sempre
-      // aparecem (mesmo zerados, pra linha existir); "OUTROS" só quando tem
-      // valor. A soma dos totais fecha com PAGTO FOLHA.
+      // Quebra por banco do líquido a depositar: quanto cai em cada banco, com
+      // o detalhe por tipo de conta (Corrente/Poupança/Conta Salário…) logo
+      // abaixo do total do banco. Itaú, Santander e A TRAZER sempre aparecem
+      // (mesmo zerados, pra linha existir); "OUTROS" só quando tem valor. A soma
+      // dos totais fecha com TOTAL A DEPOSITAR.
       const writeTipos = (bucket: "ITAU" | "SANTANDER") => {
         Array.from(porTipo.entries())
           .filter(([k, v]) => k.startsWith(`${bucket}|`) && v > 0)
@@ -4353,6 +4361,8 @@ function JobDetailModal({
             set(`G${row}`, v, styleSummaryMoney, "n"); row++;
           });
       };
+      set(`F${row}`, "TOTAL A DEPOSITAR:", styleSummaryLabel);
+      set(`G${row}`, totalLiquido, styleSummaryMoney, "n"); row++;
       set(`F${row}`, "TOTAL ITAÚ:", styleTotalLabel);
       set(`G${row}`, porBanco.ITAU, styleTotalMoney, "n"); row++;
       writeTipos("ITAU");
