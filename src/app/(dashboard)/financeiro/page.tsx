@@ -6008,7 +6008,12 @@ function JobDetailModal({
                         <tr key={a.id} className="border-b border-border last:border-0 hover:bg-gray-50">
                           <td className="px-3 py-2">
                             <span className="font-medium">{emp?.name || a.employees?.name || "—"}</span>
-                            <span className="block text-[10px] text-text-light uppercase">{emp?.role || "Administrativo"}</span>
+                            {/* Cargo real do colaborador (ANALISTA RH, AUXILIAR DE ESCRITORIO...).
+                                Administrativo e SETOR, nao funcao: a funcao-carregador
+                                ADMINISTRATIVO nunca vira legenda aqui. Sem cargo, sem legenda. */}
+                            <span className="block text-[10px] text-text-light uppercase">
+                              {emp?.role && emp.role.trim().toUpperCase() !== "ADMINISTRATIVO" ? emp.role : ""}
+                            </span>
                           </td>
                           <td className="px-3 py-2 text-right">
                             <span className="inline-flex items-center gap-1.5 justify-end">
