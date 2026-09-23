@@ -505,6 +505,15 @@ export default function NaviosPage() {
     }
     return Array.from(map.values()).sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [ships, peticaoAgencias]);
+  // Produtos: seeds + cargas já usadas em navios, sempre em maiúsculas.
+  const knownCargos = useMemo(() => {
+    const set = new Set<string>(CARGO_OPTIONS);
+    for (const s of ships) {
+      const v = (s.cargo_type || "").trim().toUpperCase();
+      if (v) set.add(v);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [ships]);
 
   useEffect(() => {
     loadShips();
@@ -2209,6 +2218,8 @@ export default function NaviosPage() {
                   options={knownPorts}
                   placeholder="Selecione ou digite um porto..."
                   addLabel="Adicionar porto"
+                  createLabel="Cadastrar porto"
+                  createHint="Digite o nome do novo porto..."
                   disabled={form.operation_type === "COSTADO"}
                 />
                 <p className="text-[10px] text-text-light mt-1">
@@ -2261,6 +2272,8 @@ export default function NaviosPage() {
                   options={knownClients}
                   placeholder="Selecione ou digite um cliente..."
                   addLabel="Adicionar cliente"
+                  createLabel="Cadastrar cliente"
+                  createHint="Digite o nome do novo cliente..."
                 />
                 <p className="text-[10px] text-text-light mt-1">
                   Selecione um cliente da lista ou digite um novo — ele será adicionado ao salvar.
@@ -2276,19 +2289,16 @@ export default function NaviosPage() {
               <div className={form.operation_type === "EMBARQUE" ? "grid grid-cols-1 sm:grid-cols-2 gap-3" : ""}>
                 <div>
                   <label className="block text-sm font-medium text-text mb-1">Produto / Carga</label>
-                  <input
-                    type="text"
+                  <ComboBox
                     value={form.cargo_type}
-                    onChange={(e) => setForm({ ...form, cargo_type: e.target.value.toUpperCase() })}
+                    onChange={(v) => setForm({ ...form, cargo_type: v })}
+                    options={knownCargos}
                     placeholder="Ex: CARVÃO"
-                    list="cargo-options"
-                    className="w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+                    addLabel="Adicionar produto"
+                    createLabel="Cadastrar produto"
+                    createHint="Digite o nome do novo produto..."
+                    transform={(v) => v.toUpperCase()}
                   />
-                  <datalist id="cargo-options">
-                    {CARGO_OPTIONS.map((c) => (
-                      <option key={c} value={c} />
-                    ))}
-                  </datalist>
                   <p className="text-[10px] text-text-light mt-1">Selecione ou digite o produto transportado</p>
                 </div>
                 {form.operation_type === "EMBARQUE" && (
@@ -2920,17 +2930,30 @@ function ComboBox({
   options,
   placeholder,
   addLabel,
+  createLabel,
+  createHint,
+  transform,
   disabled,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: string[];
   placeholder?: string;
+  /** Rótulo do botão verde "+ Adicionar X: valor" (confirma um valor novo). */
   addLabel: string;
+  /** Entrada fixa no topo da lista ("Cadastrar porto") que limpa o campo e
+      entra em modo de cadastro — a lista some e só o valor digitado conta. */
+  createLabel?: string;
+  /** Dica exibida no modo de cadastro enquanto o campo está vazio. */
+  createHint?: string;
+  /** Normaliza o texto digitado (ex.: maiúsculas no produto). */
+  transform?: (v: string) => string;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Fecha o dropdown ao clicar fora.
   useEffect(() => {
@@ -2938,6 +2961,7 @@ function ComboBox({
     function onClickOutside(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setOpen(false);
+        setCreating(false);
       }
     }
     document.addEventListener("mousedown", onClickOutside);
@@ -2948,31 +2972,86 @@ function ComboBox({
   const filtered = q
     ? options.filter((o) => o.toLowerCase().includes(q))
     : options;
-  const hasExactMatch = options.some((o) => o.toLowerCase() === q);
-  const showAdd = q.length > 0 && !hasExactMatch;
+  const exact = options.find((o) => o.toLowerCase() === q);
+  const showAdd = q.length > 0 && !exact;
+  // No modo de cadastro a lista de existentes some — só mostra o "já existe"
+  // quando o nome digitado bate exatamente com um cadastrado.
+  const listed = creating ? (exact ? [exact] : []) : filtered;
+  const showCreate = !creating && !!createLabel;
 
   function pick(v: string) {
     onChange(v);
     setOpen(false);
+    setCreating(false);
+  }
+
+  function startCreate() {
+    onChange("");
+    setCreating(true);
+    setOpen(true);
+    inputRef.current?.focus();
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Escape") {
+      setOpen(false);
+      setCreating(false);
+      return;
+    }
+    if (e.key !== "Enter" || !open) return;
+    // Enter confirma o valor novo (ou o único match exato) em vez de
+    // submeter o formulário inteiro.
+    if (showAdd) {
+      e.preventDefault();
+      pick(value.trim());
+    } else if (exact) {
+      e.preventDefault();
+      pick(exact);
+    }
   }
 
   return (
     <div ref={containerRef} className="relative">
       <input
+        ref={inputRef}
         type="text"
         value={value}
-        onChange={(e) => { if (disabled) return; onChange(e.target.value); setOpen(true); }}
+        onChange={(e) => {
+          if (disabled) return;
+          onChange(transform ? transform(e.target.value) : e.target.value);
+          setOpen(true);
+        }}
         onFocus={() => { if (!disabled) setOpen(true); }}
-        placeholder={placeholder}
+        onKeyDown={handleKeyDown}
+        placeholder={creating && createHint ? createHint : placeholder}
         disabled={disabled}
         readOnly={disabled}
-        className={`w-full px-3 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm ${
-          disabled ? "bg-gray-100 text-text-light cursor-not-allowed" : ""
+        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 text-sm ${
+          disabled
+            ? "bg-gray-100 text-text-light cursor-not-allowed border-border focus:ring-primary/30"
+            : creating
+              ? "border-emerald-400 focus:ring-emerald-200 bg-emerald-50/40"
+              : "border-border focus:ring-primary/30"
         }`}
       />
-      {!disabled && open && (filtered.length > 0 || showAdd) && (
+      {!disabled && open && (showCreate || listed.length > 0 || showAdd || creating) && (
         <div className="absolute top-full left-0 right-0 z-20 mt-1 max-h-56 overflow-y-auto bg-white border border-border rounded-lg shadow-lg">
-          {filtered.map((opt) => (
+          {showCreate && (
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()} /* mantém foco no input */
+              onClick={startCreate}
+              className="w-full text-left px-3 py-2 text-sm bg-primary/5 text-primary hover:bg-primary/10 transition font-semibold border-b border-border"
+            >
+              ➕ {createLabel}
+            </button>
+          )}
+          {creating && q.length === 0 && (
+            <div className="px-3 py-2 text-xs text-text-light italic">
+              {createHint || "Digite o nome e confirme com Enter."}
+            </div>
+          )}
+          {listed.map((opt) => (
             <button
               key={opt}
               type="button"
@@ -2980,7 +3059,7 @@ function ComboBox({
               onClick={() => pick(opt)}
               className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition"
             >
-              {opt}
+              {creating ? <>✔ Já cadastrado: <strong>{opt}</strong></> : opt}
             </button>
           ))}
           {showAdd && (
