@@ -29,7 +29,7 @@ interface QuerySpec {
   filters: Filter[];
   order: OrderSpec[];
   limit?: number;
-  data?: Record<string, unknown>;
+  data?: Record<string, unknown> | Record<string, unknown>[];
   count?: string;
   head?: boolean;
 }
@@ -59,9 +59,11 @@ class QueryBuilder<T = any> {
     return this;
   }
 
+  // Aceita uma linha ou um lote. O lote vai inteiro pro gateway (createMany) —
+  // antes só a PRIMEIRA linha era enviada e o resto sumia sem erro nenhum.
   insert(data: Record<string, unknown> | Record<string, unknown>[]): this {
     this.spec.action = "insert";
-    this.spec.data = Array.isArray(data) ? data[0] : data;
+    this.spec.data = data;
     return this;
   }
 

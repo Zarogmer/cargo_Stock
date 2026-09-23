@@ -68,7 +68,8 @@ interface QuerySpec {
   filters?: Array<{ column: string; op: string; value?: unknown; values?: unknown[] }>;
   order?: Array<{ column: string; ascending: boolean }>;
   limit?: number;
-  data?: Record<string, unknown>;
+  // Insert aceita uma linha OU um lote (createMany).
+  data?: Record<string, unknown> | Record<string, unknown>[];
   count?: string;
   head?: boolean;
 }
@@ -308,7 +309,9 @@ export async function POST(request: NextRequest) {
       UNIT_VALUE_TABLES.has(spec.table) && !canViewStockValue(userRole);
     // Silenciosamente descarta o campo em insert/update — assim um payload
     // adulterado não grava preço, sem quebrar o resto do save.
-    if (hideValue && spec.data) delete spec.data.unit_value;
+    if (hideValue && spec.data) {
+      for (const row of Array.isArray(spec.data) ? spec.data : [spec.data]) delete row.unit_value;
+    }
 
     if (!model) {
       return NextResponse.json(
@@ -357,6 +360,17 @@ export async function POST(request: NextRequest) {
           );
         }
 
+        // Lote (array) → createMany numa tacada só. Devolve só a contagem: quem
+        // precisa da linha criada (id) insere uma por vez.
+        if (Array.isArray(spec.data)) {
+          if (spec.data.length === 0) {
+            return NextResponse.json({ data: [], error: null, count: 0 });
+          }
+          const rows = spec.data.map((row) => convertDates(spec.table, row));
+          const res = await model.createMany({ data: rows });
+          return NextResponse.json({ data: null, error: null, count: res.count ?? rows.length });
+        }
+
         const insertData = convertDates(spec.table, spec.data);
 
         const data = await model.create({ data: insertData });
@@ -378,6 +392,13 @@ export async function POST(request: NextRequest) {
           );
         }
 
+        // Update é sempre uma linha de campos (lote só existe no insert).
+        if (Array.isArray(spec.data)) {
+          return NextResponse.json(
+            { data: null, error: { message: "Update não aceita lista de linhas", code: "400" }, count: null },
+            { status: 400 }
+          );
+        }
         const updateData = convertDates(spec.table, spec.data);
         // Auto-set updated_at for tables that have it
         const TABLES_WITH_UPDATED_AT = [

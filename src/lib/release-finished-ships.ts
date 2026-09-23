@@ -70,7 +70,12 @@ export async function releaseFinishedShipAllocations(actor: string): Promise<{ s
       .from("job_allocations")
       .update({ status: "REMOVIDO", removed_at: now, removed_by: actor, removal_reason: AUTO_RELEASE_REASON })
       .eq("job_id", job.id)
-      .eq("status", "ATIVO");
+      .eq("status", "ATIVO")
+      // ADMINISTRATIVO fora: essa alocação não é escala (ninguém fica
+      // "Embarcado" por ela), é o custo fixo do escritório no navio. Baixar
+      // junto zerava o Administrativo do Resultado do Navio assim que a data
+      // de saída passava.
+      .neq("kind", "ADMINISTRATIVO");
     if (!upd.error) touched++;
   }
   return { ships: ships.length, allocations: touched };
@@ -93,7 +98,12 @@ export async function releaseShipAllocationsNow(shipId: string, actor: string): 
       .from("job_allocations")
       .update({ status: "REMOVIDO", removed_at: now, removed_by: actor, removal_reason: AUTO_RELEASE_REASON })
       .eq("job_id", job.id)
-      .eq("status", "ATIVO");
+      .eq("status", "ATIVO")
+      // ADMINISTRATIVO fora: essa alocação não é escala (ninguém fica
+      // "Embarcado" por ela), é o custo fixo do escritório no navio. Baixar
+      // junto zerava o Administrativo do Resultado do Navio assim que a data
+      // de saída passava.
+      .neq("kind", "ADMINISTRATIVO");
     if (!upd.error) touched++;
   }
   return touched;
