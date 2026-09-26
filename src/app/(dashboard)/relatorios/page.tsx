@@ -412,6 +412,93 @@ function isoDateOnly(v: string | null): string {
   return v ? String(v).slice(0, 10) : "";
 }
 
+// Visualizador em tela cheia das fotos de um bloco: clique na miniatura abre,
+// ← → (ou swipe no celular) navega dentro do bloco, ESC / fundo / × fecha.
+function PhotoLightbox({
+  photos,
+  index,
+  captions,
+  onIndex,
+  onClose,
+}: {
+  photos: PhotoMeta[];
+  index: number;
+  captions: Record<number, string>;
+  onIndex: (i: number) => void;
+  onClose: () => void;
+}) {
+  const touchStartX = useRef<number | null>(null);
+  const total = photos.length;
+  const photo = photos[index];
+  const goPrev = useCallback(() => onIndex((index - 1 + total) % total), [index, total, onIndex]);
+  const goNext = useCallback(() => onIndex((index + 1) % total), [index, total, onIndex]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowLeft" && total > 1) goPrev();
+      else if (e.key === "ArrowRight" && total > 1) goNext();
+    }
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose, goPrev, goNext, total]);
+
+  if (!photo) return null;
+  const caption = (captions[photo.id] ?? photo.caption ?? "").trim();
+  const navBtn =
+    "absolute top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/25 text-white text-3xl leading-none flex items-center justify-center transition select-none";
+
+  return (
+    <div
+      onClick={onClose}
+      onTouchStart={(e) => { touchStartX.current = e.touches[0]?.clientX ?? null; }}
+      onTouchEnd={(e) => {
+        const start = touchStartX.current;
+        touchStartX.current = null;
+        if (start == null || total < 2) return;
+        const dx = (e.changedTouches[0]?.clientX ?? start) - start;
+        if (dx > 50) goPrev();
+        else if (dx < -50) goNext();
+      }}
+      className="fixed inset-0 z-[100] bg-black/90 flex flex-col items-center justify-center p-safe-4 cursor-zoom-out"
+      role="dialog"
+      aria-label="Foto ampliada"
+    >
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute top-4 right-4 z-10 text-white text-2xl w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 transition flex items-center justify-center"
+        aria-label="Fechar"
+      >
+        ×
+      </button>
+      {total > 1 && (
+        <>
+          <button type="button" onClick={(e) => { e.stopPropagation(); goPrev(); }} className={`${navBtn} left-2 sm:left-4`} aria-label="Foto anterior">‹</button>
+          <button type="button" onClick={(e) => { e.stopPropagation(); goNext(); }} className={`${navBtn} right-2 sm:right-4`} aria-label="Próxima foto">›</button>
+        </>
+      )}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        key={photo.id}
+        src={`/api/relatorios/fotos/${photo.id}`}
+        alt={caption || "Foto do relatório"}
+        onClick={(e) => e.stopPropagation()}
+        className="max-w-full max-h-[80vh] object-contain rounded-lg cursor-default shadow-2xl"
+      />
+      <div onClick={(e) => e.stopPropagation()} className="mt-3 max-w-full px-4 text-center text-white cursor-default">
+        {caption && <p className="text-sm">{caption}</p>}
+        <p className="text-xs text-white/60 mt-1">{index + 1} / {total}</p>
+      </div>
+    </div>
+  );
+}
+
 export default function RelatoriosPage() {
   const { profile } = useAuth();
   const router = useRouter();
@@ -645,6 +732,7 @@ function ReportDetail({
   const [uploadingLabel, setUploadingLabel] = useState<string | null>(null);
   const [uploadErrors, setUploadErrors] = useState<string[]>([]);
   const [deletePhoto, setDeletePhoto] = useState<PhotoMeta | null>(null);
+  const [lightbox, setLightbox] = useState<{ photos: PhotoMeta[]; index: number } | null>(null);
   const [deleting, setDeleting] = useState(false);
   // ── Geração dos PDFs ──────────────────────────────────────────────────────
   const [generatingPdf, setGeneratingPdf] = useState<string | null>(null);
@@ -1850,8 +1938,15 @@ function ReportDetail({
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                     {shown.map((p) => (
                       <div key={p.id} className="bg-bg rounded-xl border border-border overflow-hidden">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={`/api/relatorios/fotos/${p.id}`} alt={p.caption || b.label} className="w-full h-36 object-cover" loading="lazy" />
+                        <button
+                          type="button"
+                          onClick={() => setLightbox({ photos: shown, index: shown.indexOf(p) })}
+                          className="block w-full cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-primary/40"
+                          title="Ampliar foto"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={`/api/relatorios/fotos/${p.id}`} alt={p.caption || b.label} className="w-full h-36 object-cover" loading="lazy" />
+                        </button>
                         <div className="p-2 space-y-1.5">
                           {locked ? (
                             <p className="text-xs text-text-light truncate">{p.caption || "—"}</p>
@@ -1946,6 +2041,16 @@ function ReportDetail({
             )}
           </div>
         </div>
+      )}
+
+      {lightbox && (
+        <PhotoLightbox
+          photos={lightbox.photos}
+          index={lightbox.index}
+          captions={photoCaptions}
+          onIndex={(i) => setLightbox((prev) => (prev ? { ...prev, index: i } : prev))}
+          onClose={() => setLightbox(null)}
+        />
       )}
 
       <ConfirmDialog
