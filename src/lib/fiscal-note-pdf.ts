@@ -2,11 +2,11 @@
 // Bordo). O layout segue o das notas que a empresa já manda pro cliente:
 // timbrado da Cargo no topo, faixa NOTA DE DÉBITO com o número à direita, bloco
 // do destinatário com "Valor total a Fatura", bloco Ref. do navio, tabela
-// Histórico/Débito/Crédito, SUB-TOTAL e TOTAL, e os dados de depósito no rodapé.
+// Descrição/Débito/Crédito, SUB-TOTAL e TOTAL, e os dados de depósito no rodapé.
 //
 // Um modelo só serve os dois formatos de hoje: `language` troca os rótulos
 // (Wilson Sons recebe em inglês), `oi`/`exchange_rate`/`iss_percent` aparecem só
-// quando preenchidos, e cada serviço é uma linha do Histórico.
+// quando preenchidos, e cada serviço é uma linha da Descrição.
 
 import { readFile } from "fs/promises";
 import path from "path";
@@ -59,7 +59,7 @@ function rect(ctx: Ctx, x: number, y: number, w: number, h: number, fill?: Retur
   });
 }
 
-// Quebra o texto na largura da coluna (descrições longas do Histórico).
+// Quebra o texto na largura da coluna (descrições longas da coluna Descrição).
 function wrap(s: string, font: PDFFont, size: number, maxWidth: number): string[] {
   const words = (s || "").split(/\s+/).filter(Boolean);
   const lines: string[] = [];
@@ -210,7 +210,7 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
   });
   y -= refH + 8;
 
-  // ── Tabela: Histórico | Débito | Crédito | D/C | Total ────────────────────
+  // ── Tabela: Descrição | Débito | Crédito | D/C | Total ────────────────────
   const colTotal = 78;
   const colDC = 24;
   const colCredit = 88;

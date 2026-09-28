@@ -136,7 +136,7 @@ export const NOTE_LABELS = {
     arrival: "Entrada:",
     departure: "Saída:",
     port: "Porto:",
-    description: "Histórico",
+    description: "Descrição",
     debit: "Débito",
     credit: "Crédito",
     total: "Total",
