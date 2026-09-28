@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { db } from "@/lib/db";
+import { useAuth } from "@/lib/auth-context";
+import { canDeleteFiscalNote } from "@/lib/rbac";
 import { parseDecimalBR } from "@/lib/utils";
 import { fetchPtaxCompra } from "@/components/dollar-ticker";
 import {
@@ -93,6 +95,11 @@ export function FiscalNoteModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { user, profile } = useAuth();
+  // Apagar nota emitida: só Guilherme e EXECUTIVO (mesma régua da rota DELETE).
+  const canDelete = canDeleteFiscalNote(profile?.role, user?.email);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   const [kind, setKind] = useState<FiscalNoteKind>("DEBITO");
   const [clients, setClients] = useState<InvoiceClientRow[]>([]);
   const [notes, setNotes] = useState<ExistingNote[]>([]);
@@ -314,6 +321,26 @@ export function FiscalNoteModal({
     }
   }
 
+  // Apaga uma nota emitida. O servidor checa de novo quem pode; aqui o botão só
+  // aparece pra quem passa em canDeleteFiscalNote.
+  async function handleDelete(n: ExistingNote) {
+    const label = `${n.kind === "DEBITO" ? "ND" : "NC"} ${formatNoteNumber(n.number, n.year)}`;
+    if (!confirm(`Apagar a nota ${label} do ${n.ship_name}?\n\nO número ${formatNoteNumber(n.number, n.year)} sai da sequência do ano e a nota não pode ser recuperada.`)) return;
+    setDeletingId(n.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/financeiro/notas/${n.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || `Falha ao apagar a nota (HTTP ${res.status}).`);
+      await loadNotes();
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   if (!job) return null;
   const previewHeader = resolveHeaderLine(headerLine, job.name, legalName || job.client || "");
 
@@ -338,6 +365,13 @@ export function FiscalNoteModal({
                     className="ml-auto px-2 py-0.5 rounded bg-red-600 text-white hover:bg-red-700">📕 PDF</a>
                   <a href={`/api/financeiro/notas/${n.id}/arquivo?formato=xlsx`}
                     className="px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700">📗 XLSX</a>
+                  {canDelete && (
+                    <button type="button" onClick={() => handleDelete(n)} disabled={deletingId === n.id}
+                      title="Apagar nota emitida (só Guilherme e Executivo)"
+                      className="px-2 py-0.5 rounded border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-50">
+                      {deletingId === n.id ? "…" : "🗑"}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

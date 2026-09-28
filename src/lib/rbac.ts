@@ -282,6 +282,20 @@ export function canViewStockValue(role: Role): boolean {
   return STOCK_VALUE_ROLES.includes(role);
 }
 
+// Quem pode APAGAR uma Nota de Débito/Crédito já emitida. Apagar nota mexe na
+// numeração corrida do ano (o número some da sequência), então é decisão da
+// diretoria: só a conta do Guilherme e as contas de papel EXECUTIVO. Fonte
+// única: o botão 🗑 do modal de Notas e o DELETE /api/financeiro/notas/[id]
+// checam por aqui.
+export const FISCAL_NOTE_DELETE_EMAILS = ["guigui12306@gmail.com"];
+export const FISCAL_NOTE_DELETE_ROLES: Role[] = ["EXECUTIVO"];
+
+export function canDeleteFiscalNote(role: Role | null | undefined, email: string | null | undefined): boolean {
+  if (role && FISCAL_NOTE_DELETE_ROLES.includes(role)) return true;
+  const e = (email || "").trim().toLowerCase();
+  return e !== "" && FISCAL_NOTE_DELETE_EMAILS.includes(e);
+}
+
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/", icon: "dashboard", module: "DASHBOARD" },
   { label: "Navios", href: "/navios", icon: "navios", module: "NAVIOS" },
