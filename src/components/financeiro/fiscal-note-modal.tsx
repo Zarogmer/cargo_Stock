@@ -44,6 +44,7 @@ interface ExistingNote {
   ship_name: string;
   issue_date: string;
   currency: string;
+  language?: string;
   total: string | number;
   exchange_rate: string | number | null;
 }
@@ -99,6 +100,8 @@ export function FiscalNoteModal({
   // Apagar nota emitida: só Guilherme e EXECUTIVO (mesma régua da rota DELETE).
   const canDelete = canDeleteFiscalNote(profile?.role, user?.email);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Idioma escolhido pra baixar cada nota emitida (padrão = o gravado na nota).
+  const [downloadLang, setDownloadLang] = useState<Record<string, FiscalNoteLanguage>>({});
 
   const [kind, setKind] = useState<FiscalNoteKind>("DEBITO");
   const [clients, setClients] = useState<InvoiceClientRow[]>([]);
@@ -361,9 +364,16 @@ export function FiscalNoteModal({
                   <span className="font-semibold tabular-nums">
                     {formatMoney(Number(n.total), (n.currency === "USD" ? "USD" : "BRL") as FiscalNoteCurrency)}
                   </span>
-                  <a href={`/api/financeiro/notas/${n.id}/arquivo?formato=pdf`}
-                    className="ml-auto px-2 py-0.5 rounded bg-red-600 text-white hover:bg-red-700">📕 PDF</a>
-                  <a href={`/api/financeiro/notas/${n.id}/arquivo?formato=xlsx`}
+                  <select value={downloadLang[n.id] ?? (n.language === "EN" ? "EN" : "PT")}
+                    onChange={(e) => setDownloadLang((m) => ({ ...m, [n.id]: e.target.value as FiscalNoteLanguage }))}
+                    title="Idioma do arquivo baixado"
+                    className="ml-auto border border-border rounded px-1 py-0.5 text-[11px] bg-white">
+                    <option value="PT">PT</option>
+                    <option value="EN">EN</option>
+                  </select>
+                  <a href={`/api/financeiro/notas/${n.id}/arquivo?formato=pdf&idioma=${(downloadLang[n.id] ?? n.language ?? "PT").toLowerCase()}`}
+                    className="px-2 py-0.5 rounded bg-red-600 text-white hover:bg-red-700">📕 PDF</a>
+                  <a href={`/api/financeiro/notas/${n.id}/arquivo?formato=xlsx&idioma=${(downloadLang[n.id] ?? n.language ?? "PT").toLowerCase()}`}
                     className="px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700">📗 XLSX</a>
                   {canDelete && (
                     <button type="button" onClick={() => handleDelete(n)} disabled={deletingId === n.id}
@@ -430,6 +440,14 @@ export function FiscalNoteModal({
             <label className={labelCls}>ISS do mês (%)</label>
             <input type="text" value={issPercent} onChange={(e) => setIssPercent(e.target.value)} placeholder="2,71" className={inputCls} />
             <p className="text-[10px] text-amber-700 mt-0.5">Vem da contabilidade — abate do total.</p>
+          </div>
+          <div>
+            <label className={labelCls}>Idioma da nota</label>
+            <select value={language} onChange={(e) => setLanguage(e.target.value as FiscalNoteLanguage)} className={inputCls}>
+              <option value="PT">Português</option>
+              <option value="EN">Inglês (DEBIT NOTE)</option>
+            </select>
+            <p className="text-[10px] text-text-light mt-0.5">Vem do cadastro do cliente. Depois de emitida, a nota baixa nos dois idiomas.</p>
           </div>
         </div>
 
@@ -499,11 +517,6 @@ export function FiscalNoteModal({
               <input type="text" value={ie} onChange={(e) => setIe(e.target.value)} className={inputCls} /></div>
             <div><label className={labelCls}>Inscrição Municipal</label>
               <input type="text" value={municipal} onChange={(e) => setMunicipal(e.target.value)} className={inputCls} /></div>
-            <div><label className={labelCls}>Idioma da nota</label>
-              <select value={language} onChange={(e) => setLanguage(e.target.value as FiscalNoteLanguage)} className={inputCls}>
-                <option value="PT">Português</option>
-                <option value="EN">Inglês (DEBIT NOTE / BARTHED / SAILED)</option>
-              </select></div>
             <div className="flex items-end">
               <label className="inline-flex items-center gap-2 text-sm cursor-pointer pb-2">
                 <input type="checkbox" checked={requiresOi} onChange={(e) => setRequiresOi(e.target.checked)} className="w-4 h-4" />

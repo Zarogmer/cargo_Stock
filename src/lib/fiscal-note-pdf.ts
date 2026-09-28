@@ -17,6 +17,7 @@ import {
   CURRENCY_SYMBOL,
   FiscalNoteInput,
   NOTE_LABELS,
+  inFavorLine,
   calcFiscalNoteTotals,
   depositLines,
   formatIssueCity,
@@ -338,7 +339,7 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
   ensure(favH);
   rect(ctx, left, y - favH, innerW - colTotal, favH);
   rect(ctx, left + innerW - colTotal, y - favH, colTotal, favH);
-  text(ctx, ascii(isDebit ? L.inFavorDebit : L.inFavorCredit), left + 5, y - favH + 4, 7.4);
+  text(ctx, ascii(inFavorLine(note.language, isDebit, note.client_name)), left + 5, y - favH + 4, 7.4);
   textRight(ctx, money(totals.total, symbol), right - 5, y - favH + 4, 7.4, true);
   y -= favH + 26;
 

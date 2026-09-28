@@ -73,6 +73,11 @@ export async function GET(
   input.deposit_bank = clients.find((c) => clientKey(c.name) === clientKey(input.client_name))?.deposit_bank ?? null;
   const base = fiscalNoteFileName(input.kind, input.number, input.year, input.ship_name);
   const formato = (request.nextUrl.searchParams.get("formato") || "pdf").toLowerCase();
+  // ?idioma=pt|en gera a MESMA nota no outro idioma (o gravado é só o padrão):
+  // a Wilson Sons recebe em inglês e a contabilidade pode pedir a mesma em
+  // português, sem reemitir.
+  const idioma = (request.nextUrl.searchParams.get("idioma") || "").toUpperCase();
+  if (idioma === "EN" || idioma === "PT") input.language = idioma;
 
   // Mesma convenção das outras rotas de download: filename= é o fallback ASCII
   // (RFC 6266 não manda decodificar %20 ali — Safari salvaria "ND%20059..."),

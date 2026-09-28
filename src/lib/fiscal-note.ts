@@ -145,8 +145,8 @@ export const NOTE_LABELS = {
     due: "VENCIMENTO:",
     invoiceTotal: "Valor total a Fatura:",
     exchange: "TAXA DO DÓLAR: R$",
-    inFavorDebit: "Crédito a Favor da Cargo Ships",
-    inFavorCredit: "Crédito a Favor do Cliente",
+    inFavorDebit: "Débito para {CLIENTE}",
+    inFavorCredit: "Crédito para {CLIENTE}",
     deposit: "Dados para depósito:",
     obsBRL: "OBS: VALORES EXPRESSOS EM REAL",
     obsUSD: "OBS: VALORES EXPRESSOS EM DÓLAR",
@@ -169,10 +169,12 @@ export const NOTE_LABELS = {
     subtotal: "SUB-TOTAL",
     grandTotal: "TOTAL",
     due: "DEADLINE:",
-    invoiceTotal: "Amount:",
+    // Na nota em inglês da Wilson Sons a caixa amarela é a única coisa em
+    // português: fica "Valor", como no modelo original.
+    invoiceTotal: "Valor",
     exchange: "DOLLAR EXCHANGE RATE: R$",
-    inFavorDebit: "DEBIT TO CLIENT",
-    inFavorCredit: "CREDIT TO CLIENT",
+    inFavorDebit: "DEBIT TO {CLIENTE}",
+    inFavorCredit: "CREDIT TO {CLIENTE}",
     deposit: "Bank details:",
     obsBRL: "OBS: AMOUNTS IN BRAZILIAN REAL",
     obsUSD: "OBS: AMOUNTS IN US DOLLAR",
@@ -181,6 +183,16 @@ export const NOTE_LABELS = {
     noteTotal: "Invoice total",
   },
 } as const;
+
+// Linha de fechamento da nota: "DEBIT TO WILSON SONS" / "Débito para WILSON
+// SONS". Débito = o cliente nos deve; crédito = devolvemos ao cliente. Sempre
+// em nome do CLIENTE da nota (nunca "a favor da Cargo Ships"), como no modelo
+// que a Wilson Sons recebe.
+export function inFavorLine(language: FiscalNoteLanguage, isDebit: boolean, clientName: string): string {
+  const L = NOTE_LABELS[language] ?? NOTE_LABELS.PT;
+  const tpl = isDebit ? L.inFavorDebit : L.inFavorCredit;
+  return tpl.replace("{CLIENTE}", (clientName || "").trim().toUpperCase() || (language === "EN" ? "CLIENT" : "CLIENTE"));
+}
 
 export interface FiscalNoteTotals {
   subtotal: number;

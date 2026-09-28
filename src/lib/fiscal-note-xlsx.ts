@@ -11,6 +11,7 @@ import {
   CURRENCY_SYMBOL,
   FiscalNoteInput,
   NOTE_LABELS,
+  inFavorLine,
   calcFiscalNoteTotals,
   depositLines,
   formatIssueCity,
@@ -244,7 +245,7 @@ export function buildFiscalNoteXlsx(note: FiscalNoteInput): ArrayBuffer {
   merge(1, row - 1, 5, row - 1);
   row++;
 
-  set(`B${row}`, isDebit ? L.inFavorDebit : L.inFavorCredit, S.cellBold);
+  set(`B${row}`, inFavorLine(note.language, isDebit, note.client_name), S.cellBold);
   merge(1, row - 1, 4, row - 1);
   set(`F${row}`, totals.total, money(S.cellBold), "n");
   row += 3;
