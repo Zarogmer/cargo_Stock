@@ -303,6 +303,11 @@ export default function NaviosPage() {
   const [shipAllocs, setShipAllocs] = useState<Array<{ id: number; employee_id: number | null; function_id: number; kind: string | null; status: string }>>([]);
   const [shipExpenses, setShipExpenses] = useState<ShipExpense[]>([]);
   const [shipFinLoading, setShipFinLoading] = useState(false);
+  // Troca de função inline na lista de escalados do painel (id da
+  // job_allocation em edição + erro da última tentativa).
+  const [editingAllocId, setEditingAllocId] = useState<number | null>(null);
+  const [savingAllocFn, setSavingAllocFn] = useState(false);
+  const [allocFnError, setAllocFnError] = useState<string | null>(null);
 
   // Form "Adicionar gasto" do painel do navio.
   const [showAddExpense, setShowAddExpense] = useState(false);
@@ -1429,17 +1434,58 @@ export default function NaviosPage() {
     }
   }
 
+  // Troca a função de um escalado direto pela lista do painel (mesma opção
+  // que o cadastro do navio dá na hora de escalar). Atualiza a job_allocation
+  // no lugar — função nova + rate recalculado (override por pessoa >
+  // default_rate da função) — então Pagamento de Embarque, Folha de Ponto e
+  // Relatórios de Bordo passam a ver a função certa.
+  async function handleChangeCrewFunction(allocId: number, employeeId: number, newFnId: number) {
+    if (!selectedShip) return;
+    const current = shipAllocs.find((a) => a.id === allocId);
+    if (!current || current.function_id === newFnId) { setEditingAllocId(null); return; }
+    // Mesmo colaborador não pode ter a mesma função 2x no navio (a 2ª função
+    // do cadastro já segue essa regra).
+    const dup = shipAllocs.some((a) => a.id !== allocId && a.employee_id === employeeId && a.function_id === newFnId && a.status === "ATIVO");
+    if (dup) { setAllocFnError("Esse colaborador já está escalado nessa função neste navio."); return; }
+    setSavingAllocFn(true);
+    setAllocFnError(null);
+    try {
+      const fnRow = jobFunctions.find((f) => f.id === newFnId);
+      const { data: ovData } = await db
+        .from("employee_function_rates")
+        .select("rate")
+        .eq("employee_id", employeeId)
+        .eq("function_id", newFnId);
+      const override = (ovData as { rate: string | number }[] | null)?.[0]?.rate;
+      const rate = Number(override ?? fnRow?.default_rate ?? 0);
+      const res: any = await db
+        .from("job_allocations")
+        .update({ function_id: newFnId, rate })
+        .eq("id", allocId);
+      if (res?.error) throw new Error(res.error.message);
+      setEditingAllocId(null);
+      await loadShipFinance(selectedShip);
+    } catch (err: any) {
+      setAllocFnError(err?.message || "Falha ao trocar a função.");
+    } finally {
+      setSavingAllocFn(false);
+    }
+  }
+
   // Tripulação escalada do navio (deduplicada por colaborador — quem tem 2
   // funções aparece uma vez com as duas). Nome vem de `employees`; função de
-  // `jobFunctions` (ambos já carregados).
+  // `jobFunctions` (ambos já carregados). Cada alocação fica guardada em
+  // `allocs` pra permitir trocar a função de uma delas na lista.
   const shipCrew = useMemo(() => {
-    const byEmp = new Map<number, { id: number; name: string; functions: string[] }>();
+    type CrewAlloc = { id: number; function_id: number; function_name: string; status: string };
+    const byEmp = new Map<number, { id: number; name: string; functions: string[]; allocs: CrewAlloc[] }>();
     for (const a of shipAllocs) {
       if (a.employee_id == null) continue;
       const emp = employees.find((e) => e.id === a.employee_id);
       const fn = jobFunctions.find((f) => f.id === a.function_id);
-      const entry = byEmp.get(a.employee_id) || { id: a.employee_id, name: emp?.name || `#${a.employee_id}`, functions: [] };
+      const entry = byEmp.get(a.employee_id) || { id: a.employee_id, name: emp?.name || `#${a.employee_id}`, functions: [], allocs: [] };
       if (fn?.name && !entry.functions.includes(fn.name)) entry.functions.push(fn.name);
+      entry.allocs.push({ id: a.id, function_id: a.function_id, function_name: fn?.name || `#${a.function_id}`, status: a.status });
       byEmp.set(a.employee_id, entry);
     }
     return Array.from(byEmp.values()).sort((x, y) => x.name.localeCompare(y.name, "pt-BR"));
@@ -1822,6 +1868,7 @@ export default function NaviosPage() {
               ) : shipCrew.length > 0 ? (
                 <div>
                   <p className="text-xs text-text-light mb-2">{shipCrew.length} escalado{shipCrew.length > 1 ? "s" : ""}</p>
+                  {allocFnError && <p className="text-xs text-danger mb-2">{allocFnError}</p>}
                   <ul className="space-y-1.5">
                     {shipCrew.map((m) => (
                       <li key={m.id} className="flex items-center gap-2 text-sm py-1 px-2 bg-gray-50 rounded-lg">
@@ -1829,9 +1876,46 @@ export default function NaviosPage() {
                           {m.name.charAt(0).toUpperCase()}
                         </div>
                         <span className="font-medium text-text truncate flex-1">{m.name}</span>
-                        {m.functions.length > 0 && (
-                          <span className="text-[10px] text-text-light truncate shrink-0 max-w-[45%]" title={m.functions.join(", ")}>
-                            {m.functions.join(", ")}
+                        {m.allocs.length > 0 && (
+                          <span className="flex items-center gap-1 shrink-0 max-w-[50%] justify-end flex-wrap">
+                            {m.allocs.map((al) => {
+                              const editable = canEdit && al.status === "ATIVO" && escalableFunctions.length > 0;
+                              if (editable && editingAllocId === al.id) {
+                                return (
+                                  <select
+                                    key={al.id}
+                                    autoFocus
+                                    value={al.function_id}
+                                    disabled={savingAllocFn}
+                                    onChange={(e) => handleChangeCrewFunction(al.id, m.id, parseInt(e.target.value, 10))}
+                                    onBlur={() => { if (!savingAllocFn) { setEditingAllocId(null); setAllocFnError(null); } }}
+                                    className="text-[11px] px-1.5 py-0.5 border border-primary/40 rounded bg-white focus:outline-none focus:ring-2 focus:ring-primary/30 max-w-[160px]"
+                                  >
+                                    {!escalableFunctions.some((f) => f.id === al.function_id) && (
+                                      <option value={al.function_id}>{al.function_name}</option>
+                                    )}
+                                    {escalableFunctions.map((f) => (
+                                      <option key={f.id} value={f.id}>{f.name}</option>
+                                    ))}
+                                  </select>
+                                );
+                              }
+                              return editable ? (
+                                <button
+                                  key={al.id}
+                                  type="button"
+                                  onClick={() => { setEditingAllocId(al.id); setAllocFnError(null); }}
+                                  title="Clique pra trocar a função"
+                                  className="text-[10px] text-text-light hover:text-primary hover:bg-primary/10 px-1.5 py-0.5 rounded transition truncate max-w-[160px]"
+                                >
+                                  {al.function_name} ✎
+                                </button>
+                              ) : (
+                                <span key={al.id} className="text-[10px] text-text-light truncate max-w-[160px]" title={al.function_name}>
+                                  {al.function_name}
+                                </span>
+                              );
+                            })}
                           </span>
                         )}
                       </li>
