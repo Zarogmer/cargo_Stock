@@ -11,10 +11,12 @@
 
 const LOGO_SRC = "/cargo-logo.png";
 
-// Lado maior da foto final. 1600px imprime bem em A4 e mantém o JPEG na casa
-// de 200-500KB — importante porque a imagem vive inline no banco.
-const MAX_DIMENSION = 1600;
-const JPEG_QUALITY = 0.82;
+// Lado maior da foto final. 1280px ainda imprime bem em A4 (a foto ocupa
+// menos de meia página no PDF) e, com qualidade 0.75, o JPEG fica na casa de
+// 100-250KB — metade do que era com 1600px/0.82. Peso importa: são centenas de
+// fotos por semana.
+const MAX_DIMENSION = 1280;
+const JPEG_QUALITY = 0.75;
 
 // Logo com ~18% da largura da foto, levemente translúcido, margem de 2%.
 const LOGO_WIDTH_PCT = 18;

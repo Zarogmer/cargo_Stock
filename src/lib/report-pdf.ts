@@ -422,7 +422,7 @@ export async function buildPhotoReportPdf(opts: {
   vesselName: string;
   kind: ReportKindName;
   reportDate: string | null;
-  photos: (PhotoMeta & { image_data: string })[];
+  photos: (PhotoMeta & { image: { mime: string; bytes: Buffer } | null })[];
   sections: SectionMeta[];
 }): Promise<Uint8Array> {
   const isCostado = opts.kind === "COSTADO";
@@ -499,7 +499,7 @@ export async function buildPhotoReportPdf(opts: {
     for (const stageItems of buckets) {
       for (let i = 0; i < stageItems.length; i++) {
         const p = stageItems[i];
-        const image = await embedPhoto(d.doc, p.image_data);
+        const image = await embedPhoto(d.doc, p.image);
         if (!image) continue; // formato que o PDF não aceita: pula a foto
 
         d.newPage();
@@ -553,13 +553,15 @@ export async function buildPhotoReportPdf(opts: {
 
 // Foto → imagem embutida. JPEG e PNG entram direto; webp (e qualquer coisa que
 // o pdf-lib não leia) passa pelo canvas e vira JPEG.
-async function embedPhoto(doc: PDFDocument, dataUrl: string): Promise<PDFImage | null> {
-  const match = String(dataUrl || "").match(/^data:(image\/[a-z+]+);base64,(.+)$/);
-  if (!match) return null;
-  const bytes = Buffer.from(match[2], "base64");
+async function embedPhoto(
+  doc: PDFDocument,
+  image: { mime: string; bytes: Buffer } | null
+): Promise<PDFImage | null> {
+  if (!image) return null;
+  const { mime, bytes } = image;
   try {
-    if (match[1] === "image/jpeg" || match[1] === "image/jpg") return await doc.embedJpg(bytes);
-    if (match[1] === "image/png") return await doc.embedPng(bytes);
+    if (mime === "image/jpeg" || mime === "image/jpg") return await doc.embedJpg(bytes);
+    if (mime === "image/png") return await doc.embedPng(bytes);
   } catch {
     // segue pra conversão
   }

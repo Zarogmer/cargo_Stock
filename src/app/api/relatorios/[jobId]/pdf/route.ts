@@ -9,6 +9,7 @@ import {
   WORKED_ALLOC_WHERE,
 } from "@/lib/report-scope";
 import { buildCleaningReportPdf, buildEvaluationPdf, buildPhotoReportPdf } from "@/lib/report-pdf";
+import { loadPhotoBytes } from "@/lib/photo-storage";
 import {
   EVAL_CRITERIA,
   EvaluationPrintRow,
@@ -99,7 +100,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
       // carregamento do caminhão é um só e sai nos três PDFs). image_data só é
       // lido aqui — o JSON da tela traz apenas metadados.
       const siblings = await siblingBlockReportIds(jobId, kind);
-      const PHOTO_FIELDS = { id: true, hold_label: true, stage: true, caption: true, image_data: true };
+      const PHOTO_FIELDS = {
+        id: true, hold_label: true, stage: true, caption: true,
+        image_data: true, storage_key: true, mime_type: true,
+      };
       const [ownPhotos, sharedPhotos, sharedSections] = await Promise.all([
         report
           ? prisma.shipReportPhoto.findMany({ where: { report_id: report.id }, select: PHOTO_FIELDS })
@@ -118,7 +122,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
             })
           : [],
       ]);
-      const photos = [...ownPhotos, ...sharedPhotos].sort((a, b) => a.id - b.id);
+      // Bytes das fotos: bucket ou inline, tanto faz pro PDF. Uma foto sem
+      // imagem (objeto sumiu) entra no PDF só com a legenda, sem derrubar tudo.
+      const rows = [...ownPhotos, ...sharedPhotos].sort((a, b) => a.id - b.id);
+      const photos = await Promise.all(
+        rows.map(async ({ image_data, storage_key, mime_type, ...meta }) => ({
+          ...meta,
+          image: await loadPhotoBytes({ image_data, storage_key, mime_type }),
+        }))
+      );
       const sections: SectionMeta[] = [...(report?.sections ?? [])];
       const seenLabels = new Set(sections.map((s) => s.label));
       for (const s of sharedSections) {

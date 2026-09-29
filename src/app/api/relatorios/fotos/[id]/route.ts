@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { actorCanAccessJob, getReportActor, parseKind } from "@/lib/report-scope";
 import { REPORT_KINDS, type ReportKindName } from "@/lib/report-format";
+import { deletePhotoObjects, loadPhotoBytes } from "@/lib/photo-storage";
 
 // GET  /api/relatorios/fotos/[id] — serve a imagem em si (bytes), pra usar em
 //      <img src>. O JSON do relatório traz só metadados; 90 fotos em base64
-//      num payload só seria pesado demais.
+//      num payload só seria pesado demais. Os bytes vêm do Bucket do Railway
+//      (ou do formato antigo inline, se a foto ainda não migrou) — o bucket é
+//      privado, então a permissão do navio é checada aqui antes de servir.
 // PATCH /api/relatorios/fotos/[id] — edita legenda/porão/etapa.
 // DELETE /api/relatorios/fotos/[id] — remove a foto.
 
@@ -50,14 +53,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const result = await loadPhotoWithAccess(Number(id));
   if ("error" in result) return result.error;
 
-  // Sem a flag /s (target ES2017): o base64 não tem quebra de linha mesmo.
-  const match = result.photo.image_data.match(/^data:(image\/[a-z]+);base64,([A-Za-z0-9+/=]+)$/);
-  if (!match) return NextResponse.json({ error: "Imagem corrompida" }, { status: 500 });
+  const image = await loadPhotoBytes(result.photo);
+  if (!image) return NextResponse.json({ error: "Imagem não encontrada" }, { status: 404 });
 
-  const buffer = Buffer.from(match[2], "base64");
+  const buffer = image.bytes;
   return new NextResponse(buffer, {
     headers: {
-      "Content-Type": match[1],
+      "Content-Type": image.mime,
       "Content-Length": String(buffer.length),
       // Foto não muda depois de subir (edição = apagar e subir outra) — pode
       // cachear no navegador e poupar o Postgres nas re-aberturas do relatório.
@@ -100,5 +102,6 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   if (lockError) return lockError;
 
   await prisma.shipReportPhoto.delete({ where: { id: Number(id) } });
+  await deletePhotoObjects([result.photo.storage_key]);
   return NextResponse.json({ data: { ok: true } });
 }

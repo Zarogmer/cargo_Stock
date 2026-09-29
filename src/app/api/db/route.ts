@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { canViewStockValue, hasPermission } from "@/lib/rbac";
+import { deletePhotoObjects, photoKeysForJobs } from "@/lib/photo-storage";
 import type { Role } from "@/types/database";
 
 // Map snake_case table names to Prisma model accessors
@@ -421,7 +422,16 @@ export async function POST(request: NextRequest) {
           );
         }
 
+        // Apagar navio leva os relatórios e as fotos junto (cascade) — mas os
+        // objetos no bucket não. Recolhe as chaves antes e limpa depois.
+        let photoKeys: string[] = [];
+        if (spec.table === "jobs") {
+          const jobs = await prisma.job.findMany({ where, select: { id: true } });
+          photoKeys = await photoKeysForJobs(jobs.map((j) => j.id));
+        }
+
         await model.deleteMany({ where });
+        if (photoKeys.length) await deletePhotoObjects(photoKeys);
         return NextResponse.json({ data: null, error: null, count: null });
       }
 

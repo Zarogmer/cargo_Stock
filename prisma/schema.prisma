@@ -915,17 +915,21 @@ model ShipReportActivity {
   @@map("ship_report_activities")
 }
 
-// Foto do relatório fotográfico. image_data = data URL JPEG comprimida com a
-// marca d'água da Cargo já queimada no cliente — inline no Postgres (infra só
-// Railway, sem storage externo; mesmo racional de stock_items.image_url).
+// Foto do relatório fotográfico. A imagem (JPEG comprimido com a marca d'água
+// da Cargo já queimada no cliente) mora no Bucket do Railway (S3) em
+// storage_key — ver src/lib/photo-storage.ts. image_data é o formato antigo
+// (data URL inline no Postgres): fica só nas fotos que ainda não migraram
+// (scripts/migrate-photos-to-bucket.ts) ou quando o bucket não está configurado.
 model ShipReportPhoto {
-  id         Int        @id @default(autoincrement())
-  report_id  String     @db.Uuid
-  reports    ShipReport @relation(fields: [report_id], references: [id], onDelete: Cascade)
-  hold_label String? // a qual porão/área a foto pertence
-  stage      String     @default("ANTES") // ANTES | DURANTE | DEPOIS
-  caption    String?
-  image_data String
+  id          Int        @id @default(autoincrement())
+  report_id   String     @db.Uuid
+  reports     ShipReport @relation(fields: [report_id], references: [id], onDelete: Cascade)
+  hold_label  String? // a qual porão/área a foto pertence
+  stage       String     @default("ANTES") // ANTES | DURANTE | DEPOIS
+  caption     String?
+  image_data  String?
+  storage_key String? // chave do objeto no bucket (relatorios/<report_id>/<id>.jpg)
+  mime_type   String     @default("image/jpeg")
   sort_order Int        @default(0)
   created_by String
   created_at DateTime   @default(now()) @db.Timestamptz()
