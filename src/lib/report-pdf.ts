@@ -328,12 +328,15 @@ export async function buildCleaningReportPdf(opts: {
     if (!colB.length) colB = ["-"];
     const total = formatMinutes(holdMinutes(h));
     const labelLines = water && total ? [h.label, `Worked ${total}`] : [h.label];
+    // 100% e Completo sao a mesma coisa: relatorio antigo salvo com 100%
+    // "Em andamento" (supervisor esqueceu o status) sai "Complete" no PDF.
+    const holdStatus = Number(h.completion_pct) >= 100 ? "COMPLETO" : h.status;
     const nLines = Math.max(labelLines.length, colA.length, colB.length);
     const rowH = 19 + (nLines - 1) * LINE_H;
     paginate(rowH + 5);
     for (let li = 0; li < nLines; li++) {
       drawRow(
-        [labelLines[li] || "", li === 0 ? HOLD_STATUS_EN[h.status] || h.status : "", colA[li] || "", colB[li] || "", li === 0 ? `${h.completion_pct}%` : ""],
+        [labelLines[li] || "", li === 0 ? HOLD_STATUS_EN[holdStatus] || holdStatus : "", colA[li] || "", colB[li] || "", li === 0 ? `${h.completion_pct}%` : ""],
         holdCols,
         d.y - 12 - li * LINE_H,
         { center: [2, 3, 4], sub: li > 0 }

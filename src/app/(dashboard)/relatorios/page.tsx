@@ -1443,7 +1443,15 @@ function ReportDetail({
                             const raw = e.target.value;
                             const pct = Math.max(0, Math.min(100, Number(raw) || 0));
                             if (/^0\d/.test(raw)) e.currentTarget.value = String(pct);
-                            patch({ completion_pct: pct });
+                            // 100% → Completo sozinho (o supervisor esquecia de
+                            // trocar o status e o PDF saía "In progress"). Abaixo
+                            // de 100 um Completo volta pra Em andamento, e um
+                            // Pendente com progresso também vira Em andamento.
+                            const status =
+                              pct >= 100 ? "COMPLETO"
+                              : h.status === "COMPLETO" || (h.status === "PENDENTE" && pct > 0) ? "EM_ANDAMENTO"
+                              : h.status;
+                            patch({ completion_pct: pct, status });
                           }}
                           className={inputCls}
                         />

@@ -251,18 +251,25 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
     prisma.shipReportHold.createMany({
       data: holds
         .filter((h: Record<string, unknown>) => String(h.label || "").trim())
-        .map((h: Record<string, unknown>, i: number) => ({
-          report_id: report.id,
-          label: String(h.label).trim().slice(0, 120),
-          status: ["PENDENTE", "EM_ANDAMENTO", "COMPLETO"].includes(String(h.status))
+        .map((h: Record<string, unknown>, i: number) => {
+          const completion_pct = Math.max(0, Math.min(100, Number(h.completion_pct) || 0));
+          const rawStatus = ["PENDENTE", "EM_ANDAMENTO", "COMPLETO"].includes(String(h.status))
             ? String(h.status)
-            : "PENDENTE",
-          // Dias trabalhados no porão (dia + início + término), validados e
-          // com teto — mesmo motivo do MAX_ROWS.
-          periods: parsePeriods(h.periods).slice(0, MAX_ROWS) as unknown as Prisma.InputJsonValue,
-          completion_pct: Math.max(0, Math.min(100, Number(h.completion_pct) || 0)),
-          sort_order: i,
-        })),
+            : "PENDENTE";
+          return {
+            report_id: report.id,
+            label: String(h.label).trim().slice(0, 120),
+            // 100% é Completo, sempre — a tela já faz isso, mas a regra fica
+            // aqui também pra cliente antigo (desktop sem atualizar) não gravar
+            // 100% "Em andamento" e o PDF sair "In progress".
+            status: completion_pct >= 100 ? "COMPLETO" : rawStatus,
+            // Dias trabalhados no porão (dia + início + término), validados e
+            // com teto — mesmo motivo do MAX_ROWS.
+            periods: parsePeriods(h.periods).slice(0, MAX_ROWS) as unknown as Prisma.InputJsonValue,
+            completion_pct,
+            sort_order: i,
+          };
+        }),
     }),
     prisma.shipReportActivity.deleteMany({ where: { report_id: report.id } }),
     prisma.shipReportActivity.createMany({
