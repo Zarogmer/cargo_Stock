@@ -28,6 +28,7 @@ import { useAuth } from "@/lib/auth-context";
 import { hasModuleAccess } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { PdfPreview } from "@/components/pdf-preview";
 import { PlusIcon, TrashIcon } from "@/components/icons";
 import { processReportPhoto, sniffImageType } from "@/lib/watermark";
 import { shareOrDownloadBlob } from "@/lib/print";
@@ -2377,11 +2378,12 @@ function ReportDetail({
                 <button onClick={() => setPreview(null)} className="px-2 py-1 text-text-light hover:text-text rounded-lg" title="Fechar">✕</button>
               </div>
             </div>
-            <iframe
+            {/* Renderizado em canvas (pdf.js): iframe com PDF fica cinza no
+                app Electron, que não tem o visualizador nativo ligado. */}
+            <PdfPreview
               key={`${preview}-${previewNonce}`}
-              src={`/api/relatorios/${jobId}/pdf?kind=${kind}&tipo=${preview}&inline=1&v=${previewNonce}`}
-              className="flex-1 w-full bg-gray-100"
-              title="Preview do relatório"
+              url={`/api/relatorios/${jobId}/pdf?kind=${kind}&tipo=${preview}&inline=1&v=${previewNonce}`}
+              className="flex-1 min-h-0"
             />
           </div>
         </div>
