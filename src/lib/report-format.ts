@@ -149,6 +149,30 @@ export function holdMinutes(h: HoldRow): number {
   return periodsMinutes(h.periods || []);
 }
 
+// Dias de trabalho sem data, início ou término. Travam o "Concluir relatório"
+// na tela e na API: relatório fechado com um "--:--" sai capenga no PDF e o
+// supervisor já não consegue mais corrigir. Linhas sem nome não contam.
+export interface IncompletePeriod {
+  hold: string;
+  phase: HoldPhase;
+  date: string | null;
+}
+export function incompletePeriods(holds: HoldRow[]): IncompletePeriod[] {
+  const out: IncompletePeriod[] = [];
+  for (const h of holds) {
+    if (!String(h.label || "").trim()) continue;
+    for (const p of h.periods || []) {
+      if (!p.date || !p.start || !p.end) out.push({ hold: h.label, phase: p.phase, date: p.date });
+    }
+  }
+  return out;
+}
+const PHASE_PT: Record<HoldPhase, string> = { SALT: "Água salgada", FRESH: "Água doce", GERAL: "Horário" };
+// "Porão 6 · Água doce 28/09" — pra mensagem de erro/aviso.
+export function describeIncompletePeriod(x: IncompletePeriod): string {
+  return `${x.hold} · ${PHASE_PT[x.phase]} ${x.date ? formatDayMonth(x.date) : "sem data"}`;
+}
+
 // 510 → "8h30"; 45 → "0h45"; 0 → "" (nada trabalhado ainda).
 export function formatMinutes(min: number): string {
   if (!min || min <= 0) return "";

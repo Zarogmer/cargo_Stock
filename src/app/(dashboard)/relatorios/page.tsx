@@ -36,8 +36,10 @@ import {
   EVAL_CRITERIA,
   PHOTO_PLACES,
   REPORT_KINDS,
+  describeIncompletePeriod,
   formatDayMonth,
   formatEtcDate,
+  incompletePeriods,
   formatMinutes,
   holdMinutes,
   holdPhasePeriods,
@@ -1333,6 +1335,11 @@ function ReportDetail({
     () => holds.filter((h) => h.label.trim() && (Number(h.completion_pct) || 0) < 100).length,
     [holds]
   );
+  // ...e com todos os dias de cada porão com data, início e término (a API
+  // confere de novo). Fechar com "--:--" deixava o PDF capenga e o supervisor
+  // sem poder corrigir.
+  const periodsMissing = useMemo(() => incompletePeriods(holds), [holds]);
+  const concludeBlocked = holdsMissing > 0 || periodsMissing.length > 0;
 
   // Quem aparece na aba Avaliações: a equipe escalada SEM supervisor — o
   // supervisor avalia, não é avaliado (nem por ele mesmo, nem pela gestão).
@@ -1868,15 +1875,23 @@ function ReportDetail({
                 🔒 Concluir libera quando {kind === "COSTADO" ? "todas as áreas" : "todos os porões"} chegarem a 100% — falta{holdsMissing > 1 ? "m" : ""} {holdsMissing}.
               </p>
             )}
+            {!locked && savedStatus !== "COMPLETO" && periodsMissing.length > 0 && (
+              <p className="w-full text-right text-xs text-text-light self-center">
+                🔒 Concluir libera quando todos os dias tiverem data, início e término — falta{periodsMissing.length > 1 ? "m" : ""} {periodsMissing.length}:{" "}
+                {periodsMissing.slice(0, 3).map(describeIncompletePeriod).join(", ")}{periodsMissing.length > 3 ? "..." : ""}.
+              </p>
+            )}
             {!locked && savedStatus !== "COMPLETO" && (
               <Button
-                variant={holdsMissing > 0 ? "secondary" : "success"}
+                variant={concludeBlocked ? "secondary" : "success"}
                 onClick={() => setConfirmConclude(true)}
-                disabled={savingReport || holdsMissing > 0}
+                disabled={savingReport || concludeBlocked}
                 title={
                   holdsMissing > 0
                     ? `Só dá pra concluir com ${kind === "COSTADO" ? "todas as áreas" : "todos os porões"} em 100%`
-                    : "Fecha o relatório: depois de concluído, o supervisor não edita mais (a gestão pode reabrir)"
+                    : periodsMissing.length > 0
+                      ? "Só dá pra concluir com todos os dias com data, início e término"
+                      : "Fecha o relatório: depois de concluído, o supervisor não edita mais (a gestão pode reabrir)"
                 }
               >
                 ✅ Concluir relatório

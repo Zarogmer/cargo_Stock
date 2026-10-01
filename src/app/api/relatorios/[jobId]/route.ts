@@ -8,7 +8,7 @@ import {
   siblingBlockReportIds,
   WORKED_ALLOC_WHERE,
 } from "@/lib/report-scope";
-import { SHARED_BLOCK_LABELS, parsePeriods } from "@/lib/report-format";
+import { SHARED_BLOCK_LABELS, describeIncompletePeriod, incompletePeriods, parsePeriods } from "@/lib/report-format";
 import type { Prisma } from "@prisma/client";
 
 // GET /api/relatorios/[jobId]?kind=EMBARQUE|COSTADO|RASPAGEM|PINTURA
@@ -239,6 +239,28 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
     etc_date: clip(r.etc_date, 60),
     etc_time: clip(r.etc_time, 60),
   };
+
+  // Concluir exige todos os dias de cada porão com data, início e término —
+  // mesma trava da tela, aqui pra chamada direta/cliente antigo.
+  if (headerData.status === "COMPLETO") {
+    const missing = incompletePeriods(
+      holds.map((h: Record<string, unknown>) => ({
+        label: String(h.label || ""),
+        status: String(h.status || ""),
+        periods: parsePeriods(h.periods),
+        completion_pct: Number(h.completion_pct) || 0,
+      }))
+    );
+    if (missing.length > 0) {
+      const list = missing.slice(0, 3).map(describeIncompletePeriod).join(", ");
+      return NextResponse.json(
+        {
+          error: `Pra concluir, todos os dias precisam de data, início e término — falta${missing.length > 1 ? "m" : ""} ${missing.length}: ${list}${missing.length > 3 ? "..." : ""}.`,
+        },
+        { status: 400 }
+      );
+    }
+  }
 
   const report = await prisma.shipReport.upsert({
     where: { job_id_kind: { job_id: jobId, kind } },
