@@ -173,11 +173,23 @@ function toDraft(e: EvaluationApi): EvalDraft {
   };
 }
 
-const SHIP_STATUS_CHIP: Record<string, { label: string; cls: string }> = {
-  AGENDADO: { label: "Agendado", cls: "bg-blue-100 text-blue-700" },
-  EM_OPERACAO: { label: "Em operação", cls: "bg-amber-100 text-amber-700" },
+// Situação do navio NA LISTA DE RELATÓRIOS: vem dos relatórios, não do status
+// do navio na aba Navios (o navio pode estar "Concluído" lá com o relatório
+// ainda em andamento ou nem começado). Concluído aqui = todo serviço do navio
+// com relatório COMPLETO.
+type ReportListStatus = "CONCLUIDO" | "EM_ANDAMENTO" | "SEM_RELATORIO";
+const REPORT_STATUS_CHIP: Record<ReportListStatus, { label: string; cls: string }> = {
+  SEM_RELATORIO: { label: "Sem relatório", cls: "bg-gray-100 text-gray-600" },
+  EM_ANDAMENTO: { label: "Em andamento", cls: "bg-amber-100 text-amber-700" },
   CONCLUIDO: { label: "Concluído", cls: "bg-emerald-100 text-emerald-700" },
 };
+function reportListStatus(n: NavioItem): ReportListStatus {
+  const kinds = n.kinds.length ? n.kinds : [];
+  const reports = kinds.map((k) => n.reports.find((r) => r.kind === k));
+  if (kinds.length > 0 && reports.every((r) => r?.status === "COMPLETO")) return "CONCLUIDO";
+  if (reports.some((r) => !!r)) return "EM_ANDAMENTO";
+  return "SEM_RELATORIO";
+}
 
 // Nome/emoji de cada serviço — a fonte é o mapa compartilhado com o PDF.
 const KIND_LABEL: Record<Kind, string> = {
@@ -621,7 +633,8 @@ export default function RelatoriosPage() {
   const filtered = useMemo(() => {
     return navios.filter((n) => {
       if (!n.ship) return false;
-      if (!showFinished && n.ship.status === "CONCLUIDO") return false;
+      // Some da lista só quando o RELATÓRIO está concluído (não o navio).
+      if (!showFinished && reportListStatus(n) === "CONCLUIDO") return false;
       const text = `${n.ship.name} ${n.ship.port || ""} ${n.ship.client_name || ""}`.toLowerCase();
       return text.includes(search.toLowerCase());
     });
@@ -694,7 +707,7 @@ export default function RelatoriosPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filtered.map((n) => {
-            const chip = SHIP_STATUS_CHIP[n.ship!.status];
+            const chip = REPORT_STATUS_CHIP[reportListStatus(n)];
             return (
               <div key={n.job_id} className="bg-card rounded-xl border border-border p-4 space-y-3">
                 <div className="flex items-start justify-between gap-2">
