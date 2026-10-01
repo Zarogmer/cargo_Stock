@@ -16,8 +16,13 @@
 // edições locais do supervisor nunca são sobrescritas pelo refresh.
 // Acesso ao módulo: Gestor/RH/Executivo/Financeiro/Tecnologia + Supervisor
 // (ver RELATORIOS no rbac.ts).
+//
+// Gerar Relatórios (preview + PDFs + "versão pro cliente") é só do escritório:
+// o supervisor não vê a aba. A versão pro cliente é uma cópia à parte do
+// Cleaning Report (ship_reports.office_version) que a gestão ajusta de última
+// hora; o que o supervisor escreveu na primeira aba nunca é alterado por ela.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { hasModuleAccess } from "@/lib/rbac";
@@ -106,6 +111,12 @@ interface ReportApi {
   etc_time: string | null;
   holds: (HoldRow & { id: number })[];
   activities: (ActivityRow & { id: number })[];
+  // Versão do escritório pro cliente (ver aba Gerar Relatórios). JSON com o
+  // mesmo formato do PUT: { report_date, port, remarks, etc_date, etc_time,
+  // holds, activities }.
+  office_version?: unknown;
+  office_version_by?: string | null;
+  office_version_at?: string | null;
 }
 
 // Bloco de fotos com legenda própria / criado à mão. Os blocos fixos (ciclo da
@@ -414,6 +425,72 @@ function isoDateOnly(v: string | null): string {
 
 // Visualizador em tela cheia das fotos de um bloco: clique na miniatura abre,
 // ← → (ou swipe no celular) navega dentro do bloco, ESC / fundo / × fecha.
+type PdfTipo = "cleaning" | "fotos" | "avaliacao";
+
+// Rascunho completo do Cleaning Report (cabeçalho + porões + atividades).
+interface OfficeDraft {
+  header: HeaderDraft;
+  holds: HoldRow[];
+  activities: ActivityRow[];
+}
+
+// Rascunho a partir do que está SALVO do supervisor — usado ao abrir a tela e
+// como ponto de partida da versão do escritório.
+function draftFromSavedReport(r: ReportApi | null, ship: ShipInfo | null, kind: Kind): OfficeDraft {
+  let holds: HoldRow[];
+  if (kind !== "COSTADO" && ship?.holds_count) {
+    // A lista de porões vem do cadastro do navio (aba Navios) — vale pra
+    // lavagem, raspagem e pintura (são os mesmos porões do navio).
+    holds = mergeShipHolds((r?.holds ?? []).map(normalizeHold), ship.holds_count);
+  } else if (r && r.holds.length > 0) {
+    holds = r.holds.map(normalizeHold);
+  } else {
+    holds = [];
+  }
+  return {
+    header: {
+      report_date: isoDateOnly(r?.report_date ?? null) || todayIso(),
+      port: r?.port ?? ship?.port ?? "",
+      remarks: r?.remarks ?? "",
+      etc_date: r?.etc_date ?? "",
+      etc_time: r?.etc_time ?? "",
+    },
+    holds,
+    activities: r ? r.activities.map((a) => ({ ...a })) : [],
+  };
+}
+
+// Rascunho a partir do JSON da versão do escritório (null = não existe).
+function officeDraftFromVersion(v: unknown): OfficeDraft | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const str = (x: unknown) => (x == null ? "" : String(x));
+  const holds = (Array.isArray(o.holds) ? o.holds : []) as (HoldRow & { periods?: unknown })[];
+  const activities = (Array.isArray(o.activities) ? o.activities : []) as Record<string, unknown>[];
+  return {
+    header: {
+      report_date: isoDateOnly(o.report_date == null ? null : String(o.report_date)) || todayIso(),
+      port: str(o.port),
+      remarks: str(o.remarks),
+      etc_date: str(o.etc_date),
+      etc_time: str(o.etc_time),
+    },
+    holds: holds.map((h) =>
+      normalizeHold({
+        label: str(h.label),
+        status: str(h.status) || "PENDENTE",
+        periods: h.periods,
+        completion_pct: Number(h.completion_pct) || 0,
+      })
+    ),
+    activities: activities.map((a) => ({
+      time_range: a.time_range == null ? null : String(a.time_range),
+      activity: str(a.activity),
+      hold_label: a.hold_label == null ? null : String(a.hold_label),
+    })),
+  };
+}
+
 function PhotoLightbox({
   photos,
   index,
@@ -659,6 +736,409 @@ export default function RelatoriosPage() {
   );
 }
 
+// ─── Formulário do Cleaning Report ───────────────────────────────────────────
+// Cabeçalho + porões/áreas + atividades + observações. Usado em dois lugares
+// com estados diferentes: na aba Lavagem (o rascunho do supervisor) e na aba
+// Gerar Relatórios (a versão do escritório pro cliente — cópia à parte, o que
+// o supervisor escreveu não muda).
+
+type HeaderDraft = { report_date: string; port: string; remarks: string; etc_date: string; etc_time: string };
+
+const INPUT_CLS = "w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none bg-white";
+
+function CleaningReportForm({
+  kind,
+  header,
+  setHeader,
+  holds,
+  setHolds,
+  activities,
+  setActivities,
+  lockedHolds,
+  disabled,
+  statusChip,
+}: {
+  kind: Kind;
+  header: HeaderDraft;
+  setHeader: Dispatch<SetStateAction<HeaderDraft>>;
+  holds: HoldRow[];
+  setHolds: Dispatch<SetStateAction<HoldRow[]>>;
+  activities: ActivityRow[];
+  setActivities: Dispatch<SetStateAction<ActivityRow[]>>;
+  // > 0 = serviço de porão com nº de porões no cadastro do navio: lista travada
+  // nesse tamanho (sem Adicionar; rótulo e exclusão bloqueados).
+  lockedHolds: number;
+  // Tudo somente leitura (relatório concluído na visão do supervisor).
+  disabled: boolean;
+  // O que aparece na célula "Status do relatório".
+  statusChip: ReactNode;
+}) {
+  const kindInfo = REPORT_KINDS[kind];
+  const activitySuggestions = ACTIVITY_SUGGESTIONS_BY_KIND[kind];
+  const inputCls = INPUT_CLS;
+  // Linhas de atividade em modo "Outra..." (texto livre) — por índice.
+  const [customActivityRows, setCustomActivityRows] = useState<Set<number>>(new Set());
+
+  const holdLabels = useMemo(() => holds.map((h) => h.label).filter(Boolean), [holds]);
+
+  // Preencheu horário de uma atividade/fase ligada a um porão pendente → o
+  // porão entra em "Em andamento" sozinho (Completo não é rebaixado).
+  const markHoldInProgress = useCallback(
+    (label: string | null | undefined) => {
+      if (!label) return;
+      setHolds((prev) =>
+        prev.map((h) => (h.label === label && h.status === "PENDENTE" ? { ...h, status: "EM_ANDAMENTO" } : h))
+      );
+    },
+    [setHolds]
+  );
+
+  // ETC anotado como texto livre (antes dos seletores) que nem data nem hora
+  // conseguem exibir — mostrado como aviso ao lado dos campos.
+  const etcLegacy = [
+    normalizeDate(header.etc_date) ? "" : header.etc_date,
+    normalizeTime(header.etc_time) ? "" : header.etc_time,
+  ]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <fieldset disabled={disabled} className="space-y-4 min-w-0">
+      {/* Cabeçalho: uma coluna no celular. Em duas, o input de data (que no
+          iOS tem largura mínima própria) estourava a célula e encostava no
+          campo do lado. min-w-0 solta as células do min-width:auto do grid. */}
+      <div className="bg-card rounded-xl border border-border p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="min-w-0">
+          <label className="block text-xs font-medium text-text-light mb-1">Data do relatório</label>
+          <input type="date" value={header.report_date} onChange={(e) => setHeader((h) => ({ ...h, report_date: e.target.value }))} className={inputCls} />
+        </div>
+        <div className="min-w-0">
+          <label className="block text-xs font-medium text-text-light mb-1">Porto / Fundeio</label>
+          <input type="text" value={header.port} onChange={(e) => setHeader((h) => ({ ...h, port: e.target.value }))} className={inputCls} placeholder="Santos" />
+        </div>
+        <div className="min-w-0">
+          <label className="block text-xs font-medium text-text-light mb-1">Status do relatório</label>
+          {/* Não é mais select: o status muda pelo Concluir/Reabrir. */}
+          {statusChip}
+        </div>
+        <div className="min-w-0">
+          <label className="block text-xs font-medium text-text-light mb-1">Previsão de término (ETC)</label>
+          {/* Data e hora saem de seletor — digitar solto virava "0408". */}
+          <div className="flex gap-1.5">
+            <input type="date" value={normalizeDate(header.etc_date)} onChange={(e) => setHeader((h) => ({ ...h, etc_date: e.target.value }))} className={`${inputCls} min-w-0`} title="Data prevista" />
+            <input type="time" value={normalizeTime(header.etc_time)} onChange={(e) => setHeader((h) => ({ ...h, etc_time: e.target.value }))} className={`${inputCls} min-w-0`} title="Hora prevista" />
+          </div>
+          {/* Valor antigo que o seletor não entendeu: fica visível pra
+              pessoa reescolher, em vez de sumir calado no próximo salvar. */}
+          {etcLegacy && (
+            <p className="text-[11px] text-amber-700 mt-1">
+              Anotado antes como “{etcLegacy}” — escolha a data/hora pra atualizar.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Porões / áreas */}
+      <div className="bg-card rounded-xl border border-border p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <p className="font-semibold text-text text-sm">
+              {kind === "COSTADO" ? "Áreas do costado" : "Porões"}
+            </p>
+            {lockedHolds > 0 && (
+              <p className="text-xs text-text-light mt-0.5">
+                {lockedHolds} {lockedHolds > 1 ? "porões" : "porão"} conforme o cadastro do navio (aba Navios).
+              </p>
+            )}
+            {!kindInfo.waterPhases && (
+              <p className="text-xs text-text-light mt-0.5">
+                Marque o início e o término da {KIND_WORK_NOUN[kind]} em cada porão.
+              </p>
+            )}
+          </div>
+          {lockedHolds === 0 && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() =>
+                setHolds((prev) => [
+                  ...prev,
+                  emptyHold(kind === "COSTADO" ? `Área ${prev.length + 1}` : `Porão ${prev.length + 1}`),
+                ])
+              }
+            >
+              <PlusIcon className="w-4 h-4" />
+              Adicionar
+            </Button>
+          )}
+        </div>
+
+        {holds.length === 0 && (
+          <p className="text-sm text-text-light">Nenhum {kind === "COSTADO" ? "área" : "porão"} adicionado.</p>
+        )}
+
+        <div className="space-y-2">
+          {holds.map((h, i) => {
+            const patch = (p: Partial<HoldRow>) =>
+              setHolds((prev) => prev.map((x, j) => (j === i ? { ...x, ...p } : x)));
+            // Linha do cadastro do navio: nome fixo e sem exclusão. Linhas
+            // além do cadastro (legado) seguem editáveis pra dar baixa.
+            const fixed = lockedHolds > 0 && i < lockedHolds;
+            // Uma fase do porão (salgada, doce ou o horário único de
+            // raspagem/pintura): lista de dias trabalhados, cada um com
+            // data + início + término, e o total de horas da fase. O
+            // pessoal para às 18h e volta no dia seguinte — "+ dia" já
+            // vem com a data seguinte. Horário em porão pendente → "Em
+            // andamento" sozinho; Completo continua manual (o fim de um
+            // dia não é o fim do serviço).
+            const phaseBlock = (phase: HoldPhase, emoji: string, name: string, legacy = false) => {
+              const idxs = h.periods.map((p, k) => (p.phase === phase ? k : -1)).filter((k) => k >= 0);
+              const total = formatMinutes(periodsMinutes(holdPhasePeriods(h, phase)));
+              const patchPeriod = (k: number, p: Partial<HoldPeriod>) =>
+                patch({
+                  periods: h.periods.map((x, j) => (j === k ? { ...x, ...p } : x)),
+                  ...((p.start || p.end) && h.status === "PENDENTE" ? { status: "EM_ANDAMENTO" } : {}),
+                });
+              const addPeriod = () => {
+                const last = idxs.length ? h.periods[idxs[idxs.length - 1]] : null;
+                const date = last?.date ? nextDayIso(last.date) : header.report_date || null;
+                patch({ periods: [...h.periods, { phase, date, start: null, end: null }] });
+              };
+              const removePeriod = (k: number) => patch({ periods: h.periods.filter((_, j) => j !== k) });
+              return (
+                <div className="flex flex-col sm:flex-row sm:items-start gap-1.5">
+                  <span className={`text-xs w-24 shrink-0 sm:pt-2 ${legacy ? "text-amber-700" : "text-text-light"}`} title={legacy ? "Registrado antes da divisão por fases" : undefined}>
+                    {emoji} {name}
+                  </span>
+                  <div className="flex-1 min-w-0 space-y-1.5">
+                    {idxs.map((k) => {
+                      const p = h.periods[k];
+                      return (
+                        <div key={k} className="flex items-center gap-1.5">
+                          <input type="date" value={p.date || ""} onChange={(e) => patchPeriod(k, { date: e.target.value || null })} className={`${inputCls} !w-auto min-w-[8.5rem]`} title="Dia" />
+                          <input type="time" value={normalizeTime(p.start)} onChange={(e) => patchPeriod(k, { start: e.target.value || null })} className={inputCls} title="Início" />
+                          <span className="text-xs text-text-light shrink-0">→</span>
+                          <input type="time" value={normalizeTime(p.end)} onChange={(e) => patchPeriod(k, { end: e.target.value || null })} className={inputCls} title="Término — ou a hora em que pararam nesse dia" />
+                          <button type="button" onClick={() => removePeriod(k)} title="Remover este dia" className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition shrink-0">
+                            <TrashIcon className="w-4 h-4" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <div className="flex items-center gap-3 min-h-[1.5rem]">
+                      {!legacy && (
+                        <button type="button" onClick={addPeriod} className="text-xs font-medium text-primary hover:underline">
+                          + {idxs.length ? "Adicionar outro dia" : "Adicionar dia"}
+                        </button>
+                      )}
+                      {total && <span className="text-xs text-text-light">⏱ {total} trabalhadas</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            };
+            const holdTotal = formatMinutes(holdMinutes(h));
+            return (
+              <div key={i} className="bg-gray-50 rounded-lg p-2.5 space-y-2">
+                <div className="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_150px_90px_36px] gap-2 items-center">
+                  {fixed ? (
+                    <p className="px-3 py-2 text-sm font-semibold text-text">{h.label}</p>
+                  ) : (
+                    <input type="text" value={h.label} onChange={(e) => patch({ label: e.target.value })} className={inputCls} placeholder={kind === "COSTADO" ? "Área" : "Porão"} />
+                  )}
+                  <select value={h.status} onChange={(e) => patch({ status: e.target.value, completion_pct: e.target.value === "COMPLETO" ? 100 : h.completion_pct })} className={inputCls}>
+                    <option value="PENDENTE">Pendente</option>
+                    <option value="EM_ANDAMENTO">Em andamento</option>
+                    <option value="COMPLETO">Completo</option>
+                  </select>
+                  <div className="flex items-center gap-1">
+                    {/* Tocou no campo → seleciona o que está lá: digitar
+                        por cima do 0 dá "100", não "0100". O React não
+                        corrige sozinho porque, pra ele, "0100" já é 100 —
+                        então o zero à esquerda a gente tira na mão. */}
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      max={100}
+                      value={h.completion_pct}
+                      onFocus={(e) => e.currentTarget.select()}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const pct = Math.max(0, Math.min(100, Number(raw) || 0));
+                        if (/^0\d/.test(raw)) e.currentTarget.value = String(pct);
+                        // 100% → Completo sozinho (o supervisor esquecia de
+                        // trocar o status e o PDF saía "In progress"). Abaixo
+                        // de 100 um Completo volta pra Em andamento, e um
+                        // Pendente com progresso também vira Em andamento.
+                        const status =
+                          pct >= 100 ? "COMPLETO"
+                          : h.status === "COMPLETO" || (h.status === "PENDENTE" && pct > 0) ? "EM_ANDAMENTO"
+                          : h.status;
+                        patch({ completion_pct: pct, status });
+                      }}
+                      className={inputCls}
+                    />
+                    <span className="text-xs text-text-light">%</span>
+                  </div>
+                  {!fixed && (
+                    <button onClick={() => setHolds((prev) => prev.filter((_, j) => j !== i))} title="Remover" className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition justify-self-end">
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+                {kindInfo.waterPhases ? (
+                  <>
+                    {/* Fases da lavagem: água salgada (lavagem) e doce
+                        (enxágue), cada uma com os seus dias. */}
+                    {phaseBlock("SALT", "🌊", "Água salgada")}
+                    {phaseBlock("FRESH", "💧", "Água doce")}
+                    {/* Horário geral legado (relatório salvo antes das
+                        fases): só aparece quando tem valor — dá pra ver,
+                        corrigir ou remover (removeu e salvou → some de vez). */}
+                    {holdPhasePeriods(h, "GERAL").length > 0 && phaseBlock("GERAL", "🕐", "Horário geral", true)}
+                    {holdTotal && (
+                      <p className="text-xs font-medium text-text text-right">⏱ Total do {kind === "COSTADO" ? "área" : "porão"}: {holdTotal}</p>
+                    )}
+                  </>
+                ) : (
+                  // Raspagem e pintura não têm fase de água: um horário
+                  // por dia, gravado na fase GERAL.
+                  phaseBlock("GERAL", kindInfo.emoji, kind === "PINTURA" ? "Pintura" : "Raspagem")
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Atividades */}
+      <div className="bg-card rounded-xl border border-border p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="font-semibold text-text text-sm">Registro de atividades</p>
+          <Button size="sm" variant="secondary" onClick={() => setActivities((prev) => [...prev, { time_range: "", activity: "", hold_label: "" }])}>
+            <PlusIcon className="w-4 h-4" />
+            Adicionar
+          </Button>
+        </div>
+
+        {activities.length === 0 && <p className="text-sm text-text-light">Nenhuma atividade registrada.</p>}
+
+        {/* O modo texto livre ("Outra...") completa com as mesmas sugestões */}
+        <datalist id="activity-suggestions">
+          {activitySuggestions.map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
+
+        <div className="space-y-2">
+          {activities.map((a, i) => {
+            const patchAct = (p: Partial<ActivityRow>) =>
+              setActivities((prev) => prev.map((x, j) => (j === i ? { ...x, ...p } : x)));
+            const { start, end } = splitTimeRange(a.time_range);
+            // Valor fora da lista (legado/texto livre) mantém a linha em modo texto.
+            const custom = customActivityRows.has(i) || (!!a.activity && !activitySuggestions.includes(a.activity));
+            const setTime = (which: "start" | "end", v: string) => {
+              patchAct({ time_range: joinTimeRange(which === "start" ? v : start, which === "end" ? v : end) || null });
+              if (v) markHoldInProgress(a.hold_label);
+            };
+            return (
+              // No celular a linha é [campo | lixeira]: horário e atividade
+              // ocupam a largura toda e o porão divide a última fileira com
+              // a lixeira. Antes a lixeira caía sozinha numa 3ª fileira e
+              // deixava metade dela em branco.
+              <div key={i} className="grid grid-cols-[1fr_32px] md:grid-cols-[220px_1fr_150px_36px] gap-2 items-center bg-gray-50 rounded-lg p-2">
+                <div className="col-span-2 md:col-span-1 flex items-center gap-1 min-w-0">
+                  <input type="time" value={start} onChange={(e) => setTime("start", e.target.value)} className={`${inputCls} min-w-0`} title="Início" />
+                  <span className="text-xs text-text-light shrink-0">→</span>
+                  <input type="time" value={end} onChange={(e) => setTime("end", e.target.value)} className={`${inputCls} min-w-0`} title="Término" />
+                </div>
+                {custom ? (
+                  <div className="col-span-2 md:col-span-1 flex items-center gap-1 min-w-0">
+                    <input type="text" list="activity-suggestions" value={a.activity} onChange={(e) => patchAct({ activity: e.target.value })} className={`${inputCls} min-w-0`} placeholder="Digite a atividade..." />
+                    <button
+                      onClick={() => {
+                        setCustomActivityRows((prev) => {
+                          const n = new Set(prev);
+                          n.delete(i);
+                          return n;
+                        });
+                        patchAct({ activity: "" });
+                      }}
+                      title="Voltar pra lista de atividades"
+                      className="px-2 py-1.5 text-text-light hover:text-text hover:bg-gray-200 rounded-lg transition shrink-0 text-sm"
+                    >
+                      ☰
+                    </button>
+                  </div>
+                ) : (
+                  <select
+                    value={a.activity}
+                    onChange={(e) => {
+                      if (e.target.value === CUSTOM_ACTIVITY) {
+                        setCustomActivityRows((prev) => new Set(prev).add(i));
+                        patchAct({ activity: "" });
+                      } else {
+                        patchAct({ activity: e.target.value });
+                      }
+                    }}
+                    className={`${inputCls} col-span-2 md:col-span-1`}
+                  >
+                    <option value="">— atividade —</option>
+                    {activitySuggestions.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                    <option value={CUSTOM_ACTIVITY}>✏️ Outra (digitar)...</option>
+                  </select>
+                )}
+                <select
+                  value={a.hold_label || ""}
+                  onChange={(e) => {
+                    const label = e.target.value || null;
+                    patchAct({ hold_label: label });
+                    if (start || end) markHoldInProgress(label);
+                  }}
+                  className={`${inputCls} min-w-0`}
+                >
+                  <option value="">— {kind === "COSTADO" ? "área" : "porão"} —</option>
+                  {holdLabels.map((l) => (
+                    <option key={l} value={l}>{l}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => {
+                    setActivities((prev) => prev.filter((_, j) => j !== i));
+                    // Reindexa o modo texto das linhas seguintes.
+                    setCustomActivityRows((prev) => {
+                      const n = new Set<number>();
+                      for (const j of prev) {
+                        if (j === i) continue;
+                        n.add(j > i ? j - 1 : j);
+                      }
+                      return n;
+                    });
+                  }}
+                  title="Remover"
+                  className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition justify-self-end"
+                >
+                  <TrashIcon className="w-4 h-4" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Observações */}
+      <div className="bg-card rounded-xl border border-border p-4 space-y-2">
+        <p className="font-semibold text-text text-sm">Observações</p>
+        <textarea value={header.remarks} onChange={(e) => setHeader((h) => ({ ...h, remarks: e.target.value }))} rows={3} className={inputCls} placeholder="Observações gerais da operação..." />
+      </div>
+    </fieldset>
+  );
+}
+
 // ─── Detalhe de um navio+serviço ─────────────────────────────────────────────
 
 function ReportDetail({
@@ -684,10 +1164,9 @@ function ReportDetail({
   const kindInfo = REPORT_KINDS[kind];
   // Avaliação da equipe existe uma vez por navio, no relatório de lavagem.
   const showEvaluations = kind === "EMBARQUE" || kind === "COSTADO";
-  const activitySuggestions = ACTIVITY_SUGGESTIONS_BY_KIND[kind];
 
   // ── Rascunho da lavagem ────────────────────────────────────────────────────
-  const [header, setHeader] = useState({
+  const [header, setHeader] = useState<HeaderDraft>({
     report_date: todayIso(),
     port: "",
     remarks: "",
@@ -701,8 +1180,6 @@ function ReportDetail({
   const [confirmConclude, setConfirmConclude] = useState(false);
   const [holds, setHolds] = useState<HoldRow[]>([]);
   const [activities, setActivities] = useState<ActivityRow[]>([]);
-  // Linhas de atividade em modo "Outra..." (texto livre) — por índice.
-  const [customActivityRows, setCustomActivityRows] = useState<Set<number>>(new Set());
   const [savingReport, setSavingReport] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
 
@@ -737,6 +1214,18 @@ function ReportDetail({
   // ── Geração dos PDFs ──────────────────────────────────────────────────────
   const [generatingPdf, setGeneratingPdf] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState("");
+  // Preview aberto (iframe com o PDF inline). previewNonce força recarregar
+  // depois de salvar a versão do escritório.
+  const [preview, setPreview] = useState<PdfTipo | null>(null);
+  const [previewNonce, setPreviewNonce] = useState(0);
+  // ── Versão do escritório (Cleaning Report pro cliente) ────────────────────
+  // Cópia à parte do relatório, editada pela gestão na aba Gerar Relatórios.
+  // null = sem versão: o PDF sai do que o supervisor escreveu.
+  const [office, setOffice] = useState<OfficeDraft | null>(null);
+  const [officeMeta, setOfficeMeta] = useState<{ by: string | null; at: string | null } | null>(null);
+  const [officeEditing, setOfficeEditing] = useState(false);
+  const [savingOffice, setSavingOffice] = useState(false);
+  const [confirmDiscardOffice, setConfirmDiscardOffice] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Destino do próximo arquivo escolhido — setado ao clicar no bloco.
   const uploadTargetRef = useRef<{ label: string; stage: string }>({ label: "", stage: "GERAL" });
@@ -755,25 +1244,17 @@ function ReportDetail({
       setData(d);
 
       const r = d.report;
-      setHeader({
-        report_date: isoDateOnly(r?.report_date ?? null) || todayIso(),
-        port: r?.port ?? d.ship?.port ?? "",
-        remarks: r?.remarks ?? "",
-        etc_date: r?.etc_date ?? "",
-        etc_time: r?.etc_time ?? "",
-      });
+      const draft = draftFromSavedReport(r, d.ship, kind);
+      setHeader(draft.header);
+      setHolds(draft.holds);
+      setActivities(draft.activities);
       setSavedStatus(r?.status ?? "EM_ANDAMENTO");
-
-      if (kind !== "COSTADO" && d.ship?.holds_count) {
-        // A lista de porões vem do cadastro do navio (aba Navios) — vale pra
-        // lavagem, raspagem e pintura (são os mesmos porões do navio).
-        setHolds(mergeShipHolds((r?.holds ?? []).map(normalizeHold), d.ship.holds_count));
-      } else if (r && r.holds.length > 0) {
-        setHolds(r.holds.map(normalizeHold));
-      } else {
-        setHolds([]);
-      }
-      setActivities(r ? r.activities.map((a) => ({ ...a })) : []);
+      // Versão do escritório (o supervisor não tem a aba; a API nem devolve
+      // pra ele algo diferente, mas aqui só a gestão usa).
+      const ov = officeDraftFromVersion(r?.office_version);
+      setOffice(ov);
+      setOfficeMeta(ov ? { by: r?.office_version_by ?? null, at: r?.office_version_at ?? null } : null);
+      setOfficeEditing(false);
       setPhotos(d.photos ?? []);
       setSections(d.sections ?? []);
       setBlockCaptions(Object.fromEntries((d.sections ?? []).map((s) => [photoBlockKey(s.label), s.caption || ""])));
@@ -904,15 +1385,6 @@ function ReportDetail({
     const kinds = SHARED_PHOTO_KINDS.filter((k) => services.has(REPORT_KINDS[k].service));
     return kinds.length > 1 ? kinds.map((k) => REPORT_KINDS[k].label) : [];
   }, [kind, data?.ship?.services]);
-
-  // Preencheu horário de uma atividade/fase ligada a um porão pendente → o
-  // porão entra em "Em andamento" sozinho (Completo não é rebaixado).
-  const markHoldInProgress = useCallback((label: string | null | undefined) => {
-    if (!label) return;
-    setHolds((prev) =>
-      prev.map((h) => (h.label === label && h.status === "PENDENTE" ? { ...h, status: "EM_ANDAMENTO" } : h))
-    );
-  }, []);
 
   // nextStatus: sem argumento = salvar mantendo o status atual; "COMPLETO" =
   // Concluir relatório; "EM_ANDAMENTO" (vindo de um concluído) = Reabrir.
@@ -1156,10 +1628,94 @@ function ReportDetail({
     if (!(canRate && savedStatus === "COMPLETO")) saveReport();
   }
 
+  // ── Versão do escritório ──────────────────────────────────────────────────
+  // Abre o editor: parte da versão já salva ou, não havendo, de uma cópia do
+  // que o supervisor salvou (nunca do rascunho local não salvo da aba Lavagem).
+  function startOfficeEdit() {
+    if (!data) return;
+    if (!office) setOffice(draftFromSavedReport(data.report, data.ship, kind));
+    setOfficeEditing(true);
+  }
+
+  // Cancelar sem salvar: volta pro que está no banco (ou some, se não havia).
+  function cancelOfficeEdit() {
+    setOffice(officeDraftFromVersion(data?.report?.office_version));
+    setOfficeEditing(false);
+  }
+
+  async function saveOffice() {
+    if (!office) return;
+    setSavingOffice(true);
+    setSavedMsg("");
+    try {
+      const res = await fetch(`/api/relatorios/${jobId}/escritorio`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, report: office.header, holds: office.holds, activities: office.activities }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setSavedMsg(`⚠️ ${json.error || "Erro ao salvar."}`);
+        return;
+      }
+      setOfficeMeta({ by: json.data?.office_version_by ?? null, at: json.data?.office_version_at ?? null });
+      setData((prev) =>
+        prev && prev.report
+          ? {
+              ...prev,
+              report: {
+                ...prev.report,
+                office_version: json.data?.office_version ?? null,
+                office_version_by: json.data?.office_version_by ?? null,
+                office_version_at: json.data?.office_version_at ?? null,
+              },
+            }
+          : prev
+      );
+      setOfficeEditing(false);
+      setPreviewNonce((n) => n + 1);
+      setSavedMsg("✅ Versão pro cliente salva! O PDF do Cleaning Report passa a sair dela.");
+      setTimeout(() => setSavedMsg(""), 5000);
+    } catch {
+      setSavedMsg("⚠️ Erro ao conectar com o servidor.");
+    } finally {
+      setSavingOffice(false);
+    }
+  }
+
+  async function discardOffice() {
+    setSavingOffice(true);
+    setSavedMsg("");
+    try {
+      const res = await fetch(`/api/relatorios/${jobId}/escritorio?kind=${kind}`, { method: "DELETE" });
+      const json = await res.json();
+      if (!res.ok) {
+        setSavedMsg(`⚠️ ${json.error || "Erro ao descartar."}`);
+        return;
+      }
+      setOffice(null);
+      setOfficeMeta(null);
+      setOfficeEditing(false);
+      setData((prev) =>
+        prev && prev.report
+          ? { ...prev, report: { ...prev.report, office_version: null, office_version_by: null, office_version_at: null } }
+          : prev
+      );
+      setPreviewNonce((n) => n + 1);
+      setSavedMsg("↩ Versão do escritório descartada — o PDF volta a sair do relatório do supervisor.");
+      setTimeout(() => setSavedMsg(""), 5000);
+    } catch {
+      setSavedMsg("⚠️ Erro ao conectar com o servidor.");
+    } finally {
+      setSavingOffice(false);
+      setConfirmDiscardOffice(false);
+    }
+  }
+
   // O PDF é montado no servidor (src/lib/report-pdf.ts) e baixado como arquivo
   // — igual aos documentos do RH. No celular abre o menu de compartilhar.
   // Conteúdo = o que está SALVO: o aviso da aba lembra de salvar antes.
-  async function downloadPdf(tipo: "cleaning" | "fotos" | "avaliacao") {
+  async function downloadPdf(tipo: PdfTipo) {
     setPdfError("");
     setGeneratingPdf(tipo);
     try {
@@ -1209,16 +1765,6 @@ function ReportDetail({
   // continua editando e pode reabrir).
   const locked = canRate && savedStatus === "COMPLETO";
 
-  // ETC anotado como texto livre (antes dos seletores) que nem data nem hora
-  // conseguem exibir — mostrado como aviso ao lado dos campos.
-  const etcLegacy = [
-    normalizeDate(header.etc_date) ? "" : header.etc_date,
-    normalizeTime(header.etc_time) ? "" : header.etc_time,
-  ]
-    .map((v) => String(v || "").trim())
-    .filter(Boolean)
-    .join(" ");
-
   const tabs = [
     { key: "lavagem" as const, label: `${kindInfo.emoji} ${kindInfo.workTab}` },
     // A avaliação da equipe é uma só por navio — fica no relatório de lavagem
@@ -1226,10 +1772,13 @@ function ReportDetail({
     // cliente; repetir as notas neles seria avaliar a mesma pessoa 3 vezes.
     ...(showEvaluations ? [{ key: "avaliacoes" as const, label: "⭐ Avaliações" }] : []),
     { key: "fotos" as const, label: `📷 Fotos${photos.length ? ` (${photos.length})` : ""}` },
-    { key: "gerar" as const, label: "📄 Gerar Relatórios" },
+    // Gerar Relatórios é do escritório: é lá que a gestão revisa, ajusta a
+    // versão pro cliente e baixa os PDFs. O supervisor registra e manda pelo
+    // WhatsApp; não precisa (nem deve) gerar o PDF final.
+    ...(canRate ? [] : [{ key: "gerar" as const, label: "📄 Gerar Relatórios" }]),
   ];
 
-  const inputCls = "w-full px-3 py-2 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none bg-white";
+  const inputCls = INPUT_CLS;
 
   return (
     <div className="space-y-4">
@@ -1277,340 +1826,22 @@ function ReportDetail({
           {/* fieldset desabilita todos os campos de uma vez quando o relatório
               está concluído na visão do supervisor. min-w-0 anula o
               min-width:min-content padrão de fieldset (quebraria o responsivo). */}
-          <fieldset disabled={locked} className="space-y-4 min-w-0">
-          {/* Cabeçalho: uma coluna no celular. Em duas, o input de data (que no
-              iOS tem largura mínima própria) estourava a célula e encostava no
-              campo do lado. min-w-0 solta as células do min-width:auto do grid. */}
-          <div className="bg-card rounded-xl border border-border p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="min-w-0">
-              <label className="block text-xs font-medium text-text-light mb-1">Data do relatório</label>
-              <input type="date" value={header.report_date} onChange={(e) => setHeader((h) => ({ ...h, report_date: e.target.value }))} className={inputCls} />
-            </div>
-            <div className="min-w-0">
-              <label className="block text-xs font-medium text-text-light mb-1">Porto / Fundeio</label>
-              <input type="text" value={header.port} onChange={(e) => setHeader((h) => ({ ...h, port: e.target.value }))} className={inputCls} placeholder="Santos" />
-            </div>
-            <div className="min-w-0">
-              <label className="block text-xs font-medium text-text-light mb-1">Status do relatório</label>
-              {/* Não é mais select: o status muda pelo Concluir/Reabrir. */}
+          <CleaningReportForm
+            kind={kind}
+            header={header}
+            setHeader={setHeader}
+            holds={holds}
+            setHolds={setHolds}
+            activities={activities}
+            setActivities={setActivities}
+            lockedHolds={lockedHolds}
+            disabled={locked}
+            statusChip={
               <div className={`px-3 py-2 rounded-lg border text-sm font-medium ${savedStatus === "COMPLETO" ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-amber-50 border-amber-200 text-amber-700"}`}>
                 {savedStatus === "COMPLETO" ? "✅ Concluído" : "🔄 Em andamento"}
               </div>
-            </div>
-            <div className="min-w-0">
-              <label className="block text-xs font-medium text-text-light mb-1">Previsão de término (ETC)</label>
-              {/* Data e hora saem de seletor — digitar solto virava "0408". */}
-              <div className="flex gap-1.5">
-                <input type="date" value={normalizeDate(header.etc_date)} onChange={(e) => setHeader((h) => ({ ...h, etc_date: e.target.value }))} className={`${inputCls} min-w-0`} title="Data prevista" />
-                <input type="time" value={normalizeTime(header.etc_time)} onChange={(e) => setHeader((h) => ({ ...h, etc_time: e.target.value }))} className={`${inputCls} min-w-0`} title="Hora prevista" />
-              </div>
-              {/* Valor antigo que o seletor não entendeu: fica visível pra
-                  pessoa reescolher, em vez de sumir calado no próximo salvar. */}
-              {etcLegacy && (
-                <p className="text-[11px] text-amber-700 mt-1">
-                  Anotado antes como “{etcLegacy}” — escolha a data/hora pra atualizar.
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Porões / áreas */}
-          <div className="bg-card rounded-xl border border-border p-4 space-y-3">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div>
-                <p className="font-semibold text-text text-sm">
-                  {kind === "COSTADO" ? "Áreas do costado" : "Porões"}
-                </p>
-                {lockedHolds > 0 && (
-                  <p className="text-xs text-text-light mt-0.5">
-                    {lockedHolds} {lockedHolds > 1 ? "porões" : "porão"} conforme o cadastro do navio (aba Navios).
-                  </p>
-                )}
-                {!kindInfo.waterPhases && (
-                  <p className="text-xs text-text-light mt-0.5">
-                    Marque o início e o término da {KIND_WORK_NOUN[kind]} em cada porão.
-                  </p>
-                )}
-              </div>
-              {lockedHolds === 0 && (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() =>
-                    setHolds((prev) => [
-                      ...prev,
-                      emptyHold(kind === "COSTADO" ? `Área ${prev.length + 1}` : `Porão ${prev.length + 1}`),
-                    ])
-                  }
-                >
-                  <PlusIcon className="w-4 h-4" />
-                  Adicionar
-                </Button>
-              )}
-            </div>
-
-            {holds.length === 0 && (
-              <p className="text-sm text-text-light">Nenhum {kind === "COSTADO" ? "área" : "porão"} adicionado.</p>
-            )}
-
-            <div className="space-y-2">
-              {holds.map((h, i) => {
-                const patch = (p: Partial<HoldRow>) =>
-                  setHolds((prev) => prev.map((x, j) => (j === i ? { ...x, ...p } : x)));
-                // Linha do cadastro do navio: nome fixo e sem exclusão. Linhas
-                // além do cadastro (legado) seguem editáveis pra dar baixa.
-                const fixed = lockedHolds > 0 && i < lockedHolds;
-                // Uma fase do porão (salgada, doce ou o horário único de
-                // raspagem/pintura): lista de dias trabalhados, cada um com
-                // data + início + término, e o total de horas da fase. O
-                // pessoal para às 18h e volta no dia seguinte — "+ dia" já
-                // vem com a data seguinte. Horário em porão pendente → "Em
-                // andamento" sozinho; Completo continua manual (o fim de um
-                // dia não é o fim do serviço).
-                const phaseBlock = (phase: HoldPhase, emoji: string, name: string, legacy = false) => {
-                  const idxs = h.periods.map((p, k) => (p.phase === phase ? k : -1)).filter((k) => k >= 0);
-                  const total = formatMinutes(periodsMinutes(holdPhasePeriods(h, phase)));
-                  const patchPeriod = (k: number, p: Partial<HoldPeriod>) =>
-                    patch({
-                      periods: h.periods.map((x, j) => (j === k ? { ...x, ...p } : x)),
-                      ...((p.start || p.end) && h.status === "PENDENTE" ? { status: "EM_ANDAMENTO" } : {}),
-                    });
-                  const addPeriod = () => {
-                    const last = idxs.length ? h.periods[idxs[idxs.length - 1]] : null;
-                    const date = last?.date ? nextDayIso(last.date) : header.report_date || null;
-                    patch({ periods: [...h.periods, { phase, date, start: null, end: null }] });
-                  };
-                  const removePeriod = (k: number) => patch({ periods: h.periods.filter((_, j) => j !== k) });
-                  return (
-                    <div className="flex flex-col sm:flex-row sm:items-start gap-1.5">
-                      <span className={`text-xs w-24 shrink-0 sm:pt-2 ${legacy ? "text-amber-700" : "text-text-light"}`} title={legacy ? "Registrado antes da divisão por fases" : undefined}>
-                        {emoji} {name}
-                      </span>
-                      <div className="flex-1 min-w-0 space-y-1.5">
-                        {idxs.map((k) => {
-                          const p = h.periods[k];
-                          return (
-                            <div key={k} className="flex items-center gap-1.5">
-                              <input type="date" value={p.date || ""} onChange={(e) => patchPeriod(k, { date: e.target.value || null })} className={`${inputCls} !w-auto min-w-[8.5rem]`} title="Dia" />
-                              <input type="time" value={normalizeTime(p.start)} onChange={(e) => patchPeriod(k, { start: e.target.value || null })} className={inputCls} title="Início" />
-                              <span className="text-xs text-text-light shrink-0">→</span>
-                              <input type="time" value={normalizeTime(p.end)} onChange={(e) => patchPeriod(k, { end: e.target.value || null })} className={inputCls} title="Término — ou a hora em que pararam nesse dia" />
-                              <button type="button" onClick={() => removePeriod(k)} title="Remover este dia" className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition shrink-0">
-                                <TrashIcon className="w-4 h-4" />
-                              </button>
-                            </div>
-                          );
-                        })}
-                        <div className="flex items-center gap-3 min-h-[1.5rem]">
-                          {!legacy && (
-                            <button type="button" onClick={addPeriod} className="text-xs font-medium text-primary hover:underline">
-                              + {idxs.length ? "Adicionar outro dia" : "Adicionar dia"}
-                            </button>
-                          )}
-                          {total && <span className="text-xs text-text-light">⏱ {total} trabalhadas</span>}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                };
-                const holdTotal = formatMinutes(holdMinutes(h));
-                return (
-                  <div key={i} className="bg-gray-50 rounded-lg p-2.5 space-y-2">
-                    <div className="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_150px_90px_36px] gap-2 items-center">
-                      {fixed ? (
-                        <p className="px-3 py-2 text-sm font-semibold text-text">{h.label}</p>
-                      ) : (
-                        <input type="text" value={h.label} onChange={(e) => patch({ label: e.target.value })} className={inputCls} placeholder={kind === "COSTADO" ? "Área" : "Porão"} />
-                      )}
-                      <select value={h.status} onChange={(e) => patch({ status: e.target.value, completion_pct: e.target.value === "COMPLETO" ? 100 : h.completion_pct })} className={inputCls}>
-                        <option value="PENDENTE">Pendente</option>
-                        <option value="EM_ANDAMENTO">Em andamento</option>
-                        <option value="COMPLETO">Completo</option>
-                      </select>
-                      <div className="flex items-center gap-1">
-                        {/* Tocou no campo → seleciona o que está lá: digitar
-                            por cima do 0 dá "100", não "0100". O React não
-                            corrige sozinho porque, pra ele, "0100" já é 100 —
-                            então o zero à esquerda a gente tira na mão. */}
-                        <input
-                          type="number"
-                          inputMode="numeric"
-                          min={0}
-                          max={100}
-                          value={h.completion_pct}
-                          onFocus={(e) => e.currentTarget.select()}
-                          onChange={(e) => {
-                            const raw = e.target.value;
-                            const pct = Math.max(0, Math.min(100, Number(raw) || 0));
-                            if (/^0\d/.test(raw)) e.currentTarget.value = String(pct);
-                            // 100% → Completo sozinho (o supervisor esquecia de
-                            // trocar o status e o PDF saía "In progress"). Abaixo
-                            // de 100 um Completo volta pra Em andamento, e um
-                            // Pendente com progresso também vira Em andamento.
-                            const status =
-                              pct >= 100 ? "COMPLETO"
-                              : h.status === "COMPLETO" || (h.status === "PENDENTE" && pct > 0) ? "EM_ANDAMENTO"
-                              : h.status;
-                            patch({ completion_pct: pct, status });
-                          }}
-                          className={inputCls}
-                        />
-                        <span className="text-xs text-text-light">%</span>
-                      </div>
-                      {!fixed && (
-                        <button onClick={() => setHolds((prev) => prev.filter((_, j) => j !== i))} title="Remover" className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition justify-self-end">
-                          <TrashIcon className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                    {kindInfo.waterPhases ? (
-                      <>
-                        {/* Fases da lavagem: água salgada (lavagem) e doce
-                            (enxágue), cada uma com os seus dias. */}
-                        {phaseBlock("SALT", "🌊", "Água salgada")}
-                        {phaseBlock("FRESH", "💧", "Água doce")}
-                        {/* Horário geral legado (relatório salvo antes das
-                            fases): só aparece quando tem valor — dá pra ver,
-                            corrigir ou remover (removeu e salvou → some de vez). */}
-                        {holdPhasePeriods(h, "GERAL").length > 0 && phaseBlock("GERAL", "🕐", "Horário geral", true)}
-                        {holdTotal && (
-                          <p className="text-xs font-medium text-text text-right">⏱ Total do {kind === "COSTADO" ? "área" : "porão"}: {holdTotal}</p>
-                        )}
-                      </>
-                    ) : (
-                      // Raspagem e pintura não têm fase de água: um horário
-                      // por dia, gravado na fase GERAL.
-                      phaseBlock("GERAL", kindInfo.emoji, kind === "PINTURA" ? "Pintura" : "Raspagem")
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Atividades */}
-          <div className="bg-card rounded-xl border border-border p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="font-semibold text-text text-sm">Registro de atividades</p>
-              <Button size="sm" variant="secondary" onClick={() => setActivities((prev) => [...prev, { time_range: "", activity: "", hold_label: "" }])}>
-                <PlusIcon className="w-4 h-4" />
-                Adicionar
-              </Button>
-            </div>
-
-            {activities.length === 0 && <p className="text-sm text-text-light">Nenhuma atividade registrada.</p>}
-
-            {/* O modo texto livre ("Outra...") completa com as mesmas sugestões */}
-            <datalist id="activity-suggestions">
-              {activitySuggestions.map((s) => (
-                <option key={s} value={s} />
-              ))}
-            </datalist>
-
-            <div className="space-y-2">
-              {activities.map((a, i) => {
-                const patchAct = (p: Partial<ActivityRow>) =>
-                  setActivities((prev) => prev.map((x, j) => (j === i ? { ...x, ...p } : x)));
-                const { start, end } = splitTimeRange(a.time_range);
-                // Valor fora da lista (legado/texto livre) mantém a linha em modo texto.
-                const custom = customActivityRows.has(i) || (!!a.activity && !activitySuggestions.includes(a.activity));
-                const setTime = (which: "start" | "end", v: string) => {
-                  patchAct({ time_range: joinTimeRange(which === "start" ? v : start, which === "end" ? v : end) || null });
-                  if (v) markHoldInProgress(a.hold_label);
-                };
-                return (
-                  // No celular a linha é [campo | lixeira]: horário e atividade
-                  // ocupam a largura toda e o porão divide a última fileira com
-                  // a lixeira. Antes a lixeira caía sozinha numa 3ª fileira e
-                  // deixava metade dela em branco.
-                  <div key={i} className="grid grid-cols-[1fr_32px] md:grid-cols-[220px_1fr_150px_36px] gap-2 items-center bg-gray-50 rounded-lg p-2">
-                    <div className="col-span-2 md:col-span-1 flex items-center gap-1 min-w-0">
-                      <input type="time" value={start} onChange={(e) => setTime("start", e.target.value)} className={`${inputCls} min-w-0`} title="Início" />
-                      <span className="text-xs text-text-light shrink-0">→</span>
-                      <input type="time" value={end} onChange={(e) => setTime("end", e.target.value)} className={`${inputCls} min-w-0`} title="Término" />
-                    </div>
-                    {custom ? (
-                      <div className="col-span-2 md:col-span-1 flex items-center gap-1 min-w-0">
-                        <input type="text" list="activity-suggestions" value={a.activity} onChange={(e) => patchAct({ activity: e.target.value })} className={`${inputCls} min-w-0`} placeholder="Digite a atividade..." />
-                        <button
-                          onClick={() => {
-                            setCustomActivityRows((prev) => {
-                              const n = new Set(prev);
-                              n.delete(i);
-                              return n;
-                            });
-                            patchAct({ activity: "" });
-                          }}
-                          title="Voltar pra lista de atividades"
-                          className="px-2 py-1.5 text-text-light hover:text-text hover:bg-gray-200 rounded-lg transition shrink-0 text-sm"
-                        >
-                          ☰
-                        </button>
-                      </div>
-                    ) : (
-                      <select
-                        value={a.activity}
-                        onChange={(e) => {
-                          if (e.target.value === CUSTOM_ACTIVITY) {
-                            setCustomActivityRows((prev) => new Set(prev).add(i));
-                            patchAct({ activity: "" });
-                          } else {
-                            patchAct({ activity: e.target.value });
-                          }
-                        }}
-                        className={`${inputCls} col-span-2 md:col-span-1`}
-                      >
-                        <option value="">— atividade —</option>
-                        {activitySuggestions.map((s) => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                        <option value={CUSTOM_ACTIVITY}>✏️ Outra (digitar)...</option>
-                      </select>
-                    )}
-                    <select
-                      value={a.hold_label || ""}
-                      onChange={(e) => {
-                        const label = e.target.value || null;
-                        patchAct({ hold_label: label });
-                        if (start || end) markHoldInProgress(label);
-                      }}
-                      className={`${inputCls} min-w-0`}
-                    >
-                      <option value="">— {kind === "COSTADO" ? "área" : "porão"} —</option>
-                      {holdLabels.map((l) => (
-                        <option key={l} value={l}>{l}</option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => {
-                        setActivities((prev) => prev.filter((_, j) => j !== i));
-                        // Reindexa o modo texto das linhas seguintes.
-                        setCustomActivityRows((prev) => {
-                          const n = new Set<number>();
-                          for (const j of prev) {
-                            if (j === i) continue;
-                            n.add(j > i ? j - 1 : j);
-                          }
-                          return n;
-                        });
-                      }}
-                      title="Remover"
-                      className="p-1.5 text-text-light hover:text-danger hover:bg-danger/10 rounded-lg transition justify-self-end"
-                    >
-                      <TrashIcon className="w-4 h-4" />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Observações */}
-          <div className="bg-card rounded-xl border border-border p-4 space-y-2">
-            <p className="font-semibold text-text text-sm">Observações</p>
-            <textarea value={header.remarks} onChange={(e) => setHeader((h) => ({ ...h, remarks: e.target.value }))} rows={3} className={inputCls} placeholder="Observações gerais da operação..." />
-          </div>
-          </fieldset>
+            }
+          />
 
           <div className="flex justify-end gap-2 flex-wrap">
             <Button
@@ -1990,7 +2221,7 @@ function ReportDetail({
       )}
 
       {/* ── Gerar relatórios ── */}
-      {tab === "gerar" && (
+      {tab === "gerar" && !canRate && (
         <div className={`grid grid-cols-1 gap-4 ${showEvaluations ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
           <div className="bg-card rounded-xl border border-border p-5 flex flex-col gap-3">
             <p className="text-3xl">{kindInfo.emoji}</p>
@@ -1999,10 +2230,18 @@ function ReportDetail({
               <p className="text-xs text-text-light mt-1">
                 Relatório operacional da {KIND_WORK_NOUN[kind]} (1 página, em inglês): status por {kindInfo.areaWord}, atividades, observações, ETC e assinatura.
               </p>
+              {officeMeta && (
+                <p className="text-xs text-blue-700 mt-1.5 font-medium">✏️ Sai da versão pro cliente (editada pelo escritório).</p>
+              )}
             </div>
-            <Button onClick={() => downloadPdf("cleaning")} disabled={!!generatingPdf}>
-              {generatingPdf === "cleaning" ? "Gerando..." : "Baixar PDF"}
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" className="flex-1" onClick={() => setPreview("cleaning")} disabled={!!generatingPdf}>
+                👁 Visualizar
+              </Button>
+              <Button className="flex-1" onClick={() => downloadPdf("cleaning")} disabled={!!generatingPdf}>
+                {generatingPdf === "cleaning" ? "Gerando..." : "Baixar PDF"}
+              </Button>
+            </div>
           </div>
 
           <div className="bg-card rounded-xl border border-border p-5 flex flex-col gap-3">
@@ -2013,9 +2252,14 @@ function ReportDetail({
                 Capa + uma foto por página (antes/durante/depois), com a marca d&apos;água da Cargo. {photos.length} foto{photos.length === 1 ? "" : "s"} no relatório.
               </p>
             </div>
-            <Button onClick={() => downloadPdf("fotos")} disabled={photos.length === 0 || !!generatingPdf}>
-              {generatingPdf === "fotos" ? "Gerando..." : "Baixar PDF"}
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" className="flex-1" onClick={() => setPreview("fotos")} disabled={photos.length === 0 || !!generatingPdf}>
+                👁 Visualizar
+              </Button>
+              <Button className="flex-1" onClick={() => downloadPdf("fotos")} disabled={photos.length === 0 || !!generatingPdf}>
+                {generatingPdf === "fotos" ? "Gerando..." : "Baixar PDF"}
+              </Button>
+            </div>
           </div>
 
           {/* A avaliação é do time no navio, feita uma vez no relatório de
@@ -2029,9 +2273,14 @@ function ReportDetail({
                   Avaliação da equipe com notas por critério, pontos a melhorar e observações do supervisor.
                 </p>
               </div>
-              <Button onClick={() => downloadPdf("avaliacao")} disabled={evalTeam.length === 0 || !!generatingPdf}>
-                {generatingPdf === "avaliacao" ? "Gerando..." : "Baixar PDF"}
-              </Button>
+              <div className="flex gap-2">
+                <Button variant="secondary" className="flex-1" onClick={() => setPreview("avaliacao")} disabled={evalTeam.length === 0 || !!generatingPdf}>
+                  👁 Visualizar
+                </Button>
+                <Button className="flex-1" onClick={() => downloadPdf("avaliacao")} disabled={evalTeam.length === 0 || !!generatingPdf}>
+                  {generatingPdf === "avaliacao" ? "Gerando..." : "Baixar PDF"}
+                </Button>
+              </div>
             </div>
           )}
 
@@ -2041,15 +2290,111 @@ function ReportDetail({
             </div>
           )}
 
+          {/* ── Versão pro cliente (Cleaning Report) ──
+              Cópia à parte do relatório que o escritório ajusta de última hora
+              antes de mandar pro cliente. O que o supervisor escreveu na aba
+              de lavagem continua intacto; o PDF passa a sair daqui. */}
+          <div className={`${showEvaluations ? "md:col-span-3" : "md:col-span-2"} bg-card rounded-xl border border-border p-4 space-y-3`}>
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <p className="font-bold text-text">✏️ Versão pro cliente — {kindInfo.titleEn} Report</p>
+                <p className="text-xs text-text-light mt-1">
+                  Ajuste de última hora pra mandar pro cliente. Não altera o que o supervisor escreveu na aba {kindInfo.workTab}.
+                </p>
+                <p className={`text-xs mt-1.5 font-medium ${officeMeta ? "text-blue-700" : "text-text-light"}`}>
+                  {officeMeta
+                    ? `Versão do escritório ativa${officeMeta.by ? ` — editada por ${officeMeta.by}` : ""}${officeMeta.at ? ` em ${new Date(officeMeta.at).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}` : ""}. O PDF e o preview saem dela.`
+                    : "Sem versão do escritório: o PDF sai do relatório do supervisor."}
+                </p>
+              </div>
+              {!officeEditing && (
+                <div className="flex gap-2 flex-wrap">
+                  {officeMeta && (
+                    <Button variant="secondary" size="sm" onClick={() => setConfirmDiscardOffice(true)} disabled={savingOffice}>
+                      ↩ Voltar pro relatório do supervisor
+                    </Button>
+                  )}
+                  <Button size="sm" onClick={startOfficeEdit} disabled={savingOffice}>
+                    {officeMeta ? "✏️ Editar versão pro cliente" : "✏️ Criar versão pro cliente"}
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {officeEditing && office && (
+              <>
+                <CleaningReportForm
+                  kind={kind}
+                  header={office.header}
+                  setHeader={(a) => setOffice((prev) => (prev ? { ...prev, header: typeof a === "function" ? a(prev.header) : a } : prev))}
+                  holds={office.holds}
+                  setHolds={(a) => setOffice((prev) => (prev ? { ...prev, holds: typeof a === "function" ? a(prev.holds) : a } : prev))}
+                  activities={office.activities}
+                  setActivities={(a) => setOffice((prev) => (prev ? { ...prev, activities: typeof a === "function" ? a(prev.activities) : a } : prev))}
+                  lockedHolds={lockedHolds}
+                  disabled={savingOffice}
+                  statusChip={
+                    <div className="px-3 py-2 rounded-lg border text-sm font-medium bg-blue-50 border-blue-200 text-blue-700">
+                      ✏️ Versão pro cliente
+                    </div>
+                  }
+                />
+                <div className="flex justify-end gap-2 flex-wrap">
+                  <Button variant="secondary" onClick={cancelOfficeEdit} disabled={savingOffice}>
+                    Cancelar
+                  </Button>
+                  <Button onClick={saveOffice} disabled={savingOffice}>
+                    {savingOffice ? "Salvando..." : "💾 Salvar versão pro cliente"}
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+
           <div className={`${showEvaluations ? "md:col-span-3" : "md:col-span-2"} bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-900`}>
             💡 O PDF é gerado no servidor e baixa direto (no celular abre o menu de compartilhar).
-            Gere o PDF <strong>depois de salvar</strong> as alterações, pra sair tudo atualizado.
+            Preview e PDF mostram o que está <strong>salvo</strong> — salve as alterações antes de gerar.
             {!showEvaluations && (
               <> A avaliação da equipe fica no relatório de <strong>Embarque</strong> deste navio — é uma só pra todos os serviços.</>
             )}
           </div>
         </div>
       )}
+
+      {/* Preview do PDF: o mesmo arquivo do download, só que inline num iframe. */}
+      {preview && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-2 sm:p-4" onClick={() => setPreview(null)}>
+          <div className="bg-white rounded-xl w-full max-w-5xl h-[92vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-border">
+              <p className="font-semibold text-text text-sm truncate">
+                {preview === "cleaning" ? `${kindInfo.titleEn} Report` : preview === "fotos" ? "Relatório Fotográfico" : "Avaliação de Desempenho"}
+                <span className="text-text-light font-normal ml-2">· {vesselName}</span>
+              </p>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button size="sm" onClick={() => downloadPdf(preview)} disabled={!!generatingPdf}>
+                  {generatingPdf === preview ? "Gerando..." : "Baixar PDF"}
+                </Button>
+                <button onClick={() => setPreview(null)} className="px-2 py-1 text-text-light hover:text-text rounded-lg" title="Fechar">✕</button>
+              </div>
+            </div>
+            <iframe
+              key={`${preview}-${previewNonce}`}
+              src={`/api/relatorios/${jobId}/pdf?kind=${kind}&tipo=${preview}&inline=1&v=${previewNonce}`}
+              className="flex-1 w-full bg-gray-100"
+              title="Preview do relatório"
+            />
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmDiscardOffice}
+        onClose={() => setConfirmDiscardOffice(false)}
+        onConfirm={discardOffice}
+        title="Voltar pro relatório do supervisor"
+        message="Descartar a versão do escritório? O PDF volta a sair exatamente do que o supervisor escreveu. O relatório do supervisor não muda."
+        loading={savingOffice}
+      />
 
       {lightbox && (
         <PhotoLightbox

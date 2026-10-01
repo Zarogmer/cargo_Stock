@@ -868,6 +868,13 @@ model ShipReport {
   // referência ("July, 21th" / "AM").
   etc_date    String?
   etc_time    String?
+  // Versão do escritório pro cliente: cópia editável do Cleaning Report
+  // (cabeçalho + porões + atividades) que a gestão ajusta de última hora na aba
+  // Gerar Relatórios. Quando existe, o PDF sai dela; o que o supervisor
+  // escreveu (colunas/tabelas acima) fica intacto. NULL = usa o do supervisor.
+  office_version    Json?
+  office_version_by String?
+  office_version_at DateTime? @db.Timestamptz()
   created_by  String
   created_at  DateTime  @default(now()) @db.Timestamptz()
   updated_at  DateTime  @default(now()) @updatedAt @db.Timestamptz()

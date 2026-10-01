@@ -10,6 +10,7 @@ import {
 } from "@/lib/report-scope";
 import { buildCleaningReportPdf, buildEvaluationPdf, buildPhotoReportPdf } from "@/lib/report-pdf";
 import { loadPhotoBytes } from "@/lib/photo-storage";
+import { parseOfficeVersion } from "@/lib/report-payload";
 import {
   EVAL_CRITERIA,
   EvaluationPrintRow,
@@ -62,8 +63,20 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
   });
 
   const vesselName = job.ships?.name || job.name || "—";
-  const dateStr = formatDayMonthYear(report?.report_date?.toISOString() ?? null);
   const isCostado = kind === "COSTADO";
+  // inline=1 → o navegador mostra o PDF em vez de baixar (preview na aba
+  // Gerar Relatórios, num iframe).
+  const inline = req.nextUrl.searchParams.get("inline") === "1";
+
+  // Cleaning Report: se o escritório salvou uma versão pro cliente, o PDF sai
+  // dela (versao=supervisor força o original). Fotos e avaliação não têm versão
+  // do escritório. O supervisor nunca enxerga a versão do escritório.
+  const office =
+    tipo === "cleaning" && !actor.isSupervisor && req.nextUrl.searchParams.get("versao") !== "supervisor"
+      ? parseOfficeVersion(report?.office_version)
+      : null;
+  const reportDateIso = office ? office.report_date : (report?.report_date?.toISOString() ?? null);
+  const dateStr = formatDayMonthYear(reportDateIso);
 
   try {
     if (tipo === "cleaning") {
@@ -74,14 +87,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
       const pdf = await buildCleaningReportPdf({
         vesselName,
         kind,
-        reportDate: report?.report_date?.toISOString() ?? null,
-        port: report?.port || job.ships?.port || null,
+        reportDate: reportDateIso,
+        port: (office ? office.port : report?.port) || job.ships?.port || null,
         complete: report?.status === "COMPLETO",
-        holds: (report?.holds ?? []).map((h) => ({ ...h, periods: parsePeriods(h.periods) })),
-        activities: report?.activities ?? [],
-        remarks: report?.remarks ?? null,
-        etcDate: report?.etc_date ?? null,
-        etcTime: report?.etc_time ?? null,
+        holds: office
+          ? office.holds
+          : (report?.holds ?? []).map((h) => ({ ...h, periods: parsePeriods(h.periods) })),
+        activities: office ? office.activities : (report?.activities ?? []),
+        remarks: office ? office.remarks : (report?.remarks ?? null),
+        etcDate: office ? office.etc_date : (report?.etc_date ?? null),
+        etcTime: office ? office.etc_time : (report?.etc_time ?? null),
         supervisorName,
       });
       return pdfResponse(
@@ -90,7 +105,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
           isCostado ? "Hull Side Cleaning Report" : `${REPORT_KINDS[kind].titleEn} Report`,
           vesselName,
           dateStr
-        )
+        ),
+        inline
       );
     }
 
@@ -153,7 +169,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
             : `${REPORT_KINDS[kind].titleEn} Photographic Report`,
           vesselName,
           dateStr
-        )
+        ),
+        inline
       );
     }
 
@@ -203,7 +220,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ jobI
       reportDate: report?.report_date?.toISOString() ?? null,
       rows,
     });
-    return pdfResponse(pdf, reportFileName("Avaliação de Desempenho", vesselName, dateStr));
+    return pdfResponse(pdf, reportFileName("Avaliação de Desempenho", vesselName, dateStr), inline);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     console.error("[relatorios/pdf] falhou:", detail);
@@ -231,13 +248,14 @@ async function shipSupervisorName(jobId: string, kind: ReportKindName): Promise<
   return null;
 }
 
-function pdfResponse(bytes: Uint8Array, baseName: string): NextResponse {
+// inline = abre no navegador (preview em iframe) em vez de baixar.
+function pdfResponse(bytes: Uint8Array, baseName: string, inline = false): NextResponse {
   const filename = `${baseName}.pdf`;
   const ascii = filename.replace(/[^\x20-\x7E]+/g, "_");
   return new NextResponse(bytes as unknown as BodyInit, {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
       "Cache-Control": "no-store",
     },
   });
