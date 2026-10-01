@@ -66,7 +66,23 @@ export function safe(value: unknown): string {
     .replace(/[“”]/g, '"')
     .replace(/[–—]/g, "-")
     .replace(/…/g, "...")
-    .replace(/[^\x20-\x7E\xA0-\xFF]/g, "");
+    .replace(/[^\x20-\x7E\xA0-\xFF•]/g, ""); // • = marcador dos tópicos (WinAnsi tem)
+}
+
+// Quebra o texto de observações em tópicos: uma linha do textarea = um
+// tópico. Tira marcador que o usuário já digitou ("*", "-", "•") pra não
+// duplicar com o nosso, e descarta linha vazia.
+export function splitRemarks(value: string | null | undefined): string[] {
+  return String(value ?? "")
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .trim()
+        .replace(/^[\s*\-•·]+/, "")
+        .replace(/[\s*]+$/, "")
+        .trim()
+    )
+    .filter(Boolean);
 }
 
 type TextOpts = {
@@ -318,8 +334,9 @@ export async function buildCleaningReportPdf(opts: {
       colB = lines(fresh);
       const ta = formatMinutes(periodsMinutes([...salt, ...legacy]));
       const tb = formatMinutes(periodsMinutes(fresh));
-      if (ta && colA.length > 1) colA.push(`Total ${ta}`);
-      if (tb && colB.length > 1) colB.push(`Total ${tb}`);
+      // Total sai sempre que houve período, mesmo com um dia só de operação.
+      if (ta && colA.length) colA.push(`Total ${ta}`);
+      if (tb && colB.length) colB.push(`Total ${tb}`);
     } else {
       colA = lines(h.periods);
       colB = [formatMinutes(holdMinutes(h)) || "-"];
@@ -371,14 +388,28 @@ export async function buildCleaningReportPdf(opts: {
     d.y -= 7;
   }
 
-  // 3. Observações
+  // 3. Observações — um tópico por linha do textarea (o supervisor costuma
+  // digitar "*23/09 ...*" ou "- ..." no estilo WhatsApp; tiramos o marcador
+  // dele e colocamos o nosso). safe() apaga o \n, por isso quebramos antes.
   d.y -= 8;
-  const remarkLines = d.wrap(opts.remarks || "No remarks.", CONTENT_W - 24, { size: 9 });
-  paginate(50 + remarkLines.length * 12);
+  const remarkItems = splitRemarks(opts.remarks);
+  const bulletIndent = 12;
+  const remarkBlocks = remarkItems.length
+    ? remarkItems.map((item) => d.wrap(item, CONTENT_W - 24 - bulletIndent, { size: 9 }))
+    : [d.wrap("No remarks.", CONTENT_W - 24, { size: 9 })];
+  const remarkLineCount = remarkBlocks.reduce((n, b) => n + b.length, 0);
+  // 3pt de respiro entre tópicos
+  const remarkTextH = remarkLineCount * 12 + (remarkBlocks.length - 1) * 3;
+  paginate(50 + remarkTextH);
   d.y = d.sectionBar("3. REMARKS", d.y);
-  const boxH = Math.max(34, 16 + remarkLines.length * 12);
+  const boxH = Math.max(34, 16 + remarkTextH);
   d.rect(M, d.y - boxH, CONTENT_W, boxH, undefined, LINE);
-  remarkLines.forEach((l, i) => d.text(l, M + 12, d.y - 16 - i * 12, { size: 9 }));
+  let ry = d.y - 16;
+  remarkBlocks.forEach((lines) => {
+    if (remarkItems.length) d.text("•", M + 12, ry, { size: 9 });
+    lines.forEach((l, i) => d.text(l, M + 12 + (remarkItems.length ? bulletIndent : 0), ry - i * 12, { size: 9 }));
+    ry -= lines.length * 12 + 3;
+  });
   d.y -= boxH + 14;
 
   // 4. ETC
