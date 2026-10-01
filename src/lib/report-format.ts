@@ -173,6 +173,35 @@ export function describeIncompletePeriod(x: IncompletePeriod): string {
   return `${x.hold} · ${PHASE_PT[x.phase]} ${x.date ? formatDayMonth(x.date) : "sem data"}`;
 }
 
+// Fotos obrigatórias por porão/área: pelo menos uma em cada fase (Antes,
+// Durante e Depois). Sem isso o Concluir fica travado — tela e API. O relatório
+// fotográfico do cliente precisa mostrar o antes/depois de cada porão.
+export const HOLD_PHOTO_STAGES = ["ANTES", "DURANTE", "DEPOIS"] as const;
+const STAGE_PT: Record<string, string> = { ANTES: "Antes", DURANTE: "Durante", DEPOIS: "Depois" };
+export interface MissingHoldPhotos {
+  hold: string;
+  stages: string[];
+}
+export function missingHoldPhotos(
+  holds: Pick<HoldRow, "label">[],
+  photos: { hold_label: string | null; stage: string }[]
+): MissingHoldPhotos[] {
+  const out: MissingHoldPhotos[] = [];
+  for (const h of holds) {
+    const label = String(h.label || "").trim();
+    if (!label) continue;
+    const key = photoBlockKey(label);
+    const have = new Set(photos.filter((p) => photoBlockKey(p.hold_label) === key).map((p) => p.stage));
+    const stages = HOLD_PHOTO_STAGES.filter((s) => !have.has(s));
+    if (stages.length) out.push({ hold: label, stages: [...stages] });
+  }
+  return out;
+}
+// "Porão 7 (Durante, Depois)" — pra mensagem de erro/aviso.
+export function describeMissingHoldPhotos(x: MissingHoldPhotos): string {
+  return `${x.hold} (${x.stages.map((s) => STAGE_PT[s] || s).join(", ")})`;
+}
+
 // 510 → "8h30"; 45 → "0h45"; 0 → "" (nada trabalhado ainda).
 export function formatMinutes(min: number): string {
   if (!min || min <= 0) return "";

@@ -37,9 +37,11 @@ import {
   PHOTO_PLACES,
   REPORT_KINDS,
   describeIncompletePeriod,
+  describeMissingHoldPhotos,
   formatDayMonth,
   formatEtcDate,
   incompletePeriods,
+  missingHoldPhotos,
   formatMinutes,
   holdMinutes,
   holdPhasePeriods,
@@ -1339,7 +1341,10 @@ function ReportDetail({
   // confere de novo). Fechar com "--:--" deixava o PDF capenga e o supervisor
   // sem poder corrigir.
   const periodsMissing = useMemo(() => incompletePeriods(holds), [holds]);
-  const concludeBlocked = holdsMissing > 0 || periodsMissing.length > 0;
+  // ...e cada porão/área com foto de Antes, Durante e Depois (a API confere
+  // de novo). É o que o cliente recebe no relatório fotográfico.
+  const photosMissing = useMemo(() => missingHoldPhotos(holds, photos), [holds, photos]);
+  const concludeBlocked = holdsMissing > 0 || periodsMissing.length > 0 || photosMissing.length > 0;
 
   // Quem aparece na aba Avaliações: a equipe escalada SEM supervisor — o
   // supervisor avalia, não é avaliado (nem por ele mesmo, nem pela gestão).
@@ -1881,6 +1886,12 @@ function ReportDetail({
                 {periodsMissing.slice(0, 3).map(describeIncompletePeriod).join(", ")}{periodsMissing.length > 3 ? "..." : ""}.
               </p>
             )}
+            {!locked && savedStatus !== "COMPLETO" && photosMissing.length > 0 && (
+              <p className="w-full text-right text-xs text-text-light self-center">
+                🔒 Concluir libera quando {kind === "COSTADO" ? "cada área" : "cada porão"} tiver foto de Antes, Durante e Depois (aba Fotos) — falta:{" "}
+                {photosMissing.slice(0, 4).map(describeMissingHoldPhotos).join(", ")}{photosMissing.length > 4 ? "..." : ""}.
+              </p>
+            )}
             {!locked && savedStatus !== "COMPLETO" && (
               <Button
                 variant={concludeBlocked ? "secondary" : "success"}
@@ -1891,7 +1902,9 @@ function ReportDetail({
                     ? `Só dá pra concluir com ${kind === "COSTADO" ? "todas as áreas" : "todos os porões"} em 100%`
                     : periodsMissing.length > 0
                       ? "Só dá pra concluir com todos os dias com data, início e término"
-                      : "Fecha o relatório: depois de concluído, o supervisor não edita mais (a gestão pode reabrir)"
+                      : photosMissing.length > 0
+                        ? "Só dá pra concluir com foto de Antes, Durante e Depois em cada porão (aba Fotos)"
+                        : "Fecha o relatório: depois de concluído, o supervisor não edita mais (a gestão pode reabrir)"
                 }
               >
                 ✅ Concluir relatório

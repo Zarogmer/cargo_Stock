@@ -8,7 +8,14 @@ import {
   siblingBlockReportIds,
   WORKED_ALLOC_WHERE,
 } from "@/lib/report-scope";
-import { SHARED_BLOCK_LABELS, describeIncompletePeriod, incompletePeriods, parsePeriods } from "@/lib/report-format";
+import {
+  SHARED_BLOCK_LABELS,
+  describeIncompletePeriod,
+  describeMissingHoldPhotos,
+  incompletePeriods,
+  missingHoldPhotos,
+  parsePeriods,
+} from "@/lib/report-format";
 import type { Prisma } from "@prisma/client";
 
 // GET /api/relatorios/[jobId]?kind=EMBARQUE|COSTADO|RASPAGEM|PINTURA
@@ -194,7 +201,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
   // consegue (o status só volta pra EM_ANDAMENTO pela gestão).
   const existing = await prisma.shipReport.findUnique({
     where: { job_id_kind: { job_id: jobId, kind } },
-    select: { status: true },
+    select: { id: true, status: true },
   });
   if (existing?.status === "COMPLETO" && actor.isSupervisor) {
     return NextResponse.json(
@@ -256,6 +263,27 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ jobI
       return NextResponse.json(
         {
           error: `Pra concluir, todos os dias precisam de data, início e término — falta${missing.length > 1 ? "m" : ""} ${missing.length}: ${list}${missing.length > 3 ? "..." : ""}.`,
+        },
+        { status: 400 }
+      );
+    }
+    // ...e cada porão/área com foto de Antes, Durante e Depois (as fotos dos
+    // porões são do próprio relatório, não dos irmãos).
+    const photos = existing
+      ? await prisma.shipReportPhoto.findMany({
+          where: { report_id: existing.id },
+          select: { hold_label: true, stage: true },
+        })
+      : [];
+    const noPhotos = missingHoldPhotos(
+      holds.map((h: Record<string, unknown>) => ({ label: String(h.label || "") })),
+      photos
+    );
+    if (noPhotos.length > 0) {
+      const list = noPhotos.slice(0, 3).map(describeMissingHoldPhotos).join(", ");
+      return NextResponse.json(
+        {
+          error: `Pra concluir, cada ${kind === "COSTADO" ? "área" : "porão"} precisa de foto de Antes, Durante e Depois — falta: ${list}${noPhotos.length > 3 ? "..." : ""}.`,
         },
         { status: 400 }
       );
