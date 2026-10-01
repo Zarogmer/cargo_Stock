@@ -302,8 +302,8 @@ export async function buildCleaningReportPdf(opts: {
         ? { size: 7, bold: true, color: MUTED }
         : o.sub
           ? isTotalLine(cell)
-            ? { size: 7.5, bold: true, color: BRAND_DK }
-            : { size: 8, color: INK }
+            ? { size: 9, bold: true, color: BRAND_DK }
+            : { size: 9, color: INK }
           : { size: 9, color: last ? BRAND_DK : INK, bold: last };
       const w = d.width(cell, opts2);
       d.text(cell, center ? x + (cols[i] - w) / 2 : x + 4, y, opts2);
@@ -319,7 +319,9 @@ export async function buildCleaningReportPdf(opts: {
     d.text("No data.", M + 4, d.y - 12, { size: 9, color: MUTED });
     d.y -= 20;
   }
-  const LINE_H = 10;
+  // Todas as linhas de data/horario saem no mesmo tamanho (9), entao o passo
+  // entre elas precisa de folga.
+  const LINE_H = 11;
   for (const h of opts.holds) {
     // Cada dia trabalhado vira uma linha ("12/09 15:00 - 18:00"); a fase
     // fecha com o total de horas. Sem período: "-".
