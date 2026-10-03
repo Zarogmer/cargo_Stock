@@ -793,6 +793,10 @@ export function EscalacaoEstoquePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [confirmReturnOpen]);
 
+  // Depois de embarcado a lista do Embarque fica só pra consulta: o estoque já
+  // foi baixado e a lista já foi pro WhatsApp — mexer aqui só desalinhava.
+  const canEditEmbark = canEmbarcar && !currentShip?.embarked_at;
+
   // Retornos já registrados deste navio (histórico, mais recente primeiro).
   const shipReturns = returns.filter((r) => r.ship_id === selectedShip);
   // Um retorno só por navio/equipe: confirmar de novo EDITA este (o mais
@@ -1396,7 +1400,7 @@ export function EscalacaoEstoquePage() {
 
       {/* Aviso enquanto faltar item: agora é só um alerta (não trava mais o
           Embarcar). Mostra o que falta pra decisão consciente. */}
-      {tab === "embarque" && canEmbarcar && selectedTeam && hasMissing && (
+      {tab === "embarque" && canEditEmbark && selectedTeam && hasMissing && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-900">
           <p className="font-semibold">⚠️ {missingNames.length} item(ns) sem quantidade pra equipe</p>
           <p className="mt-1 text-xs">{missingSummary}</p>
@@ -1456,7 +1460,7 @@ export function EscalacaoEstoquePage() {
           </button>
           <div className="flex items-center gap-3 flex-wrap">
             <span className="text-xs text-text-light">{matReady} ok · {matMissing} com falta · {teamKitActive.length} itens{teamKitRemoved.length > 0 ? ` · ${teamKitRemoved.length} removido(s)` : ""}</span>
-            {canEmbarcar && (
+            {canEditEmbark && (
               <Button size="sm" variant="secondary" onClick={() => setAddKind("MATERIAL")} title="Adicionar um item do Estoque só na lista deste navio">
                 ➕ Adicionar item
               </Button>
@@ -1479,7 +1483,7 @@ export function EscalacaoEstoquePage() {
             <div className="px-4 py-10 text-center text-text-light">
               <span className="text-3xl block mb-2">🧰</span>
               {teamKit.length === 0 ? "Sem kit de materiais para esta equipe" : "Nenhum material vai neste navio (todos removidos)"}
-              {canEmbarcar && <span className="block text-xs mt-1">Use o ➕ Adicionar item pra montar a lista deste navio.</span>}
+              {canEditEmbark && <span className="block text-xs mt-1">Use o ➕ Adicionar item pra montar a lista deste navio.</span>}
             </div>
           ) : (
             <div className="divide-y divide-border">
@@ -1514,7 +1518,7 @@ export function EscalacaoEstoquePage() {
                         {k.added && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold uppercase whitespace-nowrap" title="Item extra — só na lista deste navio">extra</span>
                         )}
-                        {canEmbarcar && (
+                        {canEditEmbark && (
                           <button
                             type="button"
                             onClick={() => { setRenamingId(k.stock_item_id); setRenameValue(k.estName); }}
@@ -1531,7 +1535,7 @@ export function EscalacaoEstoquePage() {
                   <div className="grid grid-cols-3 gap-2 sm:contents">
                     <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center text-text-light">
                       <span className="text-[10px] text-text-light uppercase sm:hidden">Materiais</span>
-                      {canEmbarcar ? (
+                      {canEditEmbark ? (
                         <span className="inline-flex items-center gap-1">
                           <input
                             type="number" min={0} step="any"
@@ -1584,7 +1588,7 @@ export function EscalacaoEstoquePage() {
                     </div>
                   </div>
                   {/* Observação por item (igual à aba Retorno) */}
-                  {canEmbarcar ? (
+                  {canEditEmbark ? (
                     <input
                       type="text"
                       value={noteDraft[k.stock_item_id] ?? noteOf(k.stock_item_id)}
@@ -1606,7 +1610,7 @@ export function EscalacaoEstoquePage() {
         {/* Removidos deste navio — materiais tirados da lista (Leva 0). Ficam
             aqui pra restaurar com um clique, mesmo quando não têm disponível
             livre (aí não voltariam pelo "Adicionar item"). */}
-        {showMat && canEmbarcar && teamKitRemoved.length > 0 && (
+        {showMat && canEditEmbark && teamKitRemoved.length > 0 && (
           <div className="rounded-xl border border-dashed border-border bg-gray-50 px-4 py-3">
             <p className="text-xs font-semibold text-text-light uppercase tracking-wider mb-2">🗑️ Removidos deste navio ({teamKitRemoved.length})</p>
             <div className="flex flex-wrap gap-2">
@@ -1643,7 +1647,7 @@ export function EscalacaoEstoquePage() {
           <div className="flex items-center gap-3 flex-wrap">
             <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${allReady ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{pct}% pronto</span>
             <span className="text-xs text-text-light">{readyCount} prontos · {missingCount} com falta</span>
-            {canEmbarcar && (
+            {canEditEmbark && (
               <Button size="sm" variant="secondary" onClick={() => setAddKind("RANCHO")} title="Adicionar um item do Rancho da equipe só na lista deste navio">
                 ➕ Adicionar item
               </Button>
@@ -1666,7 +1670,7 @@ export function EscalacaoEstoquePage() {
             <div className="px-4 py-10 text-center text-text-light">
               <span className="text-3xl block mb-2">🛒</span>
               Nenhum item com quantidade padrão definida
-              {canEmbarcar && <span className="block text-xs mt-1">Use o ➕ Adicionar item pra montar a lista deste navio.</span>}
+              {canEditEmbark && <span className="block text-xs mt-1">Use o ➕ Adicionar item pra montar a lista deste navio.</span>}
             </div>
           ) : (
             <div className="divide-y divide-border">
@@ -1689,7 +1693,7 @@ export function EscalacaoEstoquePage() {
                   <div className="grid grid-cols-3 gap-2 sm:contents">
                     <div className="flex flex-col items-center gap-0.5 sm:block sm:text-center text-text-light">
                       <span className="text-[10px] text-text-light uppercase sm:hidden">Padrão</span>
-                      {canEmbarcar ? (
+                      {canEditEmbark ? (
                         <span className="inline-flex items-center gap-1">
                           <input
                             type="number" min={0} step="any"
@@ -1735,7 +1739,7 @@ export function EscalacaoEstoquePage() {
                     </div>
                   </div>
                   {/* Observação por item (igual à aba Retorno) */}
-                  {canEmbarcar ? (
+                  {canEditEmbark ? (
                     <input
                       type="text"
                       value={noteDraft[item.id] ?? noteOf(item.id)}
