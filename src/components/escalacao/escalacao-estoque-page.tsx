@@ -29,10 +29,6 @@ interface Ship {
   services?: string[] | null; // ["COSTADO"] = navio de Costado (sem kit/Retorno)
 }
 
-// A partir desta data, navio Concluído na aba Navios sem Retorno segue aberto
-// no Checklist mesmo sem embarque registrado (ver isChecklistClosed).
-const CHECKLIST_OPEN_SINCE = "2026-10-03";
-
 // Item do kit de embarque (embark_kit_items) + o material do Estoque ligado.
 interface KitItem {
   id: number;
@@ -186,6 +182,9 @@ export function EscalacaoEstoquePage() {
   const [returnMsg, setReturnMsg] = useState<string | null>(null);
   // Diálogo de confirmação do retorno (só confere material — não fecha navio).
   const [confirmReturnOpen, setConfirmReturnOpen] = useState(false);
+  // Data de Término informada no Confirmar Retorno quando o navio ainda está
+  // aberto — é ela que fecha o navio na aba Navios.
+  const [returnCloseDate, setReturnCloseDate] = useState("");
 
   // Envio da lista de embarque pro grupo do WhatsApp (aba Embarque).
   const [sendingEmbarkList, setSendingEmbarkList] = useState(false);
@@ -222,27 +221,18 @@ export function EscalacaoEstoquePage() {
 
   useEffect(() => { loadData(); }, [loadData, pathname]);
 
-  // Regra do seletor: o Checklist fecha no tempo DELE, independente da aba
-  // Navios. Fechar o navio lá (Concluído) NÃO tira o navio daqui — ele só sai
-  // da lista padrão quando o Retorno é confirmado (aí vai pro "Mostrar
-  // concluídos"). Confirmar o Retorno com o navio ainda aberto fecha o navio
-  // também (handleSaveReturn). Cancelado não entra em nenhuma. Costado fica de
-  // fora — não tem kit de material (tem aba própria).
+  // Regra do seletor: desligado, SÓ os navios em operação (AGENDADO é legado e
+  // conta como em operação); "Mostrar concluídos" liga e a lista vira SÓ os
+  // concluídos — navio fechado na aba Navios só aparece pelo toggle (o Retorno
+  // dele segue aberto lá). Confirmar o Retorno com o navio ainda aberto fecha o
+  // navio também (handleSaveReturn). Cancelado não entra em nenhuma. Costado
+  // fica de fora — não tem kit de material (tem aba própria).
+  const isActiveShip = (s: Ship) => s.status === "AGENDADO" || s.status === "EM_OPERACAO";
   const isCostadoShip = (s: Ship) => (s.services || []).includes("COSTADO");
   const shipHasReturn = (shipId: string) => returns.some((r) => r.ship_id === shipId);
-  // Navio fechado na aba Navios sem Retorno continua pendente aqui se passou
-  // pelo Checklist (embarque registrado) ou foi fechado a partir de
-  // CHECKLIST_OPEN_SINCE. Os antigos, fechados antes do Checklist existir, não
-  // voltam pra lista (era isso que lotava o seletor antes).
-  const isChecklistClosed = (s: Ship) => s.status === "CONCLUIDO" && (
-    shipHasReturn(s.id)
-    || (!s.embarked_at && (!s.departure_date || s.departure_date.slice(0, 10) < CHECKLIST_OPEN_SINCE))
-  );
   const visibleShips = useMemo(
-    () => ships.filter((s) => !isCostadoShip(s) && s.status !== "CANCELADO"
-      && (showFinished ? isChecklistClosed(s) : !isChecklistClosed(s))),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ships, returns, showFinished],
+    () => ships.filter((s) => !isCostadoShip(s) && (showFinished ? s.status === "CONCLUIDO" : isActiveShip(s))),
+    [ships, showFinished],
   );
 
   // Seleciona o 1º navio visível (o mais novo); se o selecionado saiu da lista
@@ -786,6 +776,14 @@ export function EscalacaoEstoquePage() {
     loadData();
   }
 
+  // Navio ainda aberto na aba Navios: o Confirmar Retorno pede a Data de
+  // Término e fecha o navio junto. Ao abrir o modal, sugere a data cadastrada.
+  const shipOpenForClose = !!currentShip && currentShip.status !== "CONCLUIDO" && currentShip.status !== "CANCELADO";
+  useEffect(() => {
+    if (confirmReturnOpen) setReturnCloseDate(currentShip?.departure_date?.slice(0, 10) || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirmReturnOpen]);
+
   // Retornos já registrados deste navio (histórico, mais recente primeiro).
   const shipReturns = returns.filter((r) => r.ship_id === selectedShip);
   // Um retorno só por navio/equipe: confirmar de novo EDITA este (o mais
@@ -1109,11 +1107,11 @@ export function EscalacaoEstoquePage() {
 
       // O Checklist tem prioridade no fechamento: confirmar o Retorno com o
       // navio ainda aberto fecha o navio também (mesmo que o "Fechar" da aba
-      // Navios): Concluído, data de saída (a cadastrada ou hoje), fim do job
+      // Navios): Concluído, Data de Término informada no modal, fim do job
       // (libera pro Financeiro) e solta a tripulação. Navio já fechado na aba
       // Navios fica como está.
       if (currentShip.status !== "CONCLUIDO" && currentShip.status !== "CANCELADO") {
-        const closeDate = currentShip.departure_date?.slice(0, 10) || today;
+        const closeDate = returnCloseDate || currentShip.departure_date?.slice(0, 10) || today;
         const upd = (await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate }).eq("id", currentShip.id)) as any;
         if (upd?.error) {
           autoNote += ` ⚠️ Não consegui fechar o navio (${upd.error.message}) — feche pela aba Navios.`;
@@ -1793,11 +1791,22 @@ export function EscalacaoEstoquePage() {
               <> O navio ainda está aberto na aba Navios — confirmar aqui <strong>fecha o navio também</strong> (Concluído, libera pro Financeiro e solta a tripulação).</>
             )}
           </p>
+          {shipOpenForClose && (
+            <div>
+              <label className="block text-xs font-medium text-text mb-1">Data de Término do navio *</label>
+              <input
+                type="date"
+                value={returnCloseDate}
+                onChange={(e) => setReturnCloseDate(e.target.value)}
+                className="w-full px-3 py-2 border border-border rounded-lg text-sm"
+              />
+            </div>
+          )}
           <div className="flex justify-end gap-2 pt-1">
             <Button size="sm" variant="secondary" onClick={() => setConfirmReturnOpen(false)} disabled={savingReturn}>
               Cancelar
             </Button>
-            <Button size="sm" onClick={() => handleSaveReturn()} disabled={savingReturn}>
+            <Button size="sm" onClick={() => handleSaveReturn()} disabled={savingReturn || (shipOpenForClose && !returnCloseDate)}>
               {savingReturn ? "Confirmando..." : "✅ Confirmar Retorno"}
             </Button>
           </div>
@@ -2337,7 +2346,7 @@ function ShipSelector({
           </div>
           <div className="px-3 py-2 bg-gray-50 border-t border-border flex items-center justify-between gap-2">
             <span className="text-[10px] text-text-light">
-              {ships.length} navio(s) {showFinished ? "com checklist concluído" : "com checklist em aberto"}
+              {ships.length} navio(s) {showFinished ? "concluído(s)" : "em operação"}
             </span>
             <label className="flex items-center gap-1.5 text-[11px] text-text-light cursor-pointer select-none">
               <input
