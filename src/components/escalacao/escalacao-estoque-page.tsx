@@ -29,6 +29,10 @@ interface Ship {
   services?: string[] | null; // ["COSTADO"] = navio de Costado (sem kit/Retorno)
 }
 
+// Navio Concluído sem Retorno só segue pendente no Checklist se chegou a partir
+// desta data — os antigos (fechados sem conferência) não lotam o seletor.
+const CHECKLIST_PENDING_SINCE = "2026-09-15";
+
 // Item do kit de embarque (embark_kit_items) + o material do Estoque ligado.
 interface KitItem {
   id: number;
@@ -221,18 +225,23 @@ export function EscalacaoEstoquePage() {
 
   useEffect(() => { loadData(); }, [loadData, pathname]);
 
-  // Regra do seletor: desligado, SÓ os navios em operação (AGENDADO é legado e
-  // conta como em operação); "Mostrar concluídos" liga e a lista vira SÓ os
-  // concluídos — navio fechado na aba Navios só aparece pelo toggle (o Retorno
-  // dele segue aberto lá). Confirmar o Retorno com o navio ainda aberto fecha o
-  // navio também (handleSaveReturn). Cancelado não entra em nenhuma. Costado
-  // fica de fora — não tem kit de material (tem aba própria).
-  const isActiveShip = (s: Ship) => s.status === "AGENDADO" || s.status === "EM_OPERACAO";
+  // Regra do seletor: fechar o navio na aba Navios (pra liberar a equipe pra
+  // outro navio) NÃO fecha o Checklist — o navio Concluído continua na lista
+  // padrão até o Retorno ser confirmado; aí vai pro "Mostrar concluídos".
+  // Confirmar o Retorno com o navio ainda aberto fecha o navio também
+  // (handleSaveReturn). Navios antigos (chegada antes de CHECKLIST_PENDING_SINCE)
+  // concluídos sem Retorno não voltam pra lista padrão — ficam só no toggle.
+  // Cancelado não entra em nenhuma. Costado fica de fora — não tem kit.
   const isCostadoShip = (s: Ship) => (s.services || []).includes("COSTADO");
   const shipHasReturn = (shipId: string) => returns.some((r) => r.ship_id === shipId);
+  const isChecklistClosed = (s: Ship) => s.status === "CONCLUIDO" && (
+    shipHasReturn(s.id) || (s.arrival_date || "").slice(0, 10) < CHECKLIST_PENDING_SINCE
+  );
   const visibleShips = useMemo(
-    () => ships.filter((s) => !isCostadoShip(s) && (showFinished ? s.status === "CONCLUIDO" : isActiveShip(s))),
-    [ships, showFinished],
+    () => ships.filter((s) => !isCostadoShip(s) && s.status !== "CANCELADO"
+      && (showFinished ? isChecklistClosed(s) : !isChecklistClosed(s))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ships, returns, showFinished],
   );
 
   // Seleciona o 1º navio visível (o mais novo); se o selecionado saiu da lista
@@ -2346,7 +2355,7 @@ function ShipSelector({
           </div>
           <div className="px-3 py-2 bg-gray-50 border-t border-border flex items-center justify-between gap-2">
             <span className="text-[10px] text-text-light">
-              {ships.length} navio(s) {showFinished ? "concluído(s)" : "em operação"}
+              {ships.length} navio(s) {showFinished ? "com checklist concluído" : "com checklist em aberto"}
             </span>
             <label className="flex items-center gap-1.5 text-[11px] text-text-light cursor-pointer select-none">
               <input
