@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { sortShipsNewestFirst } from "@/lib/ship-order";
+import { releaseShipAllocationsNow } from "@/lib/release-finished-ships";
 import { hasPermission, canViewStockValue, type Module } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
@@ -27,6 +28,10 @@ interface Ship {
   cargo_type: string | null; // produto/carga — sai no "Produto" do Check List
   services?: string[] | null; // ["COSTADO"] = navio de Costado (sem kit/Retorno)
 }
+
+// A partir desta data, navio Concluído na aba Navios sem Retorno segue aberto
+// no Checklist mesmo sem embarque registrado (ver isChecklistClosed).
+const CHECKLIST_OPEN_SINCE = "2026-10-03";
 
 // Item do kit de embarque (embark_kit_items) + o material do Estoque ligado.
 interface KitItem {
@@ -217,17 +222,27 @@ export function EscalacaoEstoquePage() {
 
   useEffect(() => { loadData(); }, [loadData, pathname]);
 
-  // Regra do seletor: desligado, SÓ os navios em operação (AGENDADO é legado e
-  // conta como em operação); "Mostrar concluídos" liga e a lista vira SÓ os
-  // concluídos. Cancelado não entra em nenhuma. Costado fica de fora — não tem
-  // kit de material (tem aba própria). Navio concluído que ainda não teve o
-  // Retorno conferido continua acessível pelo toggle (o Retorno segue aberto).
-  const isActiveShip = (s: Ship) => s.status === "AGENDADO" || s.status === "EM_OPERACAO";
+  // Regra do seletor: o Checklist fecha no tempo DELE, independente da aba
+  // Navios. Fechar o navio lá (Concluído) NÃO tira o navio daqui — ele só sai
+  // da lista padrão quando o Retorno é confirmado (aí vai pro "Mostrar
+  // concluídos"). Confirmar o Retorno com o navio ainda aberto fecha o navio
+  // também (handleSaveReturn). Cancelado não entra em nenhuma. Costado fica de
+  // fora — não tem kit de material (tem aba própria).
   const isCostadoShip = (s: Ship) => (s.services || []).includes("COSTADO");
   const shipHasReturn = (shipId: string) => returns.some((r) => r.ship_id === shipId);
+  // Navio fechado na aba Navios sem Retorno continua pendente aqui se passou
+  // pelo Checklist (embarque registrado) ou foi fechado a partir de
+  // CHECKLIST_OPEN_SINCE. Os antigos, fechados antes do Checklist existir, não
+  // voltam pra lista (era isso que lotava o seletor antes).
+  const isChecklistClosed = (s: Ship) => s.status === "CONCLUIDO" && (
+    shipHasReturn(s.id)
+    || (!s.embarked_at && (!s.departure_date || s.departure_date.slice(0, 10) < CHECKLIST_OPEN_SINCE))
+  );
   const visibleShips = useMemo(
-    () => ships.filter((s) => !isCostadoShip(s) && (showFinished ? s.status === "CONCLUIDO" : isActiveShip(s))),
-    [ships, showFinished],
+    () => ships.filter((s) => !isCostadoShip(s) && s.status !== "CANCELADO"
+      && (showFinished ? isChecklistClosed(s) : !isChecklistClosed(s))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ships, returns, showFinished],
   );
 
   // Seleciona o 1º navio visível (o mais novo); se o selecionado saiu da lista
@@ -1092,14 +1107,31 @@ export function EscalacaoEstoquePage() {
         autoNote += " ⚠️ Não consegui lançar a despesa de material perdido no navio.";
       }
 
-      // O retorno NÃO fecha mais o navio: o fechamento (data de saída,
-      // Financeiro, tripulação) é feito pelo usuário na aba Navios, no tempo
-      // dele. Aqui o ciclo de material se encerra.
-      if (currentShip.status !== "CONCLUIDO") {
-        autoNote += " ℹ️ O navio segue aberto — o fechamento é feito na aba Navios.";
+      // O Checklist tem prioridade no fechamento: confirmar o Retorno com o
+      // navio ainda aberto fecha o navio também (mesmo que o "Fechar" da aba
+      // Navios): Concluído, data de saída (a cadastrada ou hoje), fim do job
+      // (libera pro Financeiro) e solta a tripulação. Navio já fechado na aba
+      // Navios fica como está.
+      if (currentShip.status !== "CONCLUIDO" && currentShip.status !== "CANCELADO") {
+        const closeDate = currentShip.departure_date?.slice(0, 10) || today;
+        const upd = (await db.from("ships").update({ status: "CONCLUIDO", departure_date: closeDate }).eq("id", currentShip.id)) as any;
+        if (upd?.error) {
+          autoNote += ` ⚠️ Não consegui fechar o navio (${upd.error.message}) — feche pela aba Navios.`;
+        } else {
+          await db.from("jobs").update({ end_date: closeDate }).eq("ship_id", currentShip.id);
+          try {
+            await releaseShipAllocationsNow(currentShip.id, actor);
+          } catch (err) {
+            console.warn("[checklist] release on close failed:", (err as Error).message);
+          }
+          autoNote += ` 🏁 Navio fechado (Concluído, saída ${formatDate(closeDate)}).`;
+        }
       }
 
       setReturnMsg(baseMsg + autoNote);
+      // Checklist fechado: o navio passa pro "Mostrar concluídos" — liga o
+      // toggle pra continuar nele (e na mensagem) em vez de pular pro próximo.
+      setShowFinished(true);
       loadData();
     } catch (err) {
       setReturnMsg(`Erro ao salvar retorno: ${(err as Error).message}`);
@@ -1289,7 +1321,7 @@ export function EscalacaoEstoquePage() {
 
       {/* A equipe é a definida no cadastro do navio (aba Navios) — sem seletor. */}
       <div className="flex flex-wrap gap-2 items-center justify-between">
-        {selectedTeam ? (
+        {!currentShip ? null : selectedTeam ? (
           <div className="flex gap-2 items-center">
             <span className="text-xs text-text-light font-semibold uppercase tracking-wider">Equipe:</span>
             <span
@@ -1749,9 +1781,8 @@ export function EscalacaoEstoquePage() {
         loading={embarking}
       />
 
-      {/* Confirmar retorno: só confere o material e manda o resumo no WhatsApp.
-          O navio NÃO é fechado aqui — o fechamento (data de saída, Financeiro,
-          tripulação) é feito pelo usuário na aba Navios. */}
+      {/* Confirmar retorno: confere o material, manda o resumo no WhatsApp e
+          fecha o Checklist. Se o navio ainda estiver aberto, fecha ele também. */}
       <Modal open={confirmReturnOpen} onClose={() => setConfirmReturnOpen(false)} title="Confirmar Retorno" maxWidth="max-w-md">
         <div className="space-y-4">
           <p className="text-sm text-text-light">
@@ -1759,7 +1790,7 @@ export function EscalacaoEstoquePage() {
             navio <strong>{currentShip?.name}</strong>. O que voltou bom volta pro Estoque; o resumo com
             perdido/insumo/avariado vai pro WhatsApp e entra no <strong>Resultado do Navio</strong> (Financeiro).
             {currentShip?.status !== "CONCLUIDO" && (
-              <> O navio <strong>não é fechado</strong> aqui — o fechamento fica na aba <strong>Navios</strong>.</>
+              <> O navio ainda está aberto na aba Navios — confirmar aqui <strong>fecha o navio também</strong> (Concluído, libera pro Financeiro e solta a tripulação).</>
             )}
           </p>
           <div className="flex justify-end gap-2 pt-1">
@@ -2306,7 +2337,7 @@ function ShipSelector({
           </div>
           <div className="px-3 py-2 bg-gray-50 border-t border-border flex items-center justify-between gap-2">
             <span className="text-[10px] text-text-light">
-              {ships.length} navio(s) {showFinished ? "concluído(s)" : "em operação"}
+              {ships.length} navio(s) {showFinished ? "com checklist concluído" : "com checklist em aberto"}
             </span>
             <label className="flex items-center gap-1.5 text-[11px] text-text-light cursor-pointer select-none">
               <input
