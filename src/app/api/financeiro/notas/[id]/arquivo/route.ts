@@ -37,6 +37,7 @@ function toInput(note: Record<string, any>): FiscalNoteInput {
     currency: note.currency,
     exchange_rate: note.exchange_rate != null ? Number(note.exchange_rate) : null,
     iss_percent: note.iss_percent != null ? Number(note.iss_percent) : null,
+    calc_method: note.calc_method,
     notes: note.notes,
     items: (note.items || []).map((it: Record<string, any>) => ({
       position: it.position,

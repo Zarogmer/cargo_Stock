@@ -23,6 +23,7 @@ import {
   formatIssueCity,
   formatNoteDate,
   formatNoteNumber,
+  issLineLabel,
   resolveHeaderLine,
 } from "@/lib/fiscal-note";
 
@@ -241,7 +242,7 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
   // Corpo: uma linha por item. Débito e Crédito ficam em colunas opostas
   // conforme o tipo da nota (ND lança no débito, NC lança no crédito).
   for (const item of [...note.items].sort((a, b) => a.position - b.position)) {
-    const memo = item.unit_value && item.quantity
+    const memo = item.unit_value && item.quantity && note.calc_method !== "USD_CONVERTIDO"
       ? `${money(Number(item.unit_value), symbol)} x ${Number(item.quantity).toLocaleString("pt-BR")}`
       : "";
     const descLines = wrap(ascii(item.description), font, 7.2, colDesc - 10);
@@ -265,7 +266,7 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
     const rowH = 16;
     ensure(rowH);
     const pct = Number(note.iss_percent || 0);
-    const label = `${L.iss} (${pct.toLocaleString("pt-BR", { maximumFractionDigits: 4 })}%) - ${L.issValue}`;
+    const label = issLineLabel(note.language, pct);
     rect(ctx, xDesc, y - rowH, colDesc, rowH);
     rect(ctx, xDebit, y - rowH, colDebit, rowH);
     rect(ctx, xCredit, y - rowH, colCredit, rowH);

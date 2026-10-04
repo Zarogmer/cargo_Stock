@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/rbac";
-import { calcFiscalNoteTotals } from "@/lib/fiscal-note";
+import { calcFiscalNoteTotals, normalizeCalcMethod } from "@/lib/fiscal-note";
 import type { Role } from "@/types/database";
 
 // Notas de Débito / Crédito emitidas pelo Pagamento de Navios.
@@ -142,6 +142,7 @@ export async function POST(request: NextRequest) {
         iss_value: issPercent != null ? new Prisma.Decimal(totals.issValue.toFixed(2)) : null,
         subtotal: new Prisma.Decimal(totals.subtotal.toFixed(2)),
         total: new Prisma.Decimal(totals.total.toFixed(2)),
+        calc_method: normalizeCalcMethod(body.calc_method),
         notes: body.notes || null,
         created_by: actor,
         items: { create: cleanItems },

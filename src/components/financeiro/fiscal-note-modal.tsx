@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { db } from "@/lib/db";
@@ -9,11 +9,15 @@ import { canDeleteFiscalNote } from "@/lib/rbac";
 import { parseDecimalBR } from "@/lib/utils";
 import { fetchPtaxCompra } from "@/components/dollar-ticker";
 import {
+  CALC_METHODS,
   calcFiscalNoteTotals,
+  convertUsdItem,
   findInvoiceClient,
   formatMoney,
   formatNoteNumber,
+  normalizeCalcMethod,
   resolveHeaderLine,
+  type FiscalNoteCalcMethod,
   type FiscalNoteCurrency,
   type FiscalNoteKind,
   type FiscalNoteLanguage,
@@ -32,6 +36,11 @@ import {
 // A taxa do dólar vem sugerida: a mesma da última nota DESTE navio (a Wilson
 // Sons recebe lavagem e lancha em notas separadas, com a mesma taxa) ou, sem
 // nota ainda, a PTAX de compra do dia — e pode ser trocada pela negociada.
+//
+// Cada cliente fatura de um jeito (invoice_clients.calc_method): o modal mostra
+// a fórmula DO CLIENTE do navio e a memória de cálculo ao vivo, igual à coluna
+// lateral das planilhas da diretoria. Wilson Sons = USD × qtd × taxa → R$, com
+// ISS no crédito; Continental e demais = valor fechado digitado na moeda da nota.
 //
 // Uma nota por documento: pra faturar lavagem e lancha em notas separadas (como
 // a Wilson Sons exige), emite-se duas, cada uma com seus itens.
@@ -79,6 +88,9 @@ function todayISO(): string {
 // Números digitados em pt-BR (vírgula decimal). parseDecimalBR só trata ponto
 // como milhar quando há vírgula — "5.15" é 5.15, não 515.
 const parseBR = parseDecimalBR;
+
+const fmtNum = (v: number, digits = 2) =>
+  v.toLocaleString("pt-BR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
 // Taxa gravada (4 casas) → texto pt-BR do campo ("5,1508").
 function rateToText(v: string | number | null | undefined): string {
@@ -132,6 +144,9 @@ export function FiscalNoteModal({
   const [municipal, setMunicipal] = useState("");
   const [headerLine, setHeaderLine] = useState("");
   const [requiresOi, setRequiresOi] = useState(false);
+  // Forma de cálculo do cliente (Dados dos Clientes) — decide a fórmula do modal.
+  const [calcMethod, setCalcMethod] = useState<FiscalNoteCalcMethod>("DIRETO");
+  const converted = calcMethod === "USD_CONVERTIDO";
 
   const year = Number(issueDate.slice(0, 4)) || new Date().getFullYear();
 
@@ -190,7 +205,10 @@ export function FiscalNoteModal({
     setHeaderLine(match?.header_line || "");
     setRequiresOi(!!match?.requires_oi);
     setLanguage((match?.language === "EN" ? "EN" : "PT") as FiscalNoteLanguage);
-    setCurrency((match?.default_currency === "USD" ? "USD" : "BRL") as FiscalNoteCurrency);
+    const method = normalizeCalcMethod(match?.calc_method);
+    setCalcMethod(method);
+    // USD convertido (Wilson Sons): a nota sai sempre em R$.
+    setCurrency((method === "USD_CONVERTIDO" ? "BRL" : match?.default_currency === "USD" ? "USD" : "BRL") as FiscalNoteCurrency);
   }, [job]);
 
   // Sugestão da taxa do dólar: última nota deste navio com taxa; senão PTAX
@@ -234,9 +252,22 @@ export function FiscalNoteModal({
     ? Number(number)
     : kind === "DEBITO" ? nextDebito : nextCredito;
 
+  // Valor de cada linha conforme a fórmula do cliente. USD convertido: unit
+  // (USD) × qtd × taxa = R$; sem unit/qtd vale o total digitado direto em R$.
+  const rate = parseBR(exchangeRate);
+  const calcRows = useMemo(() => items.map((it) => {
+    const unit = parseBR(it.unit);
+    const qty = parseBR(it.qty);
+    if (converted && unit > 0 && qty > 0) {
+      const { totalUsd, amountBrl } = convertUsdItem(unit, qty, rate);
+      return { unit, qty, totalUsd, amount: amountBrl, derived: true };
+    }
+    return { unit, qty, totalUsd: 0, amount: parseBR(it.amount), derived: false };
+  }), [items, converted, rate]);
+
   const totals = useMemo(
-    () => calcFiscalNoteTotals(items.map((it) => ({ amount: parseBR(it.amount) })), issPercent ? parseBR(issPercent) : null),
-    [items, issPercent],
+    () => calcFiscalNoteTotals(calcRows.map((r) => ({ amount: r.amount })), issPercent ? parseBR(issPercent) : null),
+    [calcRows, issPercent],
   );
 
   function patchItem(i: number, patch: Partial<ItemDraft>) {
@@ -249,7 +280,8 @@ export function FiscalNoteModal({
       if (idx !== i) return it;
       const u = parseBR(it.unit);
       const q = parseBR(it.qty);
-      if (u > 0 && q > 0) return { ...it, amount: (u * q).toFixed(2).replace(".", ",") };
+      // USD convertido calcula ao vivo (calcRows) — não grava o total no campo.
+      if (!converted && u > 0 && q > 0) return { ...it, amount: (u * q).toFixed(2).replace(".", ",") };
       return it;
     }));
   }
@@ -257,6 +289,10 @@ export function FiscalNoteModal({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!job) return;
+    if (converted && !(rate > 0)) {
+      setError("Informe a taxa do dólar negociada — o valor em R$ sai de USD × taxa.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -299,15 +335,17 @@ export function FiscalNoteModal({
           currency,
           exchange_rate: exchangeRate ? parseBR(exchangeRate) : null,
           iss_percent: issPercent ? parseBR(issPercent) : null,
+          calc_method: calcMethod,
           notes: obs || null,
           items: items
-            .filter((it) => it.description.trim())
-            .map((it, i) => ({
+            .map((it, idx) => ({ it, row: calcRows[idx] }))
+            .filter(({ it }) => it.description.trim())
+            .map(({ it, row }, i) => ({
               position: i + 1,
               description: it.description.trim(),
               unit_value: it.unit ? parseBR(it.unit) : null,
               quantity: it.qty ? parseBR(it.qty) : null,
-              amount: parseBR(it.amount),
+              amount: row.amount,
             })),
         }),
       });
@@ -421,13 +459,15 @@ export function FiscalNoteModal({
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div>
             <label className={labelCls}>Moeda</label>
-            <select value={currency} onChange={(e) => setCurrency(e.target.value as FiscalNoteCurrency)} className={inputCls}>
+            <select value={currency} onChange={(e) => setCurrency(e.target.value as FiscalNoteCurrency)}
+              disabled={converted} className={`${inputCls} disabled:bg-gray-100`}>
               <option value="BRL">R$ (Real)</option>
               <option value="USD">USD (Dólar)</option>
             </select>
+            {converted && <p className="text-[10px] text-text-light mt-0.5">Nota em R$ — o USD é convertido pela taxa.</p>}
           </div>
           <div>
-            <label className={labelCls}>Taxa do dólar negociada</label>
+            <label className={labelCls}>Taxa do dólar negociada{converted ? " *" : ""}</label>
             <input type="text" value={exchangeRate} onChange={(e) => { setExchangeRate(e.target.value); setRateSource(null); }}
               placeholder="5,1508" className={inputCls} />
             {rateSource && exchangeRate && (
@@ -471,24 +511,47 @@ export function FiscalNoteModal({
               className="text-xs px-2 py-1 bg-primary text-white rounded hover:bg-primary-dark">+ Item</button>
           </div>
           <div className="space-y-2">
+            {converted && (
+              <div className="hidden md:grid grid-cols-12 gap-2 text-[10px] font-semibold text-text-light">
+                <span className="col-span-4">Descrição</span>
+                <span className="col-span-2">USD por porão / lancha</span>
+                <span className="col-span-1">Qtd</span>
+                <span className="col-span-2">Total USD</span>
+                <span className="col-span-2">Valor em R$ (débito)</span>
+              </div>
+            )}
             {items.map((it, i) => (
               <div key={i} className="grid grid-cols-12 gap-2 items-start">
                 <input type="text" value={it.description} onChange={(e) => patchItem(i, { description: e.target.value })}
                   placeholder="Prestação de Serviço de Limpeza em 5 Porões do MV…"
-                  className={`${inputCls} col-span-12 md:col-span-6`} />
+                  className={`${inputCls} col-span-12 ${converted ? "md:col-span-4" : "md:col-span-6"}`} />
                 <input type="text" value={it.unit} onChange={(e) => patchItem(i, { unit: e.target.value })} onBlur={() => recalcAmount(i)}
-                  placeholder="Unit." title="Valor por porão/unidade" className={`${inputCls} col-span-3 md:col-span-2`} />
+                  placeholder={converted ? "USD unit." : "Unit."} title={converted ? "Valor em USD por porão / por lancha" : "Valor por porão/unidade"}
+                  className={`${inputCls} col-span-3 md:col-span-2`} />
                 <input type="text" value={it.qty} onChange={(e) => patchItem(i, { qty: e.target.value })} onBlur={() => recalcAmount(i)}
                   placeholder="Qtd" title="Porões / lanchas" className={`${inputCls} col-span-3 md:col-span-1`} />
-                <input type="text" value={it.amount} onChange={(e) => patchItem(i, { amount: e.target.value })}
-                  placeholder="Total" className={`${inputCls} col-span-4 md:col-span-2 font-semibold`} />
+                {converted && (
+                  <input type="text" readOnly tabIndex={-1} value={calcRows[i]?.derived ? fmtNum(calcRows[i].totalUsd) : ""}
+                    placeholder="Total USD" title="USD unitário × quantidade"
+                    className={`${inputCls} col-span-3 md:col-span-2 bg-gray-100 tabular-nums`} />
+                )}
+                {converted && calcRows[i]?.derived ? (
+                  <input type="text" readOnly tabIndex={-1} value={rate > 0 ? fmtNum(calcRows[i].amount) : ""}
+                    placeholder="Falta a taxa" title="Total USD × taxa do dólar"
+                    className={`${inputCls} col-span-4 md:col-span-2 font-semibold bg-gray-100 tabular-nums`} />
+                ) : (
+                  <input type="text" value={it.amount} onChange={(e) => patchItem(i, { amount: e.target.value })}
+                    placeholder={converted ? "R$" : "Total"} className={`${inputCls} col-span-4 md:col-span-2 font-semibold`} />
+                )}
                 <button type="button" onClick={() => setItems((p) => p.filter((_, idx) => idx !== i))}
                   className="col-span-2 md:col-span-1 text-red-600 hover:bg-red-50 rounded py-2 text-sm" title="Remover item">🗑</button>
               </div>
             ))}
           </div>
           <p className="text-[10px] text-text-light mt-1">
-            Unit. × Qtd preenche o Total ao sair do campo. Pra faturar lancha e lavagem em notas separadas, emita duas notas.
+            {converted
+              ? "Digite o valor em USD e a quantidade — o R$ sai de USD × Qtd × taxa do dólar. Lancha e lavagem vão em notas separadas: emita duas."
+              : "Unit. × Qtd preenche o Total ao sair do campo. Pra faturar lancha e lavagem em notas separadas, emita duas notas."}
           </p>
         </div>
 
@@ -527,6 +590,60 @@ export function FiscalNoteModal({
               <input type="text" value={obs} onChange={(e) => setObs(e.target.value)} className={inputCls} /></div>
           </div>
         </details>
+
+        {/* Como este cliente é calculado + memória de cálculo ao vivo — a mesma
+            conta da coluna lateral das planilhas de nota da diretoria. */}
+        <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3">
+          <p className="text-xs font-semibold text-text">
+            🧮 Como a nota {job.client ? `da ${job.client}` : "deste cliente"} é calculada — {CALC_METHODS[calcMethod].label}
+          </p>
+          <ol className="text-[11px] text-text-light mt-1 list-decimal pl-4 space-y-0.5">
+            {CALC_METHODS[calcMethod].steps.map((s) => <li key={s}>{s}</li>)}
+          </ol>
+          <table className="mt-2 text-xs tabular-nums">
+            <tbody>
+              {items.map((it, i) => {
+                const r = calcRows[i];
+                if (!r || !(r.amount > 0 || r.derived)) return null;
+                const line = (v: string, label: string, strong = false) => (
+                  <tr className={strong ? "font-semibold bg-blue-100/70" : ""}>
+                    <td className="text-right pr-2 py-0.5 pl-2">{v}</td>
+                    <td className="py-0.5 pr-2">{label}</td>
+                  </tr>
+                );
+                return (
+                  <Fragment key={i}>
+                    <tr><td colSpan={2} className="pt-1.5 text-[11px] font-semibold text-text">{i + 1}- {it.description.trim() || `Item ${i + 1}`}</td></tr>
+                    {r.derived ? (
+                      <>
+                        {line(fmtNum(r.unit), "Valor unitário (USD)")}
+                        {line(fmtNum(r.qty, 0), "Qtde (porões / lanchas)")}
+                        {line(fmtNum(r.totalUsd), "Total (USD)")}
+                        {line(rate > 0 ? fmtNum(rate, 4) : "—", "tx dólar")}
+                        {line(fmtNum(r.amount), "Total em R$", true)}
+                      </>
+                    ) : (
+                      <>
+                        {r.unit > 0 && r.qty > 0 && line(`${fmtNum(r.unit)} × ${fmtNum(r.qty, 0)}`, "Unitário × Qtde")}
+                        {line(fmtNum(r.amount), `Valor do item (${currency === "USD" ? "USD" : "R$"})`, true)}
+                      </>
+                    )}
+                  </Fragment>
+                );
+              })}
+              <tr><td colSpan={2} className="pt-1.5" /></tr>
+              <tr><td className="text-right pr-2 pl-2 py-0.5">{fmtNum(totals.subtotal)}</td><td>Total da fatura</td></tr>
+              {(converted || totals.issValue > 0) && (
+                <>
+                  <tr><td className="text-right pr-2 pl-2 py-0.5">{issPercent ? `${issPercent}%` : "—"}</td><td>ISS do mês</td></tr>
+                  <tr><td className="text-right pr-2 pl-2 py-0.5">{fmtNum(totals.issValue)}</td><td>Valor do ISS (crédito)</td></tr>
+                </>
+              )}
+              <tr className="font-semibold"><td className="text-right pr-2 pl-2 py-0.5">{fmtNum(totals.total)}</td><td>Valor total da NF/ND</td></tr>
+            </tbody>
+          </table>
+          <p className="text-[10px] text-text-light mt-1.5">A forma de cálculo é do cliente — muda em Financeiro › Dados dos Clientes.</p>
+        </div>
 
         {/* Totais */}
         <div className="rounded-lg border border-border bg-gray-50 p-3 text-sm">

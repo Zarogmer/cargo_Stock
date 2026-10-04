@@ -32,7 +32,60 @@ export interface InvoiceClientRow {
   // Dados para depósito da nota deste cliente (uma linha por informação).
   // NULL = Itaú padrão da CARGO_ISSUER. A Deep recebe a conta Santander.
   deposit_bank: string | null;
+  // Forma de cálculo da nota deste cliente (ver CALC_METHODS).
+  calc_method?: string | null;
   notes: string | null;
+}
+
+// Cada cliente fatura de um jeito. As duas formas vêm das planilhas da
+// diretoria (2- INVOICE/<cliente>):
+//   • DIRETO — Continental e demais (ND CONTINENTAL 2026.xlsx): o valor fechado
+//     de cada serviço é digitado direto na moeda da nota (R$ ou USD), sem
+//     conversão; total = soma dos itens.
+//   • USD_CONVERTIDO — Wilson Sons (NOTAS DE DÉBITOS 2026.xlsx): o serviço é
+//     negociado em USD por porão/lancha; USD × qtd × taxa negociada = R$, que é
+//     o que sai no débito. O ISS do mês × total da fatura sai no crédito e abate
+//     do total. Lancha vai em nota separada, mesma taxa, sem ISS.
+export type FiscalNoteCalcMethod = "DIRETO" | "USD_CONVERTIDO";
+
+export function normalizeCalcMethod(v: string | null | undefined): FiscalNoteCalcMethod {
+  return v === "USD_CONVERTIDO" ? "USD_CONVERTIDO" : "DIRETO";
+}
+
+export const CALC_METHODS: Record<FiscalNoteCalcMethod, { label: string; steps: string[] }> = {
+  DIRETO: {
+    label: "Valor fechado na moeda da nota",
+    steps: [
+      "O valor fechado de cada serviço é digitado direto na moeda da nota (R$ ou USD) — não há conversão pelo dólar.",
+      "Total da nota = soma dos itens (SUB-TOTAL = TOTAL).",
+      "Nota em dólar sai com a observação \"VALORES EXPRESSOS EM DÓLAR\"; em real, \"VALORES EXPRESSOS EM REAL\".",
+    ],
+  },
+  USD_CONVERTIDO: {
+    label: "USD × quantidade × taxa do dólar = R$",
+    steps: [
+      "Valor do serviço em USD (por porão / por lancha) × quantidade = total em USD.",
+      "Total em USD × taxa do dólar negociada = valor em R$ — é o que sai no DÉBITO da nota.",
+      "Total da fatura × ISS do mês (contabilidade) = valor do ISS, que sai no CRÉDITO e abate do total.",
+      "Lancha (Boat support) vai em nota separada, com a mesma taxa e sem ISS.",
+    ],
+  },
+};
+
+// USD unitário × quantidade × taxa → R$ (2 casas), como H22*H23*H25 da planilha
+// da Wilson Sons. Devolve também o total em USD pra memória de cálculo.
+export function convertUsdItem(unitUsd: number, qty: number, rate: number): { totalUsd: number; amountBrl: number } {
+  const totalUsd = (Number(unitUsd) || 0) * (Number(qty) || 0);
+  return { totalUsd: +totalUsd.toFixed(2), amountBrl: +(totalUsd * (Number(rate) || 0)).toFixed(2) };
+}
+
+// Linha do ISS na nota. Em inglês segue o modelo da Wilson Sons:
+// "TAXES CALCULATED BY THE SERVICE COST (ISS: 2,71%)".
+export function issLineLabel(language: FiscalNoteLanguage, pct: number): string {
+  const p = pct.toLocaleString("pt-BR", { maximumFractionDigits: 4 });
+  if (language === "EN") return `TAXES CALCULATED BY THE SERVICE COST (ISS: ${p}%)`;
+  const L = NOTE_LABELS.PT;
+  return `${L.iss} (${p}%) - ${L.issValue}`;
 }
 
 // Chave pra casar o cliente do navio com o cadastro fiscal: sem acento, caixa
@@ -95,6 +148,9 @@ export interface FiscalNoteInput {
   currency: FiscalNoteCurrency;
   exchange_rate?: number | null;
   iss_percent?: number | null;
+  // Forma de cálculo usada na emissão. Em USD_CONVERTIDO o unit_value dos itens
+  // está em USD e o amount em R$ — a memória "unit x qtd" não é impressa.
+  calc_method?: string | null;
   notes?: string | null;
   // Dados para depósito do cliente (cadastro). Vazio = Itaú padrão.
   deposit_bank?: string | null;

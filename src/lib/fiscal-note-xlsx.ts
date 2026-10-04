@@ -17,6 +17,7 @@ import {
   formatIssueCity,
   formatNoteDate,
   formatNoteNumber,
+  issLineLabel,
   resolveHeaderLine,
 } from "@/lib/fiscal-note";
 
@@ -188,7 +189,7 @@ export function buildFiscalNoteXlsx(note: FiscalNoteInput): ArrayBuffer {
     set(`E${row}`, isDebit ? "" : Number(item.amount), isDebit ? S.cell : money(S.cell), isDebit ? "s" : "n");
     set(`F${row}`, "", S.cell);
     row++;
-    if (item.unit_value && item.quantity) {
+    if (item.unit_value && item.quantity && note.calc_method !== "USD_CONVERTIDO") {
       const memo = `${symbol} ${Number(item.unit_value).toLocaleString("pt-BR", { minimumFractionDigits: 2 })} x ${Number(item.quantity).toLocaleString("pt-BR")}`;
       set(`B${row}`, memo, S.cellMemo);
       merge(1, row - 1, 2, row - 1);
@@ -201,7 +202,7 @@ export function buildFiscalNoteXlsx(note: FiscalNoteInput): ArrayBuffer {
 
   if (totals.issValue > 0) {
     const pct = Number(note.iss_percent || 0);
-    set(`B${row}`, `${L.iss} (${pct.toLocaleString("pt-BR", { maximumFractionDigits: 4 })}%) - ${L.issValue}`, S.cellBold);
+    set(`B${row}`, issLineLabel(note.language, pct), S.cellBold);
     merge(1, row - 1, 2, row - 1);
     set(`D${row}`, isDebit ? "" : totals.issValue, isDebit ? S.cell : money(S.cell), isDebit ? "s" : "n");
     set(`E${row}`, isDebit ? totals.issValue : "", isDebit ? money(S.cell) : S.cell, isDebit ? "n" : "s");

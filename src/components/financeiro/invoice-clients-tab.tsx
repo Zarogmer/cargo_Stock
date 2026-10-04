@@ -4,7 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { db } from "@/lib/db";
-import { resolveHeaderLine, type InvoiceClientRow } from "@/lib/fiscal-note";
+import {
+  CALC_METHODS,
+  normalizeCalcMethod,
+  resolveHeaderLine,
+  type FiscalNoteCalcMethod,
+  type InvoiceClientRow,
+} from "@/lib/fiscal-note";
 
 // Financeiro › Dados dos Clientes — cadastro fiscal que sai no cabeçalho das
 // Notas de Débito/Crédito (razão social, endereço, CNPJ, IE, Insc. Municipal,
@@ -31,13 +37,14 @@ interface Draft {
   language: "PT" | "EN";
   default_currency: "BRL" | "USD";
   requires_oi: boolean;
+  calc_method: FiscalNoteCalcMethod;
   deposit_bank: string;
   notes: string;
 }
 
 const EMPTY: Draft = {
   name: "", legal_name: "", header_line: "", address: "", cnpj: "", ie: "", municipal_reg: "",
-  language: "PT", default_currency: "BRL", requires_oi: false, deposit_bank: "", notes: "",
+  language: "PT", default_currency: "BRL", requires_oi: false, calc_method: "DIRETO", deposit_bank: "", notes: "",
 };
 
 function toDraft(c: InvoiceClientRow): Draft {
@@ -52,6 +59,7 @@ function toDraft(c: InvoiceClientRow): Draft {
     language: c.language === "EN" ? "EN" : "PT",
     default_currency: c.default_currency === "USD" ? "USD" : "BRL",
     requires_oi: !!c.requires_oi,
+    calc_method: normalizeCalcMethod(c.calc_method),
     deposit_bank: c.deposit_bank || "",
     notes: c.notes || "",
   };
@@ -130,6 +138,7 @@ export function InvoiceClientsTab({ canEdit, profileName }: { canEdit: boolean; 
       language: draft.language,
       default_currency: draft.default_currency,
       requires_oi: draft.requires_oi,
+      calc_method: draft.calc_method,
       deposit_bank: draft.deposit_bank.trim() || null,
       notes: draft.notes.trim() || null,
       updated_at: new Date().toISOString(),
@@ -373,6 +382,20 @@ export function InvoiceClientsTab({ canEdit, profileName }: { canEdit: boolean; 
                 />
                 Nota com OI (ordem da agência)
               </label>
+            </div>
+            <div className="md:col-span-3">
+              <label className={labelCls}>Forma de cálculo da nota</label>
+              <select
+                value={draft.calc_method}
+                onChange={(e) => setDraft({ ...draft, calc_method: e.target.value as FiscalNoteCalcMethod })}
+                className={inputCls}
+              >
+                <option value="DIRETO">{CALC_METHODS.DIRETO.label} (Continental e demais)</option>
+                <option value="USD_CONVERTIDO">{CALC_METHODS.USD_CONVERTIDO.label} (Wilson Sons)</option>
+              </select>
+              <ul className="text-[10px] text-text-light mt-1 list-disc pl-4 space-y-0.5">
+                {CALC_METHODS[draft.calc_method].steps.map((s) => <li key={s}>{s}</li>)}
+              </ul>
             </div>
             <div className="md:col-span-3">
               <label className={labelCls}>Dados para depósito na nota</label>
