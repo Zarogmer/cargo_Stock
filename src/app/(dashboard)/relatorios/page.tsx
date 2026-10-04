@@ -1656,6 +1656,14 @@ function ReportDetail({
     setOfficeEditing(false);
   }
 
+  // Mexeu demais na versão pro cliente: recarrega o formulário com o que o
+  // supervisor salvou. Só troca o rascunho — nada muda no banco até Salvar.
+  function resetOfficeToSupervisor() {
+    if (!data) return;
+    if (!confirm("Voltar o formulário à versão do supervisor? Tudo o que foi alterado na versão pro cliente é descartado. Nada é gravado até você clicar em Salvar.")) return;
+    setOffice(draftFromSavedReport(data.report, data.ship, kind));
+  }
+
   async function saveOffice() {
     if (!office) return;
     setSavingOffice(true);
@@ -2369,6 +2377,10 @@ function ReportDetail({
                   }
                 />
                 <div className="flex justify-end gap-2 flex-wrap">
+                  <Button variant="secondary" onClick={resetOfficeToSupervisor} disabled={savingOffice} className="mr-auto"
+                    title="Recarrega o formulário com o que o supervisor salvou">
+                    ↩ Voltar à versão do supervisor
+                  </Button>
                   <Button variant="secondary" onClick={cancelOfficeEdit} disabled={savingOffice}>
                     Cancelar
                   </Button>
