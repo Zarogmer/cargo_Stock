@@ -144,6 +144,8 @@ export function FiscalNoteModal({
   const [municipal, setMunicipal] = useState("");
   const [headerLine, setHeaderLine] = useState("");
   const [requiresOi, setRequiresOi] = useState(false);
+  // Rótulo da caixa do valor do cliente ("Valor total a Fatura:" / "Valor").
+  const [valueLabel, setValueLabel] = useState("");
   // Forma de cálculo do cliente (Dados dos Clientes) — decide a fórmula do modal.
   const [calcMethod, setCalcMethod] = useState<FiscalNoteCalcMethod>("DIRETO");
   const converted = calcMethod === "USD_CONVERTIDO";
@@ -151,10 +153,19 @@ export function FiscalNoteModal({
   const year = Number(issueDate.slice(0, 4)) || new Date().getFullYear();
 
   // Descrição sugerida por serviço contratado do navio.
-  const suggestedItems = useCallback((): ItemDraft[] => {
+  // Segue o modelo de cada cliente: nota em inglês (Wilson Sons) usa "HOLD
+  // CLEANING OF 05 HOLDS OF THE SHIP: BSM QINZHOU"; em português, "Prestação de
+  // Serviço de Limpeza em 5 Porões do MV …".
+  const suggestedItems = useCallback((lang: FiscalNoteLanguage): ItemDraft[] => {
     const holds = Math.max(1, Number(job?.holds_count || 1));
     const ship = job?.name || "";
-    const map: Record<string, string> = {
+    const hh = String(holds).padStart(2, "0");
+    const bare = ship.replace(/^M\/?V\s+/i, "").toUpperCase();
+    const map: Record<string, string> = lang === "EN" ? {
+      LAVAGEM_PORAO: `HOLD CLEANING OF ${hh} HOLDS OF THE SHIP: ${bare}`,
+      RASPAGEM: `HOLD SCRAPING OF ${hh} HOLDS OF THE SHIP: ${bare}`,
+      PINTURA: `HOLD PAINTING OF ${hh} HOLDS OF THE SHIP: ${bare}`,
+    } : {
       LAVAGEM_PORAO: `Prestação de Serviço de Limpeza em ${holds} Porões do ${ship}`,
       RASPAGEM: `Prestação de Serviço de Raspagem em ${holds} Porões do ${ship}`,
       PINTURA: `Prestação de Serviço de Pintura em ${holds} Porões do ${ship}`,
@@ -190,8 +201,8 @@ export function FiscalNoteModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, job?.id, year]);
 
-  const loadAll = useCallback(async () => {
-    if (!job) return;
+  const loadAll = useCallback(async (): Promise<FiscalNoteLanguage> => {
+    if (!job) return "PT";
     setError(null);
     const { data: clientRows } = await db.from("invoice_clients").select("*");
     const list = (clientRows as InvoiceClientRow[] | null) || [];
@@ -204,11 +215,14 @@ export function FiscalNoteModal({
     setMunicipal(match?.municipal_reg || "");
     setHeaderLine(match?.header_line || "");
     setRequiresOi(!!match?.requires_oi);
-    setLanguage((match?.language === "EN" ? "EN" : "PT") as FiscalNoteLanguage);
+    setValueLabel(match?.value_label || "");
+    const lang: FiscalNoteLanguage = match?.language === "EN" ? "EN" : "PT";
+    setLanguage(lang);
     const method = normalizeCalcMethod(match?.calc_method);
     setCalcMethod(method);
     // USD convertido (Wilson Sons): a nota sai sempre em R$.
     setCurrency((method === "USD_CONVERTIDO" ? "BRL" : match?.default_currency === "USD" ? "USD" : "BRL") as FiscalNoteCurrency);
+    return lang;
   }, [job]);
 
   // Sugestão da taxa do dólar: última nota deste navio com taxa; senão PTAX
@@ -242,8 +256,9 @@ export function FiscalNoteModal({
     setRateSource(null);
     setIssPercent("");
     setObs("");
-    setItems(suggestedItems());
-    loadAll();
+    setItems([]);
+    // Os itens sugeridos dependem do idioma do cliente — só depois do cadastro.
+    loadAll().then((lang) => setItems(suggestedItems(lang)));
     loadNotes().then(suggestRate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, job?.id]);
@@ -300,13 +315,15 @@ export function FiscalNoteModal({
       const clientName = (job.client || "").trim();
       if (clientName) {
         const existing = findInvoiceClient(clients, clientName);
+        // Idioma e moeda são escolhas DESTA nota: não voltam pro cadastro de um
+        // cliente que já existe (uma nota em USD não muda o padrão do cliente).
         const payload = {
           legal_name: legalName || null, address: address || null, cnpj: cnpj || null,
           ie: ie || null, municipal_reg: municipal || null, header_line: headerLine || null,
-          language, default_currency: currency, requires_oi: requiresOi,
+          requires_oi: requiresOi,
         };
         if (existing) await db.from("invoice_clients").update(payload as never).eq("id", existing.id);
-        else await db.from("invoice_clients").insert({ name: clientName, ...payload, created_by: "Sistema" } as never);
+        else await db.from("invoice_clients").insert({ name: clientName, ...payload, language, default_currency: currency, created_by: "Sistema" } as never);
       }
 
       const res = await fetch("/api/financeiro/notas", {
@@ -336,6 +353,7 @@ export function FiscalNoteModal({
           exchange_rate: exchangeRate ? parseBR(exchangeRate) : null,
           iss_percent: issPercent ? parseBR(issPercent) : null,
           calc_method: calcMethod,
+          value_label: valueLabel || null,
           notes: obs || null,
           items: items
             .map((it, idx) => ({ it, row: calcRows[idx] }))
@@ -351,8 +369,8 @@ export function FiscalNoteModal({
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || `Falha ao emitir a nota (HTTP ${res.status}).`);
-      await Promise.all([loadAll(), loadNotes()]);
-      setItems(suggestedItems());
+      const [lang] = await Promise.all([loadAll(), loadNotes()]);
+      setItems(suggestedItems(lang));
       setNumber("");
       onSaved();
     } catch (err) {
@@ -491,6 +509,22 @@ export function FiscalNoteModal({
           </div>
         </div>
 
+        {/* Título da nota deste cliente, já pronto (cadastro em Dados dos Clientes). */}
+        <div className="rounded-lg border border-border bg-gray-50 px-3 py-2">
+          <p className="text-[10px] font-semibold text-text-light">
+            {kind === "DEBITO" ? (language === "EN" ? "DEBIT NOTE" : "NOTA DE DÉBITO") : (language === "EN" ? "CREDIT NOTE" : "NOTA DE CRÉDITO")} {formatNoteNumber(effectiveNumber, year)} — título do cliente {job.client ? `(${job.client})` : ""}
+          </p>
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm font-bold text-text">{previewHeader || "—"}</p>
+            <span className="shrink-0 text-xs font-bold italic bg-yellow-200 px-2 py-0.5 rounded">
+              {valueLabel || (language === "EN" ? "Valor" : "Valor total a Fatura:")} {formatMoney(totals.total, currency)}
+            </span>
+          </div>
+          <p className="text-[11px] text-text-light">
+            {[address, [cnpj && `CNPJ: ${cnpj}`, ie && `I.E.: ${ie}`, municipal && `Insc. Munic.: ${municipal}`].filter(Boolean).join(" - ")].filter(Boolean).join(" · ")}
+          </p>
+        </div>
+
         {/* OI — só pra cliente que trabalha com ordem da agência (Wilson Sons).
             Fica embaixo, separado, porque os demais clientes não têm. */}
         {requiresOi && (
@@ -563,11 +597,11 @@ export function FiscalNoteModal({
           </summary>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
             <div className="col-span-2 md:col-span-3">
-              <label className={labelCls}>Linha do destinatário</label>
+              <label className={labelCls}>Título da nota (linha do destinatário)</label>
               <input type="text" value={headerLine} onChange={(e) => setHeaderLine(e.target.value)}
-                placeholder="AO COMANDANTE E/OU ARMADOR DO {NAVIO} A/C WILSON SONS SHIPPING SERVICES." className={inputCls} />
+                placeholder={legalName || job.client || "Razão social do cliente"} className={inputCls} />
               <p className="text-[10px] text-text-light mt-0.5">
-                <code>{"{NAVIO}"}</code> vira o nome do navio. Em branco usa a razão social. Sai como: <em>{previewHeader}</em>
+                Já vem pronto do cadastro do cliente. Em branco usa a razão social; <code>{"{NAVIO}"}</code> vira o nome do navio.
               </p>
             </div>
             <div><label className={labelCls}>Razão social</label>

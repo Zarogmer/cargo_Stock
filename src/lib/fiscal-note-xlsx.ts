@@ -138,7 +138,7 @@ export function buildFiscalNoteXlsx(note: FiscalNoteInput): ArrayBuffer {
   );
   set(`B${row}`, headerLine, S.dest);
   merge(1, row - 1, 3, row - 1);
-  set(`E${row}`, L.invoiceTotal, S.highlightLabel);
+  set(`E${row}`, (note.value_label || "").trim() || L.invoiceTotal, S.highlightLabel);
   set(`F${row}`, totals.total, money(S.highlightLabel), "n");
   row++;
   if (note.client_address) {

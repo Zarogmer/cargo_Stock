@@ -34,6 +34,9 @@ export interface InvoiceClientRow {
   deposit_bank: string | null;
   // Forma de cálculo da nota deste cliente (ver CALC_METHODS).
   calc_method?: string | null;
+  // Rótulo da caixa amarela do valor ("Valor total a Fatura:" na Continental,
+  // "Valor" na Wilson Sons e na Deep). Vazio = padrão do idioma.
+  value_label?: string | null;
   notes: string | null;
 }
 
@@ -151,6 +154,7 @@ export interface FiscalNoteInput {
   // Forma de cálculo usada na emissão. Em USD_CONVERTIDO o unit_value dos itens
   // está em USD e o amount em R$ — a memória "unit x qtd" não é impressa.
   calc_method?: string | null;
+  value_label?: string | null;
   notes?: string | null;
   // Dados para depósito do cliente (cadastro). Vazio = Itaú padrão.
   deposit_bank?: string | null;

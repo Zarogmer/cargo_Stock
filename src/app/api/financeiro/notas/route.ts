@@ -143,6 +143,7 @@ export async function POST(request: NextRequest) {
         subtotal: new Prisma.Decimal(totals.subtotal.toFixed(2)),
         total: new Prisma.Decimal(totals.total.toFixed(2)),
         calc_method: normalizeCalcMethod(body.calc_method),
+        value_label: String(body.value_label || "").trim() || null,
         notes: body.notes || null,
         created_by: actor,
         items: { create: cleanItems },

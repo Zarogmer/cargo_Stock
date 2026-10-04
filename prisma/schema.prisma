@@ -1734,6 +1734,9 @@ model InvoiceClient {
   // Forma de cálculo da nota deste cliente: DIRETO (valor fechado na moeda da
   // nota) ou USD_CONVERTIDO (Wilson Sons: USD × qtd × taxa = R$, ISS no crédito).
   calc_method   String   @default("DIRETO")
+  // Rótulo da caixa amarela do valor: Continental "Valor total a Fatura:",
+  // Wilson Sons e Deep "Valor". NULL = padrão do idioma.
+  value_label   String?
   notes         String?
   created_by    String
   updated_at    DateTime @default(now()) @db.Timestamptz()
@@ -1788,6 +1791,8 @@ model FiscalNote {
   notes    String?
   // Forma de cálculo usada na emissão (snapshot de invoice_clients.calc_method).
   calc_method String @default("DIRETO")
+  // Rótulo da caixa do valor na emissão (snapshot de invoice_clients.value_label).
+  value_label String?
 
   items      FiscalNoteItem[]
   created_by String

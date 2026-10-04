@@ -191,7 +191,7 @@ export async function buildFiscalNotePdf(note: FiscalNoteInput): Promise<Uint8Ar
   // Caixa do valor (destaque amarelo, como na planilha)
   const vbx = left + innerW - valueBoxW;
   page.drawRectangle({ x: vbx + 1, y: y - 17, width: valueBoxW - 2, height: 15, color: HIGHLIGHT });
-  text(ctx, ascii(L.invoiceTotal), vbx + 5, y - 13, 7, true);
+  text(ctx, ascii((note.value_label || "").trim() || L.invoiceTotal), vbx + 5, y - 13, 7, true);
   textRight(ctx, money(totals.total, symbol), right - 5, y - 13, 8, true);
   y -= destH;
 

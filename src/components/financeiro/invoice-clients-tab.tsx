@@ -38,13 +38,14 @@ interface Draft {
   default_currency: "BRL" | "USD";
   requires_oi: boolean;
   calc_method: FiscalNoteCalcMethod;
+  value_label: string;
   deposit_bank: string;
   notes: string;
 }
 
 const EMPTY: Draft = {
   name: "", legal_name: "", header_line: "", address: "", cnpj: "", ie: "", municipal_reg: "",
-  language: "PT", default_currency: "BRL", requires_oi: false, calc_method: "DIRETO", deposit_bank: "", notes: "",
+  language: "PT", default_currency: "BRL", requires_oi: false, calc_method: "DIRETO", value_label: "", deposit_bank: "", notes: "",
 };
 
 function toDraft(c: InvoiceClientRow): Draft {
@@ -60,6 +61,7 @@ function toDraft(c: InvoiceClientRow): Draft {
     default_currency: c.default_currency === "USD" ? "USD" : "BRL",
     requires_oi: !!c.requires_oi,
     calc_method: normalizeCalcMethod(c.calc_method),
+    value_label: c.value_label || "",
     deposit_bank: c.deposit_bank || "",
     notes: c.notes || "",
   };
@@ -139,6 +141,7 @@ export function InvoiceClientsTab({ canEdit, profileName }: { canEdit: boolean; 
       default_currency: draft.default_currency,
       requires_oi: draft.requires_oi,
       calc_method: draft.calc_method,
+      value_label: draft.value_label.trim() || null,
       deposit_bank: draft.deposit_bank.trim() || null,
       notes: draft.notes.trim() || null,
       updated_at: new Date().toISOString(),
@@ -382,6 +385,17 @@ export function InvoiceClientsTab({ canEdit, profileName }: { canEdit: boolean; 
                 />
                 Nota com OI (ordem da agência)
               </label>
+            </div>
+            <div>
+              <label className={labelCls}>Título da caixa do valor</label>
+              <input
+                type="text"
+                value={draft.value_label}
+                onChange={(e) => setDraft({ ...draft, value_label: e.target.value })}
+                placeholder={draft.language === "EN" ? "Valor" : "Valor total a Fatura:"}
+                className={inputCls}
+              />
+              <p className="text-[10px] text-text-light mt-0.5">Caixa amarela da nota. Continental: &quot;Valor total a Fatura:&quot;; Wilson Sons e Deep: &quot;Valor&quot;.</p>
             </div>
             <div className="md:col-span-3">
               <label className={labelCls}>Forma de cálculo da nota</label>
