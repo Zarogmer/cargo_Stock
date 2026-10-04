@@ -13,6 +13,7 @@ import {
   calcFiscalNoteTotals,
   convertUsdItem,
   findInvoiceClient,
+  itemTitlePresets,
   formatMoney,
   formatNoteNumber,
   normalizeCalcMethod,
@@ -152,30 +153,46 @@ export function FiscalNoteModal({
 
   const year = Number(issueDate.slice(0, 4)) || new Date().getFullYear();
 
-  // Descrição sugerida por serviço contratado do navio.
-  // Segue o modelo de cada cliente: nota em inglês (Wilson Sons) usa "HOLD
-  // CLEANING OF 05 HOLDS OF THE SHIP: BSM QINZHOU"; em português, "Prestação de
-  // Serviço de Limpeza em 5 Porões do MV …".
+  // Títulos padrão dos itens (lib/fiscal-note.ts), nos dois idiomas.
+  const presets = useMemo(
+    () => itemTitlePresets(job?.name || "", Number(job?.holds_count || 1), job?.client || ""),
+    [job?.name, job?.holds_count, job?.client],
+  );
+  // Item que recebe o título pronto clicado (o último em que o usuário mexeu).
+  const [activeItem, setActiveItem] = useState(0);
+
+  // Itens sugeridos: um por serviço contratado do navio, já com o título
+  // padrão no idioma da nota.
   const suggestedItems = useCallback((lang: FiscalNoteLanguage): ItemDraft[] => {
     const holds = Math.max(1, Number(job?.holds_count || 1));
-    const ship = job?.name || "";
-    const hh = String(holds).padStart(2, "0");
-    const bare = ship.replace(/^M\/?V\s+/i, "").toUpperCase();
-    const map: Record<string, string> = lang === "EN" ? {
-      LAVAGEM_PORAO: `HOLD CLEANING OF ${hh} HOLDS OF THE SHIP: ${bare}`,
-      RASPAGEM: `HOLD SCRAPING OF ${hh} HOLDS OF THE SHIP: ${bare}`,
-      PINTURA: `HOLD PAINTING OF ${hh} HOLDS OF THE SHIP: ${bare}`,
-    } : {
-      LAVAGEM_PORAO: `Prestação de Serviço de Limpeza em ${holds} Porões do ${ship}`,
-      RASPAGEM: `Prestação de Serviço de Raspagem em ${holds} Porões do ${ship}`,
-      PINTURA: `Prestação de Serviço de Pintura em ${holds} Porões do ${ship}`,
-    };
     const list = (services.length ? services : ["LAVAGEM_PORAO"])
-      .map((s) => map[s])
-      .filter(Boolean)
-      .map((description) => ({ description, unit: "", qty: String(holds), amount: "" }));
+      .map((s) => presets.find((p) => p.service === s))
+      .filter((p): p is NonNullable<typeof p> => !!p)
+      .map((p) => ({ description: p[lang], unit: "", qty: String(holds), amount: "" }));
     return list.length ? list : [{ description: "", unit: "", qty: "", amount: "" }];
-  }, [job, services]);
+  }, [job, services, presets]);
+
+  // Trocar o idioma da nota troca os títulos que ainda estão no padrão; o que
+  // o usuário escreveu à mão fica como está.
+  function changeLanguage(next: FiscalNoteLanguage) {
+    const prev = language;
+    setLanguage(next);
+    if (prev === next) return;
+    setItems((cur) => cur.map((it) => {
+      const hit = presets.find((p) => p[prev].trim().toLowerCase() === it.description.trim().toLowerCase());
+      return hit ? { ...it, description: hit[next] } : it;
+    }));
+  }
+
+  // Título pronto → item selecionado (ou o primeiro sem descrição).
+  function applyPreset(text: string) {
+    setItems((cur) => {
+      if (cur.length === 0) return [{ description: text, unit: "", qty: "", amount: "" }];
+      const empty = cur.findIndex((it) => !it.description.trim());
+      const idx = empty >= 0 ? empty : Math.min(activeItem, cur.length - 1);
+      return cur.map((it, i) => (i === idx ? { ...it, description: text } : it));
+    });
+  }
 
   // Notas do navio + próximo número da sequência DO ANO. Separado do loadAll
   // porque o ano acompanha a data de emissão: se o usuário retroagir a data pra
@@ -501,7 +518,7 @@ export function FiscalNoteModal({
           </div>
           <div>
             <label className={labelCls}>Idioma da nota</label>
-            <select value={language} onChange={(e) => setLanguage(e.target.value as FiscalNoteLanguage)} className={inputCls}>
+            <select value={language} onChange={(e) => changeLanguage(e.target.value as FiscalNoteLanguage)} className={inputCls}>
               <option value="PT">Português</option>
               <option value="EN">Inglês (DEBIT NOTE)</option>
             </select>
@@ -541,8 +558,19 @@ export function FiscalNoteModal({
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-xs font-semibold text-text">Itens da nota *</label>
-            <button type="button" onClick={() => setItems((p) => [...p, { description: "", unit: "", qty: "", amount: "" }])}
+            <button type="button" onClick={() => { setActiveItem(items.length); setItems((p) => [...p, { description: "", unit: "", qty: "", amount: "" }]); }}
               className="text-xs px-2 py-1 bg-primary text-white rounded hover:bg-primary-dark">+ Item</button>
+          </div>
+          {/* Títulos padrão das notas da diretoria — um clique preenche o item
+              selecionado; o campo continua livre pra digitar. */}
+          <div className="flex flex-wrap items-center gap-1 mb-2">
+            <span className="text-[10px] font-semibold text-text-light mr-1">Títulos prontos:</span>
+            {presets.filter((p) => !p.creditOnly || kind === "CREDITO").map((p) => (
+              <button key={p.key} type="button" onClick={() => applyPreset(p[language])} title={p[language]}
+                className="text-[11px] px-2 py-0.5 rounded-full border border-border bg-white hover:bg-blue-50 hover:border-blue-300">
+                {p.label}
+              </button>
+            ))}
           </div>
           <div className="space-y-2">
             {converted && (
@@ -557,8 +585,9 @@ export function FiscalNoteModal({
             {items.map((it, i) => (
               <div key={i} className="grid grid-cols-12 gap-2 items-start">
                 <input type="text" value={it.description} onChange={(e) => patchItem(i, { description: e.target.value })}
-                  placeholder="Prestação de Serviço de Limpeza em 5 Porões do MV…"
-                  className={`${inputCls} col-span-12 ${converted ? "md:col-span-4" : "md:col-span-6"}`} />
+                  onFocus={() => setActiveItem(i)}
+                  placeholder="Escolha um título pronto ou escreva o que quiser"
+                  className={`${inputCls} col-span-12 ${converted ? "md:col-span-4" : "md:col-span-6"} ${items.length > 1 && activeItem === i ? "ring-1 ring-blue-300" : ""}`} />
                 <input type="text" value={it.unit} onChange={(e) => patchItem(i, { unit: e.target.value })} onBlur={() => recalcAmount(i)}
                   placeholder={converted ? "USD unit." : "Unit."} title={converted ? "Valor em USD por porão / por lancha" : "Valor por porão/unidade"}
                   className={`${inputCls} col-span-3 md:col-span-2`} />
@@ -583,6 +612,7 @@ export function FiscalNoteModal({
             ))}
           </div>
           <p className="text-[10px] text-text-light mt-1">
+            Título pronto vai pro item selecionado (ou pro primeiro em branco) e segue o idioma da nota.{" "}
             {converted
               ? "Digite o valor em USD e a quantidade — o R$ sai de USD × Qtd × taxa do dólar. Lancha e lavagem vão em notas separadas: emita duas."
               : "Unit. × Qtd preenche o Total ao sair do campo. Pra faturar lancha e lavagem em notas separadas, emita duas notas."}

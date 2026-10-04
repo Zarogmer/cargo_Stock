@@ -75,6 +75,69 @@ export const CALC_METHODS: Record<FiscalNoteCalcMethod, { label: string; steps: 
   },
 };
 
+// Títulos PADRÃO dos itens da nota, levantados das notas emitidas em 2026
+// (2- INVOICE/WILSON SONS, CONTINENTAL e DEEP). Cada um tem a versão em
+// português (Continental, Deep) e em inglês (Wilson Sons) — trocar o idioma
+// da nota troca o título que ainda estiver no padrão. O usuário continua
+// livre pra escrever o que quiser.
+export interface ItemTitlePreset {
+  key: string;
+  // Rótulo curto do botão no modal.
+  label: string;
+  PT: string;
+  EN: string;
+  // Serviço do navio (ships.services) que sugere este título sozinho.
+  service?: string;
+  // Só faz sentido em Nota de Crédito (repasse).
+  creditOnly?: boolean;
+}
+
+export function itemTitlePresets(shipName: string, holds: number, clientName: string): ItemTitlePreset[] {
+  const n = Math.max(1, Number(holds) || 1);
+  const hh = String(n).padStart(2, "0");
+  const ship = (shipName || "").trim();
+  const bare = ship.replace(/^M\/?V\s+/i, "").toUpperCase();
+  const client = (clientName || "").trim();
+  return [
+    { key: "LIMPEZA", label: "Limpeza de porões", service: "LAVAGEM_PORAO",
+      PT: `Prestação de Serviço de Limpeza em ${n} Porões do ${ship}`,
+      EN: `HOLD CLEANING OF ${hh} HOLDS OF THE SHIP: ${bare}` },
+    { key: "RASPAGEM", label: "Raspagem", service: "RASPAGEM",
+      PT: `Prestação de Serviço de Raspagem em ${n} Porões do ${ship}`,
+      EN: `HOLD SCRAPING OF ${hh} HOLDS OF THE SHIP: ${bare}` },
+    { key: "PINTURA", label: "Pintura", service: "PINTURA",
+      PT: `Prestação de Serviço de Pintura em ${n} Porões do ${ship}`,
+      EN: `HOLD PAINTING OF ${hh} HOLDS OF THE SHIP: ${bare}` },
+    { key: "RASPAGEM_PINTURA", label: "Raspagem e Pintura",
+      PT: `Prestação de Serviço de Raspagem e Pintura em ${n} Porões do ${ship}`,
+      EN: `HOLD SCRAPING AND PAINTING OF ${hh} HOLDS OF THE SHIP: ${bare}` },
+    { key: "COSTADO", label: "Limpeza de costado",
+      PT: `Prestação de Serviço de Limpeza de Costado do ${ship}`,
+      EN: `HULL CLEANING OF THE SHIP: ${bare}` },
+    { key: "LANCHA", label: "Barco / Lancha",
+      PT: "BARCO/LANCHA (EMBARQUE/DESEMBARQUE)",
+      EN: "Boat support - 2 trips" },
+    { key: "PISO", label: "Raspagem de piso",
+      PT: "Raspagem de piso",
+      EN: "FLOOR SANDING" },
+    { key: "FERRUGEM", label: "Ferrugem (rust scales)",
+      PT: "Remoção de ferrugem",
+      EN: "RUST SCALES" },
+    { key: "QUIMICA", label: "Química nos pisos",
+      PT: "Aplicação de química nos pisos",
+      EN: "CHEMICAL APPLICATION ON THE FLOORS" },
+    { key: "DIARIAS", label: "Diárias",
+      PT: "Diárias",
+      EN: "DAILY RATES" },
+    { key: "CANCELADO", label: "Serviço cancelado",
+      PT: "Custos operacionais (Prestação de serviço cancelada)",
+      EN: "OPERATIONAL COSTS (SERVICE CANCELLED)" },
+    { key: "CREDITO", label: "Crédito (repasse)", creditOnly: true,
+      PT: `Crédito ${client}`.trim(),
+      EN: `Credit ${client}`.trim() },
+  ];
+}
+
 // USD unitário × quantidade × taxa → R$ (2 casas), como H22*H23*H25 da planilha
 // da Wilson Sons. Devolve também o total em USD pra memória de cálculo.
 export function convertUsdItem(unitUsd: number, qty: number, rate: number): { totalUsd: number; amountBrl: number } {
