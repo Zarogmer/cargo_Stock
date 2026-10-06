@@ -542,10 +542,12 @@ export default function FinanceiroPage() {
   const [loading, setLoading] = useState(true);
 
   // Filtro das telas de Pagamento — dirige os KPIs do topo e as listas das
-  // abas Embarque/Costado. Começa sem recorte nenhum (todos os anos/meses/
-  // portos/clientes) — o usuário filtra se quiser.
+  // abas Embarque/Costado. Começa no ano atual, todos os meses/portos/
+  // clientes — e esse é o estado "neutro": selo e campo Ano não ficam
+  // destacados (só destacam quando o usuário escolhe outra coisa).
+  const currentYear = new Date().getFullYear();
   const [pgFilter, setPgFilter] = useState<PagamentoFilter>(() => ({
-    year: "ALL",
+    year: currentYear,
     month: "ALL",
     port: "ALL",
     client: "ALL",
@@ -803,7 +805,7 @@ export default function FinanceiroPage() {
 
   const activeTabLabel = financeiroTabs.find((t) => t.key === initialTab)?.label;
   const plabel = pagamentoPeriodLabel(pgFilter);
-  const filterActive = pgFilter.month !== "ALL" || pgFilter.port !== "ALL" || pgFilter.client !== "ALL" || pgFilter.year !== "ALL";
+  const filterActive = pgFilter.month !== "ALL" || pgFilter.port !== "ALL" || pgFilter.client !== "ALL" || pgFilter.year !== currentYear;
   // Quantos navios sobram com o filtro atual — feedback imediato na barra.
   const filteredCount = useMemo(
     () => jobs.filter((j) => jobMatchesPagamentoFilter(j, pgFilter)).length,
@@ -858,7 +860,7 @@ export default function FinanceiroPage() {
             </span>
             {filterActive && (
               <button
-                onClick={() => setPgFilter({ year: "ALL", month: "ALL", port: "ALL", client: "ALL" })}
+                onClick={() => setPgFilter({ year: currentYear, month: "ALL", port: "ALL", client: "ALL" })}
                 className="text-xs font-medium px-2.5 py-1 rounded-lg border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
                 title="Limpar todos os filtros"
               >
@@ -871,7 +873,7 @@ export default function FinanceiroPage() {
           <label className="block">
             <span className={filterLabelCls}>📅 Ano</span>
             <select
-              className={filterSelectCls(pgFilter.year !== "ALL")}
+              className={filterSelectCls(pgFilter.year !== currentYear)}
               value={pgFilter.year === "ALL" ? "ALL" : String(pgFilter.year)}
               onChange={(e) => setPgFilter((f) => ({ ...f, year: e.target.value === "ALL" ? "ALL" : parseInt(e.target.value, 10) }))}
             >
