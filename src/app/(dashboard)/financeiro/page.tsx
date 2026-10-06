@@ -542,10 +542,10 @@ export default function FinanceiroPage() {
   const [loading, setLoading] = useState(true);
 
   // Filtro das telas de Pagamento — dirige os KPIs do topo e as listas das
-  // abas Embarque/Costado. Começa no ano atual, todos os meses (mostra o ano
-  // inteiro sem esconder navio nenhum).
+  // abas Embarque/Costado. Começa sem recorte nenhum (todos os anos/meses/
+  // portos/clientes) — o usuário filtra se quiser.
   const [pgFilter, setPgFilter] = useState<PagamentoFilter>(() => ({
-    year: new Date().getFullYear(),
+    year: "ALL",
     month: "ALL",
     port: "ALL",
     client: "ALL",
@@ -2515,7 +2515,7 @@ function EmployeeRatesModal({
 // ─── PAGAMENTO DE NAVIOS (Embarque + Costado numa aba só) ────────────────────
 
 function PagamentoNaviosTab({
-  initialTipo, jobs, allocations, adjustments, functions, ships, shipsAll, employees, specialRates, canEdit, canEditFunction, profileName, filter, onChange, loading,
+  jobs, allocations, adjustments, functions, ships, shipsAll, employees, specialRates, canEdit, canEditFunction, profileName, filter, onChange, loading,
 }: {
   initialTipo: "EMBARQUE" | "COSTADO";
   jobs: Job[];
@@ -2533,7 +2533,8 @@ function PagamentoNaviosTab({
   onChange: () => void;
   loading: boolean;
 }) {
-  const [tipo, setTipo] = useState<"TODOS" | "EMBARQUE" | "COSTADO">(initialTipo);
+  // Sempre abre em "Todos" (Embarque + Costado empilhados).
+  const [tipo, setTipo] = useState<"TODOS" | "EMBARQUE" | "COSTADO">("TODOS");
 
   // Os dois painéis, montados uma vez só (mesmos dados) — reusados no "Todos"
   // (empilhados) e nas visões individuais. Cada um mantém a sua renderização
@@ -2643,9 +2644,9 @@ function TrabalhosTab({
   const [payJob, setPayJob] = useState<Job | null>(null);
   // Nota de Débito/Crédito deste navio (Financeiro › Pagamento de Navios).
   const [noteJob, setNoteJob] = useState<Job | null>(null);
-  // Começa em "Em Aberto": navio Pago (FECHADO) sai da visão padrão — some da
-  // lista assim que é pago (fica acessível no filtro "Pago").
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("EM_ANDAMENTO");
+  // Começa em "Todos" — inclusive ao trocar Todos/Embarque/Costado lá em cima
+  // (a lista é remontada e volta pra cá). Em Aberto/Pago/Cancelado é escolha.
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("TODOS");
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   // Nº do navio no ano (badge à esquerda do nome) — mesma numeração da aba Navios.
@@ -7567,9 +7568,9 @@ function CostadoTab({
   loading: boolean;
 }) {
   const [detailJob, setDetailJob] = useState<Job | null>(null);
-  // Começa em "Em Aberto": navio Pago (FECHADO) sai da visão padrão — some da
-  // lista assim que é pago (fica acessível no filtro "Pago").
-  const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("EM_ANDAMENTO");
+  // Começa em "Todos" — inclusive ao trocar Todos/Embarque/Costado lá em cima
+  // (a lista é remontada e volta pra cá). Em Aberto/Pago/Cancelado é escolha.
+  const [statusFilter, setStatusFilter] = useState<JobStatus | "TODOS">("TODOS");
   const shipNumbers = useMemo(() => computeShipYearNumbers(shipsAll), [shipsAll]);
   const [deleteJob, setDeleteJob] = useState<Job | null>(null);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
