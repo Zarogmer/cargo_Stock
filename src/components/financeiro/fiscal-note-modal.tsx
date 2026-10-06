@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { db } from "@/lib/db";
@@ -17,7 +17,6 @@ import {
   formatMoney,
   formatNoteNumber,
   normalizeCalcMethod,
-  resolveHeaderLine,
   type FiscalNoteCalcMethod,
   type FiscalNoteCurrency,
   type FiscalNoteKind,
@@ -158,8 +157,26 @@ export function FiscalNoteModal({
     () => itemTitlePresets(job?.name || "", Number(job?.holds_count || 1), job?.client || ""),
     [job?.name, job?.holds_count, job?.client],
   );
-  // Item que recebe o título pronto clicado (o último em que o usuário mexeu).
-  const [activeItem, setActiveItem] = useState(0);
+  // Títulos cadastrados pelo usuário (app_settings) — somam aos prontos no
+  // dropdown da descrição de cada item.
+  const [customTitles, setCustomTitles] = useState<string[]>([]);
+  const titleOptions = useMemo(() => [
+    ...presets.filter((p) => !p.creditOnly || kind === "CREDITO").map((p) => ({ text: p[language], label: p.label, custom: false })),
+    ...customTitles.map((t) => ({ text: t, label: "", custom: true })),
+  ], [presets, kind, language, customTitles]);
+
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/financeiro/notas/titulos").then((r) => r.json()).then((d) => setCustomTitles(d?.titles || [])).catch(() => {});
+  }, [open]);
+
+  async function changeCustomTitle(title: string, method: "POST" | "DELETE") {
+    const res = await fetch("/api/financeiro/notas/titulos", {
+      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }),
+    }).then((r) => r.json()).catch(() => null);
+    if (res?.titles) setCustomTitles(res.titles);
+    else setError(method === "POST" ? "Não deu pra cadastrar o título." : "Não deu pra remover o título.");
+  }
 
   // Itens sugeridos: um por serviço contratado do navio, já com o título
   // padrão no idioma da nota.
@@ -182,16 +199,6 @@ export function FiscalNoteModal({
       const hit = presets.find((p) => p[prev].trim().toLowerCase() === it.description.trim().toLowerCase());
       return hit ? { ...it, description: hit[next] } : it;
     }));
-  }
-
-  // Título pronto → item selecionado (ou o primeiro sem descrição).
-  function applyPreset(text: string) {
-    setItems((cur) => {
-      if (cur.length === 0) return [{ description: text, unit: "", qty: "", amount: "" }];
-      const empty = cur.findIndex((it) => !it.description.trim());
-      const idx = empty >= 0 ? empty : Math.min(activeItem, cur.length - 1);
-      return cur.map((it, i) => (i === idx ? { ...it, description: text } : it));
-    });
   }
 
   // Notas do navio + próximo número da sequência DO ANO. Separado do loadAll
@@ -301,6 +308,68 @@ export function FiscalNoteModal({
     () => calcFiscalNoteTotals(calcRows.map((r) => ({ amount: r.amount })), issPercent ? parseBR(issPercent) : null),
     [calcRows, issPercent],
   );
+
+  // Preview da folha: o rascunho vai pro MESMO gerador do PDF baixado
+  // (/api/financeiro/notas/preview) e aparece ao lado do formulário. Espera o
+  // usuário parar de digitar ~0,6 s pra não gerar um PDF por tecla.
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const previewSeq = useRef(0);
+  const previewBody = useMemo(() => {
+    if (!job) return null;
+    return JSON.stringify({
+      kind, number: effectiveNumber, year,
+      ship_name: job.name, client_name: (job.client || "").trim(),
+      client_legal_name: legalName || null, client_address: address || null,
+      client_cnpj: cnpj || null, client_ie: ie || null, client_municipal: municipal || null,
+      header_line: headerLine || null, language,
+      oi: requiresOi && oi ? oi : null, port: job.port || null,
+      arrival_date: job.start_date, departure_date: job.end_date,
+      issue_date: issueDate, due_date: dueDate || null, currency,
+      exchange_rate: exchangeRate ? parseBR(exchangeRate) : null,
+      iss_percent: issPercent ? parseBR(issPercent) : null,
+      calc_method: calcMethod, value_label: valueLabel || null, notes: obs || null,
+      items: items
+        .map((it, idx) => ({ it, row: calcRows[idx] }))
+        .filter(({ it, row }) => it.description.trim() || (row?.amount ?? 0) > 0)
+        .map(({ it, row }) => ({
+          description: it.description.trim(),
+          unit_value: it.unit ? parseBR(it.unit) : null,
+          quantity: it.qty ? parseBR(it.qty) : null,
+          amount: row?.amount ?? 0,
+        })),
+    });
+  }, [job, kind, effectiveNumber, year, legalName, address, cnpj, ie, municipal, headerLine, language,
+    requiresOi, oi, issueDate, dueDate, currency, exchangeRate, issPercent, calcMethod, valueLabel, obs, items, calcRows]);
+
+  useEffect(() => {
+    if (!open || !previewBody) return;
+    const seq = ++previewSeq.current;
+    const t = setTimeout(async () => {
+      setPreviewLoading(true);
+      try {
+        const res = await fetch("/api/financeiro/notas/preview", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: previewBody,
+        });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        if (seq !== previewSeq.current) return; // chegou depois de um mais novo
+        const url = URL.createObjectURL(blob);
+        setPreviewUrl((old) => { if (old) URL.revokeObjectURL(old); return url; });
+      } catch {
+        // Preview é só conferência — falhar não trava a emissão.
+      } finally {
+        if (seq === previewSeq.current) setPreviewLoading(false);
+      }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [open, previewBody]);
+
+  // Fechar o modal libera o PDF da memória.
+  useEffect(() => {
+    if (open) return;
+    setPreviewUrl((old) => { if (old) URL.revokeObjectURL(old); return null; });
+  }, [open]);
 
   function patchItem(i: number, patch: Partial<ItemDraft>) {
     setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, ...patch } : it)));
@@ -418,11 +487,13 @@ export function FiscalNoteModal({
   }
 
   if (!job) return null;
-  const previewHeader = resolveHeaderLine(headerLine, job.name, legalName || job.client || "");
 
   return (
-    <Modal open={open} onClose={onClose} title={`Notas · ${job.name}`} maxWidth="max-w-4xl">
-      <form onSubmit={handleSubmit} className="space-y-4">
+    <Modal open={open} onClose={onClose} title={`Notas · ${job.name}`} maxWidth="max-w-[min(96vw,1500px)]">
+      {/* Formulário à esquerda, a folha como vai sair à direita (embaixo em
+          tela estreita). */}
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,46%)] gap-5 items-start">
+      <form onSubmit={handleSubmit} className="space-y-4 min-w-0">
         {/* Notas já emitidas para este navio */}
         {notes.length > 0 && (
           <div className="rounded-lg border border-border bg-gray-50 p-3">
@@ -526,22 +597,6 @@ export function FiscalNoteModal({
           </div>
         </div>
 
-        {/* Título da nota deste cliente, já pronto (cadastro em Dados dos Clientes). */}
-        <div className="rounded-lg border border-border bg-gray-50 px-3 py-2">
-          <p className="text-[10px] font-semibold text-text-light">
-            {kind === "DEBITO" ? (language === "EN" ? "DEBIT NOTE" : "NOTA DE DÉBITO") : (language === "EN" ? "CREDIT NOTE" : "NOTA DE CRÉDITO")} {formatNoteNumber(effectiveNumber, year)} — título do cliente {job.client ? `(${job.client})` : ""}
-          </p>
-          <div className="flex items-start justify-between gap-3">
-            <p className="text-sm font-bold text-text">{previewHeader || "—"}</p>
-            <span className="shrink-0 text-xs font-bold italic bg-yellow-200 px-2 py-0.5 rounded">
-              {valueLabel || (language === "EN" ? "Valor" : "Valor total a Fatura:")} {formatMoney(totals.total, currency)}
-            </span>
-          </div>
-          <p className="text-[11px] text-text-light">
-            {[address, [cnpj && `CNPJ: ${cnpj}`, ie && `I.E.: ${ie}`, municipal && `Insc. Munic.: ${municipal}`].filter(Boolean).join(" - ")].filter(Boolean).join(" · ")}
-          </p>
-        </div>
-
         {/* OI — só pra cliente que trabalha com ordem da agência (Wilson Sons).
             Fica embaixo, separado, porque os demais clientes não têm. */}
         {requiresOi && (
@@ -558,19 +613,8 @@ export function FiscalNoteModal({
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-xs font-semibold text-text">Itens da nota *</label>
-            <button type="button" onClick={() => { setActiveItem(items.length); setItems((p) => [...p, { description: "", unit: "", qty: "", amount: "" }]); }}
+            <button type="button" onClick={() => setItems((p) => [...p, { description: "", unit: "", qty: "", amount: "" }])}
               className="text-xs px-2 py-1 bg-primary text-white rounded hover:bg-primary-dark">+ Item</button>
-          </div>
-          {/* Títulos padrão das notas da diretoria — um clique preenche o item
-              selecionado; o campo continua livre pra digitar. */}
-          <div className="flex flex-wrap items-center gap-1 mb-2">
-            <span className="text-[10px] font-semibold text-text-light mr-1">Títulos prontos:</span>
-            {presets.filter((p) => !p.creditOnly || kind === "CREDITO").map((p) => (
-              <button key={p.key} type="button" onClick={() => applyPreset(p[language])} title={p[language]}
-                className="text-[11px] px-2 py-0.5 rounded-full border border-border bg-white hover:bg-blue-50 hover:border-blue-300">
-                {p.label}
-              </button>
-            ))}
           </div>
           <div className="space-y-2">
             {converted && (
@@ -584,10 +628,11 @@ export function FiscalNoteModal({
             )}
             {items.map((it, i) => (
               <div key={i} className="grid grid-cols-12 gap-2 items-start">
-                <input type="text" value={it.description} onChange={(e) => patchItem(i, { description: e.target.value })}
-                  onFocus={() => setActiveItem(i)}
-                  placeholder="Escolha um título pronto ou escreva o que quiser"
-                  className={`${inputCls} col-span-12 ${converted ? "md:col-span-4" : "md:col-span-6"} ${items.length > 1 && activeItem === i ? "ring-1 ring-blue-300" : ""}`} />
+                <TitleCombo value={it.description} onChange={(v) => patchItem(i, { description: v })}
+                  options={titleOptions}
+                  onAddCustom={(t) => changeCustomTitle(t, "POST")}
+                  onRemoveCustom={(t) => changeCustomTitle(t, "DELETE")}
+                  className={`col-span-12 ${converted ? "md:col-span-4" : "md:col-span-6"}`} />
                 <input type="text" value={it.unit} onChange={(e) => patchItem(i, { unit: e.target.value })} onBlur={() => recalcAmount(i)}
                   placeholder={converted ? "USD unit." : "Unit."} title={converted ? "Valor em USD por porão / por lancha" : "Valor por porão/unidade"}
                   className={`${inputCls} col-span-3 md:col-span-2`} />
@@ -612,7 +657,7 @@ export function FiscalNoteModal({
             ))}
           </div>
           <p className="text-[10px] text-text-light mt-1">
-            Título pronto vai pro item selecionado (ou pro primeiro em branco) e segue o idioma da nota.{" "}
+            Clique na descrição (ou na ▾) pra escolher um título pronto ou cadastrar um novo.{" "}
             {converted
               ? "Digite o valor em USD e a quantidade — o R$ sai de USD × Qtd × taxa do dólar. Lancha e lavagem vão em notas separadas: emita duas."
               : "Unit. × Qtd preenche o Total ao sair do campo. Pra faturar lancha e lavagem em notas separadas, emita duas notas."}
@@ -732,6 +777,102 @@ export function FiscalNoteModal({
           </Button>
         </div>
       </form>
+
+      <div className="xl:sticky xl:top-0 min-w-0">
+        <div className="flex items-center justify-between mb-1.5">
+          <p className="text-xs font-semibold text-text">
+            👁 Preview — {kind === "DEBITO" ? "Nota de Débito" : "Nota de Crédito"} {formatNoteNumber(effectiveNumber, year)}
+          </p>
+          <span className="text-[10px] text-text-light">{previewLoading ? "Atualizando…" : "Atualiza sozinho ao digitar"}</span>
+        </div>
+        <div className="rounded-lg border border-border bg-gray-100 overflow-hidden h-[70vh] xl:h-[calc(90vh-9rem)]">
+          {previewUrl ? (
+            <iframe src={`${previewUrl}#toolbar=0&navpanes=0&view=FitH`} title="Preview da nota"
+              className={`w-full h-full bg-white transition-opacity ${previewLoading ? "opacity-60" : ""}`} />
+          ) : (
+            <div className="h-full flex items-center justify-center text-sm text-text-light">Gerando a folha…</div>
+          )}
+        </div>
+        <p className="text-[10px] text-text-light mt-1">É o mesmo PDF que sai ao emitir — confira valores, título e dados antes.</p>
+      </div>
+      </div>
     </Modal>
+  );
+}
+
+// Descrição do item com lista de títulos: clicar no campo (ou na ▾) abre os
+// títulos prontos + os cadastrados; digitar filtra; dá pra cadastrar o texto
+// do campo como título novo e remover os cadastrados (✕).
+function TitleCombo({
+  value, onChange, options, onAddCustom, onRemoveCustom, className = "",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { text: string; label: string; custom: boolean }[];
+  onAddCustom: (t: string) => void;
+  onRemoveCustom: (t: string) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  // Só filtra depois que o usuário digita — ao abrir mostra tudo.
+  const [typed, setTyped] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const q = value.trim().toLowerCase();
+  const list = typed && q
+    ? options.filter((o) => o.text.toLowerCase().includes(q) || o.label.toLowerCase().includes(q))
+    : options;
+  const exists = options.some((o) => o.text.trim().toLowerCase() === q);
+
+  return (
+    <div className={`relative ${className}`}>
+      <input ref={inputRef} type="text" value={value}
+        onChange={(e) => { onChange(e.target.value); setTyped(true); setOpen(true); }}
+        onFocus={() => { setTyped(false); setOpen(true); }}
+        onClick={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); }}
+        placeholder="Clique pra escolher um título ou escreva"
+        className={`${inputCls} pr-8`} />
+      <button type="button" tabIndex={-1} title="Títulos"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          if (open) setOpen(false);
+          else { setTyped(false); setOpen(true); inputRef.current?.focus(); }
+        }}
+        className="absolute right-1 top-1/2 -translate-y-1/2 px-1.5 py-1 text-text-light hover:text-text text-xs">
+        {open ? "▴" : "▾"}
+      </button>
+      {open && (
+        <div onMouseDown={(e) => e.preventDefault()}
+          className="absolute z-20 left-0 right-0 mt-1 max-h-72 overflow-y-auto rounded-lg border border-border bg-white shadow-lg text-sm">
+          {list.length === 0 && <p className="px-3 py-2 text-xs text-text-light">Nenhum título com esse texto.</p>}
+          {list.map((o) => (
+            <div key={`${o.custom ? "c" : "p"}:${o.text}`}
+              className="group flex items-center gap-2 px-3 py-1.5 hover:bg-blue-50 cursor-pointer"
+              onClick={() => { onChange(o.text); setOpen(false); }}>
+              <span className="flex-1 min-w-0">
+                <span className="block truncate">{o.text}</span>
+                {o.label && <span className="block text-[10px] text-text-light">{o.label}</span>}
+              </span>
+              {o.custom && (
+                <button type="button" title="Remover título cadastrado"
+                  onClick={(e) => { e.stopPropagation(); if (confirm(`Remover o título "${o.text}" da lista?`)) onRemoveCustom(o.text); }}
+                  className="opacity-0 group-hover:opacity-100 text-red-600 hover:bg-red-50 rounded px-1 text-xs">✕</button>
+              )}
+            </div>
+          ))}
+          <div className="border-t border-border">
+            {q && !exists ? (
+              <button type="button" onClick={() => { onAddCustom(value.trim()); setOpen(false); }}
+                className="w-full text-left px-3 py-2 text-xs font-semibold text-primary hover:bg-blue-50">
+                + Cadastrar &quot;{value.trim()}&quot; como título
+              </button>
+            ) : (
+              <p className="px-3 py-2 text-[11px] text-text-light">Pra cadastrar um título novo, escreva no campo e clique em &quot;+ Cadastrar&quot;.</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
