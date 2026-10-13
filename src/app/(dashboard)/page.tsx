@@ -321,8 +321,13 @@ export default function DashboardPage() {
       ]);
       const crewEmps = ((crewEmpRes.data as Array<{ id: number; name: string; role: string | null; sector: string | null; escala_unavailable: boolean | null }> | null) || [])
         .filter((e) => !e.escala_unavailable && e.sector !== "ADMINISTRATIVO");
+      // ADMINISTRATIVO fora: é o custo automático do escritório no navio (só
+      // Financeiro), não gente a bordo — fica ATIVO mesmo depois do navio sair
+      // (a liberação automática pula esse kind de propósito). Contar aqui
+      // deixava quem está no roster administrativo "Embarcado" pra sempre no
+      // último navio. Mesma regra da coluna "Escalação" do RH.
       const crewAllocs = ((crewAllocRes.data as Array<{ employee_id: number | null; kind: string | null; job_id: string | null; function_id: number | null; shift_date: string | null; shift_period: string | null }> | null) || [])
-        .filter((a) => a.employee_id != null);
+        .filter((a) => a.employee_id != null && a.kind !== "ADMINISTRATIVO");
       // function_id → nome da função (o que ela FOI naquele navio, não o cargo fixo).
       const funcName = new Map<number, string>();
       ((jobFuncRes.data as Array<{ id: number; name: string }> | null) || []).forEach((f) => funcName.set(f.id, f.name));
