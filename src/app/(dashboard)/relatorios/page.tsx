@@ -29,6 +29,7 @@ import { hasModuleAccess } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PdfPreview } from "@/components/pdf-preview";
+import { WhatsappPhotosModal, type WhatsappSendBlock } from "@/components/relatorios/whatsapp-photos-modal";
 import { PlusIcon, TrashIcon } from "@/components/icons";
 import { processReportPhoto, sniffImageType } from "@/lib/watermark";
 import { shareOrDownloadBlob } from "@/lib/print";
@@ -1215,6 +1216,8 @@ function ReportDetail({
   const [uploadErrors, setUploadErrors] = useState<string[]>([]);
   const [deletePhoto, setDeletePhoto] = useState<PhotoMeta | null>(null);
   const [lightbox, setLightbox] = useState<{ photos: PhotoMeta[]; index: number } | null>(null);
+  // Bloco escolhido pra mandar pro WhatsApp (abre o modal de destinatário).
+  const [waBlock, setWaBlock] = useState<WhatsappSendBlock | null>(null);
   const [deleting, setDeleting] = useState(false);
   // ── Geração dos PDFs ──────────────────────────────────────────────────────
   const [generatingPdf, setGeneratingPdf] = useState<string | null>(null);
@@ -1532,6 +1535,37 @@ function ReportDetail({
     setUploadProgress("");
     setUploadingLabel(null);
     setUploadErrors(errs);
+  }
+
+  // ── Enviar bloco pro WhatsApp ─────────────────────────────────────────────
+  // Monta o pacote do bloco: mensagem de abertura ("M/V navio — bloco (n
+  // fotos)" + legenda do bloco) e uma legenda por foto. Nos porões vão as TRÊS
+  // fases juntas, em ordem Antes → Durante → Depois, com a fase na legenda.
+  function openWhatsappSend(label: string, isHold: boolean, items: PhotoMeta[]) {
+    const stageRank: Record<string, number> = { ANTES: 0, DURANTE: 1, DEPOIS: 2 };
+    const ordered = isHold
+      ? [...items].sort((a, b) => (stageRank[a.stage] ?? 3) - (stageRank[b.stage] ?? 3))
+      : items;
+    const shipName = data?.ship?.name || data?.job.name || "";
+    const blockCaption = (blockCaptions[label] ?? "").trim();
+    const opening = [
+      `M/V ${shipName} — ${label} (${items.length} foto${items.length !== 1 ? "s" : ""})`,
+      blockCaption,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    setWaBlock({
+      jobId,
+      kind,
+      label,
+      opening,
+      photos: ordered.map((p) => {
+        const own = (photoCaptions[p.id] ?? p.caption ?? "").trim();
+        const phase = isHold && stageRank[p.stage] !== undefined ? stageUploadLabel(p.stage, kind) : "";
+        const head = phase ? `${label} · ${phase}` : label;
+        return { id: p.id, caption: own ? `${head} — ${own}` : head };
+      }),
+    });
   }
 
   // ── Blocos de foto ────────────────────────────────────────────────────────
@@ -2138,15 +2172,34 @@ function ReportDetail({
                     {b.label}{" "}
                     <span className="text-text-light font-normal text-sm">({items.length})</span>
                   </p>
-                  {!b.fixed && !locked && (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {/* Manda TODAS as fotos do bloco (nos porões, as três fases
+                        juntas — a fase vai na legenda de cada foto). */}
                     <button
-                      onClick={() => removeBlock(b.label)}
-                      title={items.length ? "Apague as fotos antes de remover o bloco" : "Remover bloco"}
-                      className="p-1 text-text-light hover:text-danger hover:bg-danger/10 rounded transition shrink-0"
+                      type="button"
+                      onClick={() => openWhatsappSend(b.label, b.isHold, items)}
+                      disabled={items.length === 0 || !!uploadProgress}
+                      title={
+                        items.length === 0
+                          ? "Sem fotos neste bloco"
+                          : b.isHold
+                            ? `Enviar as ${items.length} fotos do bloco (Antes, Durante e Depois) pelo WhatsApp`
+                            : `Enviar as ${items.length} fotos do bloco pelo WhatsApp`
+                      }
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-border text-text hover:border-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-border disabled:hover:text-text disabled:hover:bg-transparent"
                     >
-                      <TrashIcon className="w-4 h-4" />
+                      📲 <span className="hidden sm:inline">Enviar para </span>WhatsApp
                     </button>
-                  )}
+                    {!b.fixed && !locked && (
+                      <button
+                        onClick={() => removeBlock(b.label)}
+                        title={items.length ? "Apague as fotos antes de remover o bloco" : "Remover bloco"}
+                        className="p-1 text-text-light hover:text-danger hover:bg-danger/10 rounded transition shrink-0"
+                      >
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {sharedNote && (
@@ -2437,6 +2490,8 @@ function ReportDetail({
         message="Descartar a versão do escritório? O PDF volta a sair exatamente do que o supervisor escreveu. O relatório do supervisor não muda."
         loading={savingOffice}
       />
+
+      <WhatsappPhotosModal block={waBlock} onClose={() => setWaBlock(null)} />
 
       {lightbox && (
         <PhotoLightbox
