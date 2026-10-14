@@ -7,10 +7,14 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { DollarQuote } from "@/components/dollar-ticker";
 import { computeShipYearNumbers } from "@/lib/ship-number";
 import type { AnnualShipRow } from "@/lib/relatorios-anuais-xlsx";
+import { DEFAULT_CLIENTS } from "@/lib/port-client-options";
+import { employeeHasRole } from "@/lib/utils";
 import {
   COMPANY_FOOTER,
+  COSTADO_SERVICE_LABEL,
   buildClosingDraft,
   buildClosingTitle,
+  closingServiceKind,
   computeClosing,
   formatBRL,
   formatNumberBR,
@@ -137,6 +141,39 @@ export function FechamentoNavioPage({
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const loadSeq = useRef(0);
+
+  // Supervisores (função principal ou 2ª = SUPERVISOR, não demitidos) pro
+  // select do cabeçalho — os mesmos que a Escalação sugere pra função.
+  const [supervisors, setSupervisors] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const res = await db.from("employees").select("id, name, role, secondary_role, status").order("name");
+      if (!alive) return;
+      const rows = ((res.data as { name: string; role: string | null; secondary_role: string | null; status: string | null }[] | null) || []);
+      setSupervisors(
+        rows
+          .filter((e) => e.status !== "INATIVO" && employeeHasRole(e, "SUPERVISOR"))
+          .map((e) => (e.name || "").trim())
+          .filter(Boolean),
+      );
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // Clientes pro select: os das operações e dos navios cadastrados + as
+  // sementes da aba Navios, sem repetir por caixa ("Deep" = "DEEP").
+  const clientOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    const add = (v: string | null | undefined) => {
+      const t = (v || "").trim();
+      if (t && !map.has(t.toUpperCase())) map.set(t.toUpperCase(), t);
+    };
+    for (const j of jobs) { add(j.client); add(j.ships?.client_name); }
+    for (const s of shipsAll) add(s.client_name);
+    for (const c of DEFAULT_CLIENTS) add(c);
+    return [...map.values()].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [jobs, shipsAll]);
 
   // Nº do navio no ano (planilha da diretoria) por ship_id.
   const shipNumbers = useMemo(() => computeShipYearNumbers(shipsAll), [shipsAll]);
@@ -389,8 +426,16 @@ export function FechamentoNavioPage({
                     <input type="date" className={inputCls} value={doc.end_date} disabled={disabled} onChange={(e) => update({ end_date: e.target.value })} />
                   </div>
                   <div>
-                    <label className={labelCls} title="Ex.: LIMPEZA DE COSTADO — substitui porões/carga no título">Serviço</label>
-                    <input className={inputCls} value={doc.service_label} disabled={disabled} placeholder="(porões)" onChange={(e) => update({ service_label: e.target.value })} />
+                    <label className={labelCls} title="Tipo da operação, como na aba Navios. Costado troca porões/carga por LIMPEZA DE COSTADO no título.">Serviço</label>
+                    <select
+                      className={inputCls}
+                      value={closingServiceKind(doc)}
+                      disabled={disabled}
+                      onChange={(e) => update({ service_label: e.target.value === "COSTADO" ? COSTADO_SERVICE_LABEL : "" })}
+                    >
+                      <option value="EMBARQUE">Embarque</option>
+                      <option value="COSTADO">Costado</option>
+                    </select>
                   </div>
                 </div>
                 <div>
@@ -412,11 +457,23 @@ export function FechamentoNavioPage({
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className={labelCls}>Cliente</label>
-                    <input className={inputCls} value={doc.client} disabled={disabled} onChange={(e) => update({ client: e.target.value })} />
+                    <select className={inputCls} value={doc.client} disabled={disabled} onChange={(e) => update({ client: e.target.value })}>
+                      <option value="">(sem cliente)</option>
+                      {doc.client.trim() && !clientOptions.some((c) => c.toUpperCase() === doc.client.trim().toUpperCase()) && (
+                        <option value={doc.client}>{doc.client}</option>
+                      )}
+                      {clientOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
                   </div>
                   <div>
                     <label className={labelCls}>Supervisor</label>
-                    <input className={inputCls} value={doc.supervisor} disabled={disabled} onChange={(e) => update({ supervisor: e.target.value })} />
+                    <select className={inputCls} value={doc.supervisor} disabled={disabled} onChange={(e) => update({ supervisor: e.target.value })}>
+                      <option value="">(sem supervisor)</option>
+                      {doc.supervisor.trim() && !supervisors.some((s) => s.toUpperCase() === doc.supervisor.trim().toUpperCase()) && (
+                        <option value={doc.supervisor}>{doc.supervisor}</option>
+                      )}
+                      {supervisors.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
                   </div>
                 </div>
               </section>
@@ -483,27 +540,30 @@ export function FechamentoNavioPage({
                   </button>
                 </div>
                 <p className="text-[11px] text-text-light -mt-1">
-                  Por porão: (paga + extra/porão) × porões + extra fixo. Fixo: paga + extra. Porões em branco = os {doc.holds_count || 0} do navio.
+                  Por porão: paga × porões. Fixo: só a paga. Porões já vêm com os {doc.holds_count || 0} do navio — mude só pra quem fez menos.
                 </p>
                 <div className="overflow-x-auto -mx-4 px-4">
-                  <table className="w-full text-xs min-w-[520px]">
+                  <table className="w-full text-xs">
                     <thead>
                       <tr className="text-[10px] uppercase tracking-wider text-text-light">
                         <th className="text-left font-semibold pb-1">Nome</th>
-                        <th className="text-left font-semibold pb-1 w-16">Tipo</th>
-                        <th className="text-right font-semibold pb-1 w-20">Paga</th>
-                        <th className="text-right font-semibold pb-1 w-14" title="Porões só desta pessoa">Por.</th>
-                        <th className="text-right font-semibold pb-1 w-20" title="Extra por porão (ex.: produto no piso)">+/porão</th>
-                        <th className="text-right font-semibold pb-1 w-20" title="Valor fixo somado (rateio, adicional)">Extra</th>
-                        <th className="text-right font-semibold pb-1 w-24">Valor</th>
+                        <th className="text-left font-semibold pb-1 w-[68px]">Tipo</th>
+                        <th className="text-right font-semibold pb-1 w-[84px]">Paga</th>
+                        <th className="text-right font-semibold pb-1 w-[52px]" title="Porões desta pessoa">Por.</th>
+                        <th className="text-right font-semibold pb-1 w-[88px]">Valor</th>
                         <th className="w-5" />
                       </tr>
                     </thead>
                     <tbody>
-                      {doc.workers.map((w, i) => (
+                      {doc.workers.map((w, i) => {
+                        // Porões em branco no documento = os do navio; a caixa
+                        // mostra o número cheio e só grava quando difere.
+                        const holdsShown = w.holds ?? doc.holds_count;
+                        const extra = Number(w.fixed_extra) || 0;
+                        return (
                         <tr key={w.id} className="align-middle">
                           <td className="py-0.5 pr-1">
-                            <input className={`${inputCls} py-1`} value={w.name} disabled={disabled} placeholder="NOME" title={w.note || undefined} onChange={(e) => updateWorker(w.id, { name: e.target.value })} />
+                            <input className={`${inputCls} py-1 min-w-[180px]`} value={w.name} disabled={disabled} placeholder="NOME" title={w.note || undefined} onChange={(e) => updateWorker(w.id, { name: e.target.value })} />
                           </td>
                           <td className="py-0.5 pr-1">
                             <select className={`${inputCls} py-1 px-1`} value={w.mode} disabled={disabled} onChange={(e) => updateWorker(w.id, { mode: e.target.value === "FIXO" ? "FIXO" : "PORAO" })}>
@@ -515,24 +575,35 @@ export function FechamentoNavioPage({
                             <NumInput value={w.rate} className="py-1 px-1.5" disabled={disabled} onChange={(n) => updateWorker(w.id, { rate: n || 0 })} />
                           </td>
                           <td className="py-0.5 pr-1">
-                            <NumInput value={w.holds} nullable decimals={0} className="py-1 px-1.5" disabled={disabled || w.mode === "FIXO"} placeholder={w.mode === "FIXO" ? "—" : String(doc.holds_count || "")} onChange={(n) => updateWorker(w.id, { holds: n == null || n <= 0 ? null : Math.round(n) })} />
+                            {w.mode === "FIXO" ? (
+                              <input className={`${inputCls} py-1 px-1.5 text-right`} value="—" disabled readOnly />
+                            ) : (
+                              <NumInput
+                                value={holdsShown}
+                                decimals={0}
+                                className="py-1 px-1.5"
+                                disabled={disabled}
+                                onChange={(n) => {
+                                  const v = Math.max(0, Math.round(n || 0));
+                                  updateWorker(w.id, { holds: v <= 0 || v === doc.holds_count ? null : v });
+                                }}
+                              />
+                            )}
                           </td>
-                          <td className="py-0.5 pr-1">
-                            <NumInput value={w.extra_per_hold} className="py-1 px-1.5" disabled={disabled || w.mode === "FIXO"} onChange={(n) => updateWorker(w.id, { extra_per_hold: n || 0 })} />
+                          <td className="py-0.5 text-right font-semibold tabular-nums whitespace-nowrap" title={extra !== 0 ? `Inclui ${extra > 0 ? "+" : ""}${formatNumberBR(extra)} de rateio/adicional da escala` : undefined}>
+                            {formatNumberBR(totals.workerValues[i])}
+                            {extra !== 0 && <div className="text-[10px] font-normal text-amber-700 leading-none">incl. {extra > 0 ? "+" : ""}{formatNumberBR(extra)}</div>}
                           </td>
-                          <td className="py-0.5 pr-1">
-                            <NumInput value={w.fixed_extra} className="py-1 px-1.5" disabled={disabled} onChange={(n) => updateWorker(w.id, { fixed_extra: n || 0 })} />
-                          </td>
-                          <td className="py-0.5 text-right font-semibold tabular-nums whitespace-nowrap">{formatNumberBR(totals.workerValues[i])}</td>
                           <td className="py-0.5 text-center">
                             <button type="button" className="text-text-light hover:text-red-600 text-base leading-none" title="Remover" disabled={disabled} onClick={() => update({ workers: doc.workers.filter((x) => x.id !== w.id) })}>×</button>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                     <tfoot>
                       <tr className="border-t border-border">
-                        <td colSpan={6} className="pt-1.5 text-right font-bold uppercase text-text-light">Mão de obra</td>
+                        <td colSpan={4} className="pt-1.5 text-right font-bold uppercase text-text-light">Mão de obra</td>
                         <td className="pt-1.5 text-right font-bold tabular-nums whitespace-nowrap">{formatNumberBR(totals.maoDeObra)}</td>
                         <td />
                       </tr>

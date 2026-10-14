@@ -3467,18 +3467,6 @@ function JobDetailModal({
     }
   }
 
-  // Desconto manual (Desc. Geral clicável) por alocação: qual está sendo editada
-  // e o rascunho do valor. Salva em job_allocations.general_discount.
-  const [editDescAlloc, setEditDescAlloc] = useState<JobAllocation | null>(null);
-  const [descDraft, setDescDraft] = useState("");
-  async function saveGeneralDiscount() {
-    if (!editDescAlloc) return;
-    const v = parseFloat(descDraft.replace(/\./g, "").replace(",", ".")) || 0;
-    await db.from("job_allocations").update({ general_discount: v }).eq("id", editDescAlloc.id);
-    setEditDescAlloc(null);
-    setDescDraft("");
-    onChange();
-  }
   // Serviços extras do navio (Raspagem/Pintura) — pra rotular a quebra da paga
   // por porão de cada linha ("Limpeza X + Raspagem Y"). Cada um tem seu valor/
   // porão vindo do default_rate da função de mesmo nome (Valores).
@@ -5447,7 +5435,6 @@ function JobDetailModal({
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light" title="Base = Valor/Porão × Porões. O Extra (valor especial + rateio) aparece em amarelo logo abaixo da base, quando houver.">Base</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Total</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-purple-700 whitespace-nowrap" title="PAGTO NA FOLHA — líquido do Relatório de Líquidos. Sem import, igual ao Total.">Folha</th>
-                    <th className="px-2 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap" title="DESCONTO DE MATERIAL — material perdido no navio (Checklist › Perdido) dividido pela equipe. Avariado que a equipe trouxe de volta não entra aqui.">Desc. Geral</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-amber-700 whitespace-nowrap" title="ADIANTAMENTO — vale que o colaborador já pegou e está sendo descontado neste navio. Não muda o custo do navio, só o que ele recebe agora.">Adiant.</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-emerald-800 whitespace-nowrap" title="LÍQUIDO — o que o colaborador realmente recebe: Total − Desc. Geral − Adiantamento. Não altera o custo do navio.">Líquido</th>
                     {canEdit && !isReadOnly && !peopleReadOnly && <th className="w-14"></th>}
@@ -5770,50 +5757,9 @@ function JobDetailModal({
                             </button>
                           )}
                         </td>
-                        {/* Desc. Geral — rateio automático do material perdido +
-                            desconto manual (clicável) do colaborador. Os dois somam
-                            e são abatidos do líquido. */}
-                        <td className="px-2 py-2 text-right whitespace-nowrap">
-                          {(() => {
-                            const manual = Number(a.general_discount || 0);
-                            const total = descGeralPerPerson + manual;
-                            const clickable = canEdit && !isReadOnly && a.employee_id != null;
-                            if (editDescAlloc?.id === a.id) {
-                              return (
-                                <span className="inline-flex items-center gap-1">
-                                  <input
-                                    autoFocus
-                                    value={descDraft}
-                                    onChange={(e) => setDescDraft(e.target.value.replace(/[^\d.,]/g, ""))}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") saveGeneralDiscount();
-                                      if (e.key === "Escape") { setEditDescAlloc(null); setDescDraft(""); }
-                                    }}
-                                    placeholder="0,00"
-                                    className="w-20 px-1 py-0.5 border border-border rounded text-right text-xs"
-                                  />
-                                  <button type="button" onClick={saveGeneralDiscount} className="text-emerald-700" title="Salvar">✓</button>
-                                  <button type="button" onClick={() => { setEditDescAlloc(null); setDescDraft(""); }} className="text-text-light" title="Cancelar">×</button>
-                                </span>
-                              );
-                            }
-                            return (
-                              <button
-                                type="button"
-                                disabled={!clickable}
-                                onClick={() => { setEditDescAlloc(a); setDescDraft(manual > 0 ? manual.toFixed(2).replace(".", ",") : ""); }}
-                                className={`${total > 0 ? "text-red-700" : "text-text-light"} ${clickable ? "hover:bg-red-50 rounded px-1 -mx-1 cursor-pointer" : ""}`}
-                                title={
-                                  clickable
-                                    ? `Clique para descontar do colaborador${descGeralPerPerson > 0 ? ` (inclui ${brl(descGeralPerPerson)} de material perdido rateado)` : ""}`
-                                    : ""
-                                }
-                              >
-                                {total > 0 ? `− ${brl(total)}` : "—"}
-                              </button>
-                            );
-                          })()}
-                        </td>
+                        {/* Desc. Geral (material perdido rateado + desconto manual)
+                            saiu da tabela a pedido da diretoria — continua abatido
+                            do Líquido e listado no bloco "Descontos dos colaboradores". */}
                         {/* Adiant. — desconto de vale neste navio. Clicar abre o
                             seletor com os vales em aberto do colaborador. */}
                         <td className="px-2 py-2 text-right whitespace-nowrap">
@@ -5944,20 +5890,6 @@ function JobDetailModal({
                         </td>
                         <td className="px-2 py-2 text-right text-emerald-700 whitespace-nowrap">{brl(baseTotal + extraTotal)}</td>
                         <td className="px-2 py-2 text-right text-purple-700 whitespace-nowrap">{brl(folhaColTotal)}</td>
-                        {(() => {
-                          // Desc. Geral somado entre as linhas visíveis (cada
-                          // colaborador uma vez, como no rateio).
-                          const heads = new Set(
-                            totalAllocs.map((a) => a.employee_id).filter((id): id is number => id != null),
-                          ).size;
-                          const manualTotal = totalAllocs.reduce((s, a) => s + Number(a.general_discount || 0), 0);
-                          const t = +(descGeralPerPerson * heads + manualTotal).toFixed(2);
-                          return (
-                            <td className="px-2 py-2 text-right text-red-700 whitespace-nowrap">
-                              {t > 0 ? `− ${brl(t)}` : "—"}
-                            </td>
-                          );
-                        })()}
                         {(() => {
                           // Total descontado de vale neste navio, entre quem está
                           // na tabela. Conta cada colaborador UMA vez: o desconto é

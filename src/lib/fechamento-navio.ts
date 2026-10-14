@@ -87,6 +87,14 @@ export interface ClosingTotals {
   resultado: number; // totalBRL − totalGeral
 }
 
+// Tipo do serviço, igual à aba Navios: Costado quando o título leva "LIMPEZA
+// DE COSTADO" no lugar de porões/carga; senão Embarque (lavagem dos porões).
+export type ClosingServiceKind = "EMBARQUE" | "COSTADO";
+export const COSTADO_SERVICE_LABEL = "LIMPEZA DE COSTADO";
+export function closingServiceKind(doc: Pick<ClosingDoc, "service_label">): ClosingServiceKind {
+  return doc.service_label.trim() ? "COSTADO" : "EMBARQUE";
+}
+
 export const COMPANY_FOOTER = [
   "CARGO SHIPS CLEANING LTDA.",
   "Praça Iguatemi Martins, 08, VILA NOVA, SANTOS /SP, CEP: 11013-310",
@@ -199,18 +207,21 @@ export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
   const worked = allocations.filter((a) => a.job_id === job.id && allocCountsAsWorked(a));
 
   const workers: ClosingWorker[] = [];
-  // Embarque: paga × porões (+ serviço extra por porão + rateio fixo).
+  // Embarque: paga × porões (+ rateio fixo). O serviço extra por porão
+  // (raspagem/pintura) já entra somado na paga — na tela só existe a coluna
+  // Paga, igual ao "=350*7" que a diretoria escreve na planilha.
   for (const a of worked) {
     if ((a.kind || "EMBARQUE") !== "EMBARQUE") continue;
+    const extra = round2(Number(a.extra_value || 0));
     workers.push({
       id: newId("w"),
       name: (a.employees?.name || a.job_functions?.name || "").trim(),
       mode: "PORAO",
-      rate: round2(Number(a.rate) || 0),
+      rate: round2((Number(a.rate) || 0) + (Number(a.service_extra_rate) || 0)),
       holds: null,
-      extra_per_hold: round2(Number(a.service_extra_rate || 0)),
-      fixed_extra: round2(Number(a.extra_value || 0)),
-      note: a.extra_value && Number(a.extra_value) !== 0 ? "rateio" : "",
+      extra_per_hold: 0,
+      fixed_extra: extra,
+      note: extra !== 0 ? `rateio ${extra > 0 ? "+" : ""}${formatNumberBR(extra)}` : "",
     });
   }
   // Costado: valor por turno × turnos, agrupado por pessoa — entra como fixo.
@@ -295,7 +306,7 @@ export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
     holds_count: holds,
     cargo_type: (job.cargo_type || "").trim(),
     port: (job.port || job.ships?.port || "").trim(),
-    service_label: isCostadoOnly ? "LIMPEZA DE COSTADO" : "",
+    service_label: isCostadoOnly ? COSTADO_SERVICE_LABEL : "",
     start_date: (job.start_date || "").slice(0, 10),
     end_date: (job.end_date || "").slice(0, 10),
     title_override: null,
