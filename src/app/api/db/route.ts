@@ -54,6 +54,9 @@ const TABLE_MAP: Record<string, string> = {
   // tela; a EMISSÃO da nota passa por /api/financeiro/notas (numeração).
   invoice_clients: "invoiceClient",
   fiscal_notes: "fiscalNote",
+  // Fechamento de Navio (planilha da diretoria editável) — 1 linha por job,
+  // documento inteiro em `data`. Mesma régua do cadastro fiscal (FINANCEIRO_MOD).
+  job_closings: "jobClosing",
   // Also support "profiles" alias -> reads from users table
   profiles: "user",
   // WhatsApp
@@ -286,7 +289,7 @@ export async function POST(request: NextRequest) {
     // sem este bloqueio, qualquer papel logado poderia criar/alterar/apagar uma
     // nota emitida com um POST direto. Ler nota/cadastro fiscal exige o mesmo
     // FINANCEIRO_MOD view; editar o cadastro do cliente, edit.
-    if (spec.table === "fiscal_notes" || spec.table === "invoice_clients") {
+    if (spec.table === "fiscal_notes" || spec.table === "invoice_clients" || spec.table === "job_closings") {
       if (spec.table === "fiscal_notes" && spec.action !== "select") {
         return NextResponse.json(
           { data: null, error: { message: "Notas fiscais são emitidas/alteradas só pela rota /api/financeiro/notas", code: "403" }, count: null },

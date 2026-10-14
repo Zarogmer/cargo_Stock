@@ -66,6 +66,7 @@ import { FiscalNoteModal } from "@/components/financeiro/fiscal-note-modal";
 import { InvoiceClientsTab } from "@/components/financeiro/invoice-clients-tab";
 import { DemonstracaoFinanceiraPage } from "@/components/financeiro/demonstracao-financeira-page";
 import { RelatorioValesPage } from "@/components/financeiro/relatorio-vales-page";
+import { FechamentoNavioPage } from "@/components/financeiro/fechamento-navio-page";
 import {
   type Advance, type AdvanceDiscount as AdvanceDiscountRow,
   balanceOf, jobDiscountFor, openAdvances,
@@ -751,6 +752,27 @@ export default function FinanceiroPage() {
         />
       ),
     },
+    // A planilha de fechamento da diretoria na tela: caixinhas de porões/paga/
+    // extras/despesas à esquerda e a folha recalculando à direita. Lê a escala
+    // já preparada (cadastro + serviço extra) e as despesas do Resultado do
+    // Navio; o que o usuário mexe fica em job_closings, por navio.
+    {
+      key: "fechamento",
+      label: "📄 Fechamento de Navio",
+      content: (
+        <FechamentoNavioPage
+          jobs={jobs}
+          allocations={allocations}
+          adjustments={adjustments}
+          functions={functions}
+          shipsAll={shipsAll}
+          canEdit={canEdit}
+          profileName={profile?.full_name || "Sistema"}
+          dollar={dollar}
+          loading={loading}
+        />
+      ),
+    },
     {
       key: "controle",
       label: "🎯 Controle de Funcionários",
@@ -836,7 +858,7 @@ export default function FinanceiroPage() {
             Catálogo de funções, pagamentos e documentos
           </p>
         </div>
-        {initialTab === "navios" && <DollarTicker dollar={dollar} />}
+        {(initialTab === "navios" || initialTab === "fechamento") && <DollarTicker dollar={dollar} />}
       </div>
 
       {/* Filtro de período/porto/cliente + KPIs — dirigem as listas de pagamento
@@ -847,7 +869,7 @@ export default function FinanceiroPage() {
           com rótulo próprio; campo ativo fica azul e o contador mostra na hora
           quantos navios sobram no recorte. Porto/cliente caem no cadastro do
           navio quando o job não tem (jobPort/jobClient). */}
-      {!["funcoes", "controle", "vales", "demonstracao", "clientes"].includes(initialTab) && (<>
+      {!["funcoes", "controle", "vales", "demonstracao", "clientes", "fechamento"].includes(initialTab) && (<>
       <div className="rounded-xl border border-primary/25 bg-gradient-to-r from-blue-50/80 via-card to-card shadow-sm p-3">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
           <span className="text-sm font-bold text-text">🔎 Filtrar navios</span>

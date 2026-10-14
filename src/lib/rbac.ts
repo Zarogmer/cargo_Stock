@@ -422,6 +422,9 @@ export const NAV_ITEMS: NavItem[] = [
     children: [
       { label: "Pagamentos e Valores", href: "/financeiro?tab=funcoes" },
       { label: "Resultado do Navio", href: "/financeiro?tab=navios" },
+      // Planilha de fechamento da diretoria (porões × paga, despesas, totais)
+      // editável por navio, com a folha ao lado — pedido do Guilherme, 2026-10-14.
+      { label: "Fechamento de Navio", href: "/financeiro?tab=fechamento" },
       { label: "Controle de Funcionários", href: "/financeiro?tab=controle" },
       { label: "Relatório de Vales", href: "/financeiro?tab=vales" },
       // Cadastro fiscal dos clientes (cabeçalho das Notas de Débito/Crédito).

@@ -753,6 +753,7 @@ model Job {
   ship_reports ShipReport[]
   evaluations  PerformanceEvaluation[]
   fiscal_notes FiscalNote[]
+  closing     JobClosing?
   created_at  DateTime        @default(now()) @db.Timestamptz()
   updated_at  DateTime        @updatedAt @db.Timestamptz()
   created_by  String
@@ -760,6 +761,24 @@ model Job {
   @@index([status])
   @@index([start_date])
   @@map("jobs")
+}
+
+// Fechamento de Navio (Financeiro › Fechamento de Navio) — a planilha
+// "NN - FECHAMENTO <NAVIO> - <CLIENTE>.xlsx" da diretoria, editável na tela.
+// Uma linha por job; `data` guarda o documento inteiro (cabeçalho, valores
+// cobrados, taxa do dólar, funcionários com paga/porões/extras e despesas) no
+// formato ClosingDoc de src/lib/fechamento-navio.ts. Sem linha = a tela monta
+// o rascunho a partir da escala e das despesas do navio.
+model JobClosing {
+  id         Int      @id @default(autoincrement())
+  job_id     String   @unique
+  jobs       Job      @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  data       Json
+  updated_by String?
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz()
+  created_at DateTime @default(now()) @db.Timestamptz()
+
+  @@map("job_closings")
 }
 
 model JobAllocation {
