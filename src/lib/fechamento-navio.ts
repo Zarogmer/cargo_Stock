@@ -39,6 +39,9 @@ export interface ClosingWorker {
   holds: number | null;
   extra_per_hold: number;
   fixed_extra: number;
+  // Desconto desta pessoa neste navio (R$ 50 de material, adiantamento…),
+  // abatido do valor da linha.
+  discount: number;
   // Observação curta, só na tela ("3 turnos", "rateio").
   note: string;
 }
@@ -112,10 +115,11 @@ const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 export function workerValue(w: ClosingWorker, globalHolds: number): number {
   const rate = Number(w.rate) || 0;
   const fixed = Number(w.fixed_extra) || 0;
-  if (w.mode === "FIXO") return round2(rate + fixed);
+  const discount = Number(w.discount) || 0;
+  if (w.mode === "FIXO") return round2(rate + fixed - discount);
   const holds = w.holds != null && w.holds > 0 ? w.holds : Math.max(0, Number(globalHolds) || 0);
   const perHold = Number(w.extra_per_hold) || 0;
-  return round2((rate + perHold) * holds + fixed);
+  return round2((rate + perHold) * holds + fixed - discount);
 }
 
 // "03/09/26" — datas chegam como "2026-09-03" ou ISO com hora; só os 10
@@ -221,6 +225,8 @@ export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
       holds: null,
       extra_per_hold: 0,
       fixed_extra: extra,
+      // Desconto manual já lançado no Resultado do Navio (Desc. Geral).
+      discount: round2(Number(a.general_discount || 0)),
       note: extra !== 0 ? `rateio ${extra > 0 ? "+" : ""}${formatNumberBR(extra)}` : "",
     });
   }
@@ -249,6 +255,7 @@ export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
       holds: null,
       extra_per_hold: 0,
       fixed_extra: round2(row.extra),
+      discount: 0,
       note: `${row.turnos} turno${row.turnos === 1 ? "" : "s"} × ${costadoRate}`,
     });
   }
@@ -263,6 +270,7 @@ export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
       holds: null,
       extra_per_hold: 0,
       fixed_extra: round2(Number(a.extra_value || 0)),
+      discount: round2(Number(a.general_discount || 0)),
       note: "administrativo",
     });
   }
@@ -358,6 +366,7 @@ export function normalizeClosingDoc(raw: unknown): ClosingDoc | null {
           holds: w?.holds == null || !Number.isFinite(Number(w.holds)) || Number(w.holds) <= 0 ? null : Number(w.holds),
           extra_per_hold: num(w?.extra_per_hold),
           fixed_extra: num(w?.fixed_extra),
+          discount: num(w?.discount),
           note: str(w?.note),
         }))
       : [],
