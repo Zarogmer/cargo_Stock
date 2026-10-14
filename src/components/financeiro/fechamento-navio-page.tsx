@@ -9,6 +9,7 @@ import { computeShipYearNumbers } from "@/lib/ship-number";
 import type { AnnualShipRow } from "@/lib/relatorios-anuais-xlsx";
 import { DEFAULT_CLIENTS } from "@/lib/port-client-options";
 import { employeeHasRole } from "@/lib/utils";
+import { pickFunctionByName } from "@/lib/jobUnits";
 import {
   COMPANY_FOOTER,
   SERVICE_CHARGE_LABEL,
@@ -24,6 +25,7 @@ import {
   normalizeClosingDoc,
   parseNumberBR,
   shortDateBR,
+  type ClosingAdminRow,
   type ClosingCharge,
   type ClosingDoc,
   type ClosingExpense,
@@ -52,6 +54,18 @@ interface ClosingRow {
   data: unknown;
   updated_by: string | null;
   updated_at: string;
+}
+
+// Colaborador do RH com o que esta tela usa: supervisores pro cabeçalho e o
+// setor Administrativo (com o valor padrão por navio) pra tabela Administrativo.
+interface EmployeeRow {
+  id: number;
+  name: string;
+  role: string | null;
+  secondary_role: string | null;
+  status: string | null;
+  sector: string | null;
+  admin_ship_rate: string | number | null;
 }
 
 interface DebitNoteRow {
@@ -143,24 +157,39 @@ export function FechamentoNavioPage({
   const [confirmReset, setConfirmReset] = useState(false);
   const loadSeq = useRef(0);
 
-  // Supervisores (função principal ou 2ª = SUPERVISOR, não demitidos) pro
-  // select do cabeçalho — os mesmos que a Escalação sugere pra função.
-  const [supervisors, setSupervisors] = useState<string[]>([]);
+  // Colaboradores do RH: supervisores (função principal ou 2ª = SUPERVISOR,
+  // não demitidos) pro select do cabeçalho e o setor Administrativo pra
+  // tabela Administrativo. O rascunho só monta depois que isso chega
+  // (empLoaded), senão o administrativo entraria vazio.
+  const [employees, setEmployees] = useState<EmployeeRow[]>([]);
+  const [empLoaded, setEmpLoaded] = useState(false);
   useEffect(() => {
     let alive = true;
     (async () => {
-      const res = await db.from("employees").select("id, name, role, secondary_role, status").order("name");
+      const res = await db.from("employees").select("id, name, role, secondary_role, status, sector, admin_ship_rate").order("name");
       if (!alive) return;
-      const rows = ((res.data as { name: string; role: string | null; secondary_role: string | null; status: string | null }[] | null) || []);
-      setSupervisors(
-        rows
-          .filter((e) => e.status !== "INATIVO" && employeeHasRole(e, "SUPERVISOR"))
-          .map((e) => (e.name || "").trim())
-          .filter(Boolean),
-      );
+      setEmployees(((res.data as EmployeeRow[] | null) || []));
+      setEmpLoaded(true);
     })();
     return () => { alive = false; };
   }, []);
+  const supervisors = useMemo(
+    () => employees
+      .filter((e) => e.status !== "INATIVO" && employeeHasRole(e, "SUPERVISOR"))
+      .map((e) => (e.name || "").trim())
+      .filter(Boolean),
+    [employees],
+  );
+  // Setor Administrativo (menos demitidos) — quem entra pré-pronto na tabela,
+  // igual ao auto-add do Resultado do Navio.
+  const adminEmployees = useMemo(
+    () => employees.filter((e) => e.sector === "ADMINISTRATIVO" && (e.status ?? "ATIVO") !== "INATIVO"),
+    [employees],
+  );
+  const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
+  // Função-carregador ADMINISTRATIVO: é nela que o Resultado do Navio guarda
+  // as alocações do administrativo (kind=ADMINISTRATIVO).
+  const adminFn = useMemo(() => pickFunctionByName(functions, "ADMINISTRATIVO", "EMBARQUE") || null, [functions]);
 
   // Clientes pro select: os das operações e dos navios cadastrados + as
   // sementes da aba Navios, sem repetir por caixa ("Deep" = "DEEP").
@@ -227,14 +256,15 @@ export function FechamentoNavioPage({
         debitNote: debit
           ? { currency: debit.currency, subtotal: Number(debit.subtotal || 0), exchange_rate: debit.exchange_rate == null ? null : Number(debit.exchange_rate) }
           : null,
+        adminEmployees,
       });
     },
-    [allocations, adjustments, functions, numberOf, shipById],
+    [allocations, adjustments, functions, numberOf, shipById, adminEmployees],
   );
 
   // Troca de navio: lê o fechamento salvo; sem linha, monta o rascunho.
   useEffect(() => {
-    if (!job || loading) { setDoc(null); setSavedJson(null); setSavedAt(null); return; }
+    if (!job || loading || !empLoaded) { setDoc(null); setSavedJson(null); setSavedAt(null); return; }
     const seq = ++loadSeq.current;
     setLoadingDoc(true);
     setMsg(null);
@@ -262,7 +292,7 @@ export function FechamentoNavioPage({
     // buildDraft muda a cada reload do Financeiro; o rascunho só deve ser
     // montado na troca de navio (senão sobrescreve o que o usuário digitou).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job?.id, loading]);
+  }, [job?.id, loading, empLoaded]);
 
   const totals = useMemo(() => (doc ? computeClosing(doc) : null), [doc]);
   // Embarque é sempre por porão (sem coluna Tipo); o Costado mistura turnos
@@ -275,6 +305,9 @@ export function FechamentoNavioPage({
   }, []);
   const updateWorker = useCallback((id: string, patch: Partial<ClosingWorker>) => {
     setDoc((d) => (d ? { ...d, workers: d.workers.map((w) => (w.id === id ? { ...w, ...patch } : w)) } : d));
+  }, []);
+  const updateAdmin = useCallback((id: string, patch: Partial<ClosingAdminRow>) => {
+    setDoc((d) => (d ? { ...d, admin: d.admin.map((a) => (a.id === id ? { ...a, ...patch } : a)) } : d));
   }, []);
   const updateCharge = useCallback((id: string, patch: Partial<ClosingCharge>) => {
     setDoc((d) => (d ? { ...d, charges: d.charges.map((c) => (c.id === id ? { ...c, ...patch } : c)) } : d));
@@ -298,7 +331,62 @@ export function FechamentoNavioPage({
     }
     setSavedJson(JSON.stringify(doc));
     setSavedAt({ by: profileName, at: new Date().toISOString() });
-    setMsg({ kind: "ok", text: "Fechamento salvo." });
+    const syncErr = await syncAdminToResultado(job, doc.admin);
+    setMsg(syncErr
+      ? { kind: "err", text: `Fechamento salvo, mas o administrativo não foi pro Resultado do Navio: ${syncErr}` }
+      : { kind: "ok", text: "Fechamento salvo. Administrativo atualizado no Resultado do Navio." });
+  }
+
+  // Leva a tabela Administrativo pro Resultado do Navio (alocações
+  // kind=ADMINISTRATIVO do navio): quem já está lá tem o valor atualizado,
+  // quem falta é incluído. Linhas sem colaborador do cadastro ficam só na
+  // folha. Não remove ninguém de lá — isso se faz no próprio Resultado.
+  async function syncAdminToResultado(j: Job, rows: ClosingAdminRow[]): Promise<string | null> {
+    const linked = rows.filter((r) => r.employee_id != null);
+    if (linked.length === 0) return null;
+    const res = await db.from("job_allocations").select("id, employee_id, rate, kind, status").eq("job_id", j.id);
+    if (res.error) return res.error.message;
+    const existing = ((res.data as Array<{ id: number; employee_id: number | null; rate: string | number; kind: string | null; status: string }> | null) || [])
+      .filter((a) => a.kind === "ADMINISTRATIVO" && a.status === "ATIVO");
+    const toInsert: Array<Record<string, unknown>> = [];
+    for (const r of linked) {
+      const amount = Number(r.amount) || 0;
+      const cur = existing.find((a) => a.employee_id === r.employee_id);
+      if (cur) {
+        if (Number(cur.rate) !== amount) {
+          const up = await db.from("job_allocations").update({ rate: amount }).eq("id", cur.id);
+          if (up.error) return up.error.message;
+        }
+      } else if (adminFn) {
+        toInsert.push({
+          job_id: j.id,
+          function_id: adminFn.id,
+          employee_id: r.employee_id,
+          quantity: 1,
+          rate: amount,
+          pluxee_value: null,
+          status: "ATIVO",
+          kind: "ADMINISTRATIVO",
+        });
+      }
+    }
+    if (toInsert.length > 0) {
+      const ins = await db.from("job_allocations").insert(toInsert);
+      if (ins.error) return ins.error.message;
+    }
+    return null;
+  }
+
+  // 💾 grava o valor da linha como padrão do colaborador
+  // (employees.admin_ship_rate): os PRÓXIMOS navios já entram com ele, tanto
+  // aqui quanto no Resultado do Navio.
+  async function handleSaveAdminDefault(row: ClosingAdminRow) {
+    if (row.employee_id == null) return;
+    const amount = Number(row.amount) || 0;
+    const res = await db.from("employees").update({ admin_ship_rate: amount }).eq("id", row.employee_id);
+    if (res.error) { setMsg({ kind: "err", text: `Não gravou o padrão: ${res.error.message}` }); return; }
+    setEmployees((list) => list.map((e) => (e.id === row.employee_id ? { ...e, admin_ship_rate: amount } : e)));
+    setMsg({ kind: "ok", text: `${formatBRL(amount)} gravado como padrão de ${row.name.split(" ")[0] || "colaborador"} pros próximos navios.` });
   }
 
   async function handleReset() {
@@ -607,9 +695,113 @@ export function FechamentoNavioPage({
                     </tbody>
                     <tfoot>
                       <tr className="border-t border-border">
-                        <td colSpan={4} className="pt-1.5 text-right font-bold uppercase text-text-light">Mão de obra</td>
-                        <td className="pt-1.5 text-right font-bold tabular-nums whitespace-nowrap">{formatNumberBR(totals.maoDeObra)}</td>
+                        <td colSpan={4} className="pt-1.5 text-right font-bold uppercase text-text-light">Equipe</td>
+                        <td className="pt-1.5 text-right font-bold tabular-nums whitespace-nowrap">{formatNumberBR(totals.equipe)}</td>
                         <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </section>
+
+              {/* Administrativo */}
+              <section className={sectionCls}>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-text">Administrativo <span className="font-normal text-text-light">({doc.admin.length})</span></h3>
+                  {(() => {
+                    const inDoc = new Set(doc.admin.map((a) => a.employee_id).filter((id): id is number => id != null));
+                    const candidates = adminEmployees.filter((e) => !inDoc.has(e.id));
+                    return (
+                      <select
+                        className="text-xs text-primary bg-transparent cursor-pointer disabled:text-text-light"
+                        value=""
+                        disabled={disabled}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === "__free") {
+                            update({ admin: [...doc.admin, { id: newId("ad"), employee_id: null, name: "", amount: 0 }] });
+                            return;
+                          }
+                          const id = parseInt(v);
+                          const emp = candidates.find((c) => c.id === id);
+                          if (!emp) return;
+                          update({ admin: [...doc.admin, { id: newId("ad"), employee_id: emp.id, name: (emp.name || "").trim(), amount: Number(emp.admin_ship_rate) || 0 }] });
+                        }}
+                      >
+                        <option value="">+ pessoa</option>
+                        {candidates.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                        <option value="__free">Outro (digitar nome)…</option>
+                      </select>
+                    );
+                  })()}
+                </div>
+                <p className="text-[11px] text-text-light -mt-1">
+                  Setor Administrativo (RH › Colaboradores), valor fixo por navio — entra na mão de obra, fora da folha.
+                  Já vem com o padrão de cada um; mude o valor pra valer só neste navio, ou clique no 💾 pra virar o padrão dos próximos.
+                  Ao salvar, vai junto pro Resultado do Navio.
+                </p>
+                <div className="overflow-x-auto -mx-4 px-4">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-[10px] uppercase tracking-wider text-text-light">
+                        <th className="text-left font-semibold pb-1">Nome</th>
+                        <th className="text-right font-semibold pb-1 w-[100px]">Valor</th>
+                        <th className="w-6" />
+                        <th className="w-5" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {doc.admin.map((a) => {
+                        const emp = a.employee_id != null ? employeeById.get(a.employee_id) : undefined;
+                        const savedDefault = Number(emp?.admin_ship_rate) || 0;
+                        const differs = emp != null && (Number(a.amount) || 0) !== savedDefault;
+                        return (
+                          <tr key={a.id} className="align-middle">
+                            <td className="py-0.5 pr-1">
+                              <input
+                                className={`${inputCls} py-1 min-w-[180px]`}
+                                value={a.name}
+                                disabled={disabled || emp != null}
+                                placeholder="NOME"
+                                title={emp?.role && emp.role.trim().toUpperCase() !== "ADMINISTRATIVO" ? emp.role : undefined}
+                                onChange={(e) => updateAdmin(a.id, { name: e.target.value })}
+                              />
+                            </td>
+                            <td className="py-0.5 pr-1">
+                              <NumInput value={a.amount} className="py-1 px-1.5" disabled={disabled} onChange={(n) => updateAdmin(a.id, { amount: n || 0 })} />
+                            </td>
+                            <td className="py-0.5 text-center">
+                              {differs && !disabled && (
+                                <button
+                                  type="button"
+                                  className="text-sm leading-none hover:bg-primary/10 rounded px-0.5"
+                                  title={`Gravar ${formatBRL(Number(a.amount) || 0)} como padrão de ${a.name.split(" ")[0]} pros próximos navios (hoje: ${formatBRL(savedDefault)})`}
+                                  onClick={() => handleSaveAdminDefault(a)}
+                                >
+                                  💾
+                                </button>
+                              )}
+                            </td>
+                            <td className="py-0.5 text-center">
+                              <button type="button" className="text-text-light hover:text-red-600 text-base leading-none" title="Remover desta folha" disabled={disabled} onClick={() => update({ admin: doc.admin.filter((x) => x.id !== a.id) })}>×</button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {doc.admin.length === 0 && (
+                        <tr><td colSpan={4} className="py-2 text-xs text-text-light">Ninguém do administrativo nesta folha.</td></tr>
+                      )}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t border-border">
+                        <td className="pt-1.5 text-right font-bold uppercase text-text-light">Administrativo</td>
+                        <td className="pt-1.5 text-right font-bold tabular-nums whitespace-nowrap">{formatNumberBR(totals.administrativo)}</td>
+                        <td colSpan={2} />
+                      </tr>
+                      <tr>
+                        <td className="pt-0.5 text-right font-bold uppercase text-text-light">Mão de obra</td>
+                        <td className="pt-0.5 text-right font-bold tabular-nums whitespace-nowrap" title="Equipe + Administrativo">{formatNumberBR(totals.maoDeObra)}</td>
+                        <td colSpan={2} />
                       </tr>
                     </tfoot>
                   </table>
@@ -748,6 +940,15 @@ function ClosingSheet({ doc, totals }: { doc: ClosingDoc; totals: ReturnType<typ
               </tr>
             );
           })}
+          {/* Administrativo: na planilha da diretoria vem logo abaixo da equipe,
+              numerado em sequência (a "CAMILA … 200,00"). */}
+          {doc.admin.map((a) => (
+            <tr key={a.id}>
+              <td className={`${cell} w-8 text-center`}>{++rowNo}</td>
+              <td className={`${cell} uppercase`}>{a.name || <span className="text-gray-400">—</span>}</td>
+              <td className={`${cell} w-32 text-center tabular-nums`}>{formatNumberBR(a.amount)}</td>
+            </tr>
+          ))}
           <tr>
             <td className={`${cell} w-8 text-center`}>{++rowNo}</td>
             <td className={cell}>&nbsp;</td>
