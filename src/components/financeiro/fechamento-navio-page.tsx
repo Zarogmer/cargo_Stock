@@ -11,7 +11,8 @@ import { DEFAULT_CLIENTS } from "@/lib/port-client-options";
 import { employeeHasRole } from "@/lib/utils";
 import {
   COMPANY_FOOTER,
-  COSTADO_SERVICE_LABEL,
+  SERVICE_CHARGE_LABEL,
+  applyClosingServiceKind,
   buildClosingDraft,
   buildClosingTitle,
   closingServiceKind,
@@ -434,7 +435,7 @@ export function FechamentoNavioPage({
                       className={inputCls}
                       value={closingServiceKind(doc)}
                       disabled={disabled}
-                      onChange={(e) => update({ service_label: e.target.value === "COSTADO" ? COSTADO_SERVICE_LABEL : "" })}
+                      onChange={(e) => setDoc((d) => (d ? applyClosingServiceKind(d, e.target.value === "COSTADO" ? "COSTADO" : "EMBARQUE") : d))}
                     >
                       <option value="EMBARQUE">Embarque</option>
                       <option value="COSTADO">Costado</option>
@@ -497,7 +498,7 @@ export function FechamentoNavioPage({
                 <div className="space-y-2">
                   {doc.charges.map((c) => (
                     <div key={c.id} className="grid grid-cols-[1fr_72px_110px_24px] gap-1.5 items-center">
-                      <input className={inputCls} placeholder="LAVAGEM DOS PORÕES" value={c.label} disabled={disabled} onChange={(e) => updateCharge(c.id, { label: e.target.value })} />
+                      <input className={inputCls} placeholder={SERVICE_CHARGE_LABEL[closingServiceKind(doc)]} value={c.label} disabled={disabled} onChange={(e) => updateCharge(c.id, { label: e.target.value })} />
                       <select className={inputCls} value={c.currency} disabled={disabled} onChange={(e) => updateCharge(c.id, { currency: e.target.value === "USD" ? "USD" : "BRL" })}>
                         <option value="BRL">R$</option>
                         <option value="USD">USD</option>
@@ -544,8 +545,8 @@ export function FechamentoNavioPage({
                 </div>
                 <p className="text-[11px] text-text-light -mt-1">
                   {isCostado
-                    ? "Fixo: só a paga (turnos já somados). Por porão: paga × porões. "
-                    : `Valor = paga × porões − desconto. Porões já vêm com os ${doc.holds_count || 0} do navio — mude só pra quem fez menos. `}
+                    ? "Costado: valor = paga (turnos já somados) − desconto. "
+                    : `Embarque: valor = paga × porões − desconto. Porões já vêm com os ${doc.holds_count || 0} do navio — mude só pra quem fez menos. `}
                   Desc.: o que tirar desta pessoa (R$ 50 de material, vale…).
                 </p>
                 <div className="overflow-x-auto -mx-4 px-4">
@@ -553,7 +554,6 @@ export function FechamentoNavioPage({
                     <thead>
                       <tr className="text-[10px] uppercase tracking-wider text-text-light">
                         <th className="text-left font-semibold pb-1">Nome</th>
-                        {isCostado && <th className="text-left font-semibold pb-1 w-[68px]">Tipo</th>}
                         <th className="text-right font-semibold pb-1 w-[84px]">Paga</th>
                         <th className="text-right font-semibold pb-1 w-[52px]" title="Porões desta pessoa">Por.</th>
                         <th className="text-right font-semibold pb-1 w-[76px]" title="Desconto desta pessoa, abatido do valor">Desc.</th>
@@ -572,14 +572,6 @@ export function FechamentoNavioPage({
                           <td className="py-0.5 pr-1">
                             <input className={`${inputCls} py-1 min-w-[180px]`} value={w.name} disabled={disabled} placeholder="NOME" title={w.note || undefined} onChange={(e) => updateWorker(w.id, { name: e.target.value })} />
                           </td>
-                          {isCostado && (
-                            <td className="py-0.5 pr-1">
-                              <select className={`${inputCls} py-1 px-1`} value={w.mode} disabled={disabled} onChange={(e) => updateWorker(w.id, { mode: e.target.value === "FIXO" ? "FIXO" : "PORAO" })}>
-                                <option value="PORAO">porão</option>
-                                <option value="FIXO">fixo</option>
-                              </select>
-                            </td>
-                          )}
                           <td className="py-0.5 pr-1">
                             <NumInput value={w.rate} className="py-1 px-1.5" disabled={disabled} onChange={(n) => updateWorker(w.id, { rate: n || 0 })} />
                           </td>
@@ -615,7 +607,7 @@ export function FechamentoNavioPage({
                     </tbody>
                     <tfoot>
                       <tr className="border-t border-border">
-                        <td colSpan={isCostado ? 5 : 4} className="pt-1.5 text-right font-bold uppercase text-text-light">Mão de obra</td>
+                        <td colSpan={4} className="pt-1.5 text-right font-bold uppercase text-text-light">Mão de obra</td>
                         <td className="pt-1.5 text-right font-bold tabular-nums whitespace-nowrap">{formatNumberBR(totals.maoDeObra)}</td>
                         <td />
                       </tr>

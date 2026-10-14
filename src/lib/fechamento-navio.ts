@@ -52,6 +52,17 @@ export interface ClosingExpense {
   amount: number;
 }
 
+// Pessoal administrativo (RH › Setor = Administrativo): valor fixo por navio,
+// o "200" da Camila na planilha. Entra na MÃO DE OBRA, fora da folha.
+// employee_id liga à pessoa do cadastro (pra sincronizar com o Resultado do
+// Navio e gravar o padrão em employees.admin_ship_rate); null = linha avulsa.
+export interface ClosingAdminRow {
+  id: string;
+  employee_id: number | null;
+  name: string;
+  amount: number;
+}
+
 export interface ClosingDoc {
   version: 1;
   // Cabeçalho — "42 - M/V EUROPA GRAECA - 7 PORÕES - CARVÃO - SANTOS - 03/09/26 À 06/09/26"
@@ -72,6 +83,7 @@ export interface ClosingDoc {
   // Taxa do dólar negociada (só pesa quando há linha em USD).
   exchange_rate: number | null;
   workers: ClosingWorker[];
+  admin: ClosingAdminRow[];
   expenses: ClosingExpense[];
   notes: string;
 }
@@ -79,6 +91,9 @@ export interface ClosingDoc {
 export interface ClosingTotals {
   title: string;
   workerValues: number[]; // mesma ordem de doc.workers
+  // Só a equipe (sem administrativo) e só o administrativo; MÃO DE OBRA soma os dois.
+  equipe: number;
+  administrativo: number;
   maoDeObra: number;
   usdTotal: number;
   brlCharges: number;
@@ -96,6 +111,29 @@ export type ClosingServiceKind = "EMBARQUE" | "COSTADO";
 export const COSTADO_SERVICE_LABEL = "LIMPEZA DE COSTADO";
 export function closingServiceKind(doc: Pick<ClosingDoc, "service_label">): ClosingServiceKind {
   return doc.service_label.trim() ? "COSTADO" : "EMBARQUE";
+}
+
+// Nome do serviço na linha "VALOR COBRADO R$ … ( … )".
+export const SERVICE_CHARGE_LABEL: Record<ClosingServiceKind, string> = {
+  EMBARQUE: "LAVAGEM DOS PORÕES",
+  COSTADO: "LIMPEZA DE COSTADO",
+};
+
+// Trocar o serviço no cabeçalho arrasta o resto da folha: Embarque é paga ×
+// porões pra todo mundo; Costado é valor fixo (turnos já somados). A linha
+// cobrada que ainda tem o nome padrão do outro serviço muda de nome junto —
+// o que foi digitado à mão ("2 BARCOS") fica.
+export function applyClosingServiceKind(doc: ClosingDoc, kind: ClosingServiceKind): ClosingDoc {
+  const mode: ClosingWorkerMode = kind === "COSTADO" ? "FIXO" : "PORAO";
+  const other = SERVICE_CHARGE_LABEL[kind === "COSTADO" ? "EMBARQUE" : "COSTADO"].toUpperCase();
+  return {
+    ...doc,
+    service_label: kind === "COSTADO" ? COSTADO_SERVICE_LABEL : "",
+    workers: doc.workers.map((w) => (w.mode === mode ? w : { ...w, mode })),
+    charges: doc.charges.map((c) =>
+      c.label.trim().toUpperCase() === other || c.label.trim() === "" ? { ...c, label: SERVICE_CHARGE_LABEL[kind] } : c,
+    ),
+  };
 }
 
 export const COMPANY_FOOTER = [
@@ -151,7 +189,9 @@ export function buildClosingTitle(doc: ClosingDoc): string {
 
 export function computeClosing(doc: ClosingDoc): ClosingTotals {
   const workerValues = doc.workers.map((w) => workerValue(w, doc.holds_count));
-  const maoDeObra = round2(workerValues.reduce((s, v) => s + v, 0));
+  const equipe = round2(workerValues.reduce((s, v) => s + v, 0));
+  const administrativo = round2(doc.admin.reduce((s, a) => s + (Number(a.amount) || 0), 0));
+  const maoDeObra = round2(equipe + administrativo);
   const usdTotal = round2(doc.charges.filter((c) => c.currency === "USD").reduce((s, c) => s + (Number(c.amount) || 0), 0));
   const brlCharges = round2(doc.charges.filter((c) => c.currency !== "USD").reduce((s, c) => s + (Number(c.amount) || 0), 0));
   const rate = Number(doc.exchange_rate) || 0;
@@ -161,6 +201,8 @@ export function computeClosing(doc: ClosingDoc): ClosingTotals {
   return {
     title: buildClosingTitle(doc),
     workerValues,
+    equipe,
+    administrativo,
     maoDeObra,
     usdTotal,
     brlCharges,
@@ -202,6 +244,10 @@ export interface ClosingDraftInput {
   services: string[] | null | undefined;
   // Última Nota de Débito do navio, se houver: define moeda/valor cobrado e taxa.
   debitNote?: { currency: string | null; subtotal: number; exchange_rate: number | null } | null;
+  // Setor Administrativo do RH (não demitidos) com o valor padrão por navio
+  // (employees.admin_ship_rate). Quem ainda não está na escala do navio entra
+  // com esse padrão — igual ao auto-add do Resultado do Navio.
+  adminEmployees?: Array<{ id: number; name: string; admin_ship_rate: string | number | null }>;
 }
 
 export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
@@ -259,20 +305,24 @@ export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
       note: `${row.turnos} turno${row.turnos === 1 ? "" : "s"} × ${costadoRate}`,
     });
   }
-  // Administrativo: valor fixo por navio (employees.admin_ship_rate gravado na alocação).
+  // Administrativo: tabela própria. Quem já está no Resultado do Navio
+  // (alocação kind=ADMINISTRATIVO) entra com o valor de lá; o resto do setor
+  // entra com o padrão do cadastro (employees.admin_ship_rate), pré-pronto.
+  const admin: ClosingAdminRow[] = [];
+  const adminSeen = new Set<number>();
   for (const a of worked) {
     if (a.kind !== "ADMINISTRATIVO") continue;
-    workers.push({
-      id: newId("w"),
+    if (a.employee_id != null) adminSeen.add(a.employee_id);
+    admin.push({
+      id: newId("ad"),
+      employee_id: a.employee_id ?? null,
       name: (a.employees?.name || "Administrativo").trim(),
-      mode: "FIXO",
-      rate: round2(Number(a.rate) || 0),
-      holds: null,
-      extra_per_hold: 0,
-      fixed_extra: round2(Number(a.extra_value || 0)),
-      discount: round2(Number(a.general_discount || 0)),
-      note: "administrativo",
+      amount: round2((Number(a.rate) || 0) + (Number(a.extra_value) || 0) - (Number(a.general_discount) || 0)),
     });
+  }
+  for (const e of input.adminEmployees || []) {
+    if (adminSeen.has(e.id)) continue;
+    admin.push({ id: newId("ad"), employee_id: e.id, name: (e.name || "").trim(), amount: round2(Number(e.admin_ship_rate) || 0) });
   }
 
   // Despesas: categorias conhecidas somadas numa linha; o resto linha a linha.
@@ -298,7 +348,7 @@ export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
   // Valor cobrado: a Nota de Débito emitida manda (moeda + valor); sem nota,
   // o valor do contrato do job em R$.
   const charges: ClosingCharge[] = [];
-  const serviceName = isCostadoOnly ? "LIMPEZA DE COSTADO" : "LAVAGEM DOS PORÕES";
+  const serviceName = SERVICE_CHARGE_LABEL[isCostadoOnly ? "COSTADO" : "EMBARQUE"];
   const note = input.debitNote;
   if (note && note.subtotal > 0) {
     charges.push({ id: newId("c"), label: serviceName, amount: round2(note.subtotal), currency: note.currency === "USD" ? "USD" : "BRL" });
@@ -323,6 +373,7 @@ export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
     charges,
     exchange_rate: note?.exchange_rate != null && Number(note.exchange_rate) > 0 ? Number(note.exchange_rate) : null,
     workers,
+    admin,
     expenses,
     notes: "",
   };
@@ -335,6 +386,21 @@ export function normalizeClosingDoc(raw: unknown): ClosingDoc | null {
   const d = raw as Partial<ClosingDoc>;
   const num = (v: unknown, def = 0) => (Number.isFinite(Number(v)) ? Number(v) : def);
   const str = (v: unknown) => (typeof v === "string" ? v : "");
+  // Documento salvo antes da tabela Administrativo: o pessoal de escritório
+  // vinha como linha FIXO de Funcionários com note "administrativo". Migra
+  // pra tabela própria (sem perder o valor digitado).
+  const hasAdmin = Array.isArray(d.admin);
+  const rawWorkers = Array.isArray(d.workers) ? d.workers : [];
+  const isLegacyAdmin = (w: Partial<ClosingWorker> | null | undefined) =>
+    !hasAdmin && w?.mode === "FIXO" && str(w?.note).trim().toLowerCase() === "administrativo";
+  const legacyAdmin: ClosingAdminRow[] = rawWorkers
+    .filter((w) => isLegacyAdmin(w))
+    .map((w) => ({
+      id: newId("ad"),
+      employee_id: null,
+      name: str(w?.name),
+      amount: num(w?.rate) + num(w?.fixed_extra) - num(w?.discount),
+    }));
   return {
     version: 1,
     number: str(d.number),
@@ -357,8 +423,9 @@ export function normalizeClosingDoc(raw: unknown): ClosingDoc | null {
         }))
       : [],
     exchange_rate: d.exchange_rate == null ? null : num(d.exchange_rate, 0) || null,
-    workers: Array.isArray(d.workers)
-      ? d.workers.map((w) => ({
+    workers: rawWorkers
+      .filter((w) => !isLegacyAdmin(w))
+      .map((w) => ({
           id: str(w?.id) || newId("w"),
           name: str(w?.name),
           mode: w?.mode === "FIXO" ? "FIXO" : "PORAO",
@@ -368,8 +435,15 @@ export function normalizeClosingDoc(raw: unknown): ClosingDoc | null {
           fixed_extra: num(w?.fixed_extra),
           discount: num(w?.discount),
           note: str(w?.note),
+        })),
+    admin: hasAdmin
+      ? (d.admin as Array<Partial<ClosingAdminRow> | null>).map((a) => ({
+          id: str(a?.id) || newId("ad"),
+          employee_id: a?.employee_id == null || !Number.isFinite(Number(a.employee_id)) ? null : Number(a.employee_id),
+          name: str(a?.name),
+          amount: num(a?.amount),
         }))
-      : [],
+      : legacyAdmin,
     expenses: Array.isArray(d.expenses)
       ? d.expenses.map((e) => ({ id: str(e?.id) || newId("x"), label: str(e?.label), amount: num(e?.amount) }))
       : [],
