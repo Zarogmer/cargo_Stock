@@ -31,6 +31,8 @@ import {
   type ClosingExpense,
   type ClosingWorker,
 } from "@/lib/fechamento-navio";
+import { closingFileName } from "@/lib/fechamento-navio-file";
+import { shareOrDownloadBlob } from "@/lib/print";
 import type { Job, JobAdjustment, JobAllocation, JobFunction } from "@/types/database";
 
 // Financeiro › Fechamento de Navio — a planilha de fechamento da diretoria
@@ -153,6 +155,7 @@ export function FechamentoNavioPage({
   const [savedAt, setSavedAt] = useState<{ by: string | null; at: string } | null>(null);
   const [loadingDoc, setLoadingDoc] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState<"pdf" | "xlsx" | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const loadSeq = useRef(0);
@@ -397,6 +400,39 @@ export function FechamentoNavioPage({
     setMsg({ kind: "ok", text: "Rascunho remontado da escala — salve pra manter." });
   }
 
+  // 📄 PDF / 📊 Excel do que está NA TELA (rascunho, salvo ou não — o mesmo
+  // documento que o "Salvar fechamento" manda). O PDF é montado no servidor
+  // (fechamento-navio-pdf.ts); o Excel no cliente, com o logo no topo. No
+  // celular abre o menu de compartilhar; no desktop/Electron baixa.
+  async function handleExport(format: "pdf" | "xlsx") {
+    if (!doc) return;
+    setExporting(format);
+    setMsg(null);
+    try {
+      let blob: Blob;
+      if (format === "pdf") {
+        const res = await fetch("/api/financeiro/fechamento/pdf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(doc),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `Erro ${res.status}`);
+        }
+        blob = await res.blob();
+      } else {
+        const mod = await import("@/lib/fechamento-navio-xlsx");
+        blob = await mod.buildFechamentoXlsxBlob(doc);
+      }
+      await shareOrDownloadBlob(blob, closingFileName(doc, format));
+    } catch (err) {
+      setMsg({ kind: "err", text: `Não foi possível gerar o ${format === "pdf" ? "PDF" : "Excel"}: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      setExporting(null);
+    }
+  }
+
   const disabled = !canEdit || loadingDoc;
 
   return (
@@ -469,6 +505,12 @@ export function FechamentoNavioPage({
               )}
             </div>
             <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => handleExport("pdf")} disabled={loadingDoc || exporting != null} title="PDF da folha como está na tela (salva ou não)">
+                {exporting === "pdf" ? "Gerando…" : "📄 PDF"}
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => handleExport("xlsx")} disabled={loadingDoc || exporting != null} title="Excel da folha como está na tela, no formato da planilha da diretoria">
+                {exporting === "xlsx" ? "Gerando…" : "📊 Excel"}
+              </Button>
               <Button variant="secondary" size="sm" onClick={() => setConfirmReset(true)} disabled={disabled} title="Descarta o que foi digitado e remonta a folha da escala/despesas atuais">
                 ↻ Refazer da escala
               </Button>

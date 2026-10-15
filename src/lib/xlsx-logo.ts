@@ -64,6 +64,18 @@ export async function writeXlsxWithLogo(
   anchor: XlsxLogoAnchor,
   logoUrl = "/cargo-logo.png",
 ): Promise<void> {
+  download(await xlsxBlobWithLogo(wb, anchor, logoUrl), fileName);
+}
+
+/**
+ * O mesmo arquivo com logo, mas como Blob — pra quem entrega por outro caminho
+ * (shareOrDownloadBlob no celular/Electron). Workbook de UMA planilha.
+ */
+export async function xlsxBlobWithLogo(
+  wb: any,
+  anchor: XlsxLogoAnchor,
+  logoUrl = "/cargo-logo.png",
+): Promise<Blob> {
   const XLSX = (await import("xlsx-js-style")).default;
   const raw: ArrayBuffer = XLSX.write(wb, { type: "array", bookType: "xlsx" });
   try {
@@ -94,8 +106,8 @@ export async function writeXlsxWithLogo(
         `<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>`,
       ),
     );
-    download(new Blob([zip.generate({ type: "arraybuffer" })], { type: XLSX_MIME }), fileName);
+    return new Blob([zip.generate({ type: "arraybuffer" })], { type: XLSX_MIME });
   } catch {
-    download(new Blob([raw], { type: XLSX_MIME }), fileName);
+    return new Blob([raw], { type: XLSX_MIME });
   }
 }
