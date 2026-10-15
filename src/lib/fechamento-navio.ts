@@ -44,6 +44,61 @@ export interface ClosingWorker {
   discount: number;
   // Observação curta, só na tela ("3 turnos", "rateio").
   note: string;
+  // Vínculo com o sistema: colaborador do RH e a(s) alocação(ões) da escala
+  // (job_allocations.id) de onde a linha veio — Embarque tem 1, Costado tem
+  // uma por turno. Trocar o colaborador aqui atualiza essas alocações ao
+  // salvar; trocar na escala atualiza o nome aqui ao abrir. null/[] = linha
+  // avulsa, só na folha.
+  employee_id: number | null;
+  allocation_ids: number[];
+  // Função na escala (ESFREGÃO, WAP…) — agrupa as linhas na tela. "" = sem função.
+  function_id: number | null;
+  function_name: string;
+}
+
+// Linhas de Funcionários agrupadas por função, na ordem em que as funções
+// aparecem na folha (quem sem função fica por último). `index` é a posição em
+// doc.workers — serve pra achar o valor em totals.workerValues.
+export interface ClosingWorkerGroup {
+  key: string;
+  function_id: number | null;
+  function_name: string;
+  rows: Array<{ worker: ClosingWorker; index: number }>;
+}
+
+export function groupClosingWorkers(workers: ClosingWorker[]): ClosingWorkerGroup[] {
+  const groups: ClosingWorkerGroup[] = [];
+  const byKey = new Map<string, ClosingWorkerGroup>();
+  workers.forEach((worker, index) => {
+    const name = (worker.function_name || "").trim().toUpperCase();
+    const key = name || "__none";
+    let g = byKey.get(key);
+    if (!g) {
+      g = { key, function_id: worker.function_id ?? null, function_name: name, rows: [] };
+      byKey.set(key, g);
+      groups.push(g);
+    }
+    if (g.function_id == null && worker.function_id != null) g.function_id = worker.function_id;
+    g.rows.push({ worker, index });
+  });
+  // Sem função sempre no fim.
+  return [...groups.filter((g) => g.key !== "__none"), ...groups.filter((g) => g.key === "__none")];
+}
+
+// doc.workers na ordem agrupada (estável): é assim que a folha numera e que
+// a exportação (XLSX/PDF) lê — o documento salvo já fica nessa ordem.
+export function sortWorkersByGroup(workers: ClosingWorker[]): ClosingWorker[] {
+  return groupClosingWorkers(workers).flatMap((g) => g.rows.map((r) => r.worker));
+}
+
+// Insere uma linha nova logo depois da última da mesma função (ou no fim,
+// quando a função ainda não está na folha), pra ordem agrupada se manter.
+export function insertWorkerInGroup(workers: ClosingWorker[], w: ClosingWorker): ClosingWorker[] {
+  const key = (w.function_name || "").trim().toUpperCase();
+  let last = -1;
+  workers.forEach((x, i) => { if ((x.function_name || "").trim().toUpperCase() === key) last = i; });
+  if (last < 0) return key ? [...workers.filter((x) => (x.function_name || "").trim()), w, ...workers.filter((x) => !(x.function_name || "").trim())] : [...workers, w];
+  return [...workers.slice(0, last + 1), w, ...workers.slice(last + 1)];
 }
 
 export interface ClosingExpense {
@@ -260,12 +315,25 @@ export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
   // Embarque: paga × porões (+ rateio fixo). O serviço extra por porão
   // (raspagem/pintura) já entra somado na paga — na tela só existe a coluna
   // Paga, igual ao "=350*7" que a diretoria escreve na planilha.
-  for (const a of worked) {
-    if ((a.kind || "EMBARQUE") !== "EMBARQUE") continue;
+  // As linhas saem agrupadas por função, na ordem em que cada função aparece
+  // na escala (ESFREGÃO…, depois WAP…).
+  const embarque = worked.filter((a) => (a.kind || "EMBARQUE") === "EMBARQUE");
+  const fnOrder: string[] = [];
+  for (const a of embarque) {
+    const fn = (a.job_functions?.name || "").trim().toUpperCase();
+    if (!fnOrder.includes(fn)) fnOrder.push(fn);
+  }
+  embarque.sort((a, b) =>
+    fnOrder.indexOf((a.job_functions?.name || "").trim().toUpperCase()) - fnOrder.indexOf((b.job_functions?.name || "").trim().toUpperCase()));
+  for (const a of embarque) {
     const extra = round2(Number(a.extra_value || 0));
     workers.push({
       id: newId("w"),
       name: (a.employees?.name || a.job_functions?.name || "").trim(),
+      employee_id: a.employee_id ?? null,
+      allocation_ids: [a.id],
+      function_id: a.function_id ?? null,
+      function_name: (a.job_functions?.name || "").trim().toUpperCase(),
       mode: "PORAO",
       rate: round2((Number(a.rate) || 0) + (Number(a.service_extra_rate) || 0)),
       holds: null,
@@ -279,7 +347,7 @@ export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
   // Costado: valor por turno × turnos, agrupado por pessoa — entra como fixo.
   const costadoFn = pickCostadoFunction(functions);
   const costadoRate = costadoFn ? Number(costadoFn.default_rate || 0) : 0;
-  const costadoByPerson = new Map<string, { name: string; turnos: number; extra: number }>();
+  const costadoByPerson = new Map<string, { name: string; turnos: number; extra: number; employee_id: number | null; ids: number[]; function_id: number | null; function_name: string }>();
   for (const a of worked) {
     if (a.kind !== "COSTADO") continue;
     const key = a.employee_id ? `e${a.employee_id}` : `a${a.id}`;
@@ -287,15 +355,24 @@ export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
       name: (a.employees?.name || a.job_functions?.name || "").trim(),
       turnos: 0,
       extra: 0,
+      employee_id: a.employee_id ?? null,
+      ids: [],
+      function_id: a.function_id ?? null,
+      function_name: (a.job_functions?.name || "").trim().toUpperCase(),
     };
     row.turnos += Math.max(1, Number(a.quantity) || 1);
     row.extra += Number(a.extra_value || 0);
+    row.ids.push(a.id);
     costadoByPerson.set(key, row);
   }
   for (const row of costadoByPerson.values()) {
     workers.push({
       id: newId("w"),
       name: row.name,
+      employee_id: row.employee_id,
+      allocation_ids: row.ids,
+      function_id: row.function_id,
+      function_name: row.function_name,
       mode: "FIXO",
       rate: round2(costadoRate * row.turnos),
       holds: null,
@@ -379,6 +456,104 @@ export function buildClosingDraft(input: ClosingDraftInput): ClosingDoc {
   };
 }
 
+// ── Sincronia com a escala (job_allocations) ────────────────────────────────
+// A folha é um snapshot de VALORES, mas QUEM trabalhou é um só no sistema:
+// trocar o colaborador de uma linha aqui troca na escala do navio ao salvar
+// (Resultado do Navio, folha de pagamento, relatórios…), e trocar na escala
+// aparece aqui ao abrir a folha. Os valores digitados ficam como estão.
+
+// Alocação do jeito que a tela lê do banco pra sincronizar.
+export interface EscalaAllocation {
+  id: number;
+  employee_id: number | null;
+  function_id: number;
+  kind: string | null;
+  status: string | null;
+  removal_reason: string | null;
+  employees?: { name: string } | null;
+  job_functions?: { name: string } | null;
+}
+
+const upperName = (s: string | null | undefined) => (s || "").trim().toUpperCase();
+
+// Escala → folha. Linhas ligadas a uma alocação pegam o colaborador e a função
+// atuais de lá; linhas antigas (salvas antes do vínculo) são ligadas pelo nome.
+// `changes` lista as trocas de pessoa ("FULANO → CICLANO") pra tela avisar.
+export function syncWorkersFromEscala(
+  workers: ClosingWorker[],
+  allocs: EscalaAllocation[],
+): { workers: ClosingWorker[]; changes: string[] } {
+  const byId = new Map(allocs.map((a) => [a.id, a]));
+  const worked = allocs.filter((a) => allocCountsAsWorked(a) && (a.kind || "EMBARQUE") !== "ADMINISTRATIVO");
+  const linked = new Set<number>();
+  for (const w of workers) for (const id of w.allocation_ids) linked.add(id);
+  const changes: string[] = [];
+
+  const out = workers.map((w) => {
+    let a: EscalaAllocation | undefined;
+    let ids = w.allocation_ids.filter((id) => byId.has(id));
+    if (ids.length > 0) {
+      a = byId.get(ids[0]);
+    } else {
+      // Linha sem vínculo: liga pelo nome a quem ainda não está em nenhuma linha.
+      const name = upperName(w.name);
+      a = name ? worked.find((x) => !linked.has(x.id) && upperName(x.employees?.name) === name) : undefined;
+      if (!a) return w;
+      // Costado: todos os turnos da mesma pessoa pertencem a esta linha.
+      ids = a.employee_id != null
+        ? worked.filter((x) => !linked.has(x.id) && x.employee_id === a!.employee_id && (x.kind || "EMBARQUE") === (a!.kind || "EMBARQUE")).map((x) => x.id)
+        : [a.id];
+      for (const id of ids) linked.add(id);
+    }
+    if (!a) return w;
+    const next: ClosingWorker = {
+      ...w,
+      allocation_ids: ids,
+      function_id: a.function_id ?? w.function_id,
+      function_name: upperName(a.job_functions?.name) || w.function_name,
+    };
+    if (a.employee_id != null) {
+      const newName = (a.employees?.name || "").trim() || w.name;
+      if (w.employee_id != null && w.employee_id !== a.employee_id && upperName(w.name) !== upperName(newName)) {
+        changes.push(`${w.name || "—"} → ${newName}`);
+      }
+      next.employee_id = a.employee_id;
+      next.name = newName;
+    }
+    return next;
+  });
+  return { workers: sortWorkersByGroup(out), changes };
+}
+
+// Folha → escala. Devolve o que precisa mudar no banco pra escala refletir a
+// folha: alocações cuja pessoa foi trocada aqui e linhas novas (por porão, com
+// colaborador e função) que ainda não existem na escala. Remover uma linha da
+// folha NÃO tira ninguém da escala — isso se faz no Resultado do Navio.
+export function diffWorkersToEscala(
+  workers: ClosingWorker[],
+  allocs: EscalaAllocation[],
+): {
+  reassign: Array<{ allocation_id: number; employee_id: number }>;
+  insert: Array<{ worker_id: string; employee_id: number; function_id: number }>;
+} {
+  const byId = new Map(allocs.map((a) => [a.id, a]));
+  const reassign: Array<{ allocation_id: number; employee_id: number }> = [];
+  const insert: Array<{ worker_id: string; employee_id: number; function_id: number }> = [];
+  for (const w of workers) {
+    if (w.employee_id == null) continue;
+    const existing = w.allocation_ids.filter((id) => byId.has(id));
+    if (existing.length > 0) {
+      for (const id of existing) {
+        const a = byId.get(id)!;
+        if (a.employee_id !== w.employee_id) reassign.push({ allocation_id: id, employee_id: w.employee_id });
+      }
+    } else if (w.mode === "PORAO" && w.function_id != null) {
+      insert.push({ worker_id: w.id, employee_id: w.employee_id, function_id: w.function_id });
+    }
+  }
+  return { reassign, insert };
+}
+
 // Documento vindo do banco pode ser de uma versão antiga ou ter sido editado
 // à mão: preenche o que faltar pra tela nunca quebrar.
 export function normalizeClosingDoc(raw: unknown): ClosingDoc | null {
@@ -435,6 +610,12 @@ export function normalizeClosingDoc(raw: unknown): ClosingDoc | null {
           fixed_extra: num(w?.fixed_extra),
           discount: num(w?.discount),
           note: str(w?.note),
+          employee_id: w?.employee_id == null || !Number.isFinite(Number(w.employee_id)) ? null : Number(w.employee_id),
+          allocation_ids: Array.isArray(w?.allocation_ids)
+            ? (w.allocation_ids as unknown[]).map(Number).filter((n) => Number.isFinite(n) && n > 0)
+            : [],
+          function_id: w?.function_id == null || !Number.isFinite(Number(w.function_id)) ? null : Number(w.function_id),
+          function_name: str(w?.function_name).trim().toUpperCase(),
         })),
     admin: hasAdmin
       ? (d.admin as Array<Partial<ClosingAdminRow> | null>).map((a) => ({

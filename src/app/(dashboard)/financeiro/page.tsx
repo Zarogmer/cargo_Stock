@@ -881,6 +881,7 @@ export default function FinanceiroPage() {
               🚢 {filteredCount} {filteredCount === 1 ? "navio" : "navios"} · {plabel}
             </span>
             {filterActive && (
+          onEscalaChanged={(changed) => { if (changed) loadAll(); }}
               <button
                 onClick={() => setPgFilter({ year: currentYear, month: "ALL", port: "ALL", client: "ALL" })}
                 className="text-xs font-medium px-2.5 py-1 rounded-lg border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"

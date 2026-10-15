@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { db } from "@/lib/db";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -18,18 +18,23 @@ import {
   buildClosingTitle,
   closingServiceKind,
   computeClosing,
+  diffWorkersToEscala,
   formatBRL,
+  groupClosingWorkers,
+  insertWorkerInGroup,
   formatNumberBR,
   formatUSD,
   newId,
   normalizeClosingDoc,
   parseNumberBR,
   shortDateBR,
+  syncWorkersFromEscala,
   type ClosingAdminRow,
   type ClosingCharge,
   type ClosingDoc,
   type ClosingExpense,
   type ClosingWorker,
+  type EscalaAllocation,
 } from "@/lib/fechamento-navio";
 import { closingFileName } from "@/lib/fechamento-navio-file";
 import { shareOrDownloadBlob } from "@/lib/print";
@@ -42,8 +47,13 @@ import type { Job, JobAdjustment, JobAllocation, JobFunction } from "@/types/dat
 // um, extras, valores cobrados, taxa do dólar, despesas); à direita a folha,
 // igual ao Excel, recalculando a cada tecla. O rascunho nasce da escala e das
 // despesas do Resultado do Navio; o que o usuário mexe fica salvo por navio
-// em job_closings (sem tocar na escala). "Refazer da escala" descarta o salvo
-// e monta de novo.
+// em job_closings (sem tocar nos valores da escala). "Refazer da escala"
+// descarta o salvo e monta de novo.
+//
+// QUEM trabalhou, porém, é um só no sistema: cada linha de Funcionários fica
+// ligada à alocação da escala (allocation_ids) e o nome é um select do RH.
+// Trocar a pessoa aqui troca na escala ao salvar; trocar na escala aparece
+// aqui ao abrir (syncWorkersFromEscala / diffWorkersToEscala).
 
 const inputCls =
   "w-full px-2 py-1.5 border border-border rounded-lg text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:bg-gray-50 disabled:text-text-light";
@@ -135,8 +145,10 @@ function supervisorFromAllocations(allocs: JobAllocation[], jobId: string): stri
   return a?.employees?.name || null;
 }
 
+const ESCALA_SELECT = "id, employee_id, function_id, kind, status, removal_reason, employees(name), job_functions(name)";
+
 export function FechamentoNavioPage({
-  jobs, allocations, adjustments, functions, shipsAll, canEdit, profileName, dollar, loading,
+  jobs, allocations, adjustments, functions, shipsAll, canEdit, profileName, dollar, loading, onEscalaChanged,
 }: {
   jobs: Job[];
   allocations: JobAllocation[];
@@ -147,6 +159,9 @@ export function FechamentoNavioPage({
   profileName: string;
   dollar: DollarQuote | null;
   loading: boolean;
+  // Chamado depois de salvar, com true quando a escala do navio mudou — o
+  // Financeiro recarrega pra o Resultado do Navio mostrar a troca.
+  onEscalaChanged?: (changed: boolean) => void;
 }) {
   const [search, setSearch] = useState("");
   const [jobId, setJobId] = useState<string>("");
@@ -159,6 +174,11 @@ export function FechamentoNavioPage({
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const loadSeq = useRef(0);
+  // Escala atual do navio lida direto do banco (não das props, que só mudam no
+  // reload do Financeiro): é com ela que a folha sincroniza quem trabalhou.
+  const [escalaAllocs, setEscalaAllocs] = useState<EscalaAllocation[]>([]);
+  // Linhas em que o usuário preferiu digitar o nome em vez de escolher do RH.
+  const [typingIds, setTypingIds] = useState<Set<string>>(() => new Set());
 
   // Colaboradores do RH: supervisores (função principal ou 2ª = SUPERVISOR,
   // não demitidos) pro select do cabeçalho e o setor Administrativo pra
@@ -190,6 +210,21 @@ export function FechamentoNavioPage({
     [employees],
   );
   const employeeById = useMemo(() => new Map(employees.map((e) => [e.id, e])), [employees]);
+  // Lista do select de nome em Funcionários: todo mundo do RH que não foi demitido.
+  const employeeOptions = useMemo(
+    () => employees
+      .filter((e) => (e.status ?? "ATIVO") !== "INATIVO" && (e.name || "").trim())
+      .sort((a, b) => (a.name || "").localeCompare(b.name || "", "pt-BR")),
+    [employees],
+  );
+  const escalaByAllocId = useMemo(() => new Map(escalaAllocs.map((a) => [a.id, a])), [escalaAllocs]);
+  // Funções ativas pro "+ pessoa em…" (qualquer uma do cadastro, não só as já na folha).
+  const functionOptions = useMemo(
+    () => functions
+      .filter((f) => f.active !== false && (f.name || "").trim().toUpperCase() !== "ADMINISTRATIVO")
+      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
+    [functions],
+  );
   // Função-carregador ADMINISTRATIVO: é nela que o Resultado do Navio guarda
   // as alocações do administrativo (kind=ADMINISTRATIVO).
   const adminFn = useMemo(() => pickFunctionByName(functions, "ADMINISTRATIVO", "EMBARQUE") || null, [functions]);
@@ -272,18 +307,30 @@ export function FechamentoNavioPage({
     setLoadingDoc(true);
     setMsg(null);
     (async () => {
-      const [rowRes, noteRes] = await Promise.all([
+      const [rowRes, noteRes, escalaRes] = await Promise.all([
         db.from("job_closings").select("*").eq("job_id", job.id).limit(1),
         db.from("fiscal_notes").select("kind, currency, subtotal, exchange_rate, created_at").eq("job_id", job.id).order("created_at", { ascending: false }),
+        db.from("job_allocations").select(ESCALA_SELECT).eq("job_id", job.id),
       ]);
       if (seq !== loadSeq.current) return;
       const notes = ((noteRes.data as DebitNoteRow[] | null) || []);
+      const escala = ((escalaRes.data as EscalaAllocation[] | null) || []);
+      setEscalaAllocs(escala);
+      setTypingIds(new Set());
       const row = ((rowRes.data as ClosingRow[] | null) || [])[0];
       const saved = row ? normalizeClosingDoc(row.data) : null;
       if (saved) {
-        setDoc(saved);
-        setSavedJson(JSON.stringify(saved));
+        // Escala → folha: quem foi trocado na escala troca aqui também. Só
+        // uma troca de pessoa deixa a folha "não salva"; o vínculo de linhas
+        // antigas (salvas antes do select) é silencioso.
+        const synced = syncWorkersFromEscala(saved.workers, escala);
+        const docSynced: ClosingDoc = { ...saved, workers: synced.workers };
+        setDoc(docSynced);
+        setSavedJson(JSON.stringify(synced.changes.length > 0 ? saved : docSynced));
         setSavedAt({ by: row.updated_by, at: row.updated_at });
+        if (synced.changes.length > 0) {
+          setMsg({ kind: "ok", text: `A escala mudou (${synced.changes.join(", ")}) — nome atualizado na folha, salve pra manter.` });
+        }
       } else {
         if (rowRes.error) setMsg({ kind: "err", text: `Não foi possível ler o fechamento salvo: ${rowRes.error.message}` });
         setDoc(buildDraft(job, notes));
@@ -298,6 +345,8 @@ export function FechamentoNavioPage({
   }, [job?.id, loading, empLoaded]);
 
   const totals = useMemo(() => (doc ? computeClosing(doc) : null), [doc]);
+  // Funcionários por função (ESFREGÃO…, WAP…); a folha numera na mesma ordem.
+  const workerGroups = useMemo(() => groupClosingWorkers(doc?.workers || []), [doc?.workers]);
   // Embarque é sempre por porão (sem coluna Tipo); o Costado mistura turnos
   // já somados (fixo) com quem fez por porão, então mantém a escolha.
   const isCostado = doc != null && closingServiceKind(doc) === "COSTADO";
@@ -323,7 +372,12 @@ export function FechamentoNavioPage({
     if (!job || !doc || !canEdit) return;
     setSaving(true);
     setMsg(null);
-    const payload = { data: doc as unknown as Record<string, unknown>, updated_by: profileName };
+    // Folha → escala primeiro: trocas de pessoa e linhas novas vão pro
+    // job_allocations, e as linhas novas voltam já ligadas à alocação criada.
+    const escalaSync = await syncWorkersToEscala(job, doc.workers);
+    const docToSave: ClosingDoc = escalaSync.workers === doc.workers ? doc : { ...doc, workers: escalaSync.workers };
+    if (docToSave !== doc) setDoc(docToSave);
+    const payload = { data: docToSave as unknown as Record<string, unknown>, updated_by: profileName };
     const res = savedJson == null
       ? await db.from("job_closings").insert({ job_id: job.id, ...payload })
       : await db.from("job_closings").update(payload).eq("job_id", job.id);
@@ -332,12 +386,81 @@ export function FechamentoNavioPage({
       setMsg({ kind: "err", text: `Falha ao salvar: ${res.error.message}` });
       return;
     }
-    setSavedJson(JSON.stringify(doc));
+    setSavedJson(JSON.stringify(docToSave));
     setSavedAt({ by: profileName, at: new Date().toISOString() });
-    const syncErr = await syncAdminToResultado(job, doc.admin);
-    setMsg(syncErr
-      ? { kind: "err", text: `Fechamento salvo, mas o administrativo não foi pro Resultado do Navio: ${syncErr}` }
-      : { kind: "ok", text: "Fechamento salvo. Administrativo atualizado no Resultado do Navio." });
+    const syncErr = await syncAdminToResultado(job, docToSave.admin);
+    const errors = [
+      escalaSync.error ? `a escala não foi atualizada: ${escalaSync.error}` : null,
+      syncErr ? `o administrativo não foi pro Resultado do Navio: ${syncErr}` : null,
+    ].filter((x): x is string => x != null);
+    if (errors.length > 0) {
+      setMsg({ kind: "err", text: `Fechamento salvo, mas ${errors.join("; ")}.` });
+      return;
+    }
+    const escalaNote = escalaSync.changed > 0
+      ? ` Escala do navio atualizada (${escalaSync.changed} ${escalaSync.changed === 1 ? "alocação" : "alocações"}).`
+      : "";
+    setMsg({ kind: "ok", text: `Fechamento salvo. Administrativo atualizado no Resultado do Navio.${escalaNote}` });
+    onEscalaChanged?.(escalaSync.changed > 0);
+  }
+
+  // Folha → escala (job_allocations): a pessoa trocada numa linha ligada à
+  // escala é trocada lá (todas as alocações da linha — no Costado, cada turno);
+  // linha nova com colaborador + função entra na escala como alocação de
+  // Embarque com o valor padrão da função (o valor desta folha fica aqui).
+  // Remover uma linha daqui não tira ninguém da escala.
+  async function syncWorkersToEscala(j: Job, workers: ClosingWorker[]): Promise<{ workers: ClosingWorker[]; error: string | null; changed: number }> {
+    const res = await db.from("job_allocations").select(ESCALA_SELECT).eq("job_id", j.id);
+    if (res.error) return { workers, error: res.error.message, changed: 0 };
+    const allocs = ((res.data as EscalaAllocation[] | null) || []);
+    const { reassign, insert } = diffWorkersToEscala(workers, allocs);
+    let changed = 0;
+    let out = workers;
+    let error: string | null = null;
+    for (const r of reassign) {
+      const up = await db.from("job_allocations").update({ employee_id: r.employee_id }).eq("id", r.allocation_id);
+      if (up.error) { error = up.error.message; break; }
+      changed += 1;
+    }
+    if (!error) {
+      for (const ins of insert) {
+        const fn = functions.find((f) => f.id === ins.function_id);
+        const created = await db.from("job_allocations").insert({
+          job_id: j.id,
+          function_id: ins.function_id,
+          employee_id: ins.employee_id,
+          quantity: 1,
+          rate: Number(fn?.default_rate || 0),
+          pluxee_value: null,
+          status: "ATIVO",
+          kind: "EMBARQUE",
+        });
+        if (created.error) { error = created.error.message; break; }
+        changed += 1;
+        const createdId = Number((created.data as { id?: number } | null)?.id);
+        if (Number.isFinite(createdId) && createdId > 0) {
+          out = out.map((w) => (w.id === ins.worker_id ? { ...w, allocation_ids: [createdId] } : w));
+        }
+      }
+    }
+    if (changed > 0) {
+      const re = await db.from("job_allocations").select(ESCALA_SELECT).eq("job_id", j.id);
+      if (!re.error) setEscalaAllocs(((re.data as EscalaAllocation[] | null) || []));
+    }
+    return { workers: out, error, changed };
+  }
+
+  function addWorker(functionId: number | null, functionName: string) {
+    if (!doc) return;
+    const name = functionName.trim().toUpperCase();
+    const fnId = functionId ?? (name ? pickFunctionByName(functions, name, isCostado ? "COSTADO" : "EMBARQUE")?.id ?? null : null);
+    update({
+      workers: insertWorkerInGroup(doc.workers, {
+        id: newId("w"), name: "", mode: closingServiceKind(doc) === "COSTADO" ? "FIXO" : "PORAO",
+        rate: 0, holds: null, extra_per_hold: 0, fixed_extra: 0, discount: 0, note: "",
+        employee_id: null, allocation_ids: [], function_id: fnId, function_name: name,
+      }),
+    });
   }
 
   // Leva a tabela Administrativo pro Resultado do Navio (alocações
@@ -664,20 +787,30 @@ export function FechamentoNavioPage({
               <section className={sectionCls}>
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-text">Funcionários <span className="font-normal text-text-light">({doc.workers.length})</span></h3>
-                  <button
-                    type="button"
-                    className="text-xs text-primary hover:underline"
+                  <select
+                    className="text-xs text-primary bg-transparent cursor-pointer disabled:text-text-light"
+                    value=""
                     disabled={disabled}
-                    onClick={() => update({ workers: [...doc.workers, { id: newId("w"), name: "", mode: closingServiceKind(doc) === "COSTADO" ? "FIXO" : "PORAO", rate: 0, holds: null, extra_per_hold: 0, fixed_extra: 0, discount: 0, note: "" }] })}
+                    title="Acrescenta uma linha na função escolhida"
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (!v) return;
+                      if (v === "__none") { addWorker(null, ""); return; }
+                      const fn = functionOptions.find((f) => String(f.id) === v);
+                      if (fn) addWorker(fn.id, fn.name);
+                    }}
                   >
-                    + pessoa
-                  </button>
+                    <option value="">+ pessoa em…</option>
+                    {functionOptions.map((f) => <option key={f.id} value={String(f.id)}>{f.name}</option>)}
+                    <option value="__none">Sem função</option>
+                  </select>
                 </div>
                 <p className="text-[11px] text-text-light -mt-1">
                   {isCostado
                     ? "Costado: valor = paga (turnos já somados) − desconto. "
                     : `Embarque: valor = paga × porões − desconto. Porões já vêm com os ${doc.holds_count || 0} do navio — mude só pra quem fez menos. `}
                   Desc.: o que tirar desta pessoa (R$ 50 de material, vale…).
+                  Agrupado pela função da escala; o nome é o colaborador do RH — trocar aqui troca na escala do navio ao salvar (e o que mudar na escala aparece aqui ao abrir). Remover daqui não tira da escala.
                 </p>
                 <div className="overflow-x-auto -mx-4 px-4">
                   <table className="w-full text-xs">
@@ -692,15 +825,65 @@ export function FechamentoNavioPage({
                       </tr>
                     </thead>
                     <tbody>
-                      {doc.workers.map((w, i) => {
+                      {workerGroups.map((g) => (
+                        <Fragment key={g.key}>
+                          <tr>
+                            <td colSpan={6} className="pt-2.5 pb-1">
+                              <div className="flex items-center justify-between border-b border-border pb-0.5">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-primary">
+                                  {g.function_name || "Sem função"} <span className="font-normal text-text-light">({g.rows.length})</span>
+                                </span>
+                                <button type="button" className="text-[11px] text-primary hover:underline" disabled={disabled} title={`Acrescentar pessoa em ${g.function_name || "sem função"}`} onClick={() => addWorker(g.function_id, g.function_name)}>
+                                  + pessoa
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                          {g.rows.map(({ worker: w, index: i }) => {
                         // Porões em branco no documento = os do navio; a caixa
                         // mostra o número cheio e só grava quando difere.
                         const holdsShown = w.holds ?? doc.holds_count;
                         const extra = Number(w.fixed_extra) || 0;
+                        // O que esta linha vai mudar na escala ao salvar.
+                        const linkedAlloc = w.allocation_ids.map((id) => escalaByAllocId.get(id)).find((a) => a != null);
+                        const pendingSwap = linkedAlloc != null && w.employee_id != null && linkedAlloc.employee_id !== w.employee_id;
+                        const pendingNew = linkedAlloc == null && w.employee_id != null && w.function_id != null && w.mode === "PORAO";
+                        const inList = w.employee_id != null && employeeOptions.some((e) => e.id === w.employee_id);
                         return (
                         <tr key={w.id} className="align-middle">
                           <td className="py-0.5 pr-1">
-                            <input className={`${inputCls} py-1 min-w-[180px]`} value={w.name} disabled={disabled} placeholder="NOME" title={w.note || undefined} onChange={(e) => updateWorker(w.id, { name: e.target.value })} />
+                            {typingIds.has(w.id) ? (
+                              <div className="flex items-center gap-1 min-w-[180px]">
+                                <input className={`${inputCls} py-1`} value={w.name} disabled={disabled} placeholder="NOME" autoFocus onChange={(e) => updateWorker(w.id, { name: e.target.value, employee_id: null })} />
+                                <button type="button" className="text-xs text-primary hover:underline shrink-0" title="Voltar a escolher do RH" disabled={disabled} onClick={() => setTypingIds((prev) => { const n = new Set(prev); n.delete(w.id); return n; })}>lista</button>
+                              </div>
+                            ) : (
+                              <select
+                                className={`${inputCls} py-1 min-w-[180px] ${w.employee_id == null && w.name ? "text-amber-800" : ""}`}
+                                value={w.employee_id != null ? String(w.employee_id) : w.name ? "__cur" : ""}
+                                disabled={disabled}
+                                title={[w.note, w.employee_id == null && w.name ? "Nome digitado — não está ligado ao RH" : ""].filter(Boolean).join(" · ") || undefined}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  if (v === "__type") { setTypingIds((prev) => new Set(prev).add(w.id)); updateWorker(w.id, { employee_id: null }); return; }
+                                  if (v === "" || v === "__cur") return;
+                                  const emp = employeeById.get(parseInt(v));
+                                  if (emp) updateWorker(w.id, { employee_id: emp.id, name: (emp.name || "").trim() });
+                                }}
+                              >
+                                <option value="">— escolher —</option>
+                                {w.employee_id == null && w.name && <option value="__cur">{w.name}</option>}
+                                {w.employee_id != null && !inList && <option value={String(w.employee_id)}>{w.name}</option>}
+                                {employeeOptions.map((e) => <option key={e.id} value={String(e.id)}>{e.name}</option>)}
+                                <option value="__type">Outro (digitar nome)…</option>
+                              </select>
+                            )}
+                            {pendingSwap && (
+                              <div className="text-[10px] text-amber-700 leading-tight mt-0.5">troca na escala ao salvar (era {(linkedAlloc.employees?.name || "—").split(" ")[0]})</div>
+                            )}
+                            {pendingNew && (
+                              <div className="text-[10px] text-amber-700 leading-tight mt-0.5">entra na escala ao salvar</div>
+                            )}
                           </td>
                           <td className="py-0.5 pr-1">
                             <NumInput value={w.rate} className="py-1 px-1.5" disabled={disabled} onChange={(n) => updateWorker(w.id, { rate: n || 0 })} />
@@ -729,11 +912,16 @@ export function FechamentoNavioPage({
                             {extra !== 0 && <div className="text-[10px] font-normal text-amber-700 leading-none">incl. {extra > 0 ? "+" : ""}{formatNumberBR(extra)}</div>}
                           </td>
                           <td className="py-0.5 text-center">
-                            <button type="button" className="text-text-light hover:text-red-600 text-base leading-none" title="Remover" disabled={disabled} onClick={() => update({ workers: doc.workers.filter((x) => x.id !== w.id) })}>×</button>
+                            <button type="button" className="text-text-light hover:text-red-600 text-base leading-none" title="Remover desta folha (não tira da escala)" disabled={disabled} onClick={() => update({ workers: doc.workers.filter((x) => x.id !== w.id) })}>×</button>
                           </td>
                         </tr>
                         );
                       })}
+                        </Fragment>
+                      ))}
+                      {doc.workers.length === 0 && (
+                        <tr><td colSpan={6} className="py-2 text-xs text-text-light">Ninguém na folha — use “+ pessoa em…”.</td></tr>
+                      )}
                     </tbody>
                     <tfoot>
                       <tr className="border-t border-border">
@@ -972,7 +1160,7 @@ function ClosingSheet({ doc, totals }: { doc: ClosingDoc; totals: ReturnType<typ
 
       <table className="font-serif text-sm border-collapse w-full max-w-xl mt-2">
         <tbody>
-          {doc.workers.map((w, i) => {
+          {groupClosingWorkers(doc.workers).flatMap((g) => g.rows).map(({ worker: w, index: i }) => {
             rowNo += 1;
             return (
               <tr key={w.id}>
