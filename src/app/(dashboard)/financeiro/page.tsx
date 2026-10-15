@@ -286,6 +286,37 @@ const EXPENSE_CATEGORIES = [
 ] as const;
 type ExpenseCategory = typeof EXPENSE_CATEGORIES[number]["value"];
 
+// ── Desconto Geral do navio ──────────────────────────────────────────────────
+// É o "Desc. Geral" que aparece no Controle de Funcionários, na Folha de
+// Pagamento e no Resultado do Navio. Duas fontes, somadas:
+//   1. Material PERDIDO (Checklist › Perdido) — vira despesa MATERIAL_PERDIDO
+//      e o prejuízo é rateado entre quem trabalhou na operação (cada
+//      colaborador conta UMA vez; Administrativo fica fora do rateio).
+//   2. Desconto manual por colaborador (job_allocations.general_discount),
+//      digitado na coluna Desc. Geral do Resultado do Navio.
+// Legado: antes de 2026-07-21 a perda nascia como MATERIAL_DANIFICADO com a
+// descrição "Retorno de material…", por isso o marcador também conta.
+function isPerdaAdjustment(a: Pick<JobAdjustment, "category" | "description">): boolean {
+  return (
+    a.category === "MATERIAL_PERDIDO" ||
+    (a.category === "MATERIAL_DANIFICADO" && (a.description || "").startsWith("Retorno de material"))
+  );
+}
+function calcJobDescGeral(
+  allocations: Pick<JobAllocation, "employee_id" | "general_discount" | "kind">[],
+  adjustments: Pick<JobAdjustment, "category" | "description" | "amount">[],
+): { perda: number; headcount: number; perPerson: number; manual: number; total: number } {
+  const crew = allocations.filter((a) => (a.kind || "EMBARQUE") !== "ADMINISTRATIVO");
+  const perda = adjustments.filter(isPerdaAdjustment).reduce((s, a) => s + Number(a.amount || 0), 0);
+  const headcount = new Set(crew.map((a) => a.employee_id).filter((id): id is number => id != null)).size;
+  const perPerson = perda > 0 && headcount > 0 ? +(perda / headcount).toFixed(2) : 0;
+  const manual = crew.reduce((s, a) => s + Number(a.general_discount || 0), 0);
+  // Total = parte de cada cabeça (já arredondada) + descontos manuais — a
+  // mesma soma que a coluna Desc. Geral faz linha a linha.
+  const total = +(perPerson * headcount + manual).toFixed(2);
+  return { perda, headcount, perPerson, manual, total };
+}
+
 function categoryLabel(cat: string | null | undefined): string {
   if (!cat) return "Outros";
   return EXPENSE_CATEGORIES.find((c) => c.value === cat)?.label || cat;
@@ -2853,6 +2884,12 @@ function TrabalhosTab({
             const cost = calcJobCost(j, embarqueAllocs, adjustments);
             const revenue = Number(j.contract_value || 0);
             const profit = revenue - cost.total;
+            // Desc. Geral do navio (material perdido rateado + descontos manuais)
+            // — a mesma conta da coluna no Resultado do Navio.
+            const descGeral = calcJobDescGeral(
+              allocations.filter((a) => a.job_id === j.id && (a.kind || "EMBARQUE") === "EMBARQUE"),
+              adjustments.filter((a) => a.job_id === j.id),
+            );
             return (
               <div key={j.id} className="bg-card rounded-xl border border-border p-4 hover:shadow-md transition cursor-pointer" onClick={() => setDetailJob(j)}>
                 <div className="flex flex-col sm:flex-row sm:flex-wrap sm:justify-between sm:items-start gap-2">
@@ -2905,6 +2942,10 @@ function TrabalhosTab({
                     <div>
                       <p className="text-text-light">Contrato</p>
                       <p className="font-semibold text-blue-700">{brl(revenue)}</p>
+                    </div>
+                    <div title={descGeral.total > 0 ? `Material perdido: ${brl(descGeral.perda)} (÷ ${descGeral.headcount}) · Manual: ${brl(descGeral.manual)}` : "Sem desconto neste navio"}>
+                      <p className="text-text-light">Desconto</p>
+                      <p className={`font-semibold ${descGeral.total > 0 ? "text-red-700" : "text-text-light"}`}>{descGeral.total > 0 ? `− ${brl(descGeral.total)}` : "—"}</p>
                     </div>
                     {revenue > 0 && (
                       <div>
@@ -3468,6 +3509,18 @@ function JobDetailModal({
     }
   }
 
+  // Desconto manual (Desc. Geral clicável) por alocação: qual está sendo editada
+  // e o rascunho do valor. Salva em job_allocations.general_discount.
+  const [editDescAlloc, setEditDescAlloc] = useState<JobAllocation | null>(null);
+  const [descDraft, setDescDraft] = useState("");
+  async function saveGeneralDiscount() {
+    if (!editDescAlloc) return;
+    const v = parseFloat(descDraft.replace(/\./g, "").replace(",", ".")) || 0;
+    await db.from("job_allocations").update({ general_discount: v }).eq("id", editDescAlloc.id);
+    setEditDescAlloc(null);
+    setDescDraft("");
+    onChange();
+  }
   // Serviços extras do navio (Raspagem/Pintura) — pra rotular a quebra da paga
   // por porão de cada linha ("Limpeza X + Raspagem Y"). Cada um tem seu valor/
   // porão vindo do default_rate da função de mesmo nome (Valores).
@@ -3733,25 +3786,11 @@ function JobDetailModal({
   // Valor que precisamos = TOTAL - VALOR DA FOLHA (Pluxee + ajustes/despesas)
   const liquidValue = custoTotal - folhaValue;
 
-  // ── Desconto Geral: material PERDIDO dividido pela equipe ────────────────
-  // O que não voltou do navio (Checklist › Perdido) vira despesa
-  // MATERIAL_PERDIDO e o prejuízo é rateado entre quem trabalhou na operação.
-  // Legado: antes de 2026-07-21 essa despesa nascia como MATERIAL_DANIFICADO,
-  // então o marcador da descrição também conta.
-  const perdaTotal = adjustments
-    .filter(
-      (a) =>
-        a.category === "MATERIAL_PERDIDO" ||
-        (a.category === "MATERIAL_DANIFICADO" && a.description.startsWith("Retorno de material")),
-    )
-    .reduce((s, a) => s + Number(a.amount || 0), 0);
-  // Cabeças da equipe: cada colaborador conta UMA vez (no Costado a mesma
-  // pessoa aparece uma vez por turno). Administrativo não entra no rateio.
-  const crewHeadcount = new Set(
-    allocations.map((a) => a.employee_id).filter((id): id is number => id != null),
-  ).size;
-  const descGeralPerPerson =
-    perdaTotal > 0 && crewHeadcount > 0 ? +(perdaTotal / crewHeadcount).toFixed(2) : 0;
+  // ── Desconto Geral: material PERDIDO dividido pela equipe + manual ───────
+  // Conta única em calcJobDescGeral (mesma do card da lista e do Controle de
+  // Funcionários). perPerson = parte de cada colaborador no material perdido.
+  const descGeral = calcJobDescGeral(allocations, adjustments);
+  const descGeralPerPerson = descGeral.perPerson;
 
   // Nome da função de uma alocação (sempre em maiúsculas p/ agrupar).
   const allocFnName = (a: JobAllocation) =>
@@ -5436,6 +5475,7 @@ function JobDetailModal({
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light" title="Base = Valor/Porão × Porões. O Extra (valor especial + rateio) aparece em amarelo logo abaixo da base, quando houver.">Base</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-text-light">Total</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-purple-700 whitespace-nowrap" title="PAGTO NA FOLHA — líquido do Relatório de Líquidos. Sem import, igual ao Total.">Folha</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-red-700 whitespace-nowrap" title="DESC. GERAL — material perdido no navio (Checklist › Perdido) dividido pela equipe + desconto manual do colaborador (clique na célula pra lançar). Avariado que a equipe trouxe de volta não entra aqui.">Desc. Geral</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-amber-700 whitespace-nowrap" title="ADIANTAMENTO — vale que o colaborador já pegou e está sendo descontado neste navio. Não muda o custo do navio, só o que ele recebe agora.">Adiant.</th>
                     <th className="px-2 py-2 text-right text-xs font-semibold text-emerald-800 whitespace-nowrap" title="LÍQUIDO — o que o colaborador realmente recebe: Total − Desc. Geral − Adiantamento. Não altera o custo do navio.">Líquido</th>
                     {canEdit && !isReadOnly && !peopleReadOnly && <th className="w-14"></th>}
@@ -5758,9 +5798,51 @@ function JobDetailModal({
                             </button>
                           )}
                         </td>
-                        {/* Desc. Geral (material perdido rateado + desconto manual)
-                            saiu da tabela a pedido da diretoria — continua abatido
-                            do Líquido e listado no bloco "Descontos dos colaboradores". */}
+                        {/* Desc. Geral — rateio automático do material perdido +
+                            desconto manual (clicável) do colaborador. Os dois somam
+                            e são abatidos do líquido. Voltou à tabela em 2026-10-15
+                            pra dar pra ver de onde vem o desconto do Controle. */}
+                        <td className="px-2 py-2 text-right whitespace-nowrap">
+                          {(() => {
+                            const manual = Number(a.general_discount || 0);
+                            const total = descGeralPerPerson + manual;
+                            const clickable = canEdit && !isReadOnly && a.employee_id != null;
+                            if (editDescAlloc?.id === a.id) {
+                              return (
+                                <span className="inline-flex items-center gap-1">
+                                  <input
+                                    autoFocus
+                                    value={descDraft}
+                                    onChange={(e) => setDescDraft(e.target.value.replace(/[^\d.,]/g, ""))}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") saveGeneralDiscount();
+                                      if (e.key === "Escape") { setEditDescAlloc(null); setDescDraft(""); }
+                                    }}
+                                    placeholder="0,00"
+                                    className="w-20 px-1 py-0.5 border border-border rounded text-right text-xs"
+                                  />
+                                  <button type="button" onClick={saveGeneralDiscount} className="text-emerald-700" title="Salvar">✓</button>
+                                  <button type="button" onClick={() => { setEditDescAlloc(null); setDescDraft(""); }} className="text-text-light" title="Cancelar">×</button>
+                                </span>
+                              );
+                            }
+                            return (
+                              <button
+                                type="button"
+                                disabled={!clickable}
+                                onClick={() => { setEditDescAlloc(a); setDescDraft(manual > 0 ? manual.toFixed(2).replace(".", ",") : ""); }}
+                                className={`${total > 0 ? "text-red-700" : "text-text-light"} ${clickable ? "hover:bg-red-50 rounded px-1 -mx-1 cursor-pointer" : ""}`}
+                                title={
+                                  total > 0
+                                    ? `Material perdido rateado: ${brl(descGeralPerPerson)} · Desconto manual: ${brl(manual)}${clickable ? " — clique para editar o manual" : ""}`
+                                    : clickable ? "Clique para descontar do colaborador" : ""
+                                }
+                              >
+                                {total > 0 ? `− ${brl(total)}` : "—"}
+                              </button>
+                            );
+                          })()}
+                        </td>
                         {/* Adiant. — desconto de vale neste navio. Clicar abre o
                             seletor com os vales em aberto do colaborador. */}
                         <td className="px-2 py-2 text-right whitespace-nowrap">
@@ -5891,6 +5973,20 @@ function JobDetailModal({
                         </td>
                         <td className="px-2 py-2 text-right text-emerald-700 whitespace-nowrap">{brl(baseTotal + extraTotal)}</td>
                         <td className="px-2 py-2 text-right text-purple-700 whitespace-nowrap">{brl(folhaColTotal)}</td>
+                        {(() => {
+                          // Desc. Geral somado entre as linhas visíveis (cada
+                          // colaborador uma vez, como no rateio).
+                          const heads = new Set(
+                            totalAllocs.map((a) => a.employee_id).filter((id): id is number => id != null),
+                          ).size;
+                          const manualTotal = totalAllocs.reduce((s, a) => s + Number(a.general_discount || 0), 0);
+                          const t = +(descGeralPerPerson * heads + manualTotal).toFixed(2);
+                          return (
+                            <td className="px-2 py-2 text-right text-red-700 whitespace-nowrap">
+                              {t > 0 ? `− ${brl(t)}` : "—"}
+                            </td>
+                          );
+                        })()}
                         {(() => {
                           // Total descontado de vale neste navio, entre quem está
                           // na tabela. Conta cada colaborador UMA vez: o desconto é
