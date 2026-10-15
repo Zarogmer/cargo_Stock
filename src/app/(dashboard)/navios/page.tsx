@@ -114,6 +114,18 @@ const TEAM_COLORS: Record<string, string> = {
   EQUIPE_4: "bg-orange-100 text-orange-700",
 };
 
+// O Financeiro (job-cost.ts › applyCadastroToAllocations) faz a função e o
+// valor de cada escala de Embarque virem do CARGO do RH, não da alocação —
+// a não ser que a alocação esteja travada (function_locked). Então toda
+// função escolhida aqui que não é o cargo da pessoa (Elias é WAP no RH e vai
+// como SUPERVISOR neste navio) precisa ser gravada travada, senão o
+// Financeiro mostra o cargo do RH e o navio "volta" pra WAP.
+function functionDiffersFromRole(fnName: string | null | undefined, emp: { role?: string | null } | undefined): boolean {
+  const fn = (fnName || "").trim().toUpperCase();
+  const role = (emp?.role || "").trim().toUpperCase();
+  return !!fn && fn !== role;
+}
+
 // Todo navio tem um supervisor: a função SUPERVISOR do cadastro de Valores.
 const isSupervisorFunctionName = (name: string | null | undefined) => (name || "").trim().toUpperCase() === "SUPERVISOR";
 
@@ -976,6 +988,8 @@ export default function NaviosPage() {
               pluxee_value: null, // folha começa indefinida (coluna Folha 0)
               status: "ATIVO",
               kind: isCostado ? "COSTADO" : "EMBARQUE",
+              // Função diferente do cargo do RH: trava pro Financeiro respeitar.
+              function_locked: functionDiffersFromRole(fnRow?.name, employees.find((e) => e.id === empId)),
               added_by: profileName,
               added_at: now,
             };
@@ -1453,6 +1467,8 @@ export default function NaviosPage() {
         pluxee_value: null, // folha começa indefinida (coluna Folha 0)
         status: "ATIVO",
         kind: isCostado ? "COSTADO" : "EMBARQUE",
+        // Função diferente do cargo do RH: trava pro Financeiro respeitar.
+        function_locked: functionDiffersFromRole(fnRow?.name, employees.find((e) => e.id === empIdNum)),
         added_by: profile?.full_name || "sistema",
         added_at: new Date().toISOString(),
       };
@@ -1477,7 +1493,8 @@ export default function NaviosPage() {
   // Troca a função de um escalado direto pela lista do painel (mesma opção
   // que o cadastro do navio dá na hora de escalar). Atualiza a job_allocation
   // no lugar — função nova + rate recalculado (override por pessoa >
-  // default_rate da função) — então Pagamento de Embarque, Folha de Ponto e
+  // default_rate da função) e travada quando difere do cargo do RH — então
+  // Pagamento de Embarque, Resultado do Navio, Fechamento, Folha de Ponto e
   // Relatórios de Bordo passam a ver a função certa.
   async function handleChangeCrewFunction(allocId: number, employeeId: number, newFnId: number) {
     if (!selectedShip) return;
@@ -1507,9 +1524,12 @@ export default function NaviosPage() {
         .eq("function_id", newFnId);
       const override = (ovData as { rate: string | number }[] | null)?.[0]?.rate;
       const rate = Number(override ?? fnRow?.default_rate ?? 0);
+      // Trava igual à troca feita no Financeiro: a função escolhida pra ESTE
+      // navio vale em todo o sistema (Resultado do Navio, Fechamento, folha),
+      // em vez do cargo do RH. Voltar pro cargo destrava (o cadastro manda).
       const res: any = await db
         .from("job_allocations")
-        .update({ function_id: newFnId, rate })
+        .update({ function_id: newFnId, rate, function_locked: functionDiffersFromRole(fnRow?.name, employees.find((e) => e.id === employeeId)) })
         .eq("id", allocId);
       if (res?.error) throw new Error(res.error.message);
       setEditingAllocId(null);
