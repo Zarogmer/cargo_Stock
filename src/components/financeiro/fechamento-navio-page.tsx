@@ -218,6 +218,12 @@ export function FechamentoNavioPage({
       .sort((a, b) => (a.name || "").localeCompare(b.name || "", "pt-BR")),
     [employees],
   );
+  // Linha do grupo SUPERVISOR só lista quem é supervisor no RH (função
+  // principal ou 2ª — um WAP que também supervisiona conta).
+  const supervisorOptions = useMemo(
+    () => employeeOptions.filter((e) => employeeHasRole(e, "SUPERVISOR")),
+    [employeeOptions],
+  );
   const escalaByAllocId = useMemo(() => new Map(escalaAllocs.map((a) => [a.id, a])), [escalaAllocs]);
   // Funções ativas pro "+ pessoa em…" (qualquer uma do cadastro, não só as já na folha).
   const functionOptions = useMemo(
@@ -910,7 +916,8 @@ export function FechamentoNavioPage({
                         const linkedAlloc = w.allocation_ids.map((id) => escalaByAllocId.get(id)).find((a) => a != null);
                         const pendingSwap = linkedAlloc != null && w.employee_id != null && linkedAlloc.employee_id !== w.employee_id;
                         const pendingNew = linkedAlloc == null && w.employee_id != null && w.function_id != null && w.mode === "PORAO";
-                        const inList = w.employee_id != null && employeeOptions.some((e) => e.id === w.employee_id);
+                        const rowOptions = (w.function_name || "").trim().toUpperCase() === "SUPERVISOR" ? supervisorOptions : employeeOptions;
+                        const inList = w.employee_id != null && rowOptions.some((e) => e.id === w.employee_id);
                         return (
                         <tr key={w.id} className="align-middle">
                           <td className="py-0.5 pr-1">
@@ -936,7 +943,7 @@ export function FechamentoNavioPage({
                                 <option value="">— escolher —</option>
                                 {w.employee_id == null && w.name && <option value="__cur">{w.name}</option>}
                                 {w.employee_id != null && !inList && <option value={String(w.employee_id)}>{w.name}</option>}
-                                {employeeOptions.map((e) => <option key={e.id} value={String(e.id)}>{e.name}</option>)}
+                                {rowOptions.map((e) => <option key={e.id} value={String(e.id)}>{e.name}</option>)}
                                 <option value="__type">Outro (digitar nome)…</option>
                               </select>
                             )}
