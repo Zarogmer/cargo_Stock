@@ -15,6 +15,7 @@
 // navio e calcula os totais do preview. A tela só edita e exibe.
 
 import { allocCountsAsWorked } from "@/lib/alloc-worked";
+import { isServiceExtra } from "@/lib/job-cost";
 import { pickCostadoFunction } from "@/lib/jobUnits";
 import type { Job, JobAdjustment, JobAllocation, JobFunction } from "@/types/database";
 
@@ -470,18 +471,33 @@ export interface EscalaAllocation {
   kind: string | null;
   status: string | null;
   removal_reason: string | null;
+  // Paga da escala (job_allocations.rate) — usada quando a FUNÇÃO da pessoa
+  // mudou na escala: a linha da folha passa pra paga da função nova.
+  rate?: string | number | null;
   employees?: { name: string } | null;
   job_functions?: { name: string } | null;
 }
 
 const upperName = (s: string | null | undefined) => (s || "").trim().toUpperCase();
 
+// Supervisor atual da escala: quem está ATIVO na função SUPERVISOR (todo navio
+// tem um). null = ninguém escalado como supervisor.
+export function supervisorFromEscala(allocs: EscalaAllocation[]): string | null {
+  const a = allocs.find((x) =>
+    allocCountsAsWorked(x) && upperName(x.job_functions?.name) === "SUPERVISOR" && (x.employees?.name || "").trim());
+  return a ? (a.employees?.name || "").trim() : null;
+}
+
 // Escala → folha. Linhas ligadas a uma alocação pegam o colaborador e a função
 // atuais de lá; linhas antigas (salvas antes do vínculo) são ligadas pelo nome.
-// `changes` lista as trocas de pessoa ("FULANO → CICLANO") pra tela avisar.
+// Quando a FUNÇÃO mudou na escala (WAP → SUPERVISOR), a linha muda de grupo e
+// a paga passa pra da função nova (paga da escala + serviço extra por porão);
+// o resto dos valores digitados fica. `changes` lista o que mudou
+// ("FULANO → CICLANO", "FULANO: WAP → SUPERVISOR") pra tela avisar.
 export function syncWorkersFromEscala(
   workers: ClosingWorker[],
   allocs: EscalaAllocation[],
+  opts: { serviceExtraRate?: number } = {},
 ): { workers: ClosingWorker[]; changes: string[] } {
   const byId = new Map(allocs.map((a) => [a.id, a]));
   const worked = allocs.filter((a) => allocCountsAsWorked(a) && (a.kind || "EMBARQUE") !== "ADMINISTRATIVO");
@@ -506,11 +522,12 @@ export function syncWorkersFromEscala(
       for (const id of ids) linked.add(id);
     }
     if (!a) return w;
+    const newFnName = upperName(a.job_functions?.name) || w.function_name;
     const next: ClosingWorker = {
       ...w,
       allocation_ids: ids,
       function_id: a.function_id ?? w.function_id,
-      function_name: upperName(a.job_functions?.name) || w.function_name,
+      function_name: newFnName,
     };
     if (a.employee_id != null) {
       const newName = (a.employees?.name || "").trim() || w.name;
@@ -519,6 +536,14 @@ export function syncWorkersFromEscala(
       }
       next.employee_id = a.employee_id;
       next.name = newName;
+    }
+    if (w.function_name && newFnName !== w.function_name) {
+      changes.push(`${next.name || "—"}: ${w.function_name} → ${newFnName}`);
+      // Embarque: paga da função nova. Costado (fixo, turnos já somados) mantém.
+      if (w.mode === "PORAO" && a.rate != null && Number.isFinite(Number(a.rate))) {
+        const extra = isServiceExtra(newFnName) ? 0 : Number(opts.serviceExtraRate) || 0;
+        next.rate = round2(Number(a.rate) + extra);
+      }
     }
     return next;
   });

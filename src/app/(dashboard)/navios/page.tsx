@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { hasPermission } from "@/lib/rbac";
 import { db } from "@/lib/db";
-import { employeeRolesLabel } from "@/lib/utils";
+import { employeeHasRole, employeeRolesLabel } from "@/lib/utils";
 import { releaseFinishedShipAllocations, releaseShipAllocationsNow } from "@/lib/release-finished-ships";
 import { useSendWhatsappPref, EnviarWhatsappToggle } from "@/lib/escala-whatsapp-pref";
 import { PlusIcon, EditIcon, TrashIcon, SearchIcon } from "@/components/icons";
@@ -113,6 +113,9 @@ const TEAM_COLORS: Record<string, string> = {
   EQUIPE_2: "bg-purple-100 text-purple-700",
   EQUIPE_4: "bg-orange-100 text-orange-700",
 };
+
+// Todo navio tem um supervisor: a função SUPERVISOR do cadastro de Valores.
+const isSupervisorFunctionName = (name: string | null | undefined) => (name || "").trim().toUpperCase() === "SUPERVISOR";
 
 const EMPTY_FORM = {
   name: "",
@@ -284,6 +287,20 @@ export default function NaviosPage() {
       ),
     [jobFunctions, payModeByUnit],
   );
+  // Ids (como string, igual aos selects) da(s) função(ões) SUPERVISOR.
+  const supervisorFnIds = useMemo(
+    () => new Set(jobFunctions.filter((f) => isSupervisorFunctionName(f.name)).map((f) => String(f.id))),
+    [jobFunctions],
+  );
+  // Todo navio tem um supervisor: alguém da escala do modal precisa ir como
+  // SUPERVISOR (função principal ou 2ª). Sem isso o navio não é salvo — foi
+  // assim que um WAP que também é supervisor no RH subiu sem ninguém marcar.
+  const formHasSupervisor = useMemo(() => {
+    for (const id of groupParticipants) {
+      if (supervisorFnIds.has(groupPerEmpFn.get(id) || "") || supervisorFnIds.has(groupPerEmpFn2.get(id) || "")) return true;
+    }
+    return false;
+  }, [groupParticipants, groupPerEmpFn, groupPerEmpFn2, supervisorFnIds]);
   // Costado-only: shift date + period for the bulk-allocated rows
   const [costadoShiftDate, setCostadoShiftDate] = useState("");
   const [costadoShiftPeriod, setCostadoShiftPeriod] = useState("07-13");
@@ -681,17 +698,32 @@ export default function NaviosPage() {
       for (const id of nextAuto) next.add(id);
       return next;
     });
-    setGroupPerEmpFn((m) => {
-      const nm = new Map(m);
-      for (const id of previousAuto) if (!nextAuto.has(id)) nm.delete(id);
-      for (const e of teamAvailable) {
-        if (nm.get(e.id)) continue; // não sobrescreve função escolhida na mão
-        const role = (e.role || "").trim().toUpperCase();
-        const fn = role ? pickFunctionByName(escalableFunctions, role, "EMBARQUE") : null;
-        if (fn) nm.set(e.id, String(fn.id));
+    const nextFns = new Map(groupPerEmpFn);
+    for (const id of previousAuto) if (!nextAuto.has(id)) nextFns.delete(id);
+    for (const e of teamAvailable) {
+      if (nextFns.get(e.id)) continue; // não sobrescreve função escolhida na mão
+      const role = (e.role || "").trim().toUpperCase();
+      const fn = role ? pickFunctionByName(escalableFunctions, role, "EMBARQUE") : null;
+      if (fn) nextFns.set(e.id, String(fn.id));
+    }
+    // Todo navio tem um supervisor. Se ninguém da equipe é SUPERVISOR de
+    // cargo, quem tem SUPERVISOR como 2ª função no RH (um WAP que também
+    // supervisiona) sobe como SUPERVISOR neste navio — o usuário troca se
+    // for outro.
+    let promotedSupervisor: string | null = null;
+    const supervisorFn = pickFunctionByName(escalableFunctions, "SUPERVISOR", "EMBARQUE");
+    if (supervisorFn) {
+      const supId = String(supervisorFn.id);
+      const hasSup = Array.from(nextFns.values()).some((v) => v === supId) || Array.from(groupPerEmpFn2.values()).some((v) => v === supId);
+      if (!hasSup) {
+        const candidate = teamAvailable.find((e) => employeeHasRole(e, "SUPERVISOR"));
+        if (candidate) {
+          nextFns.set(candidate.id, supId);
+          promotedSupervisor = candidate.name;
+        }
       }
-      return nm;
-    });
+    }
+    setGroupPerEmpFn(nextFns);
     setGroupPerEmpFn2((m) => {
       const nm = new Map(m);
       for (const id of previousAuto) if (!nextAuto.has(id)) nm.delete(id);
@@ -709,9 +741,12 @@ export default function NaviosPage() {
     if (nextAuto.size > 0) {
       // Escalar sem a caixinha marcada não gera escala nenhuma — liga sozinho.
       setCreateGroup(true);
+      const supNote = promotedSupervisor
+        ? ` ${promotedSupervisor} entrou como SUPERVISOR (2ª função no RH) — troque se outro for o supervisor deste navio.`
+        : "";
       setTeamPickInfo({
         tone: "ok",
-        text: `${nextAuto.size} colaborador(es) da ${TEAM_LABELS[team]} marcados pra escalar (revise em "Escalar colaboradores", abaixo).`,
+        text: `${nextAuto.size} colaborador(es) da ${TEAM_LABELS[team]} marcados pra escalar (revise em "Escalar colaboradores", abaixo).${supNote}`,
       });
       return;
     }
@@ -844,6 +879,11 @@ export default function NaviosPage() {
             .filter(Boolean)
             .join(", ");
           setFormError(`Defina a função para: ${names}`);
+          setSaving(false);
+          return;
+        }
+        if (!formHasSupervisor) {
+          setFormError("Todo navio precisa de um supervisor: escolha SUPERVISOR como função (ou 2ª função) de pelo menos um colaborador escalado.");
           setSaving(false);
           return;
         }
@@ -1447,6 +1487,15 @@ export default function NaviosPage() {
     // do cadastro já segue essa regra).
     const dup = shipAllocs.some((a) => a.id !== allocId && a.employee_id === employeeId && a.function_id === newFnId && a.status === "ATIVO");
     if (dup) { setAllocFnError("Esse colaborador já está escalado nessa função neste navio."); return; }
+    // Todo navio tem um supervisor: o único SUPERVISOR só troca de função
+    // depois que outro for escalado como SUPERVISOR.
+    if (supervisorFnIds.has(String(current.function_id)) && !supervisorFnIds.has(String(newFnId))) {
+      const otherSup = shipAllocs.some((a) => a.id !== allocId && a.status === "ATIVO" && supervisorFnIds.has(String(a.function_id)));
+      if (!otherSup) {
+        setAllocFnError("Esse é o único supervisor do navio — todo navio precisa de um. Escale outro colaborador como SUPERVISOR antes de trocar a função dele.");
+        return;
+      }
+    }
     setSavingAllocFn(true);
     setAllocFnError(null);
     try {
@@ -1868,6 +1917,11 @@ export default function NaviosPage() {
               ) : shipCrew.length > 0 ? (
                 <div>
                   <p className="text-xs text-text-light mb-2">{shipCrew.length} escalado{shipCrew.length > 1 ? "s" : ""}</p>
+                  {shipAllocs.some((a) => a.status === "ATIVO") && !shipAllocs.some((a) => a.status === "ATIVO" && supervisorFnIds.has(String(a.function_id))) && (
+                    <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 mb-2">
+                      ⚠️ Sem supervisor escalado — todo navio precisa de um. Troque a função de alguém pra SUPERVISOR (✎) ou adicione um.
+                    </p>
+                  )}
                   {allocFnError && <p className="text-xs text-danger mb-2">{allocFnError}</p>}
                   <ul className="space-y-1.5">
                     {shipCrew.map((m) => (
@@ -2688,6 +2742,11 @@ export default function NaviosPage() {
                             <p className="text-[10px] font-semibold text-emerald-900 uppercase tracking-wider mb-2">
                               {selectedList.length} selecionado(s) — defina a função
                             </p>
+                            {!formHasSupervisor && (
+                              <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-md px-2 py-1 mb-2">
+                                ⚠️ Nenhum supervisor escalado — todo navio precisa de um. Escolha SUPERVISOR como função (ou 2ª função) de um dos colaboradores.
+                              </p>
+                            )}
                             <div className="space-y-1.5 max-h-44 overflow-y-auto">
                               {selectedList.map((emp) => {
                                 const curFn = groupPerEmpFn.get(emp.id) || "";

@@ -28,6 +28,7 @@ import {
   normalizeClosingDoc,
   parseNumberBR,
   shortDateBR,
+  supervisorFromEscala,
   syncWorkersFromEscala,
   type ClosingAdminRow,
   type ClosingCharge,
@@ -145,7 +146,7 @@ function supervisorFromAllocations(allocs: JobAllocation[], jobId: string): stri
   return a?.employees?.name || null;
 }
 
-const ESCALA_SELECT = "id, employee_id, function_id, kind, status, removal_reason, employees(name), job_functions(name)";
+const ESCALA_SELECT = "id, employee_id, function_id, kind, status, removal_reason, rate, employees(name), job_functions(name)";
 
 export function FechamentoNavioPage({
   jobs, allocations, adjustments, functions, shipsAll, canEdit, profileName, dollar, loading, onEscalaChanged,
@@ -278,6 +279,30 @@ export function FechamentoNavioPage({
   }, [filteredJobs]);
 
   const job = useMemo(() => jobs.find((j) => j.id === jobId) || null, [jobs, jobId]);
+  // Serviço extra por porão do navio (Raspagem/Pintura), já somado na paga
+  // pelas props — quando a função de alguém muda na escala, a paga nova leva
+  // o mesmo extra.
+  const serviceExtraRate = useMemo(() => {
+    const a = allocations.find((x) => x.job_id === job?.id && (x.kind || "EMBARQUE") === "EMBARQUE" && Number(x.service_extra_rate) > 0);
+    return a ? Number(a.service_extra_rate) : 0;
+  }, [allocations, job?.id]);
+
+  // Escala → folha: aplica a escala atual (quem, função/paga e supervisor) na
+  // folha. A escala é a verdade sobre QUEM trabalhou e como; os valores
+  // digitados ficam. `changes` é o que a tela avisa.
+  const mergeEscala = useCallback((base: ClosingDoc, escala: EscalaAllocation[]): { doc: ClosingDoc; changes: string[] } => {
+    const synced = syncWorkersFromEscala(base.workers, escala, { serviceExtraRate });
+    const changes = [...synced.changes];
+    let supervisor = base.supervisor;
+    const sup = supervisorFromEscala(escala);
+    if (sup && sup.toUpperCase() !== base.supervisor.trim().toUpperCase()) {
+      changes.push(`supervisor ${base.supervisor.trim() || "—"} → ${sup}`);
+      supervisor = sup;
+    }
+    return { doc: { ...base, workers: synced.workers, supervisor }, changes };
+  }, [serviceExtraRate]);
+  const mergeEscalaRef = useRef(mergeEscala);
+  useEffect(() => { mergeEscalaRef.current = mergeEscala; }, [mergeEscala]);
 
   const buildDraft = useCallback(
     (j: Job, notes: DebitNoteRow[]): ClosingDoc => {
@@ -320,16 +345,15 @@ export function FechamentoNavioPage({
       const row = ((rowRes.data as ClosingRow[] | null) || [])[0];
       const saved = row ? normalizeClosingDoc(row.data) : null;
       if (saved) {
-        // Escala → folha: quem foi trocado na escala troca aqui também. Só
-        // uma troca de pessoa deixa a folha "não salva"; o vínculo de linhas
-        // antigas (salvas antes do select) é silencioso.
-        const synced = syncWorkersFromEscala(saved.workers, escala);
-        const docSynced: ClosingDoc = { ...saved, workers: synced.workers };
-        setDoc(docSynced);
-        setSavedJson(JSON.stringify(synced.changes.length > 0 ? saved : docSynced));
+        // Escala → folha: quem foi trocado na escala (pessoa, função/paga,
+        // supervisor) troca aqui também e deixa a folha "não salva"; o
+        // vínculo de linhas antigas (salvas antes do select) é silencioso.
+        const synced = mergeEscalaRef.current(saved, escala);
+        setDoc(synced.doc);
+        setSavedJson(JSON.stringify(synced.changes.length > 0 ? saved : synced.doc));
         setSavedAt({ by: row.updated_by, at: row.updated_at });
         if (synced.changes.length > 0) {
-          setMsg({ kind: "ok", text: `A escala mudou (${synced.changes.join(", ")}) — nome atualizado na folha, salve pra manter.` });
+          setMsg({ kind: "ok", text: `A escala mudou (${synced.changes.join(", ")}) — folha atualizada, salve pra manter.` });
         }
       } else {
         if (rowRes.error) setMsg({ kind: "err", text: `Não foi possível ler o fechamento salvo: ${rowRes.error.message}` });
@@ -343,6 +367,44 @@ export function FechamentoNavioPage({
     // montado na troca de navio (senão sobrescreve o que o usuário digitou).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job?.id, loading, empLoaded]);
+
+  // A escala pode mudar em outra aba do navegador (Navios) com esta folha
+  // aberta: ao voltar pra esta janela, relê a escala e aplica na folha — a
+  // troca de função feita lá aparece aqui sem precisar recarregar.
+  const docRef = useRef(doc);
+  useEffect(() => { docRef.current = doc; }, [doc]);
+  const hasDoc = doc != null;
+  useEffect(() => {
+    if (!job || !hasDoc || loadingDoc || saving) return;
+    const jobIdNow = job.id;
+    let busy = false;
+    const resync = async () => {
+      if (busy || document.visibilityState === "hidden") return;
+      busy = true;
+      try {
+        const res = await db.from("job_allocations").select(ESCALA_SELECT).eq("job_id", jobIdNow);
+        if (res.error) return;
+        const escala = ((res.data as EscalaAllocation[] | null) || []);
+        const cur = docRef.current;
+        if (!cur) return;
+        setEscalaAllocs(escala);
+        const merged = mergeEscalaRef.current(cur, escala);
+        if (JSON.stringify(merged.doc) === JSON.stringify(cur)) return;
+        setDoc(merged.doc);
+        if (merged.changes.length > 0) {
+          setMsg({ kind: "ok", text: `A escala mudou (${merged.changes.join(", ")}) — folha atualizada, salve pra manter.` });
+        }
+      } finally {
+        busy = false;
+      }
+    };
+    window.addEventListener("focus", resync);
+    document.addEventListener("visibilitychange", resync);
+    return () => {
+      window.removeEventListener("focus", resync);
+      document.removeEventListener("visibilitychange", resync);
+    };
+  }, [job, hasDoc, loadingDoc, saving]);
 
   const totals = useMemo(() => (doc ? computeClosing(doc) : null), [doc]);
   // Funcionários por função (ESFREGÃO…, WAP…); a folha numera na mesma ordem.
