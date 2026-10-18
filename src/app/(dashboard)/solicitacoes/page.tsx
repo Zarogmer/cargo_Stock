@@ -353,7 +353,9 @@ export default function SolicitacoesPage() {
   const [showPurchaseForm, setShowPurchaseForm] = useState(false);
   const [editPurchase, setEditPurchase] = useState<PurchaseOrder | null>(null);
   // "Escanear" (câmera + IA): foto da nota/cupom/boleto vira compra(s).
+  // "Importar PDF" abre o mesmo fluxo já com o arquivo (pula a câmera).
   const [scanOpen, setScanOpen] = useState(false);
+  const [scanFiles, setScanFiles] = useState<File[] | null>(null);
   const [deletePurchase, setDeletePurchase] = useState<PurchaseOrder | null>(null);
   const now = new Date();
   // Filtros do Controle de Compras — também alimentam o relatório em Excel.
@@ -827,6 +829,7 @@ export default function SolicitacoesPage() {
       }
     }
     setScanOpen(false);
+    setScanFiles(null);
     setSaveOk(
       `✅ ${ids.length === 1 ? "Compra registrada" : `${ids.length} compras registradas`} pelo Escanear.${contasMsg}` +
       (stockMsgs.length ? ` 📦 Almoxarifado: ${stockMsgs.join("; ")}.` : ""),
@@ -1035,9 +1038,27 @@ export default function SolicitacoesPage() {
               // valores, fornecedor) — substitui o leitor de código de barras e
               // o Importar PDF.
               <div className="flex items-center gap-2 w-full sm:w-auto">
-                <Button size="sm" variant="secondary" className="flex-1 sm:flex-none" onClick={() => setScanOpen(true)}>
+                <Button size="sm" variant="secondary" className="flex-1 sm:flex-none" onClick={() => { setScanFiles(null); setScanOpen(true); }}>
                   📷 Escanear
                 </Button>
+                {/* Importar PDF: a IA lê o PDF da NF/boleto (ou foto da galeria)
+                    e abre a mesma conferência do Escanear, já preenchida. */}
+                <label className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 font-medium rounded-lg transition bg-gray-100 hover:bg-gray-200 text-text px-3 py-1.5 text-xs cursor-pointer whitespace-nowrap">
+                  📄 Importar PDF
+                  <input
+                    type="file"
+                    accept="application/pdf,image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files || []);
+                      e.target.value = "";
+                      if (files.length === 0) return;
+                      setScanFiles(files);
+                      setScanOpen(true);
+                    }}
+                  />
+                </label>
                 <Button size="sm" className="flex-1 sm:flex-none" onClick={() => { setEditPurchase(null); setShowPurchaseForm(true); }}>
                   <PlusIcon className="w-4 h-4" />Nova Compra
                 </Button>
@@ -1135,7 +1156,7 @@ export default function SolicitacoesPage() {
             <div className="text-center py-12 text-text-light">
               <span className="text-4xl block mb-3">🧾</span>
               <p className="font-medium">Nenhuma compra em {periodLabel}</p>
-              <p className="text-xs mt-1">Use &quot;📷 Escanear&quot; (foto da nota/cupom/boleto) ou &quot;Nova Compra&quot; para registrar</p>
+              <p className="text-xs mt-1">Use &quot;📷 Escanear&quot; (foto da nota/cupom/boleto), &quot;📄 Importar PDF&quot; ou &quot;Nova Compra&quot; para registrar</p>
             </div>
           ) : (
             <>
@@ -1547,8 +1568,9 @@ export default function SolicitacoesPage() {
       {scanOpen && (
         <EscanearCompraModal
           open
-          onClose={() => setScanOpen(false)}
+          onClose={() => { setScanOpen(false); setScanFiles(null); }}
           onSave={handleSaveScanned}
+          initialFiles={scanFiles}
           suppliers={suppliers.map((s) => s.name)}
           ships={ships.map((s) => ({ id: s.id, label: shipSelectLabel(s) }))}
           destinations={WAREHOUSE_DESTINATIONS}

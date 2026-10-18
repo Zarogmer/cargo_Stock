@@ -107,9 +107,12 @@ async function downscale(source: CanvasImageSource, w: number, h: number): Promi
   return canvasToJpeg(canvas);
 }
 
-export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, destinations, paymentMethods }: {
+export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, destinations, paymentMethods, initialFiles }: {
   open: boolean;
   onClose: () => void;
+  // "Importar PDF": arquivos já escolhidos (PDF da NF/boleto ou foto da
+  // galeria) — pula a câmera e vai direto pra leitura da IA.
+  initialFiles?: File[] | null;
   onSave: (draft: ScannedPurchaseDraft) => Promise<void>;
   suppliers: string[];
   ships: { id: string; label: string }[];
@@ -142,10 +145,18 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
   const shotsRef = useRef<Shot[]>([]);
   shotsRef.current = shots;
 
-  // Abre zerado a cada vez.
+  // Abre zerado a cada vez. Com arquivos importados, já começa lendo.
   useEffect(() => {
     if (!open) return;
-    setStage("camera"); setShots([]); setError(null); setResult(null); setSaving(false);
+    setShots([]); setError(null); setResult(null); setSaving(false);
+    if (initialFiles?.length) {
+      setStage("reading");
+      void startWithFiles(initialFiles);
+    } else {
+      setStage("camera");
+    }
+    // Só ao abrir — os arquivos importados chegam junto com a abertura.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // Libera as miniaturas ao fechar.
@@ -219,30 +230,53 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
     }
   }
 
+  // Arquivo escolhido (PDF vai como está; foto é reduzida) → item da lista.
+  async function fileToShot(f: File): Promise<Shot> {
+    if (f.type === "application/pdf") return { id: ++shotSeq.current, blob: f, name: f.name, preview: null };
+    if (!f.type.startsWith("image/")) throw new Error(`"${f.name}" não é foto nem PDF.`);
+    try {
+      const bmp = await createImageBitmap(f);
+      const blob = await downscale(bmp, bmp.width, bmp.height);
+      bmp.close();
+      return { id: ++shotSeq.current, blob, name: f.name.replace(/\.\w+$/, "") + ".jpg", preview: URL.createObjectURL(blob) };
+    } catch {
+      throw new Error(`Não consegui abrir "${f.name}" — envie como JPG/PNG ou PDF.`);
+    }
+  }
+
   async function addFiles(list: FileList | null) {
     if (!list) return;
     setError(null);
     for (const f of Array.from(list)) {
-      if (f.type === "application/pdf") { addShot(f, f.name); continue; }
-      if (!f.type.startsWith("image/")) { setError(`"${f.name}" não é foto nem PDF.`); continue; }
       try {
-        const bmp = await createImageBitmap(f);
-        const blob = await downscale(bmp, bmp.width, bmp.height);
-        bmp.close();
-        addShot(blob, f.name.replace(/\.\w+$/, "") + ".jpg");
-      } catch {
-        setError(`Não consegui abrir "${f.name}" — envie como JPG/PNG ou PDF.`);
+        const shot = await fileToShot(f);
+        setShots((prev) => [...prev, shot]);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
       }
     }
   }
 
-  async function analyze() {
-    if (shots.length === 0) return;
+  // "Importar PDF": prepara os arquivos e já manda pra IA.
+  async function startWithFiles(files: File[]) {
+    const ready: Shot[] = [];
+    for (const f of files) {
+      try { ready.push(await fileToShot(f)); } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    }
+    setShots(ready);
+    if (ready.length > 0) await analyze(ready);
+    else setStage("camera");
+  }
+
+  async function analyze(list: Shot[] = shots) {
+    if (list.length === 0) return;
     setError(null);
     setStage("reading");
     try {
       const fd = new FormData();
-      shots.forEach((s) => fd.append("files", s.blob, s.name));
+      list.forEach((s) => fd.append("files", s.blob, s.name));
       const res = await fetch("/api/compras/escanear", { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `Erro ${res.status}`);
@@ -630,7 +664,7 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
               </button>
               <button
                 type="button"
-                onClick={analyze}
+                onClick={() => analyze()}
                 disabled={shots.length === 0}
                 className="flex-1 sm:flex-none px-5 py-2.5 text-sm font-semibold rounded-lg bg-primary text-white hover:opacity-90 disabled:opacity-40"
               >
