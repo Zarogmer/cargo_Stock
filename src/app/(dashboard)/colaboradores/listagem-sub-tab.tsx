@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { printPdfBlob, shareOrDownloadBlob } from "@/lib/print";
+import { Modal } from "@/components/ui/modal";
 import { PdfPreview } from "./pdf-preview";
 import { isDocEligibleEmployee } from "@/lib/utils";
 import type { Employee } from "@/types/database";
@@ -21,6 +22,8 @@ export function ListagemSubTab({ employees }: { employees: Employee[] }) {
   const [generating, setGenerating] = useState<"docx" | "pdf" | "print" | "preview" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
+  const [cpfOpen, setCpfOpen] = useState(false);
+  const [cpfCopied, setCpfCopied] = useState(false);
 
   // Só quem embarca: ativos do operacional. Administrativo (RH, financeiro…)
   // não vai na listagem de embarque. Sem setor definido é tratado como
@@ -56,6 +59,35 @@ export function ListagemSubTab({ employees }: { employees: Employee[] }) {
     }
     return n;
   }, [selectedIds, employees, variant]);
+
+  // Lista de CPF: só dígitos, separados por ";" (formato que os terminais pedem
+  // pra liberar o acesso), na mesma ordem alfabética da lista.
+  const cpfList = useMemo(() => {
+    const cpfs: string[] = [];
+    const withoutCpf: string[] = [];
+    for (const e of sortedEmployees) {
+      if (!selectedIds.has(e.id)) continue;
+      const digits = (e.cpf || "").replace(/\D/g, "");
+      if (digits) cpfs.push(digits);
+      else withoutCpf.push(e.name);
+    }
+    return { text: cpfs.join(";"), count: cpfs.length, withoutCpf };
+  }, [sortedEmployees, selectedIds]);
+
+  async function copyCpfList() {
+    try {
+      await navigator.clipboard.writeText(cpfList.text);
+      setCpfCopied(true);
+      setTimeout(() => setCpfCopied(false), 2000);
+    } catch {
+      setError("Não foi possível copiar. Selecione o texto e copie manualmente.");
+    }
+  }
+
+  // wa.me sem número abre a tela de "enviar para" (contatos e grupos).
+  function sendCpfListToWhats() {
+    window.open(`https://wa.me/?text=${encodeURIComponent(cpfList.text)}`, "_blank", "noopener");
+  }
 
   function toggleEmployee(id: number) {
     setSelectedIds((prev) => {
@@ -247,6 +279,17 @@ export function ListagemSubTab({ employees }: { employees: Employee[] }) {
         >
           {generating === "preview" ? "Gerando..." : "👁️ Pré-visualizar"}
         </Button>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setError(null);
+            setCpfCopied(false);
+            setCpfOpen(true);
+          }}
+          disabled={!canGenerate}
+        >
+          📋 Lista de CPF
+        </Button>
         <Button variant="primary" onClick={() => handleGenerate("docx")} disabled={!canGenerate}>
           {generating === "docx" ? "Gerando..." : "Gerar Word (.docx)"}
         </Button>
@@ -259,6 +302,38 @@ export function ListagemSubTab({ employees }: { employees: Employee[] }) {
       </div>
 
       <PdfPreview blob={previewBlob} loading={generating === "preview"} onClose={() => setPreviewBlob(null)} />
+
+      <Modal open={cpfOpen} onClose={() => setCpfOpen(false)} title="Lista de CPF">
+        <div className="space-y-3">
+          <p className="text-xs text-text-light">
+            {cpfList.count} CPF{cpfList.count === 1 ? "" : "s"} dos colaboradores selecionados, separados por
+            ponto e vírgula.
+          </p>
+          <textarea
+            readOnly
+            value={cpfList.text}
+            onFocus={(e) => e.currentTarget.select()}
+            rows={5}
+            className="w-full px-3 py-2 text-sm font-mono border border-border rounded-lg bg-gray-50 break-all focus:outline-none focus:ring-2 focus:ring-primary/30"
+          />
+          {cpfList.withoutCpf.length > 0 && (
+            <p className="text-[11px] text-amber-700">
+              Sem CPF cadastrado (fora da lista): {cpfList.withoutCpf.join(", ")}.
+            </p>
+          )}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="secondary" onClick={() => setCpfOpen(false)}>
+              Fechar
+            </Button>
+            <Button variant="secondary" onClick={copyCpfList} disabled={!cpfList.text}>
+              {cpfCopied ? "✅ Copiado!" : "📋 Copiar"}
+            </Button>
+            <Button variant="success" onClick={sendCpfListToWhats} disabled={!cpfList.text}>
+              💬 Enviar no WhatsApp
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
