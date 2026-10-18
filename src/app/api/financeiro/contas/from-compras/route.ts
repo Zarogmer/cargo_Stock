@@ -40,16 +40,32 @@ export async function GET() {
       payment_terms: true,
       ship_name: true,
       notes: true,
+      batch_id: true,
     },
   });
 
-  return NextResponse.json({ purchases });
+  // Lote do Escanear já lançado: o título aponta só pra 1ª compra do lote, as
+  // demais não têm título próprio de propósito — não podem voltar pra lista.
+  const batchIds = [...new Set(purchases.map((p) => p.batch_id).filter((b): b is string => !!b))];
+  const doneBatches = batchIds.length
+    ? new Set(
+        (await prisma.payableInvoice.findMany({
+          where: { purchase_batch_id: { in: batchIds } },
+          select: { purchase_batch_id: true },
+        })).map((i) => i.purchase_batch_id),
+      )
+    : new Set<string | null>();
+
+  return NextResponse.json({ purchases: purchases.filter((p) => !p.batch_id || !doneBatches.has(p.batch_id)) });
 }
 
 // POST /api/financeiro/contas/from-compras — cria títulos a partir das compras.
 // Body: { purchase_ids: string[] }. Casa o FORNECEDOR (texto da compra) com um
 // fornecedor cadastrado pelo nome; não achando, guarda como favorecido.
 // created conta TÍTULOS (uma compra parcelada em 3 soma 3).
+// Compras do mesmo lote (batch_id — itens de UMA nota lida pelo Escanear) viram
+// UM lançamento com a soma do lote (um título, ou um por parcela), apontando
+// pra 1ª compra do lote e marcado com purchase_batch_id.
 // Diferente do GET (só Financeiro), o POST aceita também os papéis de Compras:
 // toda compra salva no Controle de Compras é lançada automaticamente aqui, e
 // quem registra (ex.: Gestor/RH) nem sempre acessa o módulo bancário.
@@ -83,9 +99,10 @@ export async function POST(request: NextRequest) {
 
   let created = 0;
   let skipped = 0;
+  const seenBatches = new Set<string>();
 
   for (const id of ids) {
-    const po = await prisma.purchaseOrder.findUnique({
+    let po = await prisma.purchaseOrder.findUnique({
       where: { id },
       include: {
         payable_invoices: { select: { id: true } },
@@ -100,7 +117,33 @@ export async function POST(request: NextRequest) {
       continue;
     }
 
-    const amount = Number(po.total_value) || 0;
+    // Lote: junta as compras do lote num lançamento só. A 1ª compra (mais
+    // antiga) é a âncora do título; forma de pagamento/parcelas vêm dela (o
+    // Escanear grava as mesmas em todas).
+    let batchItems: { description: string; total_value: number }[] = [];
+    let amount = Number(po.total_value) || 0;
+    if (po.batch_id) {
+      if (seenBatches.has(po.batch_id)) { skipped++; continue; }
+      seenBatches.add(po.batch_id);
+      const already = await prisma.payableInvoice.count({ where: { purchase_batch_id: po.batch_id } });
+      if (already > 0) { skipped++; continue; }
+      const siblings = await prisma.purchaseOrder.findMany({
+        where: { batch_id: po.batch_id },
+        orderBy: { created_at: "asc" },
+        include: {
+          payable_invoices: { select: { id: true } },
+          card: { select: { last4: true, closing_day: true, label: true } },
+        },
+      });
+      if (siblings.some((s) => s.payable_invoices.length > 0)) { skipped++; continue; }
+      po = siblings[0] ?? po;
+      batchItems = siblings.map((s) => ({ description: s.description, total_value: Number(s.total_value) || 0 }));
+      amount = batchItems.reduce((sum, s) => sum + s.total_value, 0);
+    }
+    const isBatch = batchItems.length > 1;
+    const baseDescription = isBatch
+      ? `${po.supplier?.trim() || "Compra"} — ${batchItems.length} itens`
+      : po.description;
     const supplierId = po.supplier ? byName.get(po.supplier.trim().toLowerCase()) ?? null : null;
 
     // Parcelas do FATURADO: payment_terms (novo) ou o payment_term_days legado
@@ -126,9 +169,13 @@ export async function POST(request: NextRequest) {
         : po.payment_method
           ? `Pagamento: ${po.payment_method}${cardLabel}`
           : null;
+    const itemsLabel = isBatch
+      ? `Itens: ${batchItems.slice(0, 10).map((it) => it.description).join(", ")}${batchItems.length > 10 ? ` e mais ${batchItems.length - 10}` : ""}`
+      : null;
     const noteParts = [
       po.ship_name ? `Navio: ${po.ship_name}` : null,
       pgtoLabel,
+      itemsLabel,
       po.notes || null,
     ].filter(Boolean);
 
@@ -155,7 +202,7 @@ export async function POST(request: NextRequest) {
 
       await prisma.payableInvoice.create({
         data: {
-          description: terms.length > 1 ? `${po.description} — parcela ${i + 1}/${n}` : po.description,
+          description: terms.length > 1 ? `${baseDescription} — parcela ${i + 1}/${n}` : baseDescription,
           amount: new Prisma.Decimal(parcelAmount.toFixed(2)),
           due_date: dueDate,
           supplier_id: supplierId,
@@ -171,6 +218,7 @@ export async function POST(request: NextRequest) {
           ship_name: po.ship_name || null,
           origin: "COMPRA",
           purchase_order_id: po.id,
+          purchase_batch_id: po.batch_id || null,
           status: autoReason ? "APROVADO" : "AGUARDANDO_APROVACAO",
           approved_by: autoReason,
           approved_at: autoReason ? new Date() : null,

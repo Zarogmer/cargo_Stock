@@ -1060,14 +1060,14 @@ export default function MensagensPage() {
         </form>
       </section>
 
-      {/* Avisos de Solicitações e Compras */}
+      {/* Avisos automáticos (lista de embarque e retorno de material). Os de
+          Solicitações/Compra concluída saíram junto com a aba Solicitações. */}
       <section className="bg-card rounded-2xl border border-border p-6 space-y-4">
         <div>
-          <h2 className="text-lg font-bold text-text">Avisos de Solicitações e Compras 🛒</h2>
+          <h2 className="text-lg font-bold text-text">Avisos automáticos 📦</h2>
           <p className="text-sm text-text-light">
-            Escolha pra onde vão os avisos automáticos: o grupo e as funções que recebem quando uma
-            solicitação é criada e quando uma compra é concluída. Clique em &ldquo;ver quem está&rdquo; pra
-            conferir os colaboradores de cada função.
+            Escolha pra onde vão os avisos automáticos da lista de embarque e do retorno de material.
+            Clique em &ldquo;ver quem está&rdquo; pra conferir os colaboradores de cada função.
           </p>
         </div>
 
@@ -1085,36 +1085,6 @@ export default function MensagensPage() {
           <p className="text-sm text-text-light">Carregando configuração...</p>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            <div className="border border-border rounded-xl p-4 space-y-3">
-              <div>
-                <p className="text-sm font-semibold">🛒 Nova solicitação</p>
-                <p className="text-[11px] text-text-light">Disparado quando alguém cria uma solicitação de compra.</p>
-              </div>
-              <GroupMultiSelect
-                selected={notifyCfg.novaSolicitacao.groups}
-                onChange={(gs) => setNotifyCfg((c) => (c ? { ...c, novaSolicitacao: { groups: gs, functions: [] } } : c))}
-                groups={groups}
-                disabled={savingCfg}
-                label="Grupos de destino"
-                hint="O aviso é postado em cada grupo marcado. Sem grupo, ninguém é avisado."
-              />
-            </div>
-
-            <div className="border border-border rounded-xl p-4 space-y-3">
-              <div>
-                <p className="text-sm font-semibold">✅ Compra concluída</p>
-                <p className="text-[11px] text-text-light">Disparado quando a solicitação é aprovada e a compra registrada.</p>
-              </div>
-              <GroupMultiSelect
-                selected={notifyCfg.compraConcluida.groups}
-                onChange={(gs) => setNotifyCfg((c) => (c ? { ...c, compraConcluida: { groups: gs, functions: [] } } : c))}
-                groups={groups}
-                disabled={savingCfg}
-                label="Grupos de destino"
-                hint="A compra concluída é postada em cada grupo marcado. Sem grupo escolhido, usamos o grupo “Compras” padrão."
-              />
-            </div>
-
             {/* Lista de embarque vem antes do Retorno (ordem do fluxo real:
                 embarca primeiro, confere o retorno depois). */}
             <div className="border border-border rounded-xl p-4 space-y-3">

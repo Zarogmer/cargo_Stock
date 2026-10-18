@@ -1120,6 +1120,10 @@ model PurchaseOrder {
   // nome preserva o histórico/relatório mesmo depois que o navio sai da lista.
   ship_id        String?   @db.Uuid
   ship_name      String? // NAVIO (snapshot do nome)
+  // Lote do "Escanear" (IA): os itens de UMA nota/boleto viram uma compra por
+  // item com o mesmo batch_id — e o Contas a Pagar lança UM título (ou um por
+  // parcela) com a soma do lote, não um por item. Null = compra avulsa.
+  batch_id       String?   @db.Uuid
   created_by     String
   created_at     DateTime  @default(now()) @db.Timestamptz()
   updated_at     DateTime  @default(now()) @db.Timestamptz()
@@ -1129,6 +1133,7 @@ model PurchaseOrder {
   payable_invoices PayableInvoice[]
 
   @@index([purchase_date(sort: Desc)])
+  @@index([batch_id])
   @@index([department])
   @@index([request_id])
   @@index([ship_id])
@@ -1443,6 +1448,10 @@ model PayableInvoice {
   // por parcela da mesma compra. SetNull preserva o título se a compra sumir.
   purchase_order_id String?        @db.Uuid
   purchase_order    PurchaseOrder? @relation(fields: [purchase_order_id], references: [id], onDelete: SetNull)
+  // Lote de compras (purchase_orders.batch_id) coberto por este título — o
+  // título aponta pra 1ª compra do lote em purchase_order_id, e isto marca o
+  // lote inteiro como lançado (sobrevive se aquela compra for apagada).
+  purchase_batch_id String?        @db.Uuid
 
   // Conta mensal que gerou este título (null = conta única). O par
   // (recorrência, vencimento) é único — é o que torna o materializador
@@ -1470,6 +1479,7 @@ model PayableInvoice {
   @@index([due_date])
   @@index([supplier_id])
   @@index([purchase_order_id])
+  @@index([purchase_batch_id])
   @@index([statement_section])
   @@index([recurring_bill_id])
   @@unique([recurring_bill_id, due_date])

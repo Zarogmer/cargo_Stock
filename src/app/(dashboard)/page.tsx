@@ -39,7 +39,6 @@ interface DashboardStats {
   totalEpis: number;
   totalUniforms: number;
   totalConversations: number;
-  totalSolicitacoes: number;
   totalCompras: number;    // Controle de Compras (compras registradas no mês corrente)
 }
 
@@ -101,14 +100,13 @@ export default function DashboardPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
 
-  const [stats, setStats] = useState<DashboardStats>({ totalMateriais: 0, totalRancho: 0, totalEmployees: 0, totalMaquinario: 0, totalFerramentas: 0, totalEletrica: 0, totalEpis: 0, totalUniforms: 0, totalConversations: 0, totalSolicitacoes: 0, totalCompras: 0 });
+  const [stats, setStats] = useState<DashboardStats>({ totalMateriais: 0, totalRancho: 0, totalEmployees: 0, totalMaquinario: 0, totalFerramentas: 0, totalEletrica: 0, totalEpis: 0, totalUniforms: 0, totalConversations: 0, totalCompras: 0 });
   const [movements, setMovements] = useState<RecentMovement[]>([]);
   // Cotação do dólar — compartilhada com o Pagamento de Navios (components/dollar-ticker).
   const dollar = useDollarQuote();
   const [stockItems, setStockItems] = useState<StockChartItem[]>([]);
   const [purchaseItems, setPurchaseItems] = useState<PurchaseLite[]>([]);
   const [shipsByMonth, setShipsByMonth] = useState<{ month: string; count: number }[]>([]);
-  const [recentPurchases, setRecentPurchases] = useState<{ id: string; tool_name: string; quantity: number; requested_by: string; responded_by: string; updated_at: string }[]>([]);
   const [trainingAlerts, setTrainingAlerts] = useState<TrainingAlert[]>([]);
   const [birthdays, setBirthdays] = useState<Birthday[]>([]);
   const [vacationLimits, setVacationLimits] = useState<VacationLimit[]>([]);
@@ -134,7 +132,7 @@ export default function DashboardPage() {
       const monthStart = `${nowD.getFullYear()}-${pad2(nowD.getMonth() + 1)}-01`;
       const nextMonthD = new Date(nowD.getFullYear(), nowD.getMonth() + 1, 1);
       const monthEnd = `${nextMonthD.getFullYear()}-${pad2(nextMonthD.getMonth() + 1)}-01`;
-      const [materiaisRes, ranchoRes, stockFullRes, employeesRes, maquinarioRes, ferramentasRes, eletricaRes, episRes, uniformsRes, solicitacoesRes, comprasRes, unreadRes] = await Promise.all([
+      const [materiaisRes, ranchoRes, stockFullRes, employeesRes, maquinarioRes, ferramentasRes, eletricaRes, episRes, uniformsRes, comprasRes, unreadRes] = await Promise.all([
         db.from("stock_items").select("id", { count: "exact", head: true }).eq("team", "GALPAO"),
         // Rancho: conta só a lista-mãe "Disponível" (EQUIPE_3). As outras equipes
         // são cópias dela, então somar as 4 contaria o mesmo item ~4x.
@@ -150,7 +148,6 @@ export default function DashboardPage() {
         db.from("epis").select("id", { count: "exact", head: true }),
         // Uniformes: soma das quantidades em estoque (total de peças), não o nº de tipos.
         db.from("uniforms").select("stock_qty"),
-        db.from("tool_requests").select("id", { count: "exact", head: true }).eq("status", "PENDENTE"),
         db.from("purchase_orders").select("id", { count: "exact", head: true }).gte("purchase_date", monthStart).lt("purchase_date", monthEnd),
         // Conversas: mensagens recebidas (from_me=false) ainda não vistas na aba
         // Conversas (created_at > último acesso). Sem acesso prévio → 0.
@@ -171,7 +168,6 @@ export default function DashboardPage() {
         totalEpis: episRes.count || 0,
         totalUniforms,
         totalConversations: unreadRes.count || 0,
-        totalSolicitacoes: solicitacoesRes.count || 0,
         totalCompras: comprasRes.count || 0,
       });
 
@@ -229,11 +225,10 @@ export default function DashboardPage() {
       const notGhost = (qb: any, col: string) => (ghostAuthors.length ? qb.notIn(col, ghostAuthors) : qb);
 
       // Load recent movements from ALL sources (fantasmas já fora da consulta).
-      const [stockMov, epiMov, toolMov, requestsMov, shipsMov, empMov, loginMov] = await Promise.all([
+      const [stockMov, epiMov, toolMov, shipsMov, empMov, loginMov] = await Promise.all([
         notGhost(db.from("stock_movements").select("id, movement_type, quantity, created_at, created_by, stock_items(name)"), "created_by").order("created_at", { ascending: false }).limit(30),
         notGhost(db.from("epi_movements").select("id, movement_type, quantity, created_at, created_by, epis(name)"), "created_by").order("created_at", { ascending: false }).limit(30),
         notGhost(db.from("tool_movements").select("id, movement_type, created_at, created_by, tools(name)"), "created_by").order("created_at", { ascending: false }).limit(30),
-        notGhost(db.from("tool_requests").select("id, tool_name, status, notes, created_at, requested_by"), "requested_by").order("created_at", { ascending: false }).limit(30),
         db.from("ships").select("id, name, status, created_at, assigned_team").order("created_at", { ascending: false }).limit(10),
         db.from("employees").select("id, name, team, created_at").order("created_at", { ascending: false }).limit(10),
         notGhost(db.from("login_logs").select("id, full_name, email, event_type, created_at"), "full_name").order("created_at", { ascending: false }).limit(30),
@@ -262,15 +257,6 @@ export default function DashboardPage() {
           movement_type: m.movement_type, created_at: m.created_at, created_by: m.created_by,
         });
       });
-      (requestsMov.data || []).forEach((m: any) => {
-        if (isGhost(m.requested_by)) return;
-        const statusLabel = m.status === "APROVADO" ? "Aprovada" : m.status === "REJEITADO" ? "Rejeitada" : "Pendente";
-        combined.push({
-          id: `req-${m.id}`, type: "Solicitação", item_name: m.tool_name || "—",
-          movement_type: m.status, created_at: m.created_at, created_by: m.requested_by || "—",
-          detail: statusLabel,
-        });
-      });
       (shipsMov.data || []).forEach((m: any) => {
         combined.push({
           id: `ship-${m.id}`, type: "Navio", item_name: m.name || "—",
@@ -297,15 +283,6 @@ export default function DashboardPage() {
 
       combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       setMovements(combined.slice(0, 30));
-
-      // Load recent purchases (COMPRADO status)
-      const purchasesRes = await db
-        .from("tool_requests")
-        .select("id, tool_name, quantity, requested_by, responded_by, updated_at")
-        .eq("status", "COMPRADO")
-        .order("updated_at", { ascending: false })
-        .limit(10);
-      setRecentPurchases((purchasesRes.data as any[]) || []);
 
       // Situação da equipe — quem está Embarcado, quem está no Costado e quem
       // sobrou disponível. Mesma regra da coluna "Escalação" do RH: quem tem
@@ -567,7 +544,6 @@ export default function DashboardPage() {
         <StatCard label="EPIs" value={stats.totalEpis} icon="⛑️" tone="violet" href="/almoxarifado?tab=epi" />
         <StatCard label="Uniformes" value={stats.totalUniforms} icon="👕" tone="rose" href="/almoxarifado?tab=uniforme" />
         <StatCard label="Conversas" value={stats.totalConversations} icon="💬" tone="cyan" href="/conversas" />
-        <StatCard label="Solicitações" value={stats.totalSolicitacoes} icon="📋" tone="indigo" href="/solicitacoes?tab=solicitacoes" />
         {canSeeCompras && (
           <StatCard label="Compras" value={stats.totalCompras} icon="🧾" tone="orange" href="/solicitacoes?tab=compras" />
         )}
@@ -700,44 +676,6 @@ export default function DashboardPage() {
           <div className="p-6">
             <ShipsBarChart data={shipsByMonth} />
           </div>
-        </CollapsibleSection>
-      )}
-
-      {/* Recent Purchases */}
-      {recentPurchases.length > 0 && (
-        <CollapsibleSection
-          storageKey="recent-purchases"
-          title="Compras recentes"
-          subtitle="Solicitações marcadas como compradas"
-          headerRight={
-            <Link
-              href="/solicitacoes"
-              className="text-xs font-medium text-primary hover:text-primary-dark whitespace-nowrap"
-            >
-              Ver todas →
-            </Link>
-          }
-        >
-          <ul className="divide-y divide-border">
-            {recentPurchases.map((p) => (
-              <li
-                key={p.id}
-                className="flex items-center gap-4 px-6 py-3 hover:bg-gray-50/60 transition"
-              >
-                <div className="w-9 h-9 rounded-lg bg-blue-50 text-primary flex items-center justify-center shrink-0 text-xs font-semibold tabular-nums">
-                  ×{p.quantity}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-text truncate">
-                    {p.tool_name}
-                  </p>
-                  <p className="text-xs text-text-light">
-                    {p.responded_by} · {formatDateTime(p.updated_at)}
-                  </p>
-                </div>
-              </li>
-            ))}
-          </ul>
         </CollapsibleSection>
       )}
 
@@ -1045,7 +983,6 @@ function ModuleBadge({ type }: { type: string }) {
     Estoque: "bg-blue-100 text-blue-700",
     EPI: "bg-purple-100 text-purple-700",
     Equipamento: "bg-amber-100 text-amber-700",
-    "Solicitação": "bg-orange-100 text-orange-700",
     Navio: "bg-cyan-100 text-cyan-700",
     Colaborador: "bg-green-100 text-green-700",
     Acesso: "bg-indigo-100 text-indigo-700",

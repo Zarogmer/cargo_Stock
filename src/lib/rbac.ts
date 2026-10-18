@@ -391,7 +391,8 @@ export const NAV_ITEMS: NavItem[] = [
     icon: "solicitacoes",
     module: "SOLICITACOES",
     children: [
-      { label: "Solicitações", href: "/solicitacoes?tab=solicitacoes" },
+      // A aba "Solicitações" saiu em 2026-10-18 (pedido do Guilherme: não era
+      // usada) — a rota /solicitacoes abre direto no Controle de Compras.
       { label: "Controle de Compras", href: "/solicitacoes?tab=compras", roles: COMPRAS_ROLES },
       { label: "Lista de Produtos", href: "/solicitacoes?tab=produtos", roles: PRODUTOS_ROLES },
       { label: "Fornecedores", href: "/solicitacoes?tab=fornecedores", roles: FORNECEDORES_ROLES },

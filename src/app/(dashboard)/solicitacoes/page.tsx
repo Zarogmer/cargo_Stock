@@ -4,51 +4,17 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
-import { hasPermission, COMPRAS_ROLES, PRODUTOS_ROLES, FORNECEDORES_ROLES } from "@/lib/rbac";
+import { COMPRAS_ROLES, PRODUTOS_ROLES, FORNECEDORES_ROLES } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tabs } from "@/components/ui/tabs";
 import { PlusIcon, EditIcon, TrashIcon, WhatsappIcon } from "@/components/icons";
-import { formatDateTime, formatCurrency, formatQty, parseDecimalBR, buildCodeMap, codeForName } from "@/lib/utils";
+import { formatCurrency, formatQty, parseDecimalBR, buildCodeMap, codeForName } from "@/lib/utils";
 import { ImagePicker } from "@/components/ui/image-picker";
-// Scanner de boleto/NF pela câmera — o mesmo do Contas a Pagar, no modo que
-// também lê o CODE-128 do DANFE (chave da NF-e) e o QR da NFC-e. Boleto
-// preenche a Nova Compra com valor/pagamento/vencimento; NF preenche
-// fornecedor (pelo CNPJ do cadastro), descrição e chave.
-// Carregado sob demanda: quase ninguém abre o Controle pra escanear, então o
-// chunk do leitor fica fora da página (o motor zxing-wasm ainda baixa o .wasm
-// de ~1,1 MB à parte, só quando o scanner abre de fato).
-import dynamic from "next/dynamic";
-import type { BoletoParsed } from "@/lib/services/boleto/linha-digitavel";
-import type { NfeChaveScan } from "@/lib/services/boleto/nfe-chave";
-import { formatCnpj } from "@/lib/services/boleto/cnpj-receita";
-import type { DocScan } from "@/components/financeiro/boleto-scanner";
-
-const DocScannerModal = dynamic(
-  () => import("@/components/financeiro/boleto-scanner").then((m) => m.DocScannerModal),
-  { ssr: false },
-);
-
-interface ToolRequest {
-  id: string;
-  tool_name: string;
-  quantity: number;
-  reason: string;
-  status: "PENDENTE" | "APROVADO" | "RECUSADO" | "COMPRADO";
-  requested_by: string;
-  responded_by: string | null;
-  response_notes: string | null;
-  image_url: string | null;
-  product_url: string | null;
-  estimated_value: number | string | null;
-  supplier: string | null;
-  department: string | null;
-  // Código do item no Almoxarifado (ex.: "AR01") — repõe exatamente aquele item ao abastecer.
-  code: string | null;
-  created_at: string;
-  updated_at: string;
-}
+// "Escanear" do Controle de Compras: câmera + IA lê nota/cupom/boleto e
+// preenche os itens (src/components/compras/escanear-compra-modal.tsx).
+import { EscanearCompraModal, type ScannedPurchaseDraft } from "@/components/compras/escanear-compra-modal";
 
 interface PurchaseOrder {
   id: string;
@@ -209,10 +175,6 @@ const WAREHOUSE_DESTINATIONS: { value: WarehouseDest; label: string }[] = [
   { value: "OUTROS", label: "— Outros (não lançar no estoque)" },
 ];
 
-// Nova Solicitação só oferece setores de estoque + "Outros" — Rancho e Escritório
-// são casos de compra direta (Controle de Compras), não de solicitação.
-const REQUEST_DESTINATIONS = WAREHOUSE_DESTINATIONS.filter((d) => d.value !== "RANCHO" && d.value !== "ESCRITORIO");
-
 // Destinos que NÃO mexem no Almoxarifado — só registram a compra/solicitação (não
 // há setor de estoque pra eles). Escritório é o caso típico. Rancho (card #46)
 // também entra aqui: a compra de comida só soma o gasto na aba de Compras, sem
@@ -258,23 +220,6 @@ const RANCHO_TEAMS: { value: string; label: string }[] = [
 // específicos de cada setor. Compartilhado por Nova Compra, Aprovar e Armazenar.
 interface DestSpec { dest: WarehouseDest; category: string; unit: string; team: string; size: string; crewTeam: string }
 const DEFAULT_DEST_SPEC: DestSpec = { dest: "ESTOQUE", category: "", unit: "UN", team: "EQUIPE_1", size: "", crewTeam: "" };
-
-// Dados que o gestor confere/ajusta no "Aprovar e concluir" — além do destino
-// (DestSpec), o resumo editável da compra (descrição, fornecedor, valor, etc.),
-// tudo pré-preenchido a partir da solicitação.
-interface ApproveData {
-  toolName: string;
-  supplier: string | null;
-  paymentMethod: string | null;
-  purchaseDate: string; // YYYY-MM-DD
-  unitValue: number;
-  quantity: number;
-  spec: DestSpec;
-  // Código no Almoxarifado conferido na aprovação. Em branco = gera pelo nome.
-  code: string | null;
-  // Aviso opcional ao fornecedor no WhatsApp (null = não avisar).
-  notify?: WhatsappTarget | null;
-}
 
 const PAYMENT_METHODS = [
   "FATURADO",
@@ -380,43 +325,13 @@ const SUPPLIER_GREETING =
   "Olá! Aqui é da *Cargo Ships Cleaning*. Tudo bem?\n\n" +
   "Gostaríamos de fazer uma cotação. Pode nos atender?";
 
-// Mensagem de cotação disparada do Nova Solicitação — já leva o produto pedido.
-function supplierQuoteMessage(opts: { toolName: string; quantity: number; productUrl?: string | null }): string {
-  const qty = opts.quantity > 0 ? opts.quantity : 1;
-  const link = opts.productUrl?.trim() ? `\n🔗 ${opts.productUrl.trim()}` : "";
-  return (
-    "Olá! Aqui é da *Cargo Ships Cleaning*. Tudo bem?\n\n" +
-    "Gostaríamos de uma cotação:\n\n" +
-    `📦 *${opts.toolName.trim() || "Produto"}*\n` +
-    `🔢 Quantidade: ${qty}${link}\n\n` +
-    "Consegue nos passar preço e disponibilidade? Obrigado!"
-  );
-}
-
-// Mensagem de confirmação de compra enviada ao fornecedor (opcional) ao registrar
-// uma Nova Compra ou ao aprovar uma solicitação. Sai com a foto do produto como
-// legenda quando houver. Sem valor de propósito (o preço já foi combinado) — leva
-// saudação, produto, quantidade e forma de pagamento.
-function purchaseConfirmMessage(opts: { description: string; quantity: number; paymentMethod?: string | null }): string {
-  const qty = opts.quantity > 0 ? opts.quantity : 1;
-  const pay = opts.paymentMethod?.trim() ? `\n💳 Pagamento: ${opts.paymentMethod.trim()}` : "";
-  return (
-    "Olá! Aqui é da *Cargo Ships Cleaning*. Tudo bem?\n\n" +
-    "Compra confirmada:\n\n" +
-    `📦 *${opts.description.trim() || "Produto"}*\n` +
-    `🔢 Quantidade: ${qty}${pay}\n\n` +
-    "Obrigado!"
-  );
-}
-
 export default function SolicitacoesPage() {
   const { profile } = useAuth();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const initialTab = searchParams.get("tab") || "solicitacoes";
+  const initialTab = searchParams.get("tab") || "compras";
   const role = profile?.role || "RH";
 
-  const [requests, setRequests] = useState<ToolRequest[]>([]);
   const [productLinks, setProductLinks] = useState<ProductLink[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchases, setPurchases] = useState<PurchaseOrder[]>([]);
@@ -427,14 +342,9 @@ export default function SolicitacoesPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const [showRequestForm, setShowRequestForm] = useState(false);
-  const [editRequest, setEditRequest] = useState<ToolRequest | null>(null);
   const [showLinkForm, setShowLinkForm] = useState(false);
   const [editLink, setEditLink] = useState<ProductLink | null>(null);
-  const [deleteRequest, setDeleteRequest] = useState<ToolRequest | null>(null);
   const [deleteLink, setDeleteLink] = useState<ProductLink | null>(null);
-  // Aprovação = conclusão num passo só (registra compra + lança no estoque).
-  const [concludeRequest, setConcludeRequest] = useState<ToolRequest | null>(null);
 
   // Imagem em tela cheia (lightbox)
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
@@ -442,18 +352,9 @@ export default function SolicitacoesPage() {
   // Controle de Compras
   const [showPurchaseForm, setShowPurchaseForm] = useState(false);
   const [editPurchase, setEditPurchase] = useState<PurchaseOrder | null>(null);
-  const [purchaseFromRequest, setPurchaseFromRequest] = useState<ToolRequest | null>(null);
-  // Abre o form já disparando o seletor de PDF (botão "Importar PDF" ao lado de Nova Compra).
-  const [purchaseAutoNf, setPurchaseAutoNf] = useState(false);
-  // Scanner de boleto/NF (câmera) do Controle de Compras. `purchaseScanned`
-  // leva o boleto lido pro formulário e `purchaseScannedNfe` a chave da NF —
-  // cada um preenche os campos em branco do seu jeito.
+  // "Escanear" (câmera + IA): foto da nota/cupom/boleto vira compra(s).
   const [scanOpen, setScanOpen] = useState(false);
-  const [purchaseScanned, setPurchaseScanned] = useState<BoletoParsed | null>(null);
-  const [purchaseScannedNfe, setPurchaseScannedNfe] = useState<NfeChaveScan | null>(null);
   const [deletePurchase, setDeletePurchase] = useState<PurchaseOrder | null>(null);
-  // "Armazenar no Estoque": lança uma solicitação já comprada no estoque do galpão.
-  const [stockRequest, setStockRequest] = useState<ToolRequest | null>(null);
   const now = new Date();
   // Filtros do Controle de Compras — também alimentam o relatório em Excel.
   const [filterYear, setFilterYear] = useState(String(now.getFullYear()));
@@ -472,16 +373,12 @@ export default function SolicitacoesPage() {
   const [deleteSupplier, setDeleteSupplier] = useState<Supplier | null>(null);
   const [supplierSearch, setSupplierSearch] = useState("");
   // Chamar o fornecedor no WhatsApp da Cargo (mensagem pré-pronta e editável).
-  // Aberto pela aba Fornecedores e pelo Nova Solicitação (pedido de cotação).
+  // Aberto pela aba Fornecedores.
   const [whatsappTarget, setWhatsappTarget] = useState<WhatsappTarget | null>(null);
 
-  const canApproveRequests = ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO"].includes(role);
   const canManageLinks = ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO"].includes(role);
-  const canEditRequests = hasPermission(role, "SOLICITACOES", "edit");
-  const canDeleteRequests = hasPermission(role, "SOLICITACOES", "delete");
-  // Gerir compras (Registrar Compra, Armazenar no estoque, Nova/editar compra) é
-  // dos papéis que veem a aba Controle de Compras (COMPRAS_ROLES) — a lista é a
-  // fonte única, separada da permissão de SOLICITACOES (que só abre pedidos).
+  // Gerir compras (Nova/editar compra, Escanear) é dos papéis que veem a aba
+  // Controle de Compras (COMPRAS_ROLES) — a lista é a fonte única.
   // 2026-09: Manutenção entrou na lista, então também registra/gere compras.
   const canManagePurchases = COMPRAS_ROLES.includes(role);
 
@@ -493,8 +390,7 @@ export default function SolicitacoesPage() {
     setLoading(true);
     setDbError(null);
     try {
-      const [reqRes, linksRes, suppRes, purchRes, shipsRes, cardsRes, banksRes] = await Promise.all([
-        db.from("tool_requests").select("*").order("created_at", { ascending: false }),
+      const [linksRes, suppRes, purchRes, shipsRes, cardsRes, banksRes] = await Promise.all([
         db.from("product_links").select("*").order("category").order("name"),
         db.from("suppliers").select("*").order("name"),
         db.from("purchase_orders").select("*").order("purchase_date", { ascending: false }).order("created_at", { ascending: false }),
@@ -507,7 +403,6 @@ export default function SolicitacoesPage() {
       ]);
 
       const errors: string[] = [];
-      if (reqRes.error) errors.push(`tool_requests: ${reqRes.error.code} ${reqRes.error.message}`);
       if (linksRes.error) errors.push(`product_links: ${linksRes.error.code} ${linksRes.error.message}`);
       if (suppRes.error) errors.push(`suppliers: ${suppRes.error.code} ${suppRes.error.message}`);
       if (purchRes.error) errors.push(`purchase_orders: ${purchRes.error.code} ${purchRes.error.message}`);
@@ -520,7 +415,6 @@ export default function SolicitacoesPage() {
         setDbError(errors.join(" | "));
       }
 
-      setRequests((reqRes.data as ToolRequest[]) || []);
       setProductLinks((linksRes.data as ProductLink[]) || []);
       setSuppliers((suppRes.data as Supplier[]) || []);
       setPurchases((purchRes.data as PurchaseOrder[]) || []);
@@ -536,229 +430,6 @@ export default function SolicitacoesPage() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll, pathname]);
-
-  async function handleSaveRequest(data: {
-    toolName: string; quantity: number; reason: string; imageUrl: string | null;
-    productUrl: string | null; estimatedValue: number | null; supplier: string | null;
-    department: string; code: string | null;
-  }) {
-    setSaving(true);
-    setSaveError(null);
-    try {
-      // Código no Almoxarifado: usa o que o usuário escolheu; em branco, GERA pelo
-      // nome no setor de destino (próximo do prefixo) — assim todo item, mesmo novo,
-      // já nasce com código, sem precisar cadastrar antes no Almoxarifado.
-      const code = data.code || (await resolveWarehouseCode(data.department as WarehouseDest, data.toolName));
-
-      if (editRequest) {
-        // Edição: atualiza os campos sem mexer em status/autor nem reavisar.
-        const { error } = await db.from("tool_requests").update({
-          tool_name: data.toolName,
-          quantity: data.quantity,
-          reason: data.reason,
-          image_url: data.imageUrl,
-          product_url: data.productUrl,
-          estimated_value: data.estimatedValue,
-          supplier: data.supplier,
-          department: data.department,
-          code,
-          updated_at: new Date().toISOString(),
-        } as any).eq("id", editRequest.id);
-        if (error) throw error;
-        setShowRequestForm(false);
-        setEditRequest(null);
-        loadAll();
-        return;
-      }
-
-      const { error } = await db.from("tool_requests").insert({
-        tool_name: data.toolName,
-        quantity: data.quantity,
-        reason: data.reason,
-        status: "PENDENTE",
-        requested_by: profile?.full_name || "Sistema",
-        image_url: data.imageUrl,
-        product_url: data.productUrl,
-        estimated_value: data.estimatedValue,
-        supplier: data.supplier,
-        department: data.department,
-        code,
-      } as any);
-      if (error) throw error;
-      // Avisa os supervisores por WhatsApp (best-effort — não bloqueia nem
-      // falha a criação da solicitação se a Evolution estiver fora do ar).
-      fetch("/api/solicitacoes/notify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          toolName: data.toolName,
-          quantity: data.quantity,
-          reason: data.reason,
-          requestedBy: profile?.full_name || "Sistema",
-          value: data.estimatedValue,
-          supplier: data.supplier,
-          productUrl: data.productUrl,
-          imageUrl: data.imageUrl,
-        }),
-      }).catch((err) => console.warn("[solicitacoes] notify failed:", err));
-      setShowRequestForm(false);
-      loadAll();
-    } catch (err: any) {
-      console.error("Erro ao salvar solicitação:", err);
-      setSaveError(`Erro ao salvar solicitação: ${err?.message || String(err)}`);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  // Aprovar = concluir num passo só: registra a compra automaticamente a partir
-  // da solicitação, marca como concluída (status APROVADO, exibido "Concluído") e
-  // lança o item no Estoque do galpão. Substitui o antigo "Aprovar → Registrar
-  // Compra → Armazenar". Não há mais recusa — a solicitação ou é concluída ou
-  // apagada.
-  async function handleConcludeRequest(data: ApproveData) {
-    const req = concludeRequest;
-    if (!req) return;
-    setSaving(true);
-    setSaveError(null);
-    setSaveOk(null);
-    try {
-      const actor = profile?.full_name || "Sistema";
-      const spec = data.spec;
-      // Valores conferidos/ajustados pelo gestor no modal (pré-preenchidos da
-      // solicitação). A compra e a reposição usam estes, não mais os da solicitação.
-      const unit = data.unitValue;
-      const qty = data.quantity > 0 ? data.quantity : 1;
-      const description = data.toolName.trim() || req.tool_name;
-      const supplier = data.supplier?.trim() || null;
-      const today = new Date();
-      const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-      const purchaseDate = data.purchaseDate || todayISO;
-      // Código no Almoxarifado: usa o conferido na aprovação; em branco, GERA pelo
-      // nome no setor escolhido (mesma regra do Almoxarifado). O destino pode ter
-      // mudado aqui (ex.: o gestor trocou Estoque→Maquinário), então geramos pro
-      // destino atual em vez de usar o código antigo da solicitação.
-      const effectiveCode = data.code || (await resolveWarehouseCode(spec.dest, description));
-
-      // 1) Registra a compra com os dados conferidos na aprovação.
-      const { data: createdPurchase, error: buyErr } = await db.from("purchase_orders").insert({
-        description,
-        department: spec.dest === "OUTROS" ? null : spec.dest,
-        code: effectiveCode,
-        team: spec.crewTeam || null,
-        supplier,
-        purchase_date: purchaseDate,
-        unit_value: unit,
-        quantity: qty,
-        total_value: unit * qty,
-        payment_method: data.paymentMethod || null,
-        notes: null,
-        image_url: req.image_url,
-        request_id: req.id,
-        created_by: actor,
-      } as any);
-      if (buyErr) throw buyErr;
-
-      // 1b) Lança a compra no Contas a Pagar (mesma regra do Nova Compra: TODA
-      // compra vira título, inclusive cartão — o Financeiro confere lá).
-      // Best-effort: falha não desfaz a aprovação.
-      let contasMsg = "";
-      const newPurchaseId = (createdPurchase as unknown as { id?: string } | null)?.id;
-      if (newPurchaseId) {
-        try {
-          const r = await fetch("/api/financeiro/contas/from-compras", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ purchase_ids: [newPurchaseId] }),
-          });
-          contasMsg = r.ok
-            ? " 🧾 Lançada no Contas a Pagar."
-            : " ⚠️ Falhou ao lançar no Contas a Pagar — será lançada sozinha ao abrir a tela.";
-        } catch {
-          contasMsg = " ⚠️ Falhou ao lançar no Contas a Pagar — será lançada sozinha ao abrir a tela.";
-        }
-      }
-
-      // 2) Marca a solicitação como concluída e guarda os valores conferidos
-      //    (o card passa a refletir o que foi de fato aprovado). quantity é Int
-      //    na tabela — arredonda o que pode ter vindo decimal do campo.
-      const { error: updErr } = await db.from("tool_requests").update({
-        status: "APROVADO",
-        responded_by: actor,
-        tool_name: description,
-        quantity: Math.max(1, Math.round(qty)),
-        estimated_value: unit,
-        supplier,
-        // Reflete no card o destino e o código de fato usados (podem ter mudado aqui).
-        department: spec.dest === "OUTROS" ? null : spec.dest,
-        code: effectiveCode,
-        updated_at: new Date().toISOString(),
-      } as any).eq("id", req.id);
-      if (updErr) throw updErr;
-
-      // 3) Lança no destino escolhido do Almoxarifado (não-fatal: a compra já
-      // foi salva). Escritório/Outros = só registra, não lança em estoque nenhum.
-      let stockMsg = "";
-      if (destStocks(spec.dest)) {
-        try {
-          const r = await storeInWarehouse(spec.dest, {
-            name: description, quantity: qty,
-            category: spec.category, unit: spec.unit, team: spec.team, size: spec.size,
-            code: effectiveCode, crewTeam: spec.crewTeam,
-            // Preço conferido na aprovação vira o valor unitário do item.
-            unitValue: unit,
-          });
-          stockMsg = ` ${r.created ? "Criado" : "Reposto"} (+${formatQty(r.quantity)}) em ${r.where}.`;
-        } catch (stockErr: any) {
-          stockMsg = ` ⚠️ Falhou ao lançar no Almoxarifado: ${stockErr?.message || String(stockErr)}`;
-        }
-      }
-
-      // 4) Avisa o grupo "Compras" no WhatsApp (best-effort — a conclusão já está
-      // gravada; só anexa o resultado ao toast). NÃO mira o grupo oficial
-      // "Compras Cargo Ships" — ver src/lib/services/compras-group.ts.
-      let groupMsg = "";
-      try {
-        const res = await fetch("/api/solicitacoes/notify-compras", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            toolName: description,
-            quantity: qty,
-            value: unit,
-            supplier,
-            requestedBy: req.requested_by,
-            concludedBy: actor,
-            productUrl: req.product_url,
-            imageUrl: req.image_url,
-          }),
-        });
-        const respData = await res.json().catch(() => null);
-        if (respData?.sent) {
-          const where = respData.group ? `no(s) grupo(s) ${respData.group}` : "no grupo";
-          groupMsg = respData.withPhoto
-            ? ` 📨 Avisado ${where} (com foto).`
-            : ` 📨 Avisado ${where}${respData.photoError ? ` (foto falhou: ${respData.photoError})` : ""}.`;
-        } else if (respData?.warning) {
-          groupMsg = ` ⚠️ ${respData.warning}`;
-        }
-      } catch {
-        groupMsg = " ⚠️ Não consegui avisar o grupo Compras.";
-      }
-
-      setConcludeRequest(null);
-      setSaveOk(`✅ "${description}" concluído — compra registrada.${contasMsg}${stockMsg}${groupMsg}`);
-      // Se o aprovador marcou "Avisar o fornecedor", abre o modal de revisão com a
-      // mensagem pronta (e a foto da solicitação) pra ele conferir e clicar Enviar.
-      if (data.notify) setWhatsappTarget(data.notify);
-      loadAll();
-    } catch (err: any) {
-      console.error("Erro ao concluir solicitação:", err);
-      setSaveError(`Erro ao concluir solicitação: ${err?.message || String(err)}`);
-    } finally {
-      setSaving(false);
-    }
-  }
 
   // Lança um item no Estoque de materiais do galpão (stock_items, team=GALPAO) —
   // a mesma tabela da aba Almoxarifado › Estoque. Se já existe um material com o
@@ -995,26 +666,8 @@ export default function SolicitacoesPage() {
     return card;
   }, [profile, bankAccounts]);
 
-  // Documento lido pela câmera (boleto OU NF): abre a Nova Compra já
-  // preenchida (ou completa a que estiver aberta). Boleto segue o fluxo do
-  // "Escanear" do Contas a Pagar; NF preenche fornecedor/descrição/chave.
-  function applyScannedDoc(scan: DocScan) {
-    setScanOpen(false);
-    if (!showPurchaseForm) {
-      setEditPurchase(null);
-      setPurchaseFromRequest(null);
-      setPurchaseAutoNf(false);
-      setShowPurchaseForm(true);
-    }
-    // Objeto novo a cada leitura — o formulário observa a identidade pra saber
-    // que chegou uma leitura nova (escanear duas vezes seguidas tem que aplicar).
-    if (scan.kind === "BOLETO") setPurchaseScanned({ ...scan.boleto });
-    else setPurchaseScannedNfe({ ...scan.nfe });
-  }
-
   async function handleSavePurchase(
     data: Partial<PurchaseOrder>,
-    fromRequestId: string | null,
     stock?: DestSpec | null,
   ) {
     setSaving(true);
@@ -1033,7 +686,6 @@ export default function SolicitacoesPage() {
         const { data: createdPurchase, error } = await db.from("purchase_orders").insert({
           ...data,
           code,
-          request_id: fromRequestId,
           created_by: actor,
         } as any);
         if (error) throw error;
@@ -1067,13 +719,6 @@ export default function SolicitacoesPage() {
             setSaveError("Compra salva, mas falhou ao lançar no Contas a Pagar — será lançada sozinha ao abrir a tela.");
           }
         }
-        // Compra originada de uma solicitação aprovada -> marca como Comprada.
-        if (fromRequestId) {
-          await db.from("tool_requests").update({
-            status: "COMPRADO",
-            responded_by: actor,
-          } as any).eq("id", fromRequestId);
-        }
         // Lança no destino escolhido do Almoxarifado, se houver. Falha aqui é
         // não-fatal: a compra já foi salva, só avisamos.
         if (stock && destStocks(stock.dest)) {
@@ -1098,7 +743,6 @@ export default function SolicitacoesPage() {
       }
       setShowPurchaseForm(false);
       setEditPurchase(null);
-      setPurchaseFromRequest(null);
       loadAll();
     } catch (err: any) {
       console.error("Erro ao salvar compra:", err);
@@ -1108,36 +752,90 @@ export default function SolicitacoesPage() {
     }
   }
 
-  // "Armazenar no Almoxarifado" a partir de uma solicitação já comprada (botão no
-  // card) — agora pode cair em qualquer setor (Estoque/Rancho/EPI/Uniforme/Maquinário).
-  async function handleStoreInWarehouse(spec: DestSpec) {
-    if (!stockRequest) return;
-    if (!destStocks(spec.dest)) { setStockRequest(null); return; }
-    setSaving(true);
+  // Salva o que o Escanear (IA) leu e o usuário conferiu: uma compra por item,
+  // todas com o mesmo cabeçalho (fornecedor, data, pagamento, parcelas, navio).
+  // Dois ou mais itens ganham um batch_id comum — o Contas a Pagar lança UM
+  // título (ou um por parcela) com a soma, não um por item. Itens com destino
+  // de estoque entram no Almoxarifado como no Nova Compra. Erro sobe pro modal
+  // mostrar (ele fica aberto); sucesso fecha e mostra o resumo.
+  async function handleSaveScanned(draft: ScannedPurchaseDraft) {
+    const actor = profile?.full_name || "Sistema";
+    const ship = draft.shipId ? ships.find((s) => s.id === draft.shipId) : null;
+    const terms = draft.paymentMethod === "FATURADO"
+      ? draft.dueDates
+          .map((iso) => daysBetweenISO(draft.purchaseDate, iso))
+          .filter((n): n is number => n != null && n >= 0)
+      : [];
+    const batchId = draft.items.length > 1 ? crypto.randomUUID() : null;
+    const ids: string[] = [];
+    const stockMsgs: string[] = [];
+    const stockErrs: string[] = [];
     setSaveError(null);
     setSaveOk(null);
-    try {
-      // Código: usa o da solicitação; em branco, gera pelo nome no setor escolhido.
-      const code = stockRequest.code || (await resolveWarehouseCode(spec.dest, stockRequest.tool_name));
-      const r = await storeInWarehouse(spec.dest, {
-        name: stockRequest.tool_name,
-        quantity: stockRequest.quantity,
-        category: spec.category, unit: spec.unit, team: spec.team, size: spec.size,
-        code, crewTeam: spec.crewTeam,
-        // Valor aprovado na solicitação vira o valor unitário do item.
-        unitValue: Number(stockRequest.estimated_value) || 0,
-      });
-      const itemName = stockRequest.tool_name;
-      setStockRequest(null);
-      setSaveOk(
-        `📦 ${r.created ? "Criado" : "Reposto"}: "${itemName}" (+${formatQty(r.quantity)}) em ${r.where}.`,
-      );
-    } catch (err: any) {
-      console.error("Erro ao lançar no Almoxarifado:", err);
-      setSaveError(`Erro ao lançar no Almoxarifado: ${err?.message || String(err)}`);
-    } finally {
-      setSaving(false);
+    for (const it of draft.items) {
+      const dest = (it.dest || "OUTROS") as WarehouseDest;
+      const code = destStocks(dest) ? await resolveWarehouseCode(dest, it.description) : null;
+      const { data: created, error } = await db.from("purchase_orders").insert({
+        description: it.description,
+        department: dest === "NENHUM" ? null : dest,
+        code,
+        supplier: draft.supplier,
+        purchase_date: draft.purchaseDate || null,
+        unit_value: it.unitValue,
+        quantity: it.quantity,
+        total_value: Math.round(it.unitValue * it.quantity * 100) / 100,
+        payment_method: draft.paymentMethod,
+        payment_terms: terms,
+        payment_term_days: terms[0] ?? null,
+        notes: draft.notes,
+        digitable_line: draft.digitableLine,
+        ship_id: ship?.id || null,
+        ship_name: ship?.name || null,
+        batch_id: batchId,
+        created_by: actor,
+      } as any);
+      if (error) {
+        if (ids.length > 0) loadAll();
+        throw new Error(`Erro ao salvar "${it.description}": ${error.message}${ids.length ? ` (${ids.length} item(ns) anterior(es) já salvos)` : ""}`);
+      }
+      const id = (created as unknown as { id?: string } | null)?.id;
+      if (id) ids.push(id);
+      if (destStocks(dest)) {
+        try {
+          const r = await storeInWarehouse(dest, {
+            name: it.description, quantity: it.quantity, code, unitValue: it.unitValue,
+          });
+          stockMsgs.push(`${r.created ? "criado" : "reposto"} "${it.description}" em ${r.where}`);
+        } catch (err: any) {
+          stockErrs.push(`"${it.description}": ${err?.message || String(err)}`);
+        }
+      }
     }
+    let contasMsg = "";
+    if (ids.length > 0) {
+      try {
+        const r = await fetch("/api/financeiro/contas/from-compras", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ purchase_ids: ids }),
+        });
+        contasMsg = r.ok
+          ? " 🧾 Lançado no Contas a Pagar."
+          : " ⚠️ Falhou ao lançar no Contas a Pagar — será lançado sozinho ao abrir a tela.";
+      } catch {
+        contasMsg = " ⚠️ Falhou ao lançar no Contas a Pagar — será lançado sozinho ao abrir a tela.";
+      }
+    }
+    setScanOpen(false);
+    setSaveOk(
+      `✅ ${ids.length === 1 ? "Compra registrada" : `${ids.length} compras registradas`} pelo Escanear.${contasMsg}` +
+      (stockMsgs.length ? ` 📦 Almoxarifado: ${stockMsgs.join("; ")}.` : ""),
+    );
+    if (stockErrs.length) setSaveError(`Compras salvas, mas falhou ao lançar no Almoxarifado: ${stockErrs.join("; ")}`);
+    // Abre o mês da compra pra ela aparecer na lista.
+    const [y, m] = (draft.purchaseDate || "").split("-");
+    if (y && m) { setFilterYear(y); setFilterMonth(String(Number(m))); }
+    loadAll();
   }
 
   async function handleDeletePurchase() {
@@ -1151,22 +849,6 @@ export default function SolicitacoesPage() {
     } catch (err: any) {
       console.error("Erro ao excluir compra:", err);
       setSaveError(`Erro ao excluir compra: ${err?.message || String(err)}`);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleDeleteRequest() {
-    if (!deleteRequest) return;
-    setSaving(true);
-    try {
-      const { error } = await db.from("tool_requests").delete().eq("id", deleteRequest.id);
-      if (error) throw error;
-      setDeleteRequest(null);
-      loadAll();
-    } catch (err) {
-      console.error("Erro ao excluir solicitação:", err);
-      setSaveError(`Erro ao excluir solicitação: ${(err as any)?.message || String(err)}`);
     } finally {
       setSaving(false);
     }
@@ -1265,8 +947,6 @@ export default function SolicitacoesPage() {
     return (s.name?.toLowerCase().includes(q)) || (s.category?.toLowerCase().includes(q)) || (s.contact?.toLowerCase().includes(q)) || (qDigits.length > 0 && (s.cnpj || "").includes(qDigits));
   });
 
-  const pendingCount = requests.filter((r) => r.status === "PENDENTE").length;
-
   // --- Controle de Compras: filtros + dados derivados ---
   // Os mesmos filtros valem pra lista em tela e pro relatório em Excel.
   const filteredPurchases = purchases.filter((p) => {
@@ -1301,7 +981,7 @@ export default function SolicitacoesPage() {
   // Equipes presentes nas compras (pra montar o filtro). Rótulo via MATERIAL_CREW_TEAMS.
   const purchaseTeams = Array.from(new Set(purchases.map((p) => p.team).filter(Boolean) as string[])).sort();
   const teamLabel = (t: string) => MATERIAL_CREW_TEAMS.find((x) => x.value === t)?.label || t;
-  const selCls = "px-3 py-2 border border-border rounded-lg text-sm bg-card focus:ring-2 focus:ring-primary outline-none";
+  const selCls = "w-full sm:w-auto px-3 py-2 border border-border rounded-lg text-sm bg-card focus:ring-2 focus:ring-primary outline-none";
 
   // Baixa o relatório em Excel do período/filtros atuais (layout da planilha oficial).
   async function handleGenerateReport() {
@@ -1344,152 +1024,6 @@ export default function SolicitacoesPage() {
 
   const tabs = [
     {
-      key: "solicitacoes",
-      label: `Solicitações${pendingCount > 0 ? ` (${pendingCount})` : ""}`,
-      content: (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <p className="text-sm text-text-light">Solicitações de compra de equipamentos e materiais</p>
-            <Button size="sm" onClick={() => { setEditRequest(null); setShowRequestForm(true); }}>
-              <PlusIcon className="w-4 h-4" />Nova Solicitação
-            </Button>
-          </div>
-          {requests.length === 0 ? (
-            <div className="text-center py-12 text-text-light">
-              <span className="text-4xl block mb-3">📋</span>
-              <p className="font-medium">Nenhuma solicitação encontrada</p>
-              <p className="text-xs mt-1">Clique em &quot;Nova Solicitação&quot; para criar uma</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {requests.map((req) => {
-                const statusConfig: Record<string, { color: string; label: string }> = {
-                  PENDENTE: { color: "bg-amber-100 text-amber-700", label: "Pendente" },
-                  APROVADO: { color: "bg-green-100 text-green-700", label: "Concluído" },
-                  RECUSADO: { color: "bg-red-100 text-red-700", label: "Recusado" },
-                  COMPRADO: { color: "bg-blue-100 text-blue-700", label: "Comprado" },
-                };
-                const cfg = statusConfig[req.status] || statusConfig.PENDENTE;
-                return (
-                  <div
-                    key={req.id}
-                    onClick={canEditRequests ? (e) => {
-                      // Clicar no card = editar. Ignora cliques nos botões/links
-                      // internos (imagem, ver produto, Aprovar, Armazenar, editar,
-                      // excluir) — eles têm ação própria e não devem abrir a edição.
-                      if ((e.target as HTMLElement).closest("button, a")) return;
-                      setEditRequest(req);
-                      setShowRequestForm(true);
-                    } : undefined}
-                    className={`bg-card border border-border rounded-xl p-4 hover:shadow-sm transition ${canEditRequests ? "cursor-pointer" : ""}`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      {req.image_url && (
-                        <button
-                          type="button"
-                          onClick={() => setLightboxImage(req.image_url)}
-                          className="shrink-0 w-16 h-16 rounded-lg overflow-hidden border border-border bg-gray-50 hover:ring-2 hover:ring-primary transition"
-                          title="Ver imagem"
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={req.image_url} alt={req.tool_name} className="w-full h-full object-cover" />
-                        </button>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-semibold text-text">{req.tool_name}</span>
-                          <span className="text-xs text-text-light bg-gray-100 px-2 py-0.5 rounded-full">x{req.quantity}</span>
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cfg.color}`}>
-                            {cfg.label}
-                          </span>
-                        </div>
-                        <p className="text-sm text-text-light mt-1.5">{req.reason}</p>
-                        {(req.estimated_value != null || req.supplier || req.product_url || req.department || req.code) && (
-                          <div className="flex gap-2 mt-2 flex-wrap items-center">
-                            {req.code && (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-mono font-medium" title="Código no Almoxarifado">
-                                🏷️ {req.code}
-                              </span>
-                            )}
-                            {req.department && (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium" title="Destino sugerido no Almoxarifado">
-                                📍 {departmentLabel(req.department)}
-                              </span>
-                            )}
-                            {req.estimated_value != null && Number(req.estimated_value) > 0 && (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">
-                                {formatCurrency(Number(req.estimated_value))}
-                              </span>
-                            )}
-                            {req.supplier && (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-text-light font-medium">🏬 {req.supplier}</span>
-                            )}
-                            {req.product_url && (
-                              <a href={req.product_url} target="_blank" rel="noopener noreferrer"
-                                className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-primary font-medium hover:bg-blue-100 transition">
-                                🔗 Ver produto
-                              </a>
-                            )}
-                          </div>
-                        )}
-                        <div className="flex gap-3 mt-2 text-xs text-text-light">
-                          <span>Solicitado por: <strong>{req.requested_by}</strong></span>
-                          <span>{formatDateTime(req.created_at)}</span>
-                        </div>
-                        {req.responded_by && (
-                          <p className="text-xs text-text-light mt-1">
-                            Resposta de <strong>{req.responded_by}</strong>: {req.response_notes || "—"}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex gap-1 shrink-0 flex-wrap justify-end">
-                        {canApproveRequests && req.status === "PENDENTE" && (
-                          <button
-                            onClick={() => setConcludeRequest(req)}
-                            className="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 font-medium transition"
-                            title="Registra a compra e lança no Almoxarifado (você escolhe o setor)"
-                          >
-                            Aprovar
-                          </button>
-                        )}
-                        {canManagePurchases && req.status === "COMPRADO" && (
-                          <button
-                            onClick={() => setStockRequest(req)}
-                            className="px-3 py-1.5 text-xs bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 font-medium transition"
-                            title="Lançar este item no Almoxarifado (Estoque/Rancho/EPI/Uniforme/Maquinário)"
-                          >
-                            📦 Armazenar
-                          </button>
-                        )}
-                        {canEditRequests && (
-                          <button
-                            onClick={() => { setEditRequest(req); setShowRequestForm(true); }}
-                            className="p-1.5 text-primary hover:bg-blue-50 rounded-lg transition"
-                            title="Editar solicitação"
-                          >
-                            <EditIcon />
-                          </button>
-                        )}
-                        {canDeleteRequests && (
-                          <button
-                            onClick={() => setDeleteRequest(req)}
-                            className="p-1.5 text-danger hover:bg-red-50 rounded-lg transition"
-                            title="Excluir solicitação"
-                          >
-                            <TrashIcon />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
       key: "compras",
       label: "Controle de Compras",
       content: (
@@ -1497,64 +1031,53 @@ export default function SolicitacoesPage() {
           <div className="flex flex-wrap justify-between items-center gap-3">
             <p className="text-sm text-text-light">Registro das compras realizadas, por mês — inspirado na planilha oficial de compras</p>
             {canManagePurchases && (
-              // Atalhos pra não redigitar: a câmera lê boleto (código de
-              // barras) E nota fiscal (CODE-128 do DANFE / QR da NFC-e); o
-              // import de PDF detecta sozinho se o arquivo é NF ou boleto.
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setScanOpen(true)}
-                  title="Ler com a câmera o código de barras do boleto ou da NF (DANFE), ou o QR code da NFC-e, e abrir a compra já preenchida"
-                >
-                  📷 Escanear boleto/NF
+              // Escanear: abre a câmera e a IA lê nota/cupom/boleto (itens,
+              // valores, fornecedor) — substitui o leitor de código de barras e
+              // o Importar PDF.
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <Button size="sm" variant="secondary" className="flex-1 sm:flex-none" onClick={() => setScanOpen(true)}>
+                  📷 Escanear
                 </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => { setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(true); setShowPurchaseForm(true); }}
-                  title="Importar o PDF da nota fiscal ou do boleto — o sistema detecta sozinho e preenche a compra"
-                >
-                  📄 Importar PDF (NF/boleto)
-                </Button>
-                <Button size="sm" onClick={() => { setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(false); setShowPurchaseForm(true); }}>
+                <Button size="sm" className="flex-1 sm:flex-none" onClick={() => { setEditPurchase(null); setShowPurchaseForm(true); }}>
                   <PlusIcon className="w-4 h-4" />Nova Compra
                 </Button>
               </div>
             )}
           </div>
 
-          {/* Filtros + total + relatório */}
+          {/* Filtros + total + relatório. No celular: grade de 2 colunas (os
+              selects lado a lado sem quebrar torto) e total/relatório em
+              largura cheia; do sm pra cima volta a ser uma linha só. */}
           <div className="space-y-3">
-            <div className="flex flex-wrap items-end gap-3">
-              <label className="flex flex-col gap-1 text-xs">
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end sm:gap-3">
+              <label className="flex flex-col gap-1 text-xs min-w-0">
                 <span className="text-text-light font-medium uppercase tracking-wide">Ano</span>
                 <select value={filterYear} onChange={(e) => setFilterYear(e.target.value)} className={selCls}>
                   {purchaseYears.map((y) => <option key={y} value={y}>{y}</option>)}
                 </select>
               </label>
-              <label className="flex flex-col gap-1 text-xs">
+              <label className="flex flex-col gap-1 text-xs min-w-0">
                 <span className="text-text-light font-medium uppercase tracking-wide">Mês</span>
                 <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className={selCls}>
                   <option value="">Ano inteiro</option>
                   {MONTH_NAMES.map((nm, i) => <option key={i} value={String(i + 1)}>{nm}</option>)}
                 </select>
               </label>
-              <label className="flex flex-col gap-1 text-xs">
+              <label className="flex flex-col gap-1 text-xs min-w-0">
                 <span className="text-text-light font-medium uppercase tracking-wide">Destino</span>
                 <select value={filterDept} onChange={(e) => setFilterDept(e.target.value)} className={selCls}>
                   <option value="">Todos</option>
                   {purchaseDepts.map((d) => <option key={d} value={d}>{departmentLabel(d)}</option>)}
                 </select>
               </label>
-              <label className="flex flex-col gap-1 text-xs">
+              <label className="flex flex-col gap-1 text-xs min-w-0">
                 <span className="text-text-light font-medium uppercase tracking-wide">Fornecedor</span>
                 <select value={filterSupplier} onChange={(e) => setFilterSupplier(e.target.value)} className={`${selCls} max-w-[200px]`}>
                   <option value="">Todos</option>
                   {purchaseSuppliers.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
               </label>
-              <label className="flex flex-col gap-1 text-xs">
+              <label className="flex flex-col gap-1 text-xs min-w-0">
                 <span className="text-text-light font-medium uppercase tracking-wide">Pagamento</span>
                 <select value={filterPayment} onChange={(e) => setFilterPayment(e.target.value)} className={selCls}>
                   <option value="">Todas</option>
@@ -1562,7 +1085,7 @@ export default function SolicitacoesPage() {
                 </select>
               </label>
               {purchaseShips.length > 0 && (
-                <label className="flex flex-col gap-1 text-xs">
+                <label className="flex flex-col gap-1 text-xs min-w-0">
                   <span className="text-text-light font-medium uppercase tracking-wide">Navio</span>
                   <select value={filterShip} onChange={(e) => setFilterShip(e.target.value)} className={`${selCls} max-w-[200px]`}>
                     <option value="">Todos</option>
@@ -1571,7 +1094,7 @@ export default function SolicitacoesPage() {
                 </label>
               )}
               {purchaseTeams.length > 0 && (
-                <label className="flex flex-col gap-1 text-xs">
+                <label className="flex flex-col gap-1 text-xs min-w-0">
                   <span className="text-text-light font-medium uppercase tracking-wide">Equipe</span>
                   <select value={filterTeam} onChange={(e) => setFilterTeam(e.target.value)} className={`${selCls} max-w-[200px]`}>
                     <option value="">Todas</option>
@@ -1583,22 +1106,25 @@ export default function SolicitacoesPage() {
                 <button
                   type="button"
                   onClick={() => { setFilterMonth(""); setFilterDept(""); setFilterSupplier(""); setFilterPayment(""); setFilterShip(""); setFilterTeam(""); }}
-                  className="text-xs text-text-light underline hover:text-text pb-2.5"
+                  className="col-span-2 text-left text-xs text-text-light underline hover:text-text sm:pb-2.5"
                 >
                   Limpar filtros
                 </button>
               )}
 
-              <div className="flex-1" />
+              <div className="hidden sm:block flex-1" />
 
-              <Button size="sm" variant="secondary" onClick={handleGenerateReport} disabled={generatingReport || filteredCount === 0}>
+              <Button size="sm" variant="secondary" className="col-span-2 sm:col-auto order-last sm:order-none" onClick={handleGenerateReport} disabled={generatingReport || filteredCount === 0}>
                 {generatingReport ? "Gerando..." : "📊 Gerar Relatório (Excel)"}
               </Button>
 
-              <div className="bg-primary/5 border border-primary/20 rounded-xl px-4 py-2.5 text-right">
-                <p className="text-[11px] uppercase tracking-wide text-text-light">Total · {periodLabel}</p>
-                <p className="text-lg font-bold text-primary">{formatCurrency(filteredTotal)}</p>
-                <p className="text-[11px] text-text-light">{filteredCount} {filteredCount === 1 ? "compra" : "compras"}</p>
+              <div className="col-span-2 sm:col-auto bg-primary/5 border border-primary/20 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3 sm:block sm:text-right">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-text-light">Total · {periodLabel}</p>
+                  <p className="text-[11px] text-text-light sm:hidden">{filteredCount} {filteredCount === 1 ? "compra" : "compras"}</p>
+                </div>
+                <p className="text-lg font-bold text-primary whitespace-nowrap">{formatCurrency(filteredTotal)}</p>
+                <p className="hidden sm:block text-[11px] text-text-light">{filteredCount} {filteredCount === 1 ? "compra" : "compras"}</p>
               </div>
             </div>
             {reportError && <p className="text-xs text-danger">⚠️ {reportError}</p>}
@@ -1609,7 +1135,7 @@ export default function SolicitacoesPage() {
             <div className="text-center py-12 text-text-light">
               <span className="text-4xl block mb-3">🧾</span>
               <p className="font-medium">Nenhuma compra em {periodLabel}</p>
-              <p className="text-xs mt-1">Clique em &quot;Nova Compra&quot; para registrar</p>
+              <p className="text-xs mt-1">Use &quot;📷 Escanear&quot; (foto da nota/cupom/boleto) ou &quot;Nova Compra&quot; para registrar</p>
             </div>
           ) : (
             <>
@@ -1666,7 +1192,7 @@ export default function SolicitacoesPage() {
                         {canManagePurchases && (
                           <td className="px-3 py-2.5">
                             <div className="flex gap-0.5 justify-end">
-                              <button onClick={() => { setEditPurchase(p); setPurchaseFromRequest(null); setShowPurchaseForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded" title="Editar"><EditIcon /></button>
+                              <button onClick={() => { setEditPurchase(p); setShowPurchaseForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded" title="Editar"><EditIcon /></button>
                               <button onClick={() => setDeletePurchase(p)} className="p-1.5 text-danger hover:bg-red-50 rounded" title="Excluir"><TrashIcon /></button>
                             </div>
                           </td>
@@ -1687,7 +1213,15 @@ export default function SolicitacoesPage() {
               {/* Cards (mobile) */}
               <div className="md:hidden space-y-3">
                 {filteredPurchases.map((p) => (
-                  <div key={p.id} className="bg-card border border-border rounded-xl p-3">
+                  <div
+                    key={p.id}
+                    onClick={canManagePurchases ? (e) => {
+                      // Tocar no card = editar (a foto e os botões têm ação própria).
+                      if ((e.target as HTMLElement).closest("button, a")) return;
+                      setEditPurchase(p); setShowPurchaseForm(true);
+                    } : undefined}
+                    className={`bg-card border border-border rounded-xl p-3 ${canManagePurchases ? "active:bg-gray-50 cursor-pointer" : ""}`}
+                  >
                     <div className="flex items-start gap-3">
                       {p.image_url && (
                         <button type="button" onClick={() => setLightboxImage(p.image_url)} className="shrink-0">
@@ -1696,8 +1230,8 @@ export default function SolicitacoesPage() {
                         </button>
                       )}
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="font-medium text-text truncate">{p.description}</p>
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="font-medium text-text line-clamp-2 break-words min-w-0">{p.description}</p>
                           <span className="font-semibold text-primary whitespace-nowrap">{formatCurrency(p.total_value || 0)}</span>
                         </div>
                         <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-xs text-text-light items-center">
@@ -1709,13 +1243,13 @@ export default function SolicitacoesPage() {
                           <span>{formatQty(p.quantity)} × {formatCurrency(p.unit_value || 0)}</span>
                           {p.payment_method && <span>{paymentLabel(p)}</span>}
                         </div>
-                        {p.notes && <p className="text-xs text-text-light mt-1">{p.notes}</p>}
+                        {p.notes && <p className="text-xs text-text-light mt-1 line-clamp-2 break-words">{p.notes}</p>}
                       </div>
                     </div>
                     {canManagePurchases && (
                       <div className="flex gap-1 justify-end mt-2 pt-2 border-t border-border">
-                        <button onClick={() => { setEditPurchase(p); setPurchaseFromRequest(null); setShowPurchaseForm(true); }} className="p-1.5 text-primary hover:bg-blue-50 rounded"><EditIcon /></button>
-                        <button onClick={() => setDeletePurchase(p)} className="p-1.5 text-danger hover:bg-red-50 rounded"><TrashIcon /></button>
+                        <button onClick={() => { setEditPurchase(p); setShowPurchaseForm(true); }} className="p-2.5 text-primary hover:bg-blue-50 rounded-lg" aria-label="Editar"><EditIcon /></button>
+                        <button onClick={() => setDeletePurchase(p)} className="p-2.5 text-danger hover:bg-red-50 rounded-lg" aria-label="Excluir"><TrashIcon /></button>
                       </div>
                     )}
                   </div>
@@ -1958,36 +1492,10 @@ export default function SolicitacoesPage() {
 
       <Tabs tabs={tabs} defaultTab={effectiveTab} hideHeader />
 
-      {/* Request Form Modal */}
-      <RequestFormModal open={showRequestForm} onClose={() => { setShowRequestForm(false); setEditRequest(null); }} onSave={handleSaveRequest} item={editRequest} suppliers={suppliers} saving={saving} />
-
       {/* Product Link Form Modal */}
       <LinkFormModal open={showLinkForm} onClose={() => { setShowLinkForm(false); setEditLink(null); setSaveError(null); }} onSave={handleSaveLink} item={editLink} saving={saving} error={saveError} />
 
-      {/* Delete Request Confirm */}
-      <ConfirmDialog
-        open={!!deleteRequest}
-        onClose={() => setDeleteRequest(null)}
-        onConfirm={handleDeleteRequest}
-        title="Excluir Solicitação"
-        message={`Excluir a solicitação "${deleteRequest?.tool_name}"?`}
-        loading={saving}
-      />
-
-      {/* Aprovar = concluir: registra a compra + lança no destino do Almoxarifado */}
-      <AprovarModal
-        open={!!concludeRequest}
-        onClose={() => setConcludeRequest(null)}
-        onConfirm={handleConcludeRequest}
-        request={concludeRequest}
-        suppliers={suppliers}
-        saving={saving}
-        onAskSupplier={setWhatsappTarget}
-      />
-
-      {/* Chamar fornecedor no WhatsApp — aba Fornecedores + "Pedir cotação" do
-          Aprovar. Renderizado DEPOIS do AprovarModal pra ficar por cima dele ao
-          abrir de lá (mesmo z-index; quem vem por último no DOM fica na frente). */}
+      {/* Chamar fornecedor no WhatsApp da Cargo — aba Fornecedores. */}
       <WhatsappSupplierModal open={!!whatsappTarget} onClose={() => setWhatsappTarget(null)} target={whatsappTarget} />
 
       {/* Delete Link Confirm */}
@@ -2023,14 +1531,9 @@ export default function SolicitacoesPage() {
       {/* Purchase Form Modal */}
       <PurchaseFormModal
         open={showPurchaseForm}
-        onClose={() => { setShowPurchaseForm(false); setEditPurchase(null); setPurchaseFromRequest(null); setPurchaseAutoNf(false); setPurchaseScanned(null); setPurchaseScannedNfe(null); }}
+        onClose={() => { setShowPurchaseForm(false); setEditPurchase(null); }}
         onSave={handleSavePurchase}
         item={editPurchase}
-        fromRequest={purchaseFromRequest}
-        autoOpenNf={purchaseAutoNf}
-        scanned={purchaseScanned}
-        scannedNfe={purchaseScannedNfe}
-        onScanRequest={() => setScanOpen(true)}
         suppliers={suppliers}
         ships={ships}
         cards={cards}
@@ -2039,14 +1542,17 @@ export default function SolicitacoesPage() {
         saving={saving}
       />
 
-      {/* Scanner de boleto/NF (câmera/foto) — preenche a Nova Compra. Só é
-          montado quando abre: assim o chunk do leitor de código de barras só
-          baixa pra quem clica em "Escanear". Desliga a câmera ao desmontar. */}
+      {/* Escanear (câmera + IA) — montado só quando abre, pra câmera desligar
+          ao fechar. */}
       {scanOpen && (
-        <DocScannerModal
+        <EscanearCompraModal
           open
           onClose={() => setScanOpen(false)}
-          onDetected={applyScannedDoc}
+          onSave={handleSaveScanned}
+          suppliers={suppliers.map((s) => s.name)}
+          ships={ships.map((s) => ({ id: s.id, label: shipSelectLabel(s) }))}
+          destinations={WAREHOUSE_DESTINATIONS}
+          paymentMethods={PAYMENT_METHODS}
         />
       )}
 
@@ -2058,15 +1564,6 @@ export default function SolicitacoesPage() {
         title="Excluir Compra"
         message={`Excluir a compra "${deletePurchase?.description}"?`}
         loading={saving}
-      />
-
-      {/* Armazenar no Almoxarifado (a partir de uma solicitação comprada) */}
-      <ArmazenarEstoqueModal
-        open={!!stockRequest}
-        onClose={() => setStockRequest(null)}
-        onConfirm={handleStoreInWarehouse}
-        request={stockRequest}
-        saving={saving}
       />
 
       {/* Image Lightbox */}
@@ -2148,7 +1645,7 @@ function SupplierField({ value, onChange, suppliers, className, placeholder = "S
 }
 
 // Campo de link do produto com auto-preenchimento (Open Graph / JSON-LD via
-// /api/solicitacoes/link-preview). Compartilhado por Nova Solicitação e Nova
+// /api/solicitacoes/link-preview). Usado pela Nova
 // Compra. O pai guarda o `link`; ao buscar, devolve os dados via onData(data,
 // force) e o pai decide em quais campos aplicar.
 function ProductLinkField({ link, onLinkChange, onData, open }: {
@@ -2229,121 +1726,6 @@ function ProductLinkField({ link, onLinkChange, onData, open }: {
         <p className="text-[10px] text-text-light mt-1">Cole o link e o nome, valor, imagem e fornecedor são preenchidos automaticamente.</p>
       )}
     </div>
-  );
-}
-
-function RequestFormModal({ open, onClose, onSave, item, suppliers, saving }: {
-  open: boolean; onClose: () => void;
-  onSave: (data: {
-    toolName: string; quantity: number; reason: string; imageUrl: string | null;
-    productUrl: string | null; estimatedValue: number | null; supplier: string | null;
-    department: string; code: string | null;
-  }) => void;
-  item: ToolRequest | null;
-  suppliers: Supplier[];
-  saving: boolean;
-}) {
-  const [toolName, setToolName] = useState("");
-  const [quantity, setQuantity] = useState(1);
-  const [reason, setReason] = useState("");
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [link, setLink] = useState("");
-  const [value, setValue] = useState("");
-  const [supplier, setSupplier] = useState("");
-  // Destino sugerido no Almoxarifado — o gestor confirma/ajusta ao aprovar.
-  const [dest, setDest] = useState<WarehouseDest>("ESTOQUE");
-  // Código do item no Almoxarifado (opcional) — repõe aquele item exato ao abastecer.
-  const [code, setCode] = useState("");
-
-  useEffect(() => {
-    if (!open) return;
-    if (item) {
-      setToolName(item.tool_name || "");
-      setQuantity(item.quantity || 1);
-      setReason(item.reason || "");
-      setImageUrl(item.image_url || null);
-      setLink(item.product_url || "");
-      setValue(numToInput(parseDecimalBR(item.estimated_value)));
-      setSupplier(item.supplier || "");
-      setDest((item.department as WarehouseDest) || "ESTOQUE");
-      setCode(item.code || "");
-    } else {
-      setToolName(""); setQuantity(1); setReason(""); setImageUrl(null);
-      setLink(""); setValue(""); setSupplier(""); setDest("ESTOQUE"); setCode("");
-    }
-  }, [open, item]);
-
-  // Aplica os dados puxados do link (sem sobrescrever o que o usuário já digitou,
-  // exceto no "Buscar" manual com force=true).
-  const applyPreview = useCallback((d: { name?: string; value?: number; supplier?: string; image?: string }, force: boolean) => {
-    if (d.name) setToolName((p) => (force || !p.trim() ? d.name! : p));
-    if (d.value != null) setValue((p) => (force || !p.trim() ? String(d.value).replace(".", ",") : p));
-    if (d.supplier) setSupplier((p) => (force || !p.trim() ? d.supplier! : p));
-    if (d.image) setImageUrl((p) => (force || !p ? d.image! : p));
-  }, []);
-
-  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    onSave({
-      toolName, quantity, reason, imageUrl,
-      productUrl: link.trim() || null,
-      estimatedValue: value.trim() ? parseDecimalBR(value) : null,
-      supplier: supplier.trim() || null,
-      department: dest,
-      code: code.trim().toUpperCase() || null,
-    });
-  }
-
-  return (
-    <Modal open={open} onClose={onClose} title={item ? "Editar Solicitação" : "Nova Solicitação"}>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <ProductLinkField link={link} onLinkChange={setLink} onData={applyPreview} open={open} />
-        <div>
-          <label className="block text-sm font-medium mb-1">Produto / Equipamento *</label>
-          <input type="text" value={toolName} onChange={(e) => setToolName(e.target.value)} required
-            placeholder="Ex: Furadeira, Chave inglesa, Luvas..." className={inputCls} />
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Destino no Almoxarifado</label>
-          <select value={dest} onChange={(e) => { setDest(e.target.value as WarehouseDest); setCode(""); }} className={inputCls}>
-            {/* Solicitação antiga pode apontar pra Rancho/Escritório — mantém a opção só nela. */}
-            {!REQUEST_DESTINATIONS.some((d) => d.value === dest) && dest && (
-              <option value={dest}>{DEST_SHORT_LABEL[dest] || dest} (legado)</option>
-            )}
-            {REQUEST_DESTINATIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
-          </select>
-          <p className="text-[10px] text-text-light mt-1">Sugestão de onde guardar — o gestor confirma ao aprovar.</p>
-        </div>
-        <CodeField dest={dest} team="EQUIPE_1" value={code} name={toolName} onChange={setCode} onResolveName={setToolName} open={open} auto />
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Quantidade</label>
-            <input type="number" value={quantity} onChange={(e) => setQuantity(Number(e.target.value))} min={1} className={inputCls} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Valor estimado (R$)</label>
-            <input type="text" inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)}
-              placeholder="0,00" className={inputCls} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Fornecedor</label>
-            <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
-          </div>
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Motivo / Justificativa *</label>
-          <textarea value={reason} onChange={(e) => setReason(e.target.value)} required rows={3}
-            placeholder="Para que será utilizado..." className={`${inputCls} resize-none`} />
-        </div>
-        <ImagePicker value={imageUrl} onChange={setImageUrl} />
-        <div className="flex gap-3 justify-end pt-2">
-          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={saving}>{saving ? "Salvando..." : item ? "Salvar" : "Enviar Solicitação"}</Button>
-        </div>
-      </form>
-    </Modal>
   );
 }
 
@@ -2650,44 +2032,10 @@ function fmtISODate(iso: string): string {
   return y && m && d ? `${d}/${m}/${y}` : "";
 }
 
-// Item da NF e payload devolvido pelo analisar-pdf / nfe-lookup (mesmo shape
-// nas duas rotas — o form aplica tudo por um caminho só).
-interface ParsedProduto {
-  descricao: string;
-  quantidade: number | null;
-  valorUnit: number | null;
-  valorTotal: number | null;
-  unidade: string | null;
-}
-interface ParsedDocPayload {
-  kind?: string;
-  scanned?: boolean;
-  ocr?: boolean;
-  description?: string | null;
-  amount?: number | null;
-  due_date?: string | null;
-  payee_name?: string | null;
-  supplier_id?: number | null;
-  digitable_line?: string | null;
-  notes?: string | null;
-  chave?: string | null;
-  emissao?: string | null;
-  duplicatas?: { vencimento?: string }[] | null;
-  produtos?: ParsedProduto[] | null;
-}
-
-function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenNf, scanned, scannedNfe, onScanRequest, suppliers, ships, cards, bankAccounts, onCreateCard, saving }: {
+function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, cards, bankAccounts, onCreateCard, saving }: {
   open: boolean; onClose: () => void;
-  onSave: (data: Partial<PurchaseOrder>, fromRequestId: string | null, stock?: DestSpec | null) => void;
+  onSave: (data: Partial<PurchaseOrder>, stock?: DestSpec | null) => void;
   item: PurchaseOrder | null;
-  fromRequest: ToolRequest | null;
-  autoOpenNf?: boolean;
-  // Boleto lido pela câmera (botão "Escanear"): preenche os campos em branco.
-  scanned?: BoletoParsed | null;
-  // Chave de NF lida pela câmera (mesmo botão): fornecedor/descrição/chave.
-  scannedNfe?: NfeChaveScan | null;
-  // Abre o scanner de boleto/NF (fica no nível da página, junto do da tela toda).
-  onScanRequest?: () => void;
   suppliers: Supplier[];
   ships: Ship[];
   cards: CardOption[];
@@ -2731,17 +2079,6 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
   const [newCardClosing, setNewCardClosing] = useState("");
   const [newCardLabel, setNewCardLabel] = useState("");
   const [savingCard, setSavingCard] = useState(false);
-  // Leitura de PDF (NF ou boleto — pré-preenche os campos, igual ao Contas a Pagar).
-  const [readingPdf, setReadingPdf] = useState(false);
-  const pdfInputRef = useRef<HTMLInputElement>(null);
-  // Consulta da NF escaneada no sistema (Contas a Pagar) e aviso de NF que já
-  // virou compra no Controle.
-  const [nfeLookup, setNfeLookup] = useState<null | "pending" | "parsed" | "invoice" | "none">(null);
-  const [dupPurchase, setDupPurchase] = useState<{ description: string; purchase_date: string | null; total_value: number } | null>(null);
-  // Fornecedor descoberto pelo CNPJ da chave escaneada — e de onde ele veio
-  // (cadastro; criado agora pela Receita; CNPJ vinculado a um cadastro sem
-  // CNPJ; ou só identificado na Receita, sem gravar).
-  const [scanSupplier, setScanSupplier] = useState<{ name: string; status: "cadastro" | "novo" | "vinculado" | "receita" } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -2749,8 +2086,6 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
     const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     // Formulário de cartão novo sempre começa fechado/limpo.
     setShowNewCard(false); setNewCardBankId(""); setNewCardLast4(""); setNewCardClosing(""); setNewCardLabel("");
-    // Estados da leitura de NF (consulta/aviso) também zeram a cada abertura.
-    setNfeLookup(null); setDupPurchase(null); setScanSupplier(null);
     if (item) {
       setDescription(item.description || "");
       setLink(item.product_url || "");
@@ -2779,272 +2114,12 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
         savedDays.length > 0 ? savedDays.map((d) => addDaysISO(itemBase, d)) : [""],
       );
       setCardId(item.card_id != null ? String(item.card_id) : "");
-    } else if (fromRequest) {
-      setDescription(fromRequest.tool_name || "");
-      setLink(fromRequest.product_url || "");
-      setDestSpec({ ...DEFAULT_DEST_SPEC, dest: (fromRequest.department as WarehouseDest) || "OUTROS" });
-      setSupplier(fromRequest.supplier || "");
-      setPurchaseDate(todayISO);
-      setUnitValue(numToInput(parseDecimalBR(fromRequest.estimated_value)));
-      setQuantity(numToInput(fromRequest.quantity) || "1");
-      setPaymentMethod("");
-      setNotes("");
-      setDigitableLine("");
-      setImageUrl(fromRequest.image_url || null);
-      setCode(fromRequest.code || "");
-      setShipId("");
-      setPaymentDueDates([""]); setCardId("");
     } else {
       setDescription(""); setLink(""); setDestSpec({ ...DEFAULT_DEST_SPEC, dest: "OUTROS" }); setSupplier(""); setPurchaseDate(todayISO);
       setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setDigitableLine(""); setImageUrl(null); setCode(""); setShipId("");
       setPaymentDueDates([""]); setCardId("");
     }
-  }, [item, fromRequest, open]);
-
-  // "Importar PDF" (atalho ao lado de Nova Compra): abre o seletor de arquivo
-  // assim que o form aparece, pra ir direto pro PDF sem um clique a mais.
-  useEffect(() => {
-    if (open && autoOpenNf) pdfInputRef.current?.click();
-  }, [open, autoOpenNf]);
-
-  // Boleto lido pela câmera: preenche o que estiver EM BRANCO (mesma regra do
-  // Contas a Pagar — quem escaneia depois de digitar quer completar, não perder
-  // o que fez). Declarado depois do efeito que zera o formulário, então roda
-  // sobre os campos já limpos quando a leitura é que abriu a tela.
-  useEffect(() => {
-    if (!open || !scanned) return;
-    const b = scanned;
-    if (b.amount != null) {
-      const amount = b.amount;
-      setUnitValue((prev) => (prev.trim() ? prev : String(amount).replace(".", ",")));
-      setQuantity((q) => q || "1");
-    }
-    setPaymentMethod((prev) => prev || "BOLETO");
-    setDescription((prev) =>
-      prev.trim()
-        ? prev
-        : b.tipo === "ARRECADACAO"
-          ? "Conta de consumo/arrecadação (boleto escaneado)"
-          : "Boleto escaneado",
-    );
-    // Linha digitável vai pro campo próprio; só preenche se estiver em branco.
-    if (b.digits) setDigitableLine((prev) => prev.trim() ? prev : b.digits!);
-    // Vencimento vira observação: a compra não tem campo de vencimento próprio
-    // (prazo em dias só existe no FATURADO).
-    if (b.dueDate) {
-      const [y, m, d] = b.dueDate.toISOString().slice(0, 10).split("-");
-      const line = `Vencimento ${d}/${m}/${y}`;
-      setNotes((prev) => (prev.includes(line) ? prev : prev ? `${prev} · ${line}` : line));
-    }
-  }, [open, scanned]);
-
-  // Aplica um documento analisado (PDF importado, ou a NF que o scanner achou
-  // no Contas a Pagar — a rota nfe-lookup devolve o MESMO shape). Preenche só
-  // o que está em branco; `replaceableDesc` permite trocar a descrição
-  // provisória do scan ("NF 123 - Fornecedor") por uma melhor (o produto).
-  function applyParsedDoc(p: ParsedDocPayload, replaceableDesc?: string) {
-    const produtos = Array.isArray(p.produtos) ? p.produtos : [];
-    // Descrição: NF de UM item usa o próprio produto; senão o resumo da nota.
-    const desc = p.kind === "NFE" && produtos.length === 1 && produtos[0].descricao
-      ? produtos[0].descricao
-      : p.description;
-    if (desc) setDescription((prev) => (!prev.trim() || prev === replaceableDesc ? desc : prev));
-    // Valor: NF de um item cujo total bate com a nota entra como qtd ×
-    // unitário de verdade; qualquer outro caso fica 1 × total (o total é o que
-    // vira título no Contas a Pagar).
-    const single = produtos.length === 1 ? produtos[0] : null;
-    if (
-      p.kind === "NFE" && single && single.quantidade != null && single.valorUnit != null &&
-      p.amount != null && single.valorTotal != null && Math.abs(single.valorTotal - p.amount) < 0.05
-    ) {
-      const q = single.quantidade, u = single.valorUnit;
-      setQuantity((prev) => (prev.trim() && prev !== "1" ? prev : String(q).replace(".", ",")));
-      setUnitValue((prev) => (prev.trim() ? prev : String(u).replace(".", ",")));
-    } else if (p.amount != null) {
-      setUnitValue(String(p.amount).replace(".", ","));
-      setQuantity((q) => q || "1");
-    }
-    // Fornecedor: casa pelo cadastro (supplier_id) ou usa o nome do emitente.
-    const matched = p.supplier_id ? suppliers.find((s) => s.id === p.supplier_id) : null;
-    const supName = matched?.name || p.payee_name;
-    if (supName) setSupplier((prev) => prev.trim() ? prev : supName);
-    if (p.digitable_line) {
-      const dl = p.digitable_line;
-      setDigitableLine((prev) => prev.trim() ? prev : dl);
-    }
-    // Observação: resumo da NF/OCR. Se o scan já deixou a linha básica
-    // ("NF n série s · chave c"), a versão completa (com emissão/parcelas)
-    // SUBSTITUI em vez de duplicar.
-    if (p.notes) {
-      const incoming = p.notes;
-      setNotes((prev) => {
-        if (!prev.trim()) return incoming;
-        if (prev.includes(incoming)) return prev;
-        const chave = p.chave || incoming.match(/chave (\d{44})/)?.[1];
-        if (chave && incoming.includes(chave)) {
-          // Linha básica do scan (pode ter emissão/emitente entre a série e a
-          // chave) — a versão completa do PDF substitui, sem duplicar.
-          const basic = new RegExp(`NF [^·]+ série [^·]+(?: · emissão [^·]+)?(?: · emitente [^·]+)? · chave ${chave}`);
-          if (basic.test(prev)) return prev.replace(basic, incoming);
-          if (prev.includes(chave)) return prev; // já tem a chave de outra forma
-        }
-        return `${prev} · ${incoming}`;
-      });
-    }
-    if (p.kind === "BOLETO") {
-      // Boleto: já marca a forma de pagamento e leva o vencimento pra
-      // observação (a compra só tem vencimento próprio no FATURADO).
-      setPaymentMethod((prev) => prev || "BOLETO");
-      if (p.due_date) {
-        const line = `Vencimento ${fmtISODate(p.due_date)}`;
-        setNotes((prev) => (prev.includes(line) ? prev : prev ? `${prev} · ${line}` : line));
-      }
-    } else if (p.kind === "NFE") {
-      // NF: a data da compra é a emissão (só em compra nova — editar não mexe
-      // na data já salva)...
-      if (!item && p.emissao) setPurchaseDate(p.emissao);
-      // ...o quadro FATURA/DUPLICATA vira FATURADO com os vencimentos
-      // preenchidos (cada parcela vira um título no Contas a Pagar)...
-      const vencs = (Array.isArray(p.duplicatas) ? p.duplicatas : [])
-        .map((d) => d?.vencimento)
-        .filter((v): v is string => typeof v === "string" && !!v);
-      if (vencs.length > 0) {
-        setPaymentMethod((prev) => prev || "FATURADO");
-        setPaymentDueDates((prev) => (prev.some((x) => x.trim()) ? prev : vencs));
-      }
-      // ...e a nota com VÁRIOS itens leva a lista pra observação (a compra é
-      // uma linha só — o detalhe fica registrado sem redigitar).
-      if (produtos.length > 1) {
-        const fmtQ = (n: number) => String(n).replace(".", ",");
-        const list = produtos
-          .slice(0, 8)
-          .map((it) =>
-            `${it.quantidade != null ? `${fmtQ(it.quantidade)}${it.unidade ? ` ${it.unidade}` : "x"} ` : ""}${it.descricao}` +
-            (it.valorUnit != null ? ` R$ ${it.valorUnit.toFixed(2).replace(".", ",")}` : ""),
-          )
-          .join(" · ");
-        const line = `Itens: ${list}${produtos.length > 8 ? ` · e mais ${produtos.length - 8}` : ""}`;
-        setNotes((prev) => (prev.includes("Itens: ") ? prev : prev ? `${prev} · ${line}` : line));
-      }
-    }
-  }
-
-  // Consulta a chave no sistema (fornecedor, título do Contas a Pagar com o
-  // PDF anexado, compra já registrada). `full` reprocessa o anexo — usado pelo
-  // scanner, que só tem a chave; o import de PDF chama com full=0 só pra
-  // descobrir duplicidade e forma de pagamento.
-  async function lookupChave(chave: string, full: boolean, replaceableDesc?: string): Promise<void> {
-    try {
-      const res = await fetch(`/api/solicitacoes/nfe-lookup?chave=${chave}&full=${full ? "1" : "0"}`);
-      if (!res.ok) { setNfeLookup((s) => (s === "pending" ? "none" : s)); return; }
-      const data = await res.json();
-      if (data.existing_purchase) setDupPurchase(data.existing_purchase);
-      if (full && data.parsed) {
-        applyParsedDoc(data.parsed as ParsedDocPayload, replaceableDesc);
-        setNfeLookup("parsed");
-      } else if (data.invoice) {
-        const inv = data.invoice as { amount: number; due_date: string | null; payment_method: string | null; supplier_name: string | null };
-        if (full) {
-          if (inv.amount > 0) {
-            setUnitValue((prev) => (prev.trim() ? prev : String(inv.amount).replace(".", ",")));
-            setQuantity((q) => q || "1");
-          }
-          if (inv.supplier_name) {
-            const nm = inv.supplier_name;
-            setSupplier((prev) => (prev.trim() ? prev : nm));
-          }
-          if (inv.due_date) {
-            const line = `Vencimento ${fmtISODate(inv.due_date)}`;
-            setNotes((prev) => (prev.includes(line) ? prev : prev ? `${prev} · ${line}` : line));
-          }
-        }
-        if (inv.payment_method) setPaymentMethod((prev) => prev || inv.payment_method!);
-        setNfeLookup((s) => (s === "pending" ? "invoice" : s));
-      } else {
-        // NF não está no sistema. O fornecedor ainda pode vir: do cadastro
-        // (CNPJ já vinculado), da Receita com cadastro/vínculo automático
-        // (supplier.created/linked) ou só como dado da Receita (ambíguo).
-        const supFromServer = (data.supplier ?? null) as { name: string; created?: boolean; linked?: boolean } | null;
-        const rec = (data.receita ?? null) as { razao: string; fantasia: string | null } | null;
-        const supName = supFromServer?.name || rec?.fantasia || rec?.razao || null;
-        if (full && supName) {
-          setSupplier((prev) => (prev.trim() ? prev : supName));
-          // A descrição provisória do scan ("NF 123") ganha o fornecedor.
-          if (replaceableDesc) {
-            setDescription((prev) => (prev === replaceableDesc && !prev.includes(" - ") ? `${prev} - ${supName}` : prev));
-          }
-          setScanSupplier({
-            name: supName,
-            status: supFromServer?.created ? "novo" : supFromServer?.linked ? "vinculado" : supFromServer ? "cadastro" : "receita",
-          });
-        }
-        setNfeLookup((s) => (s === "pending" ? "none" : s));
-      }
-    } catch {
-      setNfeLookup((s) => (s === "pending" ? "none" : s));
-    }
-  }
-
-  // Chave de NF lida pela câmera (CODE-128 do DANFE ou QR da NFC-e): o código
-  // de barras carrega SÓ a identificação (CNPJ, número, série, competência) —
-  // valor/produtos não vêm nele. Preenche o básico na hora e busca o resto no
-  // sistema: se a NF já entrou no Contas a Pagar (import por e-mail/PDF), o
-  // PDF anexado é reprocessado e o form recebe valor, data, parcelas e itens.
-  useEffect(() => {
-    if (!open || !scannedNfe) return;
-    const n = scannedNfe;
-    const sup = suppliers.find((s) => s.cnpj && s.cnpj === n.cnpjEmitente);
-    if (sup) setSupplier((prev) => (prev.trim() ? prev : sup.name));
-    setScanSupplier(sup ? { name: sup.name, status: "cadastro" } : null);
-    const basicDesc = `NF ${n.numero}${sup ? ` - ${sup.name}` : ""}`;
-    setDescription((prev) => (prev.trim() ? prev : basicDesc));
-    if (n.valor != null) {
-      const valor = n.valor;
-      setUnitValue((prev) => (prev.trim() ? prev : String(valor).replace(".", ",")));
-      setQuantity((q) => q || "1");
-    }
-    // Tudo que a chave carrega vai pra observação: número/série, competência
-    // de emissão (AAMM da chave), CNPJ do emitente e a própria chave.
-    const [compY, compM] = n.competencia.split("-");
-    const line = `NF ${n.numero} série ${n.serie} · emissão ${compM}/${compY} · emitente CNPJ ${formatCnpj(n.cnpjEmitente)} · chave ${n.chave}`;
-    setNotes((prev) => (prev.includes(n.chave) ? prev : prev ? `${prev} · ${line}` : line));
-    setDupPurchase(null);
-    setNfeLookup("pending");
-    lookupChave(n.chave, true, basicDesc);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, scannedNfe]);
-
-  // Lê um PDF (nota fiscal OU boleto — o leitor detecta sozinho, mesmo do
-  // Contas a Pagar) e pré-preenche o formulário. Não grava nada.
-  async function handleReadPdf(file: File) {
-    setReadingPdf(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/financeiro/contas/analisar-pdf", { method: "POST", body: fd });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        alert(data.error || "Erro ao ler o PDF");
-        return;
-      }
-      const p = (data.parsed || {}) as ParsedDocPayload;
-      applyParsedDoc(p);
-      // NF: confere no sistema se ela já virou compra/título (só aviso).
-      if (p.kind === "NFE" && p.chave) {
-        setDupPurchase(null);
-        lookupChave(p.chave, false);
-      }
-      if (p.scanned) {
-        alert("PDF escaneado (sem texto). Confira/preencha os campos à mão.");
-      } else if (p.ocr) {
-        alert("PDF lido por OCR — confira os campos antes de salvar.");
-      } else if (p.amount == null) {
-        alert("Li o documento, mas não achei o valor com segurança. Confira e preencha.");
-      }
-    } finally {
-      setReadingPdf(false);
-    }
-  }
+  }, [item, open]);
 
   const unit = parseDecimalBR(unitValue);
   const qty = parseDecimalBR(quantity);
@@ -3134,92 +2209,18 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
       product_url: link.trim() || null,
       ship_id: shipId || null,
       ship_name: shipName,
-    }, fromRequest?.id || null,
+    },
       // Só lança no Almoxarifado em compras novas (na edição vira só rótulo).
       !item ? destSpec : null);
   }
 
   const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
-  const title = item ? "Editar Compra" : fromRequest ? "Registrar Compra" : "Nova Compra";
+  const title = item ? "Editar Compra" : "Nova Compra";
 
   return (
     <Modal open={open} onClose={onClose} title={title} maxWidth="max-w-3xl">
       <form onSubmit={handleSubmit} className="space-y-4">
-        {fromRequest && !item && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-800">
-            Compra a partir da solicitação de <strong>{fromRequest.requested_by}</strong>. Ao salvar, a solicitação é marcada como <strong>Comprada</strong>.
-          </div>
-        )}
         <ProductLinkField link={link} onLinkChange={setLink} onData={applyPreview} open={open} />
-        {/* Atalhos de leitura: câmera (boleto ou NF) e PDF (NF ou boleto) —
-            os dois só preenchem os campos, quem salva é você. */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {onScanRequest && (
-            <button
-              type="button"
-              onClick={onScanRequest}
-              className="bg-gray-100 hover:bg-gray-200 text-text text-xs font-medium px-3 py-1.5 rounded-lg"
-              title="Ler com a câmera o código de barras do boleto ou da NF (DANFE), ou o QR code da NFC-e"
-            >
-              📷 Escanear boleto/NF
-            </button>
-          )}
-          <label className={`inline-flex items-center ${readingPdf ? "opacity-50" : "cursor-pointer"}`}>
-            <span className="bg-gray-100 hover:bg-gray-200 text-text text-xs font-medium px-3 py-1.5 rounded-lg">
-              {readingPdf ? "Lendo PDF..." : "📄 Importar PDF (NF/boleto)"}
-            </span>
-            <input
-              ref={pdfInputRef}
-              type="file"
-              accept="application/pdf"
-              className="hidden"
-              disabled={readingPdf}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) handleReadPdf(f);
-                e.target.value = "";
-              }}
-            />
-          </label>
-          <span className="text-[11px] text-text-light">Preenche os campos sozinho. Revise antes de salvar.</span>
-        </div>
-        {/* NF lida pela câmera: o código de barras traz SÓ a identificação —
-            o resto vem do cruzamento com o Contas a Pagar (nfe-lookup). */}
-        {scannedNfe && (
-          <div className="bg-sky-50 border border-sky-200 rounded-lg px-3 py-2 text-xs text-sky-800">
-            📷 NF <strong>{scannedNfe.numero}</strong> lida pela câmera.{" "}
-            {nfeLookup === "pending"
-              ? "Buscando esta NF no sistema…"
-              : nfeLookup === "parsed"
-                ? "Encontrei a nota no Contas a Pagar: valor, data, parcelas e itens vieram do PDF anexado lá — revise antes de salvar."
-                : nfeLookup === "invoice"
-                  ? "Encontrei o título desta NF no Contas a Pagar — valor preenchido de lá; revise antes de salvar."
-                  : scannedNfe.valor == null
-                    ? "O código de barras só traz a identificação da nota — preencha valor e forma de pagamento, ou use o Importar PDF."
-                    : "Confira os campos antes de salvar."}
-            {scanSupplier && (
-              <>
-                {" "}Fornecedor: <strong>{scanSupplier.name}</strong>
-                {scanSupplier.status === "novo"
-                  ? " — cadastrado agora pelo CNPJ da nota (Receita Federal)."
-                  : scanSupplier.status === "vinculado"
-                    ? " — CNPJ da nota vinculado a este cadastro."
-                    : scanSupplier.status === "receita"
-                      ? " — identificado na Receita Federal."
-                      : " (cadastro de Fornecedores)."}
-              </>
-            )}
-          </div>
-        )}
-        {/* NF que já virou compra no Controle — só avisa, quem decide é você. */}
-        {dupPurchase && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
-            ⚠️ Esta NF já tem compra registrada: “{dupPurchase.description}”
-            {dupPurchase.purchase_date ? ` em ${fmtISODate(dupPurchase.purchase_date)}` : ""}
-            {dupPurchase.total_value ? ` (${formatCurrency(dupPurchase.total_value)})` : ""}.
-            Salvar de novo cria uma compra duplicada.
-          </div>
-        )}
         <div>
           <label className="block text-sm font-medium mb-1">Descrição *</label>
           <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} required
@@ -3260,16 +2261,16 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
                   return d != null && d >= 0;
                 }).length;
               return (
-                <div key={i} className="flex items-center gap-2">
+                <div key={i} className="flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1">
                   <span className="text-xs text-text-light w-16 shrink-0">Parcela {i + 1}</span>
                   <input
                     type="date"
                     value={iso}
                     min={purchaseDate || undefined}
                     onChange={(e) => setPaymentDueDates((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
-                    className={`${inputCls} !w-44`}
+                    className={`${inputCls} flex-1 min-w-0 sm:flex-none sm:!w-44`}
                   />
-                  <span className="text-xs text-text-light flex-1 min-w-0 truncate">
+                  <span className="order-last sm:order-none basis-full sm:basis-auto pl-[4.5rem] sm:pl-0 text-xs text-text-light flex-1 min-w-0 truncate">
                     {valid
                       ? `${days} dia${days === 1 ? "" : "s"} · ${formatCurrency(parcelValue(validIdx))}`
                       : iso.trim()
@@ -3415,7 +2416,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
             </p>
           </div>
         )}
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
           <div>
             <label className="block text-sm font-medium mb-1">Valor unit. (R$)</label>
             <input type="text" inputMode="decimal" value={unitValue} onChange={(e) => setUnitValue(e.target.value)}
@@ -3426,7 +2427,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
             <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)}
               placeholder="1" className={inputCls} />
           </div>
-          <div>
+          <div className="col-span-2 sm:col-span-1">
             <label className="block text-sm font-medium mb-1">Valor total</label>
             <div className="w-full px-3 py-2.5 border border-border rounded-lg text-sm bg-gray-50 font-semibold text-primary">
               {formatCurrency(total)}
@@ -3477,222 +2478,6 @@ function PurchaseFormModal({ open, onClose, onSave, item, fromRequest, autoOpenN
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
           <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar Compra"}</Button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-// Lança uma solicitação já comprada no Almoxarifado: o usuário escolhe o destino
-// (Estoque/Rancho/EPI/Uniforme/Maquinário) e os campos do setor. Nome e quantidade
-// vêm da própria solicitação. Usado pelo botão "📦 Armazenar" dos cards COMPRADO.
-function ArmazenarEstoqueModal({ open, onClose, onConfirm, request, saving }: {
-  open: boolean; onClose: () => void;
-  onConfirm: (spec: DestSpec) => void;
-  request: ToolRequest | null;
-  saving: boolean;
-}) {
-  const [spec, setSpec] = useState<DestSpec>({ ...DEFAULT_DEST_SPEC });
-
-  useEffect(() => { if (open) setSpec({ ...DEFAULT_DEST_SPEC }); }, [open]);
-
-  return (
-    <Modal open={open} onClose={onClose} title="Armazenar no Almoxarifado" maxWidth="max-w-md">
-      <form onSubmit={(e) => { e.preventDefault(); onConfirm(spec); }} className="space-y-4">
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-sm text-emerald-800">
-          Lançar <strong>{request?.tool_name}</strong> (x{request?.quantity}) no Almoxarifado.
-        </div>
-        <WarehouseDestinationFields value={spec} onChange={setSpec} quantity={request?.quantity} />
-        <div className="flex gap-3 justify-end pt-2">
-          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={saving}>{saving ? "Lançando..." : "Lançar"}</Button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-// Aprovar e concluir uma solicitação: registra a compra no Controle de Compras e
-// lança o item no destino escolhido do Almoxarifado, num passo só.
-function AprovarModal({ open, onClose, onConfirm, request, suppliers, saving, onAskSupplier }: {
-  open: boolean; onClose: () => void;
-  onConfirm: (data: ApproveData) => void;
-  request: ToolRequest | null;
-  suppliers: Supplier[];
-  saving: boolean;
-  onAskSupplier: (target: WhatsappTarget) => void;
-}) {
-  const [spec, setSpec] = useState<DestSpec>({ ...DEFAULT_DEST_SPEC });
-  // Resumo editável da compra — pré-preenchido a partir da solicitação. O gestor
-  // confere/ajusta antes de concluir; estes valores é que viram a compra.
-  const [toolName, setToolName] = useState("");
-  const [supplier, setSupplier] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("");
-  const [purchaseDate, setPurchaseDate] = useState("");
-  const [unitValue, setUnitValue] = useState("");
-  const [quantity, setQuantity] = useState("1");
-  // Código no Almoxarifado — vem da solicitação; em branco o sistema gera pelo nome.
-  const [code, setCode] = useState("");
-  // Avisar o fornecedor no WhatsApp ao concluir (opcional, SEMPRE começa desmarcado).
-  const [notifySupplier, setNotifySupplier] = useState(false);
-
-  useEffect(() => {
-    if (!open || !request) return;
-    // O aviso ao fornecedor sempre reinicia DESMARCADO a cada abertura do modal.
-    setNotifySupplier(false);
-    const today = new Date();
-    const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    // Pré-preenche o destino com a sugestão da solicitação (campo department).
-    setSpec({ ...DEFAULT_DEST_SPEC, dest: (request.department as WarehouseDest) || "ESTOQUE" });
-    setToolName(request.tool_name || "");
-    setSupplier(request.supplier || "");
-    setPaymentMethod("");
-    setPurchaseDate(todayISO);
-    setUnitValue(numToInput(parseDecimalBR(request.estimated_value)));
-    setQuantity(numToInput(request.quantity) || "1");
-    setCode(request.code || "");
-  }, [open, request]);
-
-  const unit = parseDecimalBR(unitValue);
-  const qty = parseDecimalBR(quantity) || 1;
-  const total = unit * qty;
-  const inputCls = "w-full px-3 py-2.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none";
-
-  return (
-    <Modal open={open} onClose={onClose} title="Aprovar e concluir" maxWidth="max-w-lg">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          // Aviso opcional ao fornecedor (fornecedor cadastrado, com telefone e opção marcada).
-          const matched = suppliers.find((s) => s.name === supplier);
-          const notify: WhatsappTarget | null = (notifySupplier && matched && hasWhatsapp(matched.contact))
-            ? {
-                to: matched.contact!,
-                name: matched.name,
-                imageUrl: request?.image_url ?? null,
-                message: purchaseConfirmMessage({ description: toolName, quantity: qty, paymentMethod }),
-              }
-            : null;
-          onConfirm({
-            toolName,
-            supplier: supplier || null,
-            paymentMethod: paymentMethod || null,
-            purchaseDate,
-            unitValue: unit,
-            quantity: qty,
-            spec,
-            code: code.trim().toUpperCase() || null,
-            notify,
-          });
-        }}
-        className="space-y-4"
-      >
-        <p className="text-sm text-text-light">
-          Confira e ajuste os dados abaixo. Ao concluir, a compra é registrada no Controle de Compras
-          e o item é lançado no destino, automaticamente.
-        </p>
-
-        {/* Resumo da origem (não editável) — quem pediu, motivo e link. */}
-        {request && (
-          <div className="bg-gray-50 border border-border rounded-lg px-3 py-2 text-xs text-text-light flex flex-wrap gap-x-3 gap-y-1 items-center">
-            <span>Solicitado por <strong className="text-text">{request.requested_by}</strong></span>
-            {request.reason && <span>· {request.reason}</span>}
-            {request.product_url && (
-              <a href={request.product_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">🔗 Ver produto</a>
-            )}
-          </div>
-        )}
-
-        <div>
-          <label className="block text-sm font-medium mb-1">Produto / Descrição *</label>
-          <input type="text" value={toolName} onChange={(e) => setToolName(e.target.value)} required className={inputCls} />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-1">Fornecedor</label>
-          <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
-        </div>
-
-        {/* Cotação no WhatsApp: aparece quando o fornecedor escolhido está
-            cadastrado e tem telefone. O gestor clica e chama na hora de aprovar. */}
-        {(() => {
-          const matched = suppliers.find((s) => s.name === supplier);
-          if (!matched || !hasWhatsapp(matched.contact) || !toolName.trim()) return null;
-          return (
-            <button
-              type="button"
-              onClick={() => onAskSupplier({
-                to: matched.contact!,
-                name: matched.name,
-                message: supplierQuoteMessage({ toolName, quantity: qty, productUrl: request?.product_url }),
-              })}
-              className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-2 rounded-lg transition"
-            >
-              <WhatsappIcon className="w-4 h-4" /> Pedir cotação a {matched.name} no WhatsApp
-            </button>
-          );
-        })()}
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Data da compra</label>
-            <input type="date" value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} className={inputCls} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Forma de pagamento</label>
-            <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className={inputCls}>
-              <option value="">Selecionar...</option>
-              {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Valor unit. (R$)</label>
-            <input type="text" inputMode="decimal" value={unitValue} onChange={(e) => setUnitValue(e.target.value)} placeholder="0,00" className={inputCls} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Quantidade</label>
-            <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="1" className={inputCls} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Valor total</label>
-            <div className="w-full px-3 py-2.5 border border-border rounded-lg text-sm bg-gray-50 font-semibold text-primary">
-              {formatCurrency(total)}
-            </div>
-          </div>
-        </div>
-
-        <WarehouseDestinationFields value={spec} onChange={(v) => { if (v.dest !== spec.dest) setCode(""); setSpec(v); }} quantity={qty} />
-        <CodeField dest={spec.dest} team={spec.team} value={code} name={toolName} onChange={setCode} onResolveName={setToolName} open={open} />
-
-        {/* Avisar o fornecedor no WhatsApp ao aprovar (opcional, sempre desmarcado).
-            Só habilita com fornecedor cadastrado e com telefone. */}
-        {(() => {
-          const matched = suppliers.find((s) => s.name === supplier);
-          const canNotify = !!matched && hasWhatsapp(matched.contact);
-          return (
-            <div className="border border-border rounded-lg p-3 bg-gray-50/60">
-              <label className={`flex items-start gap-2.5 ${canNotify ? "cursor-pointer" : "opacity-60 cursor-not-allowed"}`}>
-                <input type="checkbox" checked={canNotify && notifySupplier} disabled={!canNotify}
-                  onChange={(e) => setNotifySupplier(e.target.checked)} className="mt-0.5 w-4 h-4 accent-emerald-600" />
-                <span className="text-sm">
-                  <span className="font-medium inline-flex items-center gap-1.5"><WhatsappIcon className="w-4 h-4 text-emerald-600" /> Avisar o fornecedor no WhatsApp</span>
-                  <span className="block text-xs text-text-light mt-0.5">
-                    {canNotify
-                      ? `Ao concluir, abre a mensagem pronta${request?.image_url ? " (com a foto)" : ""} pra você revisar e enviar a ${matched!.name}.`
-                      : "Selecione um fornecedor cadastrado e com telefone (aba Fornecedores) pra habilitar."}
-                  </span>
-                </span>
-              </label>
-            </div>
-          );
-        })()}
-
-        <div className="flex gap-3 justify-end pt-2">
-          <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={saving}>{saving ? "Concluindo..." : "Aprovar e concluir"}</Button>
         </div>
       </form>
     </Modal>
