@@ -160,10 +160,9 @@ export async function POST(request: NextRequest) {
   let result: AiResult;
   try {
     const response = await client.beta.messages.create({
-      model: "claude-opus-5-5",
+      // Haiku: leitura de NF/cupom/boleto é extração simples — ~40x mais barato que o Opus.
+      model: "claude-haiku-5-5",
       max_tokens: 16000,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
       output_config: {
         effort: "medium",
         format: { type: "json_schema", schema: RESULT_SCHEMA },
