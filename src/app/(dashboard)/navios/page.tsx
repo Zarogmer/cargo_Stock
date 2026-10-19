@@ -272,6 +272,9 @@ export default function NaviosPage() {
   // Quando marcado, todo funcionário ATIVO do setor ADMINISTRATIVO com telefone
   // entra no grupo do WhatsApp (mas NÃO é escalado — admin não trabalha no navio).
   const [includeAdminSector, setIncludeAdminSector] = useState(false);
+  // "Criar Grupo do navio" (Embarque): cria um grupo no WhatsApp só com o setor
+  // ADMINISTRATIVO inteiro + o(s) supervisor(es) escalado(s). Desmarcado por padrão.
+  const [createShipGroup, setCreateShipGroup] = useState(false);
   const [groupSearch, setGroupSearch] = useState("");
   const [groupWarning, setGroupWarning] = useState<string | null>(null);
   // Per-employee function chosen by the user (employeeId → functionId as string)
@@ -623,6 +626,7 @@ export default function NaviosPage() {
     setCreateGroup(false);
     setGroupParticipants(new Set());
     setIncludeAdminSector(false);
+    setCreateShipGroup(false);
     setGroupSearch("");
     setGroupWarning(null);
     setGroupPerEmpFn(new Map());
@@ -640,6 +644,7 @@ export default function NaviosPage() {
     setCreateGroup(false);
     setGroupParticipants(new Set());
     setIncludeAdminSector(false);
+    setCreateShipGroup(false);
     setGroupSearch("");
     setGroupWarning(null);
     setGroupPerEmpFn(new Map());
@@ -1030,6 +1035,43 @@ export default function NaviosPage() {
         setGroupWarning(
           "Navio criado, mas o pagamento financeiro não foi gerado — sem ele não é possível escalar. Tente em Pagamento de Embarque → Sincronizar navios.",
         );
+      }
+
+      // 2b) "Criar Grupo do navio" (só Embarque): grupo próprio do navio com
+      //     todo o Administrativo ativo + o(s) supervisor(es) escalado(s). Usa o
+      //     mesmo POST do Costado (cria, promove o Administrativo a admin,
+      //     vincula em ships.whatsapp_group_jid e manda as boas-vindas). Falha
+      //     é só aviso — navio e escala já foram criados.
+      if (!isCostado && createGroup && createShipGroup && newShipId) {
+        const adminIds = employees
+          .filter((e) => (e.status ?? "ATIVO") === "ATIVO" && e.sector === "ADMINISTRATIVO")
+          .map((e) => e.id);
+        const supervisorIds = Array.from(groupParticipants).filter(
+          (id) => supervisorFnIds.has(groupPerEmpFn.get(id) || "") || supervisorFnIds.has(groupPerEmpFn2.get(id) || ""),
+        );
+        const memberIds = Array.from(new Set<number>([...adminIds, ...supervisorIds])).filter(
+          (id) => (employees.find((e) => e.id === id)?.phone || "").trim().length > 0,
+        );
+        const phones = memberIds.map((id) => employees.find((e) => e.id === id)?.phone || "");
+        if (phones.length === 0) {
+          setGroupWarning((prev) => prev || "Navio criado, mas ninguém do Administrativo nem o supervisor tem telefone pra criar o grupo do navio.");
+        } else {
+          try {
+            const res = await fetch("/api/whatsapp/groups", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ subject: payload.name, participants: phones, shipId: newShipId, employeeIds: memberIds }),
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              setGroupWarning((prev) => prev || `Navio criado, mas o grupo do navio no WhatsApp falhou: ${body.error || `HTTP ${res.status}`}`);
+            } else if (body.status === "partial" && body.warning) {
+              setGroupWarning((prev) => prev || body.warning);
+            }
+          } catch (err) {
+            setGroupWarning((prev) => prev || `Navio criado, mas falha ao criar o grupo do navio: ${(err as Error).message}`);
+          }
+        }
       }
 
       // 3) WhatsApp: comportamento diverge por tipo de operação.
@@ -2533,6 +2575,25 @@ export default function NaviosPage() {
                         idleHint="Apenas escala — nenhum grupo será avisado."
                       />
                     )
+                  )}
+
+                  {createGroup && form.operation_type !== "COSTADO" && (
+                    <label className="flex items-start gap-2 bg-white border border-border rounded-lg px-3 py-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={createShipGroup}
+                        onChange={(e) => setCreateShipGroup(e.target.checked)}
+                        className="h-4 w-4 mt-0.5 accent-emerald-600"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-text">💬 Criar Grupo do navio</span>
+                        <span className="block text-[11px] text-text-light">
+                          {createShipGroup
+                            ? "Cria um grupo no WhatsApp com o nome do navio: todo o Administrativo + o supervisor escalado."
+                            : "Nenhum grupo do navio será criado."}
+                        </span>
+                      </span>
+                    </label>
                   )}
 
                   {createGroup && sendWhats && form.operation_type === "EMBARQUE" && (
