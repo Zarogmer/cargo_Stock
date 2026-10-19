@@ -46,6 +46,9 @@ export interface NotifyConfig {
   // Disparado pelo "Enviar lista pro WhatsApp" da aba Embarque
   // (/api/embarque/notify) — posta a lista de materiais + rancho no grupo.
   embarqueLista: RetornoNotifyTarget;
+  // Disparado ao salvar compra(s) no Controle de Compras (Nova Compra,
+  // Escanear, Importar PDF) — /api/compras/notify posta a lista no grupo.
+  compraRegistrada: RetornoNotifyTarget;
 }
 
 // Defaults = comportamento legado. Nova solicitação avisa os SUPERVISOR por DM;
@@ -56,6 +59,7 @@ export function defaultNotifyConfig(): NotifyConfig {
     compraConcluida: { groups: [], functions: [] },
     retornoMaterial: { groups: [], functions: [], enabled: true, dmAdmin: false },
     embarqueLista: { groups: [], functions: [], enabled: true, dmAdmin: false },
+    compraRegistrada: { groups: [], functions: [], enabled: true, dmAdmin: false },
   };
 }
 
@@ -142,6 +146,11 @@ export function sanitizeNotifyConfig(raw: unknown): NotifyConfig {
       ...sanitizeTarget(r.embarqueLista, def.embarqueLista),
       enabled: enabledOf(r.embarqueLista),
       dmAdmin: dmAdminOf(r.embarqueLista),
+    },
+    compraRegistrada: {
+      ...sanitizeTarget(r.compraRegistrada, def.compraRegistrada),
+      enabled: enabledOf(r.compraRegistrada),
+      dmAdmin: dmAdminOf(r.compraRegistrada),
     },
   };
 }

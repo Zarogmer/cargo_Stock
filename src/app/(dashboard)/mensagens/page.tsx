@@ -34,7 +34,7 @@ type Mode = "colaboradores" | "manual" | "grupo";
 interface NotifyGroup { jid: string; label: string | null }
 interface NotifyTarget { groups: NotifyGroup[]; functions: string[] }
 interface RetornoNotifyTarget extends NotifyTarget { enabled: boolean; dmAdmin: boolean }
-interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget; retornoMaterial: RetornoNotifyTarget; embarqueLista: RetornoNotifyTarget }
+interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget; retornoMaterial: RetornoNotifyTarget; embarqueLista: RetornoNotifyTarget; compraRegistrada: RetornoNotifyTarget }
 interface EmployeeRoleLite { id: number; name: string; phone: string | null; role: string | null; status: string | null; sector: string | null }
 
 // Templates de dados ao vivo que o usuário pode inserir no texto antes de enviar
@@ -1060,13 +1060,14 @@ export default function MensagensPage() {
         </form>
       </section>
 
-      {/* Avisos automáticos (lista de embarque e retorno de material). Os de
-          Solicitações/Compra concluída saíram junto com a aba Solicitações. */}
+      {/* Avisos automáticos (lista de embarque, retorno de material e compras
+          registradas). Os de Solicitações/Compra concluída saíram junto com a
+          aba Solicitações. */}
       <section className="bg-card rounded-2xl border border-border p-6 space-y-4">
         <div>
           <h2 className="text-lg font-bold text-text">Avisos automáticos 📦</h2>
           <p className="text-sm text-text-light">
-            Escolha pra onde vão os avisos automáticos da lista de embarque e do retorno de material.
+            Escolha pra onde vão os avisos automáticos da lista de embarque, do retorno de material e das compras registradas.
             Clique em &ldquo;ver quem está&rdquo; pra conferir os colaboradores de cada função.
           </p>
         </div>
@@ -1216,6 +1217,82 @@ export default function MensagensPage() {
                 <span>Mandar também pro <strong>Administrativo</strong> (WhatsApp de cada um)</span>
               </label>
               {notifyCfg.retornoMaterial?.dmAdmin === true && (
+                <div className="bg-gray-50 border border-border rounded-lg px-3 py-2">
+                  <p className="text-[11px] font-medium text-text-light mb-1">Quem recebe (setor Administrativo, ativos):</p>
+                  {adminStaff.length === 0 ? (
+                    <p className="text-xs text-amber-700">Ninguém ativo no setor Administrativo.</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {adminStaff.map((m) => {
+                        const hasPhone = !!m.phone && m.phone.trim().length >= 10;
+                        return (
+                          <div key={m.id} className="flex items-center gap-2 text-xs">
+                            <span className="flex-1">{m.name}</span>
+                            {hasPhone ? (
+                              <span className="font-mono text-text-light">{formatPhone(m.phone || "")}</span>
+                            ) : (
+                              <span className="text-amber-700">sem telefone</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="border border-border rounded-xl p-4 space-y-3">
+              <div>
+                <p className="text-sm font-semibold">🛒 Compras registradas</p>
+                <p className="text-[11px] text-text-light">
+                  Disparado ao salvar compra(s) no Controle › Controle de Compras (Nova Compra, Escanear
+                  ou Importar PDF) — posta fornecedor, data, pagamento e a lista de itens com o total.
+                </p>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm font-medium cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={notifyCfg.compraRegistrada?.enabled !== false}
+                  onChange={(e) => setNotifyCfg((c) => {
+                    if (!c) return c;
+                    const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                    return { ...c, compraRegistrada: { ...prev, enabled: e.target.checked } };
+                  })}
+                  disabled={savingCfg}
+                  className="w-4 h-4"
+                />
+                <span>Enviar a lista de compras ao salvar</span>
+              </label>
+
+              <GroupMultiSelect
+                selected={notifyCfg.compraRegistrada?.groups ?? []}
+                onChange={(gs) => setNotifyCfg((c) => {
+                  if (!c) return c;
+                  const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                  return { ...c, compraRegistrada: { ...prev, groups: gs } };
+                })}
+                groups={groups}
+                disabled={savingCfg || notifyCfg.compraRegistrada?.enabled === false}
+                label="Grupos de destino"
+                hint="A lista vai pra cada grupo marcado. Sem grupo (e sem a caixinha abaixo) a compra é salva sem aviso."
+              />
+
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={notifyCfg.compraRegistrada?.dmAdmin === true}
+                  onChange={(e) => setNotifyCfg((c) => {
+                    if (!c) return c;
+                    const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                    return { ...c, compraRegistrada: { ...prev, dmAdmin: e.target.checked } };
+                  })}
+                  disabled={savingCfg || notifyCfg.compraRegistrada?.enabled === false}
+                  className="w-4 h-4"
+                />
+                <span>Mandar também pro <strong>Administrativo</strong> (WhatsApp de cada um)</span>
+              </label>
+              {notifyCfg.compraRegistrada?.dmAdmin === true && (
                 <div className="bg-gray-50 border border-border rounded-lg px-3 py-2">
                   <p className="text-[11px] font-medium text-text-light mb-1">Quem recebe (setor Administrativo, ativos):</p>
                   {adminStaff.length === 0 ? (

@@ -668,6 +668,26 @@ export default function SolicitacoesPage() {
     return card;
   }, [profile, bankAccounts]);
 
+  // Posta a(s) compra(s) recém-salvas no WhatsApp (grupos do card "Compras
+  // registradas" em Mensagens). Best-effort: devolve o trecho pro toast, ou ""
+  // quando o aviso está desligado/sem grupo; falha nunca desfaz a compra.
+  async function notifyPurchasesWhatsapp(purchaseIds: string[]): Promise<string> {
+    if (purchaseIds.length === 0) return "";
+    try {
+      const r = await fetch("/api/compras/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ purchaseIds }),
+      });
+      const b = await r.json().catch(() => ({}));
+      if (b.status === "ok") return ` 📲 Enviado no WhatsApp${b.group ? ` (${b.group})` : ""}.`;
+      if (b.status === "error") return " ⚠️ Falhou ao enviar no WhatsApp.";
+      return "";
+    } catch {
+      return " ⚠️ Falhou ao enviar no WhatsApp.";
+    }
+  }
+
   async function handleSavePurchase(
     data: Partial<PurchaseOrder>,
     stock?: DestSpec | null,
@@ -741,6 +761,10 @@ export default function SolicitacoesPage() {
           } catch (stockErr: any) {
             setSaveError(`Compra salva, mas falhou ao lançar no Almoxarifado: ${stockErr?.message || String(stockErr)}`);
           }
+        }
+        if (newId) {
+          const wa = await notifyPurchasesWhatsapp([newId]);
+          if (wa) setSaveOk((prev) => `${prev || "✅ Compra registrada."}${wa}`);
         }
       }
       setShowPurchaseForm(false);
@@ -828,10 +852,11 @@ export default function SolicitacoesPage() {
         contasMsg = " ⚠️ Falhou ao lançar no Contas a Pagar — será lançado sozinho ao abrir a tela.";
       }
     }
+    const waMsg = await notifyPurchasesWhatsapp(ids);
     setScanOpen(false);
     setScanFiles(null);
     setSaveOk(
-      `✅ ${ids.length === 1 ? "Compra registrada" : `${ids.length} compras registradas`} pelo Escanear.${contasMsg}` +
+      `✅ ${ids.length === 1 ? "Compra registrada" : `${ids.length} compras registradas`} pelo Escanear.${contasMsg}${waMsg}` +
       (stockMsgs.length ? ` 📦 Almoxarifado: ${stockMsgs.join("; ")}.` : ""),
     );
     if (stockErrs.length) setSaveError(`Compras salvas, mas falhou ao lançar no Almoxarifado: ${stockErrs.join("; ")}`);
