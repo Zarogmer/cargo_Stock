@@ -60,6 +60,8 @@ const inputCls =
   "w-full px-2 py-1.5 border border-border rounded-lg text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:bg-gray-50 disabled:text-text-light";
 const labelCls = "block text-[11px] font-semibold uppercase tracking-wider text-text-light mb-1";
 const sectionCls = "bg-card border border-border rounded-xl p-4 space-y-3";
+// Rótulo dos números do funcionário quando a linha vira cartão (coluna estreita).
+const miniLabelCls = "@min-[27rem]:hidden block text-[9px] font-semibold uppercase tracking-wider text-text-light mb-0.5";
 
 interface ClosingRow {
   id: number;
@@ -626,8 +628,11 @@ export function FechamentoNavioPage({
 
   const disabled = !canEdit || loadingDoc;
 
+  // Layout por container query (largura da área de conteúdo, não da tela):
+  // assim o preview fica na lateral em notebook com zoom 125% / menu aberto,
+  // e o editor se rearruma sozinho quando a coluna dele fica estreita.
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 @container">
       {/* Seleção do navio */}
       <div className="bg-card border border-border rounded-xl p-4 flex flex-col md:flex-row md:items-end gap-3">
         <div className="flex-1 min-w-0">
@@ -695,7 +700,7 @@ export function FechamentoNavioPage({
                 <span className={`ml-3 ${msg.kind === "ok" ? "text-emerald-700" : "text-red-600"}`}>{msg.text}</span>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button variant="secondary" size="sm" onClick={() => handleExport("pdf")} disabled={loadingDoc || exporting != null} title="PDF da folha como está na tela (salva ou não)">
                 {exporting === "pdf" ? "Gerando…" : "📄 PDF"}
               </Button>
@@ -711,13 +716,15 @@ export function FechamentoNavioPage({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,460px)_minmax(0,1fr)] gap-4 items-start">
+          <div className="grid grid-cols-1 @min-[42rem]:grid-cols-[minmax(0,360px)_minmax(0,1fr)] @min-[60rem]:grid-cols-[minmax(0,420px)_minmax(0,1fr)] @min-[72rem]:grid-cols-[minmax(0,460px)_minmax(0,1fr)] gap-4 items-start">
             {/* ───────────── Editor ───────────── */}
-            <div className="space-y-4">
+            {/* Container próprio: abaixo de 27rem (celular, notebook pequeno)
+                as linhas viram "cartões" em vez de uma linha só. */}
+            <div className="space-y-4 @container">
               {/* Cabeçalho */}
               <section className={sectionCls}>
                 <h3 className="text-sm font-bold text-text">Cabeçalho</h3>
-                <div className="grid grid-cols-[72px_1fr] gap-2">
+                <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
                   <div>
                     <label className={labelCls}>Nº</label>
                     <input className={inputCls} value={doc.number} disabled={disabled} onChange={(e) => update({ number: e.target.value })} />
@@ -727,7 +734,7 @@ export function FechamentoNavioPage({
                     <input className={inputCls} value={doc.ship_name} disabled={disabled} onChange={(e) => update({ ship_name: e.target.value })} />
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-[64px_minmax(0,1fr)_minmax(0,1fr)] @min-[27rem]:grid-cols-3 gap-2">
                   <div>
                     <label className={labelCls} title="Multiplica a paga de todo mundo que é por porão">Porões</label>
                     <NumInput value={doc.holds_count} decimals={0} disabled={disabled} className="font-bold" onChange={(n) => update({ holds_count: Math.max(0, Math.round(n || 0)) })} />
@@ -741,16 +748,16 @@ export function FechamentoNavioPage({
                     <input className={inputCls} value={doc.port} disabled={disabled} onChange={(e) => update({ port: e.target.value })} />
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
+                <div className="grid grid-cols-2 @min-[27rem]:grid-cols-3 gap-2">
+                  <div className="min-w-0">
                     <label className={labelCls}>Início</label>
-                    <input type="date" className={inputCls} value={doc.start_date} disabled={disabled} onChange={(e) => update({ start_date: e.target.value })} />
+                    <input type="date" className={`${inputCls} min-w-0`} value={doc.start_date} disabled={disabled} onChange={(e) => update({ start_date: e.target.value })} />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <label className={labelCls}>Término</label>
-                    <input type="date" className={inputCls} value={doc.end_date} disabled={disabled} onChange={(e) => update({ end_date: e.target.value })} />
+                    <input type="date" className={`${inputCls} min-w-0`} value={doc.end_date} disabled={disabled} onChange={(e) => update({ end_date: e.target.value })} />
                   </div>
-                  <div>
+                  <div className="col-span-2 @min-[27rem]:col-span-1">
                     <label className={labelCls} title="Tipo da operação, como na aba Navios. Costado troca porões/carga por LIMPEZA DE COSTADO no título.">Serviço</label>
                     <select
                       className={inputCls}
@@ -818,8 +825,8 @@ export function FechamentoNavioPage({
                 </div>
                 <div className="space-y-2">
                   {doc.charges.map((c) => (
-                    <div key={c.id} className="grid grid-cols-[1fr_72px_110px_24px] gap-1.5 items-center">
-                      <input className={inputCls} placeholder={SERVICE_CHARGE_LABEL[closingServiceKind(doc)]} value={c.label} disabled={disabled} onChange={(e) => updateCharge(c.id, { label: e.target.value })} />
+                    <div key={c.id} className="grid grid-cols-[72px_minmax(0,1fr)_24px] @min-[27rem]:grid-cols-[minmax(0,1fr)_72px_110px_24px] gap-1.5 items-center">
+                      <input className={`${inputCls} col-span-3 @min-[27rem]:col-span-1`} placeholder={SERVICE_CHARGE_LABEL[closingServiceKind(doc)]} value={c.label} disabled={disabled} onChange={(e) => updateCharge(c.id, { label: e.target.value })} />
                       <select className={inputCls} value={c.currency} disabled={disabled} onChange={(e) => updateCharge(c.id, { currency: e.target.value === "USD" ? "USD" : "BRL" })}>
                         <option value="BRL">R$</option>
                         <option value="USD">USD</option>
@@ -880,23 +887,21 @@ export function FechamentoNavioPage({
                   Desc.: o que tirar desta pessoa (R$ 50 de material, vale…).
                   Agrupado pela função da escala; o nome é o colaborador do RH — trocar aqui troca na escala do navio ao salvar (e o que mudar na escala aparece aqui ao abrir). Remover daqui não tira da escala.
                 </p>
-                <div className="overflow-x-auto -mx-4 px-4">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-[10px] uppercase tracking-wider text-text-light">
-                        <th className="text-left font-semibold pb-1">Nome</th>
-                        <th className="text-right font-semibold pb-1 w-[84px]">Paga</th>
-                        <th className="text-right font-semibold pb-1 w-[52px]" title="Porões desta pessoa">Por.</th>
-                        <th className="text-right font-semibold pb-1 w-[76px]" title="Desconto desta pessoa, abatido do valor">Desc.</th>
-                        <th className="text-right font-semibold pb-1 w-[88px]">Valor</th>
-                        <th className="w-5" />
-                      </tr>
-                    </thead>
-                    <tbody>
+                {/* Linha larga: nome | paga | por. | desc. | valor | ×.
+                    Estreita (celular): nome + × em cima, os números embaixo
+                    com rótulo próprio. */}
+                <div className="text-xs">
+                  <div className="hidden @min-[27rem]:grid grid-cols-[minmax(0,1fr)_64px_38px_54px_70px_16px] gap-1 text-[10px] uppercase tracking-wider text-text-light font-semibold pb-1">
+                    <div>Nome</div>
+                    <div className="text-right">Paga</div>
+                    <div className="text-right" title="Porões desta pessoa">Por.</div>
+                    <div className="text-right" title="Desconto desta pessoa, abatido do valor">Desc.</div>
+                    <div className="text-right">Valor</div>
+                    <div />
+                  </div>
                       {workerGroups.map((g) => (
                         <Fragment key={g.key}>
-                          <tr>
-                            <td colSpan={6} className="pt-2.5 pb-1">
+                          <div className="pt-2.5 pb-1">
                               <div className="flex items-center justify-between border-b border-border pb-0.5">
                                 <span className="text-[10px] font-bold uppercase tracking-wider text-primary">
                                   {g.function_name || "Sem função"} <span className="font-normal text-text-light">({g.rows.length})</span>
@@ -905,8 +910,7 @@ export function FechamentoNavioPage({
                                   + pessoa
                                 </button>
                               </div>
-                            </td>
-                          </tr>
+                          </div>
                           {g.rows.map(({ worker: w, index: i }) => {
                         // Porões em branco no documento = os do navio; a caixa
                         // mostra o número cheio e só grava quando difere.
@@ -919,16 +923,16 @@ export function FechamentoNavioPage({
                         const rowOptions = (w.function_name || "").trim().toUpperCase() === "SUPERVISOR" ? supervisorOptions : employeeOptions;
                         const inList = w.employee_id != null && rowOptions.some((e) => e.id === w.employee_id);
                         return (
-                        <tr key={w.id} className="align-middle">
-                          <td className="py-0.5 pr-1">
+                        <div key={w.id} className="grid grid-cols-[minmax(0,1fr)_44px_minmax(0,1fr)_72px] @min-[27rem]:grid-cols-[minmax(0,1fr)_64px_38px_54px_70px_16px] gap-x-1.5 gap-y-1 @min-[27rem]:gap-x-1 items-center py-1.5 border-b border-border/60 last:border-b-0 @min-[27rem]:py-0.5 @min-[27rem]:border-b-0">
+                          <div className="col-span-3 @min-[27rem]:col-span-1 min-w-0">
                             {typingIds.has(w.id) ? (
-                              <div className="flex items-center gap-1 min-w-[180px]">
+                              <div className="flex items-center gap-1">
                                 <input className={`${inputCls} py-1`} value={w.name} disabled={disabled} placeholder="NOME" autoFocus onChange={(e) => updateWorker(w.id, { name: e.target.value, employee_id: null })} />
                                 <button type="button" className="text-xs text-primary hover:underline shrink-0" title="Voltar a escolher do RH" disabled={disabled} onClick={() => setTypingIds((prev) => { const n = new Set(prev); n.delete(w.id); return n; })}>lista</button>
                               </div>
                             ) : (
                               <select
-                                className={`${inputCls} py-1 min-w-[180px] ${w.employee_id == null && w.name ? "text-amber-800" : ""}`}
+                                className={`${inputCls} py-1 ${w.employee_id == null && w.name ? "text-amber-800" : ""}`}
                                 value={w.employee_id != null ? String(w.employee_id) : w.name ? "__cur" : ""}
                                 disabled={disabled}
                                 title={[w.note, w.employee_id == null && w.name ? "Nome digitado — não está ligado ao RH" : ""].filter(Boolean).join(" · ") || undefined}
@@ -953,11 +957,13 @@ export function FechamentoNavioPage({
                             {pendingNew && (
                               <div className="text-[10px] text-amber-700 leading-tight mt-0.5">entra na escala ao salvar</div>
                             )}
-                          </td>
-                          <td className="py-0.5 pr-1">
+                          </div>
+                          <div className="min-w-0">
+                            <span className={miniLabelCls}>Paga</span>
                             <NumInput value={w.rate} className="py-1 px-1.5" disabled={disabled} onChange={(n) => updateWorker(w.id, { rate: n || 0 })} />
-                          </td>
-                          <td className="py-0.5 pr-1">
+                          </div>
+                          <div className="min-w-0">
+                            <span className={miniLabelCls} title="Porões desta pessoa">Por.</span>
                             {w.mode === "FIXO" ? (
                               <input className={`${inputCls} py-1 px-1.5 text-right`} value="—" disabled readOnly />
                             ) : (
@@ -972,34 +978,31 @@ export function FechamentoNavioPage({
                                 }}
                               />
                             )}
-                          </td>
-                          <td className="py-0.5 pr-1">
+                          </div>
+                          <div className="min-w-0">
+                            <span className={miniLabelCls} title="Desconto desta pessoa, abatido do valor">Desc.</span>
                             <NumInput value={w.discount} className={`py-1 px-1.5 ${w.discount ? "text-red-700" : ""}`} disabled={disabled} onChange={(n) => updateWorker(w.id, { discount: Math.max(0, n || 0) })} />
-                          </td>
-                          <td className="py-0.5 text-right font-semibold tabular-nums whitespace-nowrap" title={extra !== 0 ? `Inclui ${extra > 0 ? "+" : ""}${formatNumberBR(extra)} de rateio/adicional da escala` : undefined}>
+                          </div>
+                          <div className="text-right font-semibold tabular-nums whitespace-nowrap" title={extra !== 0 ? `Inclui ${extra > 0 ? "+" : ""}${formatNumberBR(extra)} de rateio/adicional da escala` : undefined}>
+                            <span className={miniLabelCls}>Valor</span>
                             {formatNumberBR(totals.workerValues[i])}
                             {extra !== 0 && <div className="text-[10px] font-normal text-amber-700 leading-none">incl. {extra > 0 ? "+" : ""}{formatNumberBR(extra)}</div>}
-                          </td>
-                          <td className="py-0.5 text-center">
-                            <button type="button" className="text-text-light hover:text-red-600 text-base leading-none" title="Remover desta folha (não tira da escala)" disabled={disabled} onClick={() => update({ workers: doc.workers.filter((x) => x.id !== w.id) })}>×</button>
-                          </td>
-                        </tr>
+                          </div>
+                          <div className="col-start-4 row-start-1 justify-self-end @min-[27rem]:col-start-auto @min-[27rem]:row-start-auto @min-[27rem]:justify-self-center">
+                            <button type="button" className="text-text-light hover:text-red-600 text-lg @min-[27rem]:text-base leading-none px-1 @min-[27rem]:px-0" title="Remover desta folha (não tira da escala)" disabled={disabled} onClick={() => update({ workers: doc.workers.filter((x) => x.id !== w.id) })}>×</button>
+                          </div>
+                        </div>
                         );
                       })}
                         </Fragment>
                       ))}
                       {doc.workers.length === 0 && (
-                        <tr><td colSpan={6} className="py-2 text-xs text-text-light">Ninguém na folha — use “+ pessoa em…”.</td></tr>
+                        <p className="py-2 text-xs text-text-light">Ninguém na folha — use “+ pessoa em…”.</p>
                       )}
-                    </tbody>
-                    <tfoot>
-                      <tr className="border-t border-border">
-                        <td colSpan={4} className="pt-1.5 text-right font-bold uppercase text-text-light">Equipe</td>
-                        <td className="pt-1.5 text-right font-bold tabular-nums whitespace-nowrap">{formatNumberBR(totals.equipe)}</td>
-                        <td />
-                      </tr>
-                    </tfoot>
-                  </table>
+                  <div className="flex items-center justify-end gap-3 border-t border-border mt-1 pt-1.5 font-bold @min-[27rem]:pr-5">
+                    <span className="uppercase text-text-light">Equipe</span>
+                    <span className="tabular-nums whitespace-nowrap">{formatNumberBR(totals.equipe)}</span>
+                  </div>
                 </div>
               </section>
 
@@ -1058,7 +1061,7 @@ export function FechamentoNavioPage({
                           <tr key={a.id} className="align-middle">
                             <td className="py-0.5 pr-1">
                               <input
-                                className={`${inputCls} py-1 min-w-[180px]`}
+                                className={`${inputCls} py-1 min-w-[140px]`}
                                 value={a.name}
                                 disabled={disabled || emp != null}
                                 placeholder="NOME"
@@ -1143,9 +1146,9 @@ export function FechamentoNavioPage({
             </div>
 
             {/* ───────────── Folha (preview) ───────────── */}
-            <div className="space-y-3 xl:sticky xl:top-4">
+            <div className="space-y-3 @container @min-[42rem]:sticky @min-[42rem]:top-4">
               <ClosingSheet doc={doc} totals={totals} />
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 @min-[28rem]:grid-cols-3 gap-2">
                 <ResultCard label="Receita (R$)" value={formatBRL(totals.totalBRL)} tone="blue" hint={totals.hasUSD ? `${formatUSD(totals.usdTotal)} × ${doc.exchange_rate ? formatNumberBR(doc.exchange_rate, 4) : "taxa?"}` : undefined} />
                 <ResultCard label="Custo total" value={formatBRL(totals.totalGeral)} tone="red" />
                 <ResultCard
@@ -1200,31 +1203,31 @@ function ClosingSheet({ doc, totals }: { doc: ClosingDoc; totals: ReturnType<typ
   let rowNo = 0;
   const cell = "border border-black px-2 py-1";
   return (
-    <div className="bg-white text-black rounded-xl border border-border shadow-sm p-6 md:p-8 overflow-x-auto">
+    <div className="bg-white text-black rounded-xl border border-border shadow-sm p-4 @min-[34rem]:p-8 overflow-x-auto">
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src="/cargo-logo.png" alt="Cargo Ships Cleaning" className="h-16 md:h-20 w-auto mb-5" />
+      <img src="/cargo-logo.png" alt="Cargo Ships Cleaning" className="h-12 @min-[34rem]:h-20 w-auto mb-5" />
 
-      <div className="font-serif text-base md:text-lg font-bold tracking-wide mb-3">{totals.title || "—"}</div>
-      <div className="text-sm md:text-base uppercase mb-2">
+      <div className="font-serif text-base @min-[34rem]:text-lg font-bold tracking-wide mb-3">{totals.title || "—"}</div>
+      <div className="text-sm @min-[34rem]:text-base uppercase mb-2">
         CLIENTE: {doc.client || "—"}{doc.supervisor ? <> - SUPERVISOR&nbsp; {doc.supervisor}</> : null}
       </div>
       {doc.charges.map((c) => (
-        <div key={c.id} className="text-sm md:text-base uppercase mb-2">{chargeLine(c)}</div>
+        <div key={c.id} className="text-sm @min-[34rem]:text-base uppercase mb-2">{chargeLine(c)}</div>
       ))}
 
       {totals.hasUSD ? (
         <div className="mt-3 mb-2 space-y-1">
-          <div className="flex items-baseline justify-between gap-4 text-sm md:text-base uppercase">
+          <div className="flex items-baseline justify-between gap-4 text-sm @min-[34rem]:text-base uppercase">
             <span>TAXA DO DOLLAR R$ {doc.exchange_rate ? formatNumberBR(doc.exchange_rate, 4) : "—"} total serviço USD:</span>
-            <span className="font-serif text-xs md:text-sm whitespace-nowrap">{formatUSD(totals.usdTotal)}</span>
+            <span className="font-serif text-xs @min-[34rem]:text-sm whitespace-nowrap">{formatUSD(totals.usdTotal)}</span>
           </div>
-          <div className="flex items-baseline justify-between gap-4 text-sm md:text-base">
+          <div className="flex items-baseline justify-between gap-4 text-sm @min-[34rem]:text-base">
             <span>Total em Real:</span>
-            <span className="font-serif text-xs md:text-sm whitespace-nowrap">{formatBRL(totals.totalBRL)}</span>
+            <span className="font-serif text-xs @min-[34rem]:text-sm whitespace-nowrap">{formatBRL(totals.totalBRL)}</span>
           </div>
         </div>
       ) : doc.charges.length > 1 ? (
-        <div className="mt-3 mb-2 text-sm md:text-base uppercase">TOTAL COBRADO: R$ {formatNumberBR(totals.totalBRL)}</div>
+        <div className="mt-3 mb-2 text-sm @min-[34rem]:text-base uppercase">TOTAL COBRADO: R$ {formatNumberBR(totals.totalBRL)}</div>
       ) : null}
 
       <table className="font-serif text-sm border-collapse w-full max-w-xl mt-2">
@@ -1235,7 +1238,7 @@ function ClosingSheet({ doc, totals }: { doc: ClosingDoc; totals: ReturnType<typ
               <tr key={w.id}>
                 <td className={`${cell} w-8 text-center`}>{rowNo}</td>
                 <td className={`${cell} uppercase`}>{w.name || <span className="text-gray-400">—</span>}</td>
-                <td className={`${cell} w-32 text-center tabular-nums`}>{formatNumberBR(totals.workerValues[i])}</td>
+                <td className={`${cell} w-24 @min-[34rem]:w-32 text-center tabular-nums`}>{formatNumberBR(totals.workerValues[i])}</td>
               </tr>
             );
           })}
@@ -1245,7 +1248,7 @@ function ClosingSheet({ doc, totals }: { doc: ClosingDoc; totals: ReturnType<typ
             <tr key={a.id}>
               <td className={`${cell} w-8 text-center`}>{++rowNo}</td>
               <td className={`${cell} uppercase`}>{a.name || <span className="text-gray-400">—</span>}</td>
-              <td className={`${cell} w-32 text-center tabular-nums`}>{formatNumberBR(a.amount)}</td>
+              <td className={`${cell} w-24 @min-[34rem]:w-32 text-center tabular-nums`}>{formatNumberBR(a.amount)}</td>
             </tr>
           ))}
           <tr>
