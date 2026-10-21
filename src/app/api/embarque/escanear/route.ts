@@ -146,12 +146,10 @@ export async function POST(request: NextRequest) {
   let result: AiResult;
   try {
     const response = await client.beta.messages.create({
-      // Opus: número manuscrito + casar ~80 nomes abreviados — erro aqui vira
-      // estoque errado, então vale o modelo mais preciso (≈ US$ 0,20 por folha).
-      model: "claude-opus-5-5",
+      // Haiku: ~40x mais barato que o Opus (centavos por folha). A tela de
+      // conferência existe justamente pra corrigir o que a leitura errar.
+      model: "claude-haiku-5-5",
       max_tokens: 16000,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
       output_config: {
         effort: "medium",
         format: { type: "json_schema", schema: RESULT_SCHEMA },
