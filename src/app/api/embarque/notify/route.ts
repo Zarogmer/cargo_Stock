@@ -12,6 +12,7 @@ import {
   extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { readNotifyConfig } from "@/lib/services/solicitacoes-notify-config";
+import { notifyTemplateFor, renderNotifyTemplate } from "@/lib/notify-message-templates";
 import { unitShort } from "@/lib/stock-units";
 import { xlsxToPdf } from "@/lib/docx-to-pdf";
 import { buildEmbarkChecklistXlsx, checklistFileName } from "@/lib/embark-checklist-xlsx";
@@ -47,9 +48,9 @@ function isManutencaoGroup(label: string | null): boolean {
 }
 
 // Lista de embarque da equipe: materiais do kit + comida do Rancho, com as
-// quantidades que vão pro navio. Vai pro grupo escolhido em Mensagens.
-function buildMessage(b: NotifyBody): string {
-  const team = b.team ? ` · ${TEAM_LABEL[b.team] || b.team}` : "";
+// quantidades que vão pro navio. Vai pro grupo escolhido em Mensagens, no texto
+// do card "Lista de embarque" (ou o padrão).
+function buildMessage(b: NotifyBody, template: string | null): string {
   const fmtQty = (q: number) => (Number.isInteger(q) ? String(q) : String(q).replace(".", ","));
   // "10 kg" / "25 un" — a unidade vem do cadastro do item no Almoxarifado.
   const line = (i: ListItem) => {
@@ -59,17 +60,17 @@ function buildMessage(b: NotifyBody): string {
   const mat = (b.materials || []).map(line);
   const ran = (b.rancho || []).map(line);
   const isEmbark = b.event === "embarque";
-  const header = isEmbark ? `⚓ *Embarque confirmado*` : `📦 *Lista de embarque*`;
-  const by = b.sentBy?.trim()
-    ? `\n👤 ${isEmbark ? "Embarcado" : "Enviado"} por: ${b.sentBy.trim()}`
-    : "";
-  return (
-    `${header}\n\n` +
-    `🚢 Navio: *${b.shipName}*${team}\n` +
-    (mat.length ? `\n🧰 *Materiais (${mat.length})*\n${mat.join("\n")}\n` : "") +
-    (ran.length ? `\n🛒 *Rancho (${ran.length})*\n${ran.join("\n")}\n` : "") +
-    by
-  );
+  return renderNotifyTemplate(notifyTemplateFor("embarqueLista", template), {
+    titulo: isEmbark ? "⚓ *Embarque confirmado*" : "📦 *Lista de embarque*",
+    navio: b.shipName,
+    equipe: b.team ? TEAM_LABEL[b.team] || b.team : null,
+    qtd_materiais: mat.length ? String(mat.length) : null,
+    materiais: mat.join("\n"),
+    qtd_rancho: ran.length ? String(ran.length) : null,
+    rancho: ran.join("\n"),
+    acao: isEmbark ? "Embarcado" : "Enviado",
+    enviado_por: b.sentBy?.trim() || null,
+  });
 }
 
 // POST /api/embarque/notify — posta a lista de embarque no(s) grupo(s)
@@ -114,9 +115,9 @@ export async function POST(request: NextRequest) {
 
   // Mensagem completa (materiais + Rancho) e a variante sem Rancho pros grupos
   // de Manutenção — eles só cuidam do material.
-  const message = buildMessage(body);
+  const message = buildMessage(body, cfg.template);
   const hasRancho = Array.isArray(body.rancho) && body.rancho.length > 0;
-  const messageSemRancho = hasRancho ? buildMessage({ ...body, rancho: [] }) : message;
+  const messageSemRancho = hasRancho ? buildMessage({ ...body, rancho: [] }, cfg.template) : message;
   const senderId = session.user.id || null;
 
   // Lista preenchida em PDF (layout da Relação, com timbrado) pra ir como

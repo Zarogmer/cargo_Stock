@@ -8,6 +8,7 @@ import {
   extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { readNotifyConfig } from "@/lib/services/solicitacoes-notify-config";
+import { notifyTemplateFor, renderNotifyTemplate } from "@/lib/notify-message-templates";
 import { unitShort } from "@/lib/stock-units";
 
 type IncidentKind = "perdido" | "insumo" | "avariado";
@@ -97,30 +98,21 @@ function incidentSections(items: BrokenItem[]): string {
 // As ocorrências saem SEPARADAS em ❌ Perdido / 🛢️ Insumo / 🔧 Avariado:
 // perdido não voltou (vira custo do navio), insumo foi consumido de propósito,
 // avariado voltou quebrado (a equipe trouxe).
-function buildMessage(b: NotifyBody): string {
-  const team = b.team ? ` · ${TEAM_LABEL[b.team] || b.team}` : "";
-  const extra = b.notes?.trim() ? `\n📝 ${b.notes.trim()}\n` : "";
-  const by = b.checkedBy?.trim() ? `\n👤 Conferido por: ${b.checkedBy.trim()}` : "";
+//
+// O texto segue o modelo do card "Retorno de material" em Mensagens (ou o padrão).
+function buildMessage(b: NotifyBody, template: string | null): string {
   const sections = incidentSections(b.brokenItems);
-
-  if (b.event === "resumo") {
-    const n = (b.returnedItems || []).length;
-    const returnedLine = n ? `✔️ Voltou em bom estado: ${n} ${n === 1 ? "item" : "itens"}\n\n` : "";
-    return (
-      `✅ *Retorno confirmado*\n\n` +
-      `🚢 Navio: *${b.shipName}*${team}\n\n` +
-      returnedLine +
-      (sections ? sections + "\n" : "✅ Nada perdido, consumido ou avariado.\n") +
-      extra + by
-    );
-  }
-
-  return (
-    `🛠️ *Retorno de material*\n\n` +
-    `🚢 Navio: *${b.shipName}*${team}\n\n` +
-    (sections || "Nada perdido, consumido ou avariado.") +
-    "\n" + extra + by
-  );
+  const isResumo = b.event === "resumo";
+  const n = (b.returnedItems || []).length;
+  return renderNotifyTemplate(notifyTemplateFor("retornoMaterial", template), {
+    titulo: isResumo ? "✅ *Retorno confirmado*" : "🛠️ *Retorno de material*",
+    navio: b.shipName,
+    equipe: b.team ? TEAM_LABEL[b.team] || b.team : null,
+    voltou_bem: isResumo && n ? `${n} ${n === 1 ? "item" : "itens"}` : null,
+    ocorrencias: sections || `${isResumo ? "✅ " : ""}Nada perdido, consumido ou avariado.`,
+    observacao: b.notes?.trim() || null,
+    conferido_por: b.checkedBy?.trim() || null,
+  });
 }
 
 // POST /api/retorno/notify — manda a lista de quebrados por DM pro pessoal do
@@ -170,7 +162,7 @@ export async function POST(request: NextRequest) {
     }, { status: 200 });
   }
 
-  const message = buildMessage(body);
+  const message = buildMessage(body, cfg.template);
   const groupResults: { name: string; ok: boolean; error?: string }[] = [];
   for (const g of targetGroups) {
     const groupName = g.label || g.jid;

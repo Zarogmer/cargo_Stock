@@ -8,6 +8,7 @@ import {
   extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { readNotifyConfig } from "@/lib/services/solicitacoes-notify-config";
+import { notifyTemplateFor, renderNotifyTemplate } from "@/lib/notify-message-templates";
 import { formatCurrency, formatQty } from "@/lib/utils";
 
 interface NotifyBody {
@@ -50,28 +51,26 @@ function paymentLabel(p: Purchase): string | null {
 }
 
 // Uma mensagem por lote salvo (as compras de uma nota têm o mesmo cabeçalho;
-// a Nova Compra manda uma só). Cabeçalho sai da 1ª compra.
-function buildMessage(items: Purchase[]): string {
+// a Nova Compra manda uma só). Cabeçalho sai da 1ª compra. O texto segue o
+// modelo do card "Compras registradas" em Mensagens (ou o padrão).
+function buildMessage(items: Purchase[], template: string | null): string {
   const head = items[0];
   const total = items.reduce((s, p) => s + (p.total_value || 0), 0);
   const lines = items.map((p) => {
     const qty = p.quantity !== 1 ? `${formatQty(p.quantity)} × ${formatCurrency(p.unit_value)} = ` : "";
     return `• ${p.description} — ${qty}${formatCurrency(p.total_value)}`;
   });
-  const pay = paymentLabel(head);
-  return [
-    `🛒 *${items.length === 1 ? "Compra registrada" : `${items.length} compras registradas`}*`,
-    "",
-    head.supplier ? `🏪 Fornecedor: *${head.supplier}*` : null,
-    head.purchase_date ? `📅 Data: ${fmtDate(head.purchase_date)}` : null,
-    head.ship_name ? `🚢 Navio: ${head.ship_name}` : null,
-    pay ? `💳 Pagamento: ${pay}` : null,
-    "",
-    ...lines,
-    "",
-    `💰 *Total: ${formatCurrency(total)}*`,
-    head.created_by ? `\n👤 Registrado por: ${head.created_by}` : null,
-  ].filter((l) => l !== null).join("\n");
+  return renderNotifyTemplate(notifyTemplateFor("compraRegistrada", template), {
+    titulo: items.length === 1 ? "Compra registrada" : `${items.length} compras registradas`,
+    fornecedor: head.supplier,
+    data: head.purchase_date ? fmtDate(head.purchase_date) : null,
+    navio: head.ship_name,
+    pagamento: paymentLabel(head),
+    itens: lines.join("\n"),
+    qtd_itens: String(items.length),
+    total: formatCurrency(total),
+    registrado_por: head.created_by,
+  });
 }
 
 // POST /api/compras/notify — chamado pelo Controle de Compras depois de salvar
@@ -120,7 +119,7 @@ export async function POST(request: NextRequest) {
   const order = new Map(ids.map((id, i) => [id, i]));
   rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 
-  const message = buildMessage(rows);
+  const message = buildMessage(rows, cfg.template);
   const groupResults: { name: string; ok: boolean; error?: string }[] = [];
   for (const g of cfg.groups) {
     const groupName = g.label || g.jid;

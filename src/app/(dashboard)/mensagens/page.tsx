@@ -6,6 +6,12 @@ import { db } from "@/lib/db";
 import { formatPhone, matchSearch } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import { hasModuleAccess } from "@/lib/rbac";
+import {
+  NOTIFY_TEMPLATES,
+  MAX_TEMPLATE_LENGTH,
+  renderNotifyTemplate,
+  type NotifyTemplateKind,
+} from "@/lib/notify-message-templates";
 
 interface StatusResponse {
   configured?: boolean;
@@ -33,7 +39,7 @@ type Mode = "colaboradores" | "manual" | "grupo";
 // pra não importar o módulo de servidor (que puxa o Prisma) no bundle do client.
 interface NotifyGroup { jid: string; label: string | null }
 interface NotifyTarget { groups: NotifyGroup[]; functions: string[] }
-interface RetornoNotifyTarget extends NotifyTarget { enabled: boolean; dmAdmin: boolean }
+interface RetornoNotifyTarget extends NotifyTarget { enabled: boolean; dmAdmin: boolean; template: string | null }
 interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget; retornoMaterial: RetornoNotifyTarget; embarqueLista: RetornoNotifyTarget; compraRegistrada: RetornoNotifyTarget }
 interface EmployeeRoleLite { id: number; name: string; phone: string | null; role: string | null; status: string | null; sector: string | null }
 
@@ -167,6 +173,156 @@ function GroupMultiSelect({
         )}
       </div>
       <p className="text-[11px] text-text-light mt-1">{hint}</p>
+    </div>
+  );
+}
+
+// Formatação do WhatsApp na prévia: *negrito*, _itálico_, ~riscado~. Monta nós
+// React (nada de innerHTML — o texto vem do usuário).
+function renderWhatsappInline(text: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  const re = /\*([^*\n]+)\*|_([^_\n]+)_|~([^~\n]+)~/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let i = 0;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1] != null) out.push(<strong key={i++}>{m[1]}</strong>);
+    else if (m[2] != null) out.push(<em key={i++}>{m[2]}</em>);
+    else out.push(<s key={i++}>{m[3]}</s>);
+    last = re.lastIndex;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+// Texto do aviso automático: prévia (com dados de exemplo) do que vai pro
+// WhatsApp e, ao clicar em "Editar texto", o modelo com as variáveis. null =
+// texto padrão; salva junto com o botão "Salvar configuração" da seção.
+function NotifyTemplateEditor({
+  kind,
+  value,
+  onChange,
+  disabled,
+}: {
+  kind: NotifyTemplateKind;
+  value: string | null;
+  onChange: (template: string | null) => void;
+  disabled: boolean;
+}) {
+  const spec = NOTIFY_TEMPLATES[kind];
+  const [editing, setEditing] = useState(false);
+  const [sampleIdx, setSampleIdx] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const template = value ?? spec.defaultTemplate;
+  const sample = spec.samples[Math.min(sampleIdx, spec.samples.length - 1)];
+  const preview = renderNotifyTemplate(template, sample.vars);
+
+  function setTemplate(text: string) {
+    onChange(text.trim() === "" || text === spec.defaultTemplate ? null : text);
+  }
+
+  // Insere {variavel} onde está o cursor (ou no fim).
+  function insertVar(key: string) {
+    const el = textareaRef.current;
+    const token = `{${key}}`;
+    const start = el ? el.selectionStart : template.length;
+    const end = el ? el.selectionEnd : template.length;
+    setTemplate(template.slice(0, start) + token + template.slice(end));
+    requestAnimationFrame(() => {
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(start + token.length, start + token.length);
+    });
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-xs font-medium text-text-light">
+          Mensagem enviada{value != null && (
+            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold">personalizada</span>
+          )}
+        </p>
+        <button
+          type="button"
+          onClick={() => setEditing((v) => !v)}
+          className="text-xs font-medium text-primary hover:underline"
+        >
+          {editing ? "Fechar edição" : "✏️ Editar texto"}
+        </button>
+      </div>
+
+      {spec.samples.length > 1 && (
+        <div className="flex flex-wrap gap-1">
+          {spec.samples.map((smp, i) => (
+            <button
+              key={smp.label}
+              type="button"
+              onClick={() => setSampleIdx(i)}
+              className={`text-[11px] px-2 py-0.5 rounded-full border ${
+                i === sampleIdx
+                  ? "bg-primary text-white border-primary"
+                  : "border-border text-text-light hover:bg-gray-50"
+              }`}
+            >
+              {smp.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="rounded-lg bg-[#e7f8d9] border border-[#cde9b8] px-3 py-2 text-[13px] leading-snug text-gray-900 whitespace-pre-wrap break-words">
+        {preview ? renderWhatsappInline(preview) : <span className="text-gray-500 italic">(mensagem vazia)</span>}
+      </div>
+      <p className="text-[10px] text-text-light">Prévia com dados de exemplo — no envio entram o navio, os itens e as pessoas de verdade.</p>
+
+      {editing && (
+        <div className="space-y-2 pt-1">
+          <textarea
+            ref={textareaRef}
+            value={template}
+            onChange={(e) => setTemplate(e.target.value)}
+            disabled={disabled}
+            rows={Math.min(16, Math.max(8, template.split("\n").length + 1))}
+            maxLength={MAX_TEMPLATE_LENGTH}
+            className="w-full px-3 py-2 border border-border rounded-lg text-xs focus:ring-2 focus:ring-primary outline-none font-mono"
+          />
+          <div>
+            <p className="text-[11px] font-medium text-text-light mb-1">Variáveis (clique pra inserir):</p>
+            <div className="space-y-0.5">
+              {spec.vars.map((v) => (
+                <div key={v.key} className="flex items-baseline gap-2 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => insertVar(v.key)}
+                    disabled={disabled}
+                    className="font-mono px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-text shrink-0"
+                  >
+                    {`{${v.key}}`}
+                  </button>
+                  <span className="text-text-light">{v.desc}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <p className="text-[11px] text-text-light">
+            Linha com variável vazia some sozinha (ex.: sem fornecedor, some a linha do fornecedor). Use{" "}
+            <code className="px-1 rounded bg-gray-100">[ · {"{equipe}"}]</code> pra um trecho que só aparece quando a
+            variável tem valor. Negrito do WhatsApp: *texto*. Clique em <strong>Salvar configuração</strong> pra valer.
+          </p>
+          {value != null && (
+            <button
+              type="button"
+              onClick={() => onChange(null)}
+              disabled={disabled}
+              className="text-xs text-red-600 hover:underline"
+            >
+              Restaurar texto padrão
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1104,7 +1260,7 @@ export default function MensagensPage() {
                   checked={notifyCfg.embarqueLista?.enabled !== false}
                   onChange={(e) => setNotifyCfg((c) => {
                     if (!c) return c;
-                    const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                    const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
                     return { ...c, embarqueLista: { ...prev, enabled: e.target.checked } };
                   })}
                   disabled={savingCfg}
@@ -1117,7 +1273,7 @@ export default function MensagensPage() {
                 selected={notifyCfg.embarqueLista?.groups ?? []}
                 onChange={(gs) => setNotifyCfg((c) => {
                   if (!c) return c;
-                  const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                  const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
                   return { ...c, embarqueLista: { ...prev, groups: gs } };
                 })}
                 groups={groups}
@@ -1126,13 +1282,24 @@ export default function MensagensPage() {
                 hint="A lista é postada em cada grupo marcado. Sem grupo (e sem a caixinha abaixo) o botão avisa e não envia — marque o de teste primeiro, depois o oficial."
               />
 
+              <NotifyTemplateEditor
+                kind="embarqueLista"
+                value={notifyCfg.embarqueLista?.template ?? null}
+                onChange={(t) => setNotifyCfg((c) => {
+                  if (!c) return c;
+                  const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
+                  return { ...c, embarqueLista: { ...prev, template: t } };
+                })}
+                disabled={savingCfg}
+              />
+
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input
                   type="checkbox"
                   checked={notifyCfg.embarqueLista?.dmAdmin === true}
                   onChange={(e) => setNotifyCfg((c) => {
                     if (!c) return c;
-                    const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                    const prev = c.embarqueLista ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
                     return { ...c, embarqueLista: { ...prev, dmAdmin: e.target.checked } };
                   })}
                   disabled={savingCfg || notifyCfg.embarqueLista?.enabled === false}
@@ -1180,7 +1347,7 @@ export default function MensagensPage() {
                   checked={notifyCfg.retornoMaterial?.enabled !== false}
                   onChange={(e) => setNotifyCfg((c) => {
                     if (!c) return c;
-                    const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                    const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
                     return { ...c, retornoMaterial: { ...prev, enabled: e.target.checked } };
                   })}
                   disabled={savingCfg}
@@ -1193,7 +1360,7 @@ export default function MensagensPage() {
                 selected={notifyCfg.retornoMaterial?.groups ?? []}
                 onChange={(gs) => setNotifyCfg((c) => {
                   if (!c) return c;
-                  const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                  const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
                   return { ...c, retornoMaterial: { ...prev, groups: gs } };
                 })}
                 groups={groups}
@@ -1202,13 +1369,24 @@ export default function MensagensPage() {
                 hint="O aviso vai pra cada grupo marcado. Sem grupo (e sem a caixinha abaixo) o botão avisa e não envia."
               />
 
+              <NotifyTemplateEditor
+                kind="retornoMaterial"
+                value={notifyCfg.retornoMaterial?.template ?? null}
+                onChange={(t) => setNotifyCfg((c) => {
+                  if (!c) return c;
+                  const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
+                  return { ...c, retornoMaterial: { ...prev, template: t } };
+                })}
+                disabled={savingCfg}
+              />
+
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input
                   type="checkbox"
                   checked={notifyCfg.retornoMaterial?.dmAdmin === true}
                   onChange={(e) => setNotifyCfg((c) => {
                     if (!c) return c;
-                    const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                    const prev = c.retornoMaterial ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
                     return { ...c, retornoMaterial: { ...prev, dmAdmin: e.target.checked } };
                   })}
                   disabled={savingCfg || notifyCfg.retornoMaterial?.enabled === false}
@@ -1256,7 +1434,7 @@ export default function MensagensPage() {
                   checked={notifyCfg.compraRegistrada?.enabled !== false}
                   onChange={(e) => setNotifyCfg((c) => {
                     if (!c) return c;
-                    const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                    const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
                     return { ...c, compraRegistrada: { ...prev, enabled: e.target.checked } };
                   })}
                   disabled={savingCfg}
@@ -1269,7 +1447,7 @@ export default function MensagensPage() {
                 selected={notifyCfg.compraRegistrada?.groups ?? []}
                 onChange={(gs) => setNotifyCfg((c) => {
                   if (!c) return c;
-                  const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                  const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
                   return { ...c, compraRegistrada: { ...prev, groups: gs } };
                 })}
                 groups={groups}
@@ -1278,13 +1456,24 @@ export default function MensagensPage() {
                 hint="A lista vai pra cada grupo marcado. Sem grupo (e sem a caixinha abaixo) a compra é salva sem aviso."
               />
 
+              <NotifyTemplateEditor
+                kind="compraRegistrada"
+                value={notifyCfg.compraRegistrada?.template ?? null}
+                onChange={(t) => setNotifyCfg((c) => {
+                  if (!c) return c;
+                  const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
+                  return { ...c, compraRegistrada: { ...prev, template: t } };
+                })}
+                disabled={savingCfg}
+              />
+
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                 <input
                   type="checkbox"
                   checked={notifyCfg.compraRegistrada?.dmAdmin === true}
                   onChange={(e) => setNotifyCfg((c) => {
                     if (!c) return c;
-                    const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false };
+                    const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
                     return { ...c, compraRegistrada: { ...prev, dmAdmin: e.target.checked } };
                   })}
                   disabled={savingCfg || notifyCfg.compraRegistrada?.enabled === false}

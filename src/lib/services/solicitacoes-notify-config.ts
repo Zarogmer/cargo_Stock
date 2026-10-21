@@ -8,6 +8,7 @@
 // preservam EXATAMENTE o comportamento antigo quando a config ainda não existe.
 
 import { prisma } from "@/lib/prisma";
+import { MAX_TEMPLATE_LENGTH } from "@/lib/notify-message-templates";
 
 export const NOTIFY_CONFIG_KEY = "solicitacoes_notify_config";
 
@@ -33,6 +34,9 @@ export interface RetornoNotifyTarget extends NotifyTarget {
   enabled: boolean;
   // true = além do grupo, manda DM pra cada um do setor Administrativo.
   dmAdmin: boolean;
+  // Texto da mensagem editado em Mensagens; null = padrão do código
+  // (ver src/lib/notify-message-templates.ts).
+  template: string | null;
 }
 
 export interface NotifyConfig {
@@ -57,9 +61,9 @@ export function defaultNotifyConfig(): NotifyConfig {
   return {
     novaSolicitacao: { groups: [], functions: ["SUPERVISOR"] },
     compraConcluida: { groups: [], functions: [] },
-    retornoMaterial: { groups: [], functions: [], enabled: true, dmAdmin: false },
-    embarqueLista: { groups: [], functions: [], enabled: true, dmAdmin: false },
-    compraRegistrada: { groups: [], functions: [], enabled: true, dmAdmin: false },
+    retornoMaterial: { groups: [], functions: [], enabled: true, dmAdmin: false, template: null },
+    embarqueLista: { groups: [], functions: [], enabled: true, dmAdmin: false, template: null },
+    compraRegistrada: { groups: [], functions: [], enabled: true, dmAdmin: false, template: null },
   };
 }
 
@@ -134,6 +138,12 @@ export function sanitizeNotifyConfig(raw: unknown): NotifyConfig {
   // principal é o grupo; a DM é a caixinha opcional).
   const dmAdminOf = (raw: unknown) =>
     !!(raw && typeof raw === "object" && (raw as Record<string, unknown>).dmAdmin === true);
+  // template: texto não-vazio (cortado no limite); vazio/ausente = padrão.
+  const templateOf = (raw: unknown) => {
+    const t = raw && typeof raw === "object" ? (raw as Record<string, unknown>).template : null;
+    if (typeof t !== "string" || !t.trim()) return null;
+    return t.replace(/\r\n?/g, "\n").slice(0, MAX_TEMPLATE_LENGTH);
+  };
   return {
     novaSolicitacao: sanitizeTarget(r.novaSolicitacao, def.novaSolicitacao),
     compraConcluida: sanitizeTarget(r.compraConcluida, def.compraConcluida),
@@ -141,16 +151,19 @@ export function sanitizeNotifyConfig(raw: unknown): NotifyConfig {
       ...sanitizeTarget(r.retornoMaterial, def.retornoMaterial),
       enabled: enabledOf(r.retornoMaterial),
       dmAdmin: dmAdminOf(r.retornoMaterial),
+      template: templateOf(r.retornoMaterial),
     },
     embarqueLista: {
       ...sanitizeTarget(r.embarqueLista, def.embarqueLista),
       enabled: enabledOf(r.embarqueLista),
       dmAdmin: dmAdminOf(r.embarqueLista),
+      template: templateOf(r.embarqueLista),
     },
     compraRegistrada: {
       ...sanitizeTarget(r.compraRegistrada, def.compraRegistrada),
       enabled: enabledOf(r.compraRegistrada),
       dmAdmin: dmAdminOf(r.compraRegistrada),
+      template: templateOf(r.compraRegistrada),
     },
   };
 }
