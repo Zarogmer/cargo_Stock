@@ -259,6 +259,12 @@ export const PRODUTOS_ROLES: Role[] = ["TECNOLOGIA", "ESTAGIO", "EXECUTIVO", "CO
 // Fonte única: o menu (rbac) e a página de Solicitações filtram por isto.
 export const FORNECEDORES_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "COMERCIAL", "TECNOLOGIA", "ESTAGIO", "FINANCEIRO", "RH", "MANUTENCAO"];
 
+// Papéis que enxergam o "Checklist" (Embarque/Retorno) e a "Lista de
+// Equipamentos" (kit padrão por equipe que alimenta o Checklist, o PDF/WhatsApp
+// de embarque e a Petição) no Controle. Gestor fica de fora — ver o comentário
+// do item Checklist em NAV_ITEMS.
+export const CHECKLIST_ROLES: Role[] = ["EXECUTIVO", "COMERCIAL", "FINANCEIRO", "RH", "TECNOLOGIA", "ESTAGIO", "MANUTENCAO"];
+
 // Papéis que acessam o módulo bancário do Financeiro (Contas a Pagar,
 // Conciliação Bancária e o Painel financeiro). Dados de
 // banco/saldo/extrato são sensíveis — só Executivo, Financeiro e Tecnologia.
@@ -406,7 +412,12 @@ export const NAV_ITEMS: NavItem[] = [
       // ao herdar SOLICITACOES ele passaria a ver a aba que baixa estoque. A
       // rota segue /escalacao/estoque. Manutenção entrou em 2026-07 (ganhou
       // "embarcar" no módulo EMBARQUE, sem "view").
-      { label: "Checklist", href: "/escalacao/estoque", roles: ["EXECUTIVO", "COMERCIAL", "FINANCEIRO", "RH", "TECNOLOGIA", "ESTAGIO", "MANUTENCAO"] },
+      { label: "Checklist", href: "/escalacao/estoque", roles: CHECKLIST_ROLES },
+      // Kit padrão de materiais por equipe (Equipe normal = 1 e 2; Turbo): a
+      // lista que o Checklist, o PDF/WhatsApp de embarque e a Petição carregam.
+      // O ajuste por navio segue no Checklist; aqui muda o padrão (pedido do
+      // Guilherme, 2026-10-21). Mesma régua de papéis do Checklist.
+      { label: "Lista de Equipamentos", href: "/solicitacoes?tab=equipamentos", roles: CHECKLIST_ROLES },
     ],
   },
   {

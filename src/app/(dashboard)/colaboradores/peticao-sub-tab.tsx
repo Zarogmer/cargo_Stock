@@ -10,8 +10,9 @@ import type { Employee } from "@/types/database";
 
 // Documento "AUTORIZAÇÃO PARA ACESSO À BARRA": emitido por navio. O usuário
 // escolhe navio/bandeira/IMO, período, agência (reusa clientes dos navios),
-// meio de transporte e gate (cadastráveis), a equipe (define a lista fixa de
-// equipamentos, vinda do kit de embarque) e os colaboradores (viram a tabela
+// meio de transporte e gate (cadastráveis), a equipe (carrega a lista de
+// equipamentos do kit de embarque — editável na tela pra ajuste de última hora,
+// só neste documento) e os colaboradores (viram a tabela
 // NOME/CPF/RG/NASCIMENTO/ISPSCODE).
 
 interface Ship {
@@ -33,6 +34,14 @@ interface KitRow {
   team: string;
   quantity: number;
   stock_items: { id: number; name: string } | null;
+}
+
+// Linha da lista de equipamentos NA TELA (editável). `key` é só identidade
+// local (React/edição); a numeração do documento é a posição na lista.
+interface EquipRow {
+  key: number;
+  qtd: string;
+  desc: string;
 }
 
 const TEAMS: { key: string; label: string }[] = [
@@ -162,14 +171,98 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
     );
   }, [sortedEmployees, empSearch]);
 
-  // Equipamentos = kit de embarque da equipe escolhida (fixo, só leitura).
-  const equipamentos = useMemo(() => {
+  // Equipamentos = kit de embarque da equipe escolhida, como PONTO DE PARTIDA.
+  // A lista fica editável na tela (clicar na quantidade ou no nome, tirar e
+  // adicionar linha) pra ajuste de última hora SÓ nesta petição — o kit
+  // oficial não muda (esse se edita em Controle › Lista de Equipamentos).
+  // Trocar a equipe recarrega a lista do kit e descarta os ajustes.
+  const kitDefault = useMemo<EquipRow[]>(() => {
     return kit
       .filter((k) => k.team === team && k.stock_items)
       .map((k) => ({ name: k.stock_items!.name, qty: k.quantity }))
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"))
-      .map((row, i) => ({ item: pad2(i + 1), qtd: pad2(Math.round(row.qty)), desc: row.name }));
+      .map((row, i) => ({ key: i + 1, qtd: String(Math.round(row.qty)), desc: row.name }));
   }, [kit, team]);
+  const [equipRows, setEquipRows] = useState<EquipRow[]>([]);
+  const [equipEdited, setEquipEdited] = useState(false);
+  // Célula em edição (linha + campo) e o texto digitado nela.
+  const [equipEditing, setEquipEditing] = useState<{ key: number; field: "qtd" | "desc" } | null>(null);
+  const [equipDraft, setEquipDraft] = useState("");
+  const equipKeyRef = useRef(0);
+  // Esc cancela: o blur que vem logo depois não pode gravar o rascunho.
+  const equipSkipCommitRef = useRef(false);
+
+  useEffect(() => {
+    setEquipRows(kitDefault);
+    setEquipEdited(false);
+    setEquipEditing(null);
+    equipKeyRef.current = kitDefault.length;
+  }, [kitDefault]);
+
+  // O que vai pro documento: numeração sequencial, quantidade com 2 dígitos
+  // (igual ao modelo oficial) e só linhas com descrição.
+  const equipamentos = useMemo(
+    () =>
+      equipRows
+        .filter((r) => r.desc.trim())
+        .map((r, i) => {
+          const n = parseInt(r.qtd.replace(/\D/g, ""), 10);
+          return { item: pad2(i + 1), qtd: Number.isFinite(n) ? pad2(n) : r.qtd.trim(), desc: r.desc.trim() };
+        }),
+    [equipRows]
+  );
+
+  function startEquipEdit(key: number, field: "qtd" | "desc") {
+    const row = equipRows.find((r) => r.key === key);
+    if (!row) return;
+    equipSkipCommitRef.current = false;
+    setEquipEditing({ key, field });
+    setEquipDraft(row[field]);
+  }
+
+  function cancelEquipEdit() {
+    equipSkipCommitRef.current = true;
+    setEquipEditing(null);
+  }
+
+  // Grava o rascunho na linha. Nome vazio tira a linha (é o jeito de desfazer
+  // um "Adicionar item" que não foi preenchido).
+  function commitEquipEdit() {
+    if (equipSkipCommitRef.current) { equipSkipCommitRef.current = false; return; }
+    if (!equipEditing) return;
+    const { key, field } = equipEditing;
+    const value = equipDraft.trim();
+    setEquipEditing(null);
+    if (field === "desc" && !value) {
+      setEquipRows((rows) => rows.filter((r) => r.key !== key));
+      setEquipEdited(true);
+      return;
+    }
+    setEquipRows((rows) => rows.map((r) => (r.key === key ? { ...r, [field]: value } : r)));
+    setEquipEdited(true);
+  }
+
+  function removeEquipRow(key: number) {
+    setEquipRows((rows) => rows.filter((r) => r.key !== key));
+    setEquipEdited(true);
+    if (equipEditing?.key === key) setEquipEditing(null);
+  }
+
+  function addEquipRow() {
+    const key = ++equipKeyRef.current;
+    setEquipRows((rows) => [...rows, { key, qtd: "1", desc: "" }]);
+    setEquipEdited(true);
+    equipSkipCommitRef.current = false;
+    setEquipEditing({ key, field: "desc" });
+    setEquipDraft("");
+  }
+
+  function restoreEquip() {
+    setEquipRows(kitDefault);
+    setEquipEdited(false);
+    setEquipEditing(null);
+    equipKeyRef.current = kitDefault.length;
+  }
 
   const selectedCount = selectedIds.size;
 
@@ -326,7 +419,7 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
           <h3 className="font-semibold text-text">Autorização para Acesso à Barra (Petição)</h3>
           <p className="text-xs text-text-light mt-0.5">
             Documento emitido por navio. Escolha os dados do serviço e marque os colaboradores —
-            a lista de equipamentos vem fixa do kit de embarque da equipe.
+            a lista de equipamentos vem do kit de embarque da equipe e pode ser ajustada aqui antes de gerar.
           </p>
         </div>
 
@@ -476,26 +569,120 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
           </p>
         </div>
 
-        {/* Prévia dos equipamentos (fixo do kit da equipe) */}
+        {/* Equipamentos — vem do kit da equipe, mas é editável aqui pra ajuste
+            de última hora (clicar na quantidade ou no nome, tirar/adicionar
+            linha). Vale só pra este documento; o kit oficial fica intacto. */}
         <div>
-          <label className="text-xs font-semibold text-text-light uppercase tracking-wider">
-            Equipamentos e Materiais — {TEAMS.find((t) => t.key === team)?.label} ({equipamentos.length})
-          </label>
-          {equipamentos.length === 0 ? (
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <label className="text-xs font-semibold text-text-light uppercase tracking-wider">
+              Equipamentos e Materiais — {TEAMS.find((t) => t.key === team)?.label} ({equipamentos.length})
+              {equipEdited && (
+                <span className="ml-2 normal-case tracking-normal font-medium text-amber-700">· ajustado só nesta petição</span>
+              )}
+            </label>
+            <div className="flex items-center gap-3">
+              {equipEdited && (
+                <button
+                  type="button"
+                  onClick={restoreEquip}
+                  className="text-[11px] font-medium text-text-light hover:text-primary"
+                  title="Descartar os ajustes e voltar ao kit da equipe"
+                >
+                  ↺ Restaurar do kit
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={addEquipRow}
+                className="text-[11px] font-medium text-primary hover:underline"
+              >
+                ➕ Adicionar item
+              </button>
+            </div>
+          </div>
+          <p className="text-[11px] text-text-light">
+            Clique na quantidade ou no nome pra alterar. Os ajustes valem só pra esta petição — o kit oficial
+            se edita em Controle › Lista de Equipamentos.
+          </p>
+          {equipRows.length === 0 ? (
             <p className="text-[11px] text-amber-700 mt-1">
-              Esta equipe não tem kit de embarque cadastrado. Monte o kit em Controle › Checklist.
+              Esta equipe não tem kit de embarque cadastrado. Monte o kit em Controle › Lista de Equipamentos,
+              ou adicione os itens aqui.
             </p>
           ) : (
-            <div className="mt-1 max-h-40 overflow-y-auto border border-border rounded-lg text-xs">
+            <div className="mt-1 max-h-56 overflow-y-auto border border-border rounded-lg text-xs">
               <table className="w-full">
                 <tbody>
-                  {equipamentos.map((q) => (
-                    <tr key={q.item} className="border-b border-border last:border-0">
-                      <td className="px-2 py-1 text-text-light w-10">{q.item}</td>
-                      <td className="px-2 py-1 text-text-light w-12">{q.qtd}</td>
-                      <td className="px-2 py-1 text-text">{q.desc}</td>
-                    </tr>
-                  ))}
+                  {equipRows.map((r, i) => {
+                    const editingQtd = equipEditing?.key === r.key && equipEditing.field === "qtd";
+                    const editingDesc = equipEditing?.key === r.key && equipEditing.field === "desc";
+                    const qtdNum = parseInt(r.qtd.replace(/\D/g, ""), 10);
+                    const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+                      if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
+                      if (e.key === "Escape") cancelEquipEdit();
+                    };
+                    return (
+                      <tr key={r.key} className="border-b border-border last:border-0">
+                        <td className="px-2 py-1 text-text-light w-10">{pad2(i + 1)}</td>
+                        <td className="px-1 py-0.5 w-16">
+                          {editingQtd ? (
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              autoFocus
+                              value={equipDraft}
+                              onChange={(e) => setEquipDraft(e.target.value)}
+                              onBlur={commitEquipEdit}
+                              onKeyDown={onKey}
+                              className="w-14 px-1.5 py-0.5 border border-primary rounded text-center focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => startEquipEdit(r.key, "qtd")}
+                              title="Clique pra alterar a quantidade"
+                              className="w-full text-left px-1 py-0.5 rounded text-text-light hover:bg-primary/10 hover:text-primary"
+                            >
+                              {Number.isFinite(qtdNum) ? pad2(qtdNum) : r.qtd || "—"}
+                            </button>
+                          )}
+                        </td>
+                        <td className="px-1 py-0.5">
+                          {editingDesc ? (
+                            <input
+                              type="text"
+                              autoFocus
+                              value={equipDraft}
+                              onChange={(e) => setEquipDraft(e.target.value)}
+                              onBlur={commitEquipEdit}
+                              onKeyDown={onKey}
+                              placeholder="Descrição do item…"
+                              className="w-full px-1.5 py-0.5 border border-primary rounded focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => startEquipEdit(r.key, "desc")}
+                              title="Clique pra alterar o nome"
+                              className="w-full text-left px-1 py-0.5 rounded text-text hover:bg-primary/10 hover:text-primary"
+                            >
+                              {r.desc || <span className="text-text-light italic">(sem descrição)</span>}
+                            </button>
+                          )}
+                        </td>
+                        <td className="px-1 py-0.5 w-8 text-right">
+                          <button
+                            type="button"
+                            onClick={() => removeEquipRow(r.key)}
+                            title="Tirar este item da petição"
+                            className="w-6 h-6 rounded text-base leading-none text-red-500 hover:bg-red-100"
+                          >
+                            ×
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
