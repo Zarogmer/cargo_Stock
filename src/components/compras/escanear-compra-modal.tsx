@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { formatCurrency, parseDecimalBR } from "@/lib/utils";
+import { DuplicateWarning, checkPurchaseDuplicates } from "@/components/compras/duplicate-warning";
+import type { DuplicateMatch } from "@/lib/services/purchase-duplicates";
 
 // "Escanear" do Controle de Compras: a câmera abre direto, o usuário tira uma
 // ou mais fotos da MESMA compra (nota fiscal, cupom, boleto, recibo — frente,
@@ -25,6 +27,9 @@ export interface ScannedPurchaseDraft {
   // Vencimentos das parcelas (só vale no FATURADO).
   dueDates: string[];
   digitableLine: string | null;
+  // Identificação da nota lida (pra verificação de duplicata nas próximas).
+  nfNumber: string | null;
+  accessKey: string | null;
   notes: string | null;
   shipId: string | null;
   items: ScannedPurchaseItem[];
@@ -45,7 +50,9 @@ interface ScanResult {
   items: { description: string; quantity: number | null; unit: string | null; unit_value: number | null; total_value: number | null }[];
   notes: string | null;
   warnings: string | null;
-  duplicate: { description: string; purchase_date: string | null; total_value: number } | null;
+  // Lançamentos parecidos já no sistema (mesma chave/boleto/NF, ou fornecedor
+  // + valor + data próxima) — o aviso "esta compra já foi colocada".
+  duplicates: DuplicateMatch[];
 }
 
 interface Shot {
@@ -127,6 +134,10 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
   const [flash, setFlash] = useState(false);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [saving, setSaving] = useState(false);
+  // Compra parecida já lançada: lista do aviso e a caixinha "não é a mesma".
+  const [duplicates, setDuplicates] = useState<DuplicateMatch[]>([]);
+  const [dupAck, setDupAck] = useState(false);
+  const dupRef = useRef<HTMLDivElement>(null);
 
   // Campos da revisão
   const [supplier, setSupplier] = useState("");
@@ -149,6 +160,7 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
   useEffect(() => {
     if (!open) return;
     setShots([]); setError(null); setResult(null); setSaving(false);
+    setDuplicates([]); setDupAck(false);
     if (initialFiles?.length) {
       setStage("reading");
       void startWithFiles(initialFiles);
@@ -297,12 +309,12 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
     setDueDates(r.due_dates || []);
     setDigitableLine(r.digitable_line || "");
     setShipId("");
-    // Observação: o que a IA destacou + identificação da NF + vencimento do
-    // boleto (fora do FATURADO a compra não tem vencimento próprio).
+    setDuplicates(r.duplicates || []);
+    setDupAck(false);
+    // Observação: o que a IA destacou + vencimento do boleto (fora do FATURADO
+    // a compra não tem vencimento próprio). Nº da NF e chave de acesso vão em
+    // campos próprios da compra, não mais aqui.
     const parts: string[] = [];
-    if (r.nf_number || r.access_key) {
-      parts.push(`NF ${r.nf_number || "?"}${r.access_key ? ` · chave ${r.access_key}` : ""}`);
-    }
     if (pm !== "FATURADO" && r.due_dates?.length) parts.push(`Vencimento ${r.due_dates.map(fmtISO).join(", ")}`);
     if (r.notes) parts.push(r.notes);
     setNotes(parts.join(" · "));
@@ -347,12 +359,39 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
     setError(null);
     setSaving(true);
     try {
+      // Reconfere na hora de salvar, com os dados já revisados — pega o caso
+      // de outra pessoa ter salvo a mesma nota enquanto esta tela estava
+      // aberta. Lançamento novo na lista exige conferir de novo.
+      const fresh = await checkPurchaseDuplicates({
+        supplier: supplier.trim() || null,
+        description: included.length === 1 ? included[0].description.trim() : null,
+        nf_number: result?.nf_number ?? null,
+        access_key: result?.access_key ?? null,
+        digitable_line: digitableLine.replace(/\D/g, "") || null,
+        total: itemsTotal,
+        purchase_date: purchaseDate || null,
+      });
+      if (fresh.length > 0) {
+        const known = new Set(duplicates.map((d) => d.id));
+        const hasNew = fresh.some((d) => !known.has(d.id));
+        setDuplicates(fresh);
+        if (hasNew) setDupAck(false);
+        if (hasNew || !dupAck) {
+          setError("Esta compra já foi colocada no sistema. Se for mesmo outra compra, marque a caixinha do aviso e salve de novo.");
+          setTimeout(() => dupRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+          return;
+        }
+      } else if (duplicates.length > 0) {
+        setDuplicates([]);
+      }
       await onSave({
         supplier: supplier.trim() || null,
         purchaseDate,
         paymentMethod: paymentMethod || null,
         dueDates: paymentMethod === "FATURADO" ? dueDates.filter((d) => d.trim()) : [],
         digitableLine: digitableLine.replace(/\D/g, "") || null,
+        nfNumber: result?.nf_number ?? null,
+        accessKey: result?.access_key ?? null,
         notes: notes.trim() || null,
         shipId: shipId || null,
         items: included.map((it) => ({
@@ -480,12 +519,16 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
               {result.warnings && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">⚠️ {result.warnings}</div>
               )}
-              {result.duplicate && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
-                  ⚠️ Este documento já tem compra registrada: “{result.duplicate.description}”
-                  {result.duplicate.purchase_date ? ` em ${fmtISO(result.duplicate.purchase_date)}` : ""}
-                  {` (${formatCurrency(result.duplicate.total_value)})`}. Salvar de novo duplica.
+              {duplicates.length > 0 && (
+                <div ref={dupRef}>
+                  <DuplicateWarning duplicates={duplicates} acknowledged={dupAck} onAcknowledge={setDupAck} />
                 </div>
+              )}
+              {(result.nf_number || result.access_key) && (
+                <p className="text-[11px] text-text-light">
+                  NF {result.nf_number || "?"}
+                  {result.access_key && <> · chave {result.access_key}</>}
+                </p>
               )}
 
               <div>
@@ -680,10 +723,17 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={saving || included.length === 0}
+                disabled={saving || included.length === 0 || (duplicates.length > 0 && !dupAck)}
                 className="flex-1 sm:flex-none px-5 py-2.5 text-sm font-semibold rounded-lg bg-primary text-white hover:opacity-90 disabled:opacity-40"
+                title={duplicates.length > 0 && !dupAck ? "Confira o aviso de compra já lançada antes de salvar" : undefined}
               >
-                {saving ? "Salvando..." : included.length > 1 ? `Salvar ${included.length} compras` : "Salvar compra"}
+                {saving
+                  ? "Salvando..."
+                  : duplicates.length > 0
+                    ? "Salvar mesmo assim"
+                    : included.length > 1
+                      ? `Salvar ${included.length} compras`
+                      : "Salvar compra"}
               </button>
             </>
           )}

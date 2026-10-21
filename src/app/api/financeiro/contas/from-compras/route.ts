@@ -174,6 +174,8 @@ export async function POST(request: NextRequest) {
       : null;
     const noteParts = [
       po.ship_name ? `Navio: ${po.ship_name}` : null,
+      // Nº da NF vem da coluna própria (o Escanear não escreve mais na observação).
+      po.nf_number ? `NF ${po.nf_number}` : null,
       pgtoLabel,
       itemsLabel,
       po.notes || null,

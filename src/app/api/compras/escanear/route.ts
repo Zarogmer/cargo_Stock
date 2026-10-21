@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { COMPRAS_ROLES } from "@/lib/rbac";
 import type { Role } from "@/types/database";
 import { lookupCnpjReceita, companyNamesMatch, formatCnpj } from "@/lib/services/boleto/cnpj-receita";
+import { findDuplicatePurchases, type DuplicateMatch } from "@/lib/services/purchase-duplicates";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -265,40 +266,43 @@ export async function POST(request: NextRequest) {
     if (hits.length === 1) supplier = { ...hits[0], status: "cadastro" };
   }
 
-  // Compra já registrada com esta NF/boleto (só aviso — quem decide é o usuário).
-  const dupWhere = [
-    accessKey.length === 44 ? { notes: { contains: accessKey } } : null,
-    digitableLine.length >= 44 ? { digitable_line: digitableLine } : null,
-  ].filter((w): w is NonNullable<typeof w> => w != null);
-  const duplicate = dupWhere.length
-    ? await prisma.purchaseOrder.findFirst({
-        where: { OR: dupWhere },
-        orderBy: { created_at: "desc" },
-        select: { description: true, purchase_date: true, total_value: true },
-      })
-    : null;
+  // "Esta compra já foi colocada no sistema?" — mesma chave/boleto/NF (exata)
+  // ou mesmo fornecedor + valor + data próxima (provável). Só aviso: o modal
+  // mostra quem lançou e pede confirmação; quem decide é o usuário. Falha na
+  // consulta não derruba a leitura.
+  const nfNumber = result.nf_number?.trim() || null;
+  const issueDate = isoOrNull(result.issue_date);
+  const totalAmount = typeof result.total_amount === "number" ? result.total_amount : null;
+  let duplicates: DuplicateMatch[] = [];
+  try {
+    duplicates = await findDuplicatePurchases({
+      supplier: supplier?.name || result.supplier_name?.trim() || null,
+      description: items.length === 1 ? items[0].description : null,
+      nf_number: nfNumber,
+      access_key: accessKey.length === 44 ? accessKey : null,
+      digitable_line: digitableLine || null,
+      total: totalAmount,
+      purchase_date: issueDate,
+    });
+  } catch (err) {
+    console.error("[compras/escanear] verificação de duplicata falhou:", err);
+  }
 
   return NextResponse.json({
     document_type: result.document_type,
     supplier_name: supplier?.name || result.supplier_name?.trim() || null,
     supplier_status: supplier?.status ?? null,
     supplier_cnpj: cnpj || null,
-    issue_date: isoOrNull(result.issue_date),
-    total_amount: typeof result.total_amount === "number" ? result.total_amount : null,
+    issue_date: issueDate,
+    total_amount: totalAmount,
     payment_method: result.payment_method && PAYMENT_METHODS.includes(result.payment_method) ? result.payment_method : null,
     due_dates: (Array.isArray(result.due_dates) ? result.due_dates : []).map(isoOrNull).filter((d): d is string => !!d),
     digitable_line: digitableLine || null,
-    nf_number: result.nf_number?.trim() || null,
+    nf_number: nfNumber,
     access_key: accessKey.length === 44 ? accessKey : null,
     items,
     notes: result.notes?.trim() || null,
     warnings: result.warnings?.trim() || null,
-    duplicate: duplicate
-      ? {
-          description: duplicate.description,
-          purchase_date: duplicate.purchase_date ? duplicate.purchase_date.toISOString().slice(0, 10) : null,
-          total_value: Number(duplicate.total_value),
-        }
-      : null,
+    duplicates,
   });
 }

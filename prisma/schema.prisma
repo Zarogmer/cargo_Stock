@@ -1124,6 +1124,11 @@ model PurchaseOrder {
   // item com o mesmo batch_id — e o Contas a Pagar lança UM título (ou um por
   // parcela) com a soma do lote, não um por item. Null = compra avulsa.
   batch_id       String?   @db.Uuid
+  // Identificação da nota, pra verificação de compra duplicada (dois usuários
+  // lançando a mesma NF): nº da NF/documento e chave de acesso da NF-e (44
+  // dígitos). Preenchidos pelo Escanear ou digitados no Nova Compra.
+  nf_number      String?
+  access_key     String?
   created_by     String
   created_at     DateTime  @default(now()) @db.Timestamptz()
   updated_at     DateTime  @default(now()) @db.Timestamptz()
@@ -1134,6 +1139,7 @@ model PurchaseOrder {
 
   @@index([purchase_date(sort: Desc)])
   @@index([batch_id])
+  @@index([access_key])
   @@index([department])
   @@index([request_id])
   @@index([ship_id])

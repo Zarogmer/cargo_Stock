@@ -4,7 +4,10 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
-import { COMPRAS_ROLES, PRODUTOS_ROLES, FORNECEDORES_ROLES } from "@/lib/rbac";
+import { COMPRAS_ROLES, PRODUTOS_ROLES, FORNECEDORES_ROLES, CHECKLIST_ROLES } from "@/lib/rbac";
+// Lista de Equipamentos: kit padrão de materiais por equipe (o que o Checklist,
+// o PDF de embarque e a Petição carregam) — editável aqui.
+import { ListaEquipamentosTab } from "@/components/escalacao/lista-equipamentos-tab";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -15,6 +18,9 @@ import { ImagePicker } from "@/components/ui/image-picker";
 // "Escanear" do Controle de Compras: câmera + IA lê nota/cupom/boleto e
 // preenche os itens (src/components/compras/escanear-compra-modal.tsx).
 import { EscanearCompraModal, type ScannedPurchaseDraft } from "@/components/compras/escanear-compra-modal";
+import { DuplicateWarning, checkPurchaseDuplicates, duplicateIds } from "@/components/compras/duplicate-warning";
+import type { DuplicateCheckInput, DuplicateMatch } from "@/lib/services/purchase-duplicates";
+import { chaveFields } from "@/lib/services/boleto/nfe-chave";
 
 interface PurchaseOrder {
   id: string;
@@ -37,6 +43,11 @@ interface PurchaseOrder {
   card_id: number | null;
   notes: string | null;
   digitable_line: string | null;
+  // Lote do Escanear (itens da mesma nota) e identificação da nota — usados na
+  // verificação de compra duplicada.
+  batch_id: string | null;
+  nf_number: string | null;
+  access_key: string | null;
   image_url: string | null;
   product_url: string | null;
   request_id: string | null;
@@ -815,6 +826,8 @@ export default function SolicitacoesPage() {
         payment_term_days: terms[0] ?? null,
         notes: draft.notes,
         digitable_line: draft.digitableLine,
+        nf_number: draft.nfNumber,
+        access_key: draft.accessKey,
         ship_id: ship?.id || null,
         ship_name: ship?.name || null,
         batch_id: batchId,
@@ -1216,6 +1229,7 @@ export default function SolicitacoesPage() {
                             <div className="min-w-0">
                               <p className="font-medium text-text truncate max-w-[220px]">{p.description}</p>
                               {p.code && <span className="text-[10px] font-mono text-text-light">{p.code}</span>}
+                              {p.nf_number && <span className={`text-[10px] text-text-light${p.code ? " ml-1.5" : ""}`} title="Nº da nota fiscal">NF {p.nf_number}</span>}
                             </div>
                           </div>
                         </td>
@@ -1282,6 +1296,7 @@ export default function SolicitacoesPage() {
                         </div>
                         <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-xs text-text-light items-center">
                           {p.code && <span className="font-mono">{p.code}</span>}
+                          {p.nf_number && <span>NF {p.nf_number}</span>}
                           {p.department && <span className={`px-1.5 py-0.5 rounded-full font-medium ${DEPARTMENT_BADGE[p.department] || "bg-gray-100 text-gray-700"}`}>{departmentLabel(p.department)}</span>}
                           {p.ship_name && <span className="px-1.5 py-0.5 rounded-full font-medium bg-sky-100 text-sky-700">🚢 {p.ship_name}</span>}
                           {p.supplier && <span>{p.supplier}</span>}
@@ -1490,8 +1505,15 @@ export default function SolicitacoesPage() {
         </div>
       ),
     },
+    {
+      key: "equipamentos",
+      label: "Lista de Equipamentos",
+      content: <ListaEquipamentosTab />,
+    },
   ]
     .filter((t) => t.key !== "produtos" || PRODUTOS_ROLES.includes(role))
+    // "Lista de Equipamentos" segue a régua do Checklist (CHECKLIST_ROLES).
+    .filter((t) => t.key !== "equipamentos" || CHECKLIST_ROLES.includes(role))
     // "Controle de Compras" só pros papéis de gestão (mesma regra do menu em
     // rbac.ts). Manutenção não vê a aba nem acessando ?tab=compras direto —
     // o effectiveTab abaixo cai pra primeira aba disponível (Solicitações).
@@ -2100,6 +2122,18 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
   const [notes, setNotes] = useState("");
   // Linha digitável do boleto — campo próprio (antes ia dentro da Observação).
   const [digitableLine, setDigitableLine] = useState("");
+  // Nº da nota fiscal — ou a chave de acesso de 44 dígitos colada inteira (daí
+  // o nº da NF sai de dentro da chave). Serve pra avisar nota já lançada.
+  const [nfNumber, setNfNumber] = useState("");
+  // "Esta compra já foi colocada no sistema?": lançamentos parecidos, a
+  // caixinha "conferi, não é a mesma" e a conferência final ao salvar.
+  const [duplicates, setDuplicates] = useState<DuplicateMatch[]>([]);
+  const [dupAck, setDupAck] = useState(false);
+  const [dupError, setDupError] = useState<string | null>(null);
+  const [dupChecking, setDupChecking] = useState(false);
+  const lastDupIds = useRef("");
+  const dupSeq = useRef(0);
+  const dupRef = useRef<HTMLDivElement>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   // Destino no Almoxarifado (substitui o antigo "Departamento"). Em compras novas
   // o item é lançado no setor escolhido; ao editar, o destino vira só rótulo (não
@@ -2133,6 +2167,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
     const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     // Formulário de cartão novo sempre começa fechado/limpo.
     setShowNewCard(false); setNewCardBankId(""); setNewCardLast4(""); setNewCardClosing(""); setNewCardLabel("");
+    // Aviso de duplicata zera a cada abertura.
+    setDuplicates([]); setDupAck(false); setDupError(null); setDupChecking(false); lastDupIds.current = "";
+    setNfNumber(item ? item.nf_number || item.access_key || "" : "");
     if (item) {
       setDescription(item.description || "");
       setLink(item.product_url || "");
@@ -2171,6 +2208,55 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
   const unit = parseDecimalBR(unitValue);
   const qty = parseDecimalBR(quantity);
   const total = unit * qty;
+
+  // Dados da conferência de duplicata, ou null quando ainda não há o que
+  // comparar (precisa de valor + fornecedor/descrição, nº da NF ou boleto).
+  function buildDupInput(): DuplicateCheckInput | null {
+    const nfText = nfNumber.trim();
+    const nfDigits = nfText.replace(/\D/g, "");
+    const accessKey = nfDigits.length === 44 ? nfDigits : null;
+    const line = digitableLine.replace(/\D/g, "");
+    const hasValue = total > 0 && !!(supplier.trim() || description.trim());
+    if (!hasValue && !nfText && line.length < 44) return null;
+    return {
+      supplier: supplier.trim() || null,
+      description: description.trim() || null,
+      nf_number: accessKey ? chaveFields(accessKey).numero : nfText || null,
+      access_key: accessKey,
+      digitable_line: line.length >= 44 ? line : null,
+      total: total > 0 ? total : null,
+      purchase_date: purchaseDate || null,
+      exclude_id: item?.id ?? null,
+      exclude_batch_id: item?.batch_id ?? null,
+    };
+  }
+
+  // Consulta enquanto a pessoa preenche (com atraso de 600 ms) e mostra quem
+  // já lançou compra parecida. Lista diferente = nova conferência (desmarca).
+  useEffect(() => {
+    if (!open) return;
+    const input = buildDupInput();
+    const seq = ++dupSeq.current;
+    if (!input) {
+      lastDupIds.current = "";
+      setDuplicates([]);
+      return;
+    }
+    const ctrl = new AbortController();
+    const t = setTimeout(async () => {
+      const found = await checkPurchaseDuplicates(input, ctrl.signal);
+      if (seq !== dupSeq.current) return;
+      const ids = duplicateIds(found);
+      if (ids !== lastDupIds.current) {
+        lastDupIds.current = ids;
+        setDupAck(false);
+      }
+      setDuplicates(found);
+    }, 600);
+    return () => { clearTimeout(t); ctrl.abort(); };
+    // buildDupInput lê só estes estados.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, supplier, description, total, purchaseDate, nfNumber, digitableLine, item?.id]);
 
   // Parcelas válidas do FATURADO, convertidas pra DIAS (formato do banco) a
   // partir do vencimento digitado. Vencimento em branco, inválido ou anterior à
@@ -2222,7 +2308,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
     }
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     // Destino é opcional; mas se um destino de estoque foi escolhido (só em compra
     // nova, que é quando lançamos no Almoxarifado), o código passa a ser obrigatório.
@@ -2230,6 +2316,33 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
       alert("Escolha o código no Almoxarifado para o destino selecionado (ou troque o destino pra “Outros”).");
       return;
     }
+    // Última conferência de duplicata com os dados finais — outra pessoa pode
+    // ter salvo a mesma nota enquanto este formulário estava aberto. Com
+    // lançamento parecido e sem a caixinha marcada, não salva.
+    setDupError(null);
+    const dupInput = buildDupInput();
+    if (dupInput) {
+      setDupChecking(true);
+      const found = await checkPurchaseDuplicates(dupInput);
+      setDupChecking(false);
+      const ids = duplicateIds(found);
+      const changed = ids !== lastDupIds.current;
+      if (changed) {
+        lastDupIds.current = ids;
+        setDuplicates(found);
+        setDupAck(false);
+      }
+      if (found.length > 0 && (changed || !dupAck)) {
+        setDupError("Esta compra já foi colocada no sistema. Se for mesmo outra compra, marque a caixinha do aviso e salve de novo.");
+        setTimeout(() => dupRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+        return;
+      }
+    }
+    // Nº da NF: digitado, ou extraído da chave de acesso quando colaram os 44
+    // dígitos. A chave já salva se mantém se o campo foi editado pra um nº.
+    const nfText = nfNumber.trim();
+    const nfDigits = nfText.replace(/\D/g, "");
+    const nfIsKey = nfDigits.length === 44;
     // Navio: resolve o nome pelo id escolhido. Se o navio foi apagado (edição de
     // uma compra antiga), mantém o ship_name já salvo pra não perder o vínculo.
     const selectedShip = ships.find((s) => s.id === shipId);
@@ -2252,6 +2365,8 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
       card_id: paymentMethod === "CARTÃO DE CRÉDITO" && cardId ? Number(cardId) : null,
       notes: notes || null,
       digitable_line: digitableLine.trim() || null,
+      nf_number: nfIsKey ? chaveFields(nfDigits).numero : nfText || null,
+      access_key: nfIsKey ? nfDigits : item?.access_key ?? null,
       image_url: imageUrl,
       product_url: link.trim() || null,
       ship_id: shipId || null,
@@ -2277,6 +2392,27 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
           <label className="block text-sm font-medium mb-1">Fornecedor</label>
           <SupplierField value={supplier} onChange={setSupplier} suppliers={suppliers} className={inputCls} />
         </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            Nº da nota fiscal <span className="text-text-light font-normal">(opcional — ou a chave de acesso de 44 dígitos)</span>
+          </label>
+          <input
+            type="text"
+            value={nfNumber}
+            onChange={(e) => setNfNumber(e.target.value)}
+            placeholder="Ex.: 12345"
+            className={inputCls}
+          />
+          <p className="text-[10px] text-text-light mt-1">
+            Com o nº da nota o sistema avisa na hora se essa compra já foi colocada por outra pessoa.
+          </p>
+        </div>
+        {(duplicates.length > 0 || dupError) && (
+          <div ref={dupRef} className="space-y-1">
+            <DuplicateWarning duplicates={duplicates} acknowledged={dupAck} onAcknowledge={setDupAck} />
+            {dupError && <p className="text-xs font-medium text-red-600">{dupError}</p>}
+          </div>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium mb-1">Data da compra</label>
@@ -2524,7 +2660,13 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
 
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Salvar Compra"}</Button>
+          <Button
+            type="submit"
+            disabled={saving || dupChecking || (duplicates.length > 0 && !dupAck)}
+            title={duplicates.length > 0 && !dupAck ? "Confira o aviso de compra já lançada antes de salvar" : undefined}
+          >
+            {saving ? "Salvando..." : dupChecking ? "Conferindo..." : duplicates.length > 0 ? "Salvar mesmo assim" : "Salvar Compra"}
+          </Button>
         </div>
       </form>
     </Modal>
