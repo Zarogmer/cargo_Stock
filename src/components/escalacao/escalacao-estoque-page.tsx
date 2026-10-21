@@ -13,6 +13,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatDate, matchSearch, formatQty, unitSuffix, parseDecimalBR, normalize, formatCurrency } from "@/lib/utils";
 import { STOCK_UNITS } from "@/lib/stock-units";
 import type { StockItem } from "@/types/database";
+import { EscanearChecklistModal, type ScanListItem, type ScanAppliedRow } from "./escanear-checklist-modal";
 
 interface Ship {
   id: string;
@@ -198,6 +199,8 @@ export function EscalacaoEstoquePage() {
   // Listas recolhíveis da aba Embarque (Retorno tem as suas no RetornoSection).
   const [showMat, setShowMat] = useState(true);
   const [showRancho, setShowRancho] = useState(true);
+  // "📷 Escanear folha" (Embarque e Retorno): a IA lê a folha preenchida à mão.
+  const [scanOpen, setScanOpen] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -830,6 +833,82 @@ export function EscalacaoEstoquePage() {
     });
   }
 
+  // ── Escanear folha (IA) ─────────────────────────────────────────────────
+  // Navio com retorno fechado (Concluído + retorno, ou Cancelado) não edita.
+  const returnConcluded = !!currentShip && (currentShip.status === "CANCELADO" || (currentShip.status === "CONCLUIDO" && !!existingReturn));
+  const canScan = !!selectedTeam && (tab === "embarque" ? canEditEmbark : canEmbarcar && !returnConcluded);
+
+  // Itens que a IA pode casar com as linhas da folha. Embarque: kit (inclusive
+  // os removidos deste navio), todo o Rancho da equipe e o resto do Estoque
+  // (vira item extra do navio). Retorno: só o que pode voltar (kit + Rancho).
+  const ranchoTeamItems = stockItems.filter((i) => (i as any).team === selectedTeam);
+  const scanItems: ScanListItem[] = tab === "embarque"
+    ? [
+        ...teamKit.map((k) => ({ id: k.stock_item_id, name: k.estName, group: "Materiais", expected: k.need, current: k.need })),
+        ...ranchoTeamItems.map((i) => {
+          const def = ranchoNeedById.get(i.id) ?? 0;
+          return { id: i.id, name: i.name, group: "Rancho", expected: def, current: def };
+        }),
+        ...stockItems
+          .filter((i) => MATERIAL_TEAMS.has(String((i as any).team)) && !listedIds.has(i.id))
+          .map((i) => ({ id: i.id, name: i.name, group: "Estoque (fora da lista)", expected: 0, current: 0 })),
+      ]
+    : [
+        ...teamKit.map((k) => ({ id: k.stock_item_id, name: k.estName, group: "Materiais", expected: k.need, current: returnDraft[k.stock_item_id]?.returned ? Number(returnDraft[k.stock_item_id].returned) : null })),
+        ...ranchoReturnables.map((k) => ({ id: k.stock_item_id, name: k.estName, group: "Rancho", expected: k.need, current: returnDraft[k.stock_item_id]?.returned ? Number(returnDraft[k.stock_item_id].returned) : null })),
+      ];
+
+  async function handleApplyScan(rows: ScanAppliedRow[]) {
+    if (tab === "embarque") {
+      // Grava o "vai" de cada item como ajuste do navio — o mesmo que digitar
+      // no campo (kit = Materiais, Rancho = Padrão, resto do Estoque = extra).
+      let n = 0;
+      for (const r of rows) {
+        if (r.quantity == null) continue;
+        const kit = teamKit.find((k) => k.stock_item_id === r.id);
+        const rancho = ranchoTeamItems.find((i) => i.id === r.id);
+        const existing = overrides.find((o) => o.ship_id === selectedShip && o.stock_item_id === r.id);
+        const note = r.note ?? existing?.note ?? "";
+        if (kit) await saveOverrideFull("MATERIAL", r.id, r.quantity, note, kit.baseNeed);
+        else if (rancho) await saveOverrideFull("RANCHO", r.id, r.quantity, note, (rancho as any).default_quantity || 0);
+        else await saveOverrideFull("MATERIAL", r.id, r.quantity, note, 0);
+        n++;
+      }
+      const ids = new Set(rows.map((r) => r.id));
+      const drop = (d: Record<number, string>) => Object.fromEntries(Object.entries(d).filter(([k]) => !ids.has(Number(k))));
+      setQtyDraft(drop);
+      setNoteDraft(drop);
+      setEmbarkMsg(`📷 Folha aplicada: ${n} item(ns) atualizados na lista deste navio.`);
+      return;
+    }
+    // Retorno: só preenche a tela (o Confirmar Retorno grava). Mesma conta do
+    // campo Voltou: o que não voltou nem foi avariado/perdido cai em Insumo.
+    // Rancho não tem Avariado/Perdido.
+    const ranchoIds = new Set(ranchoReturnables.map((k) => k.stock_item_id));
+    const needById = new Map([...teamKit, ...ranchoReturnables].map((k) => [k.stock_item_id, k.need]));
+    setReturnDraft((prev) => {
+      const next = { ...prev };
+      for (const r of rows) {
+        const base: ReturnDraft = next[r.id] ?? { returned: "", broken: "", lost: "", consumed: "", note: "" };
+        const isRancho = ranchoIds.has(r.id);
+        const d: ReturnDraft = {
+          ...base,
+          returned: r.returned != null ? String(r.returned) : base.returned,
+          broken: isRancho ? "" : r.broken != null ? String(r.broken) : base.broken,
+          lost: isRancho ? "" : r.lost != null ? String(r.lost) : base.lost,
+          note: r.note ?? base.note,
+        };
+        const ret = parseInt(d.returned);
+        if (d.returned !== "" && !isNaN(ret)) {
+          d.consumed = String(Math.max(0, (needById.get(r.id) ?? 0) - ret - (parseInt(d.broken) || 0) - (parseInt(d.lost) || 0)));
+        }
+        next[r.id] = d;
+      }
+      return next;
+    });
+    setReturnMsg(`📷 Folha aplicada em ${rows.length} item(ns). Confira os números e clique em ✅ Confirmar Retorno pra gravar.`);
+  }
+
   // Linhas do retorno preenchidas (voltou/avariado/perdido/obs). Usadas pra
   // salvar e pros avisos. Materiais do kit + comida do Rancho.
   function buildReturnRows() {
@@ -1347,8 +1426,19 @@ export function EscalacaoEstoquePage() {
             ⚠️ Este navio não tem equipe definida — edite o navio na aba <strong>Navios</strong> e escolha a equipe.
           </p>
         )}
+        {/* Retorno: a câmera fica aqui em cima (os outros botões ficam no pé da lista). */}
+        {tab === "retorno" && canScan && scanItems.length > 0 && (
+          <Button size="sm" onClick={() => setScanOpen(true)} title="Fotografar a folha do Check List preenchida — a IA lê quanto voltou e preenche a tela">
+            📷 Escanear folha
+          </Button>
+        )}
         {tab === "embarque" && canEmbarcar && selectedTeam && (itemsWithStatus.length > 0 || teamKit.length > 0) && (
           <div className="flex gap-2 flex-wrap">
+            {canScan && (
+              <Button size="sm" onClick={() => setScanOpen(true)} disabled={embarking} title="Fotografar a folha do Check List preenchida — a IA lê quanto vai de cada item e preenche a lista">
+                📷 Escanear folha
+              </Button>
+            )}
             {/* Check List preenchido (navio/porto/equipe/produto/data + quantidades) */}
             <Button size="sm" variant="secondary" onClick={() => handleDownloadChecklist("embarque", "pdf")} disabled={downloading !== null || embarking} title="Baixar a lista preenchida em PDF (layout do Check List)">
               {downloading === "pdf" ? "Gerando..." : "📄 PDF"}
@@ -1428,7 +1518,7 @@ export function EscalacaoEstoquePage() {
           saving={savingReturn}
           sending={sendingWhats}
           canEdit={canEmbarcar}
-          concluded={!!currentShip && (currentShip.status === "CANCELADO" || (currentShip.status === "CONCLUIDO" && !!existingReturn))}
+          concluded={returnConcluded}
           closedPendingReturn={!!currentShip && currentShip.status === "CONCLUIDO" && !existingReturn}
           message={returnMsg}
           history={existingReturn ? [existingReturn] : []}
@@ -1780,6 +1870,15 @@ export function EscalacaoEstoquePage() {
           onClose={() => setAddKind(null)}
         />
       )}
+
+      <EscanearChecklistModal
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        mode={tab}
+        shipName={currentShip?.name || ""}
+        items={scanItems}
+        onApply={handleApplyScan}
+      />
 
       <ConfirmDialog
         open={confirmEmbark}
