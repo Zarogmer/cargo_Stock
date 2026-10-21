@@ -156,12 +156,16 @@ export async function findDuplicatePurchases(input: DuplicateCheckInput): Promis
     or.push({ created_at: { gte: addDays(new Date(), -30) } });
   }
 
+  // Exclusão do lote: `NOT (batch_id = X)` em SQL descarta também quem tem
+  // batch_id NULL (compra avulsa) — por isso o OR explícito com IS NULL.
+  const and: Prisma.PurchaseOrderWhereInput[] = [{ OR: or }];
+  if (input.exclude_id) and.push({ id: { not: input.exclude_id } });
+  if (input.exclude_batch_id) {
+    and.push({ OR: [{ batch_id: null }, { batch_id: { not: input.exclude_batch_id } }] });
+  }
+
   const rows: Row[] = await prisma.purchaseOrder.findMany({
-    where: {
-      OR: or,
-      ...(input.exclude_id ? { id: { not: input.exclude_id } } : {}),
-      ...(input.exclude_batch_id ? { NOT: { batch_id: input.exclude_batch_id } } : {}),
-    },
+    where: { AND: and },
     select: {
       id: true,
       batch_id: true,
