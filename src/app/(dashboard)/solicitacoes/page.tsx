@@ -21,7 +21,8 @@ import { EscanearCompraModal, type ScannedPurchaseDraft } from "@/components/com
 import { DuplicateWarning, checkPurchaseDuplicates, duplicateIds } from "@/components/compras/duplicate-warning";
 import type { DuplicateCheckInput, DuplicateMatch } from "@/lib/services/purchase-duplicates";
 import { chaveFields } from "@/lib/services/boleto/nfe-chave";
-import { unitShort } from "@/lib/stock-units";
+import { STOCK_UNITS, isPackUnit, unitShort } from "@/lib/stock-units";
+import { PackContentFields } from "@/components/compras/pack-content-fields";
 
 interface PurchaseOrder {
   id: string;
@@ -769,14 +770,21 @@ export default function SolicitacoesPage() {
         // não-fatal: a compra já foi salva, só avisamos.
         if (stock && destStocks(stock.dest)) {
           try {
+            // Embalagem com conteúdo ("2 CX com 30 DZ") entra pela unidade de
+            // dentro: 60 DZ ao preço da DZ, não 2 "unidades" ao preço da caixa.
+            const pack = data.pack_qty && data.pack_qty > 0 ? data.pack_qty : null;
+            const baseQty = Number(data.quantity) || 1;
+            const baseValue = Number(data.unit_value) || 0;
             const r = await storeInWarehouse(stock.dest, {
               name: data.description || "",
-              quantity: Number(data.quantity) || 1,
-              category: stock.category, unit: stock.unit, team: stock.team, size: stock.size,
+              quantity: pack ? Math.round(baseQty * pack * 1000) / 1000 : baseQty,
+              category: stock.category,
+              unit: (pack ? data.pack_unit : data.unit) || stock.unit,
+              team: stock.team, size: stock.size,
               crewTeam: stock.crewTeam,
               code,
               // Valor unit. da compra vira o valor unitário do item no Almoxarifado.
-              unitValue: Number(data.unit_value) || 0,
+              unitValue: pack ? Math.round((baseValue / pack) * 10000) / 10000 : baseValue,
             });
             // Anexa ao toast anterior (ex.: o do lançamento no Contas a Pagar).
             setSaveOk((prev) =>
@@ -2142,6 +2150,11 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
   const [purchaseDate, setPurchaseDate] = useState("");
   const [unitValue, setUnitValue] = useState("");
   const [quantity, setQuantity] = useState("");
+  // Unidade da compra e, sendo embalagem (CX/PCT/FARDO...), o que vem dentro —
+  // o valor unit. é o preço de UMA unidade dessas ("R$ por cx").
+  const [purchaseUnit, setPurchaseUnit] = useState("UN");
+  const [packQty, setPackQty] = useState("");
+  const [packUnit, setPackUnit] = useState("UN");
   const [paymentMethod, setPaymentMethod] = useState("");
   const [notes, setNotes] = useState("");
   // Linha digitável do boleto — campo próprio (antes ia dentro da Observação).
@@ -2204,6 +2217,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
       setPurchaseDate((item.purchase_date || "").slice(0, 10) || todayISO);
       setUnitValue(numToInput(item.unit_value));
       setQuantity(numToInput(item.quantity) || "1");
+      setPurchaseUnit(item.unit || "UN");
+      setPackQty(numToInput(item.pack_qty));
+      setPackUnit(item.pack_unit || "UN");
       setPaymentMethod(item.payment_method || "");
       setNotes(item.notes || "");
       setDigitableLine(item.digitable_line || "");
@@ -2224,7 +2240,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
       setCardId(item.card_id != null ? String(item.card_id) : "");
     } else {
       setDescription(""); setLink(""); setDestSpec({ ...DEFAULT_DEST_SPEC, dest: "OUTROS" }); setSupplier(""); setPurchaseDate(todayISO);
-      setUnitValue(""); setQuantity("1"); setPaymentMethod(""); setNotes(""); setDigitableLine(""); setImageUrl(null); setCode(""); setShipId("");
+      setUnitValue(""); setQuantity("1"); setPurchaseUnit("UN"); setPackQty(""); setPackUnit("UN"); setPaymentMethod(""); setNotes(""); setDigitableLine(""); setImageUrl(null); setCode(""); setShipId("");
       setPaymentDueDates([""]); setCardId("");
     }
   }, [item, open]);
@@ -2371,6 +2387,7 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
     // uma compra antiga), mantém o ship_name já salvo pra não perder o vínculo.
     const selectedShip = ships.find((s) => s.id === shipId);
     const shipName = selectedShip ? selectedShip.name : (shipId ? (item?.ship_name || null) : null);
+    const packN = isPackUnit(purchaseUnit) ? parseDecimalBR(packQty) : 0;
     onSave({
       description,
       department: destSpec.dest && destSpec.dest !== "NENHUM" ? destSpec.dest : null,
@@ -2381,6 +2398,9 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
       unit_value: unit,
       quantity: qty || 1,
       total_value: total,
+      unit: purchaseUnit || "UN",
+      pack_qty: packN > 0 ? packN : null,
+      pack_unit: packN > 0 ? packUnit || "UN" : null,
       payment_method: paymentMethod || null,
       // Parcelas só fazem sentido no FATURADO; cartão só no CARTÃO DE CRÉDITO.
       // payment_term_days segue com a 1ª parcela por compatibilidade (legado).
@@ -2623,24 +2643,37 @@ function PurchaseFormModal({ open, onClose, onSave, item, suppliers, ships, card
             </p>
           </div>
         )}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Valor unit. (R$)</label>
-            <input type="text" inputMode="decimal" value={unitValue} onChange={(e) => setUnitValue(e.target.value)}
-              placeholder="0,00" className={inputCls} />
-          </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
           <div>
             <label className="block text-sm font-medium mb-1">Quantidade</label>
             <input type="text" inputMode="decimal" value={quantity} onChange={(e) => setQuantity(e.target.value)}
               placeholder="1" className={inputCls} />
           </div>
-          <div className="col-span-2 sm:col-span-1">
+          <div>
+            <label className="block text-sm font-medium mb-1">Unidade</label>
+            <select value={purchaseUnit} onChange={(e) => setPurchaseUnit(e.target.value)} className={inputCls}>
+              {STOCK_UNITS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">R$ por {unitShort(purchaseUnit) || "un"}</label>
+            <input type="text" inputMode="decimal" value={unitValue} onChange={(e) => setUnitValue(e.target.value)}
+              placeholder="0,00" className={inputCls} />
+          </div>
+          <div>
             <label className="block text-sm font-medium mb-1">Valor total</label>
             <div className="w-full px-3 py-2.5 border border-border rounded-lg text-sm bg-gray-50 font-semibold text-primary">
               {formatCurrency(total)}
             </div>
           </div>
         </div>
+        {isPackUnit(purchaseUnit) && (
+          <PackContentFields
+            unit={purchaseUnit} packQty={packQty} packUnit={packUnit} quantity={quantity} unitValue={unitValue}
+            inputCls={inputCls}
+            onChange={(p) => { if (p.packQty !== undefined) setPackQty(p.packQty); if (p.packUnit !== undefined) setPackUnit(p.packUnit); }}
+          />
+        )}
         {/* ── Opcionais no fim: destino no Almoxarifado, navio, observação, foto ── */}
         <div className="pt-3 border-t border-border">
           <p className="text-[11px] font-semibold text-text-light uppercase tracking-wide">Opcional</p>

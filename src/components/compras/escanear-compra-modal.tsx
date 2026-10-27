@@ -5,6 +5,7 @@ import { formatCurrency, parseDecimalBR } from "@/lib/utils";
 import { DuplicateWarning, checkPurchaseDuplicates } from "@/components/compras/duplicate-warning";
 import type { DuplicateMatch } from "@/lib/services/purchase-duplicates";
 import { STOCK_UNITS, isPackUnit, unitShort } from "@/lib/stock-units";
+import { PackContentFields } from "@/components/compras/pack-content-fields";
 
 // "Escanear" do Controle de Compras: a câmera abre direto, o usuário tira uma
 // ou mais fotos da MESMA compra (nota fiscal, cupom, boleto, recibo — frente,
@@ -661,7 +662,7 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
                         <div className="px-2 py-2.5 text-sm font-semibold text-primary truncate">{formatCurrency(rowTotal(it))}</div>
                       </div>
                     </div>
-                    {isPackUnit(it.unit) && <PackContent it={it} inputCls={inputCls} onChange={(patch) => updateItem(it.key, patch)} />}
+                    {isPackUnit(it.unit) && <PackContentFields {...it} inputCls={inputCls} className="ml-7" onChange={(patch) => updateItem(it.key, patch)} />}
                     <div className="pl-7">
                       <select value={it.dest} onChange={(e) => updateItem(it.key, { dest: e.target.value })} className={`${inputCls} !py-2 !text-sm`} aria-label="Destino no Almoxarifado">
                         {destinations.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
@@ -772,46 +773,3 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
   );
 }
 
-// "Cada caixa tem __ dúzias": conteúdo da embalagem e a conta por unidade de
-// dentro — é o que evita ler "1 CX de ovos a R$ 250" como um ovo a R$ 250. Sem
-// conteúdo, o Almoxarifado recebe a quantidade em embalagens.
-function PackContent({ it, inputCls, onChange }: {
-  it: ItemRow;
-  inputCls: string;
-  onChange: (patch: Partial<ItemRow>) => void;
-}) {
-  const pack = unitShort(it.unit);
-  const inner = unitShort(it.packUnit) || "un";
-  const packQty = parseDecimalBR(it.packQty);
-  const qty = parseDecimalBR(it.quantity) || 1;
-  const price = parseDecimalBR(it.unitValue);
-  const fmtN = (n: number) => (Math.round(n * 1000) / 1000).toLocaleString("pt-BR");
-  return (
-    <div className={`ml-7 rounded-lg px-3 py-2 space-y-1.5 ${packQty > 0 ? "bg-sky-50 border border-sky-200" : "bg-amber-50 border border-amber-200"}`}>
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span>Cada {pack} tem</span>
-        <input
-          type="text"
-          inputMode="decimal"
-          value={it.packQty}
-          onChange={(e) => onChange({ packQty: e.target.value })}
-          placeholder="?"
-          className={`${inputCls} !w-20 !py-1.5`}
-          aria-label={`Quantidade dentro de cada ${pack}`}
-        />
-        <select value={it.packUnit} onChange={(e) => onChange({ packUnit: e.target.value })} className={`${inputCls} !w-auto !py-1.5`} aria-label="Unidade de dentro da embalagem">
-          {STOCK_UNITS.filter((u) => u.value !== it.unit).map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
-        </select>
-      </div>
-      {packQty > 0 ? (
-        <p className="text-xs text-sky-800">
-          = {fmtN(qty * packQty)} {inner} no total · {formatCurrency(price / packQty)} por {inner}
-        </p>
-      ) : (
-        <p className="text-xs text-amber-800">
-          ⚠️ O valor é de {pack} inteiro(a), não de uma unidade. Diga quanto vem dentro pra não confundir o preço — sem isso o estoque recebe {fmtN(qty)} {pack}.
-        </p>
-      )}
-    </div>
-  );
-}
