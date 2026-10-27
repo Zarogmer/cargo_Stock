@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { formatCurrency, parseDecimalBR } from "@/lib/utils";
 import { DuplicateWarning, checkPurchaseDuplicates } from "@/components/compras/duplicate-warning";
 import type { DuplicateMatch } from "@/lib/services/purchase-duplicates";
+import { STOCK_UNITS, isPackUnit, unitShort } from "@/lib/stock-units";
 
 // "Escanear" do Controle de Compras: a câmera abre direto, o usuário tira uma
 // ou mais fotos da MESMA compra (nota fiscal, cupom, boleto, recibo — frente,
@@ -16,6 +17,11 @@ export interface ScannedPurchaseItem {
   description: string;
   quantity: number;
   unitValue: number;
+  // Unidade da nota (UN, CX, PCT, M...) e, sendo embalagem, o que vem dentro
+  // ("CX com 30 DZ") — unitValue é sempre o preço de UMA `unit`.
+  unit: string;
+  packQty: number | null;
+  packUnit: string | null;
   // Destino no Almoxarifado (WarehouseDest da página) — "OUTROS" não lança.
   dest: string;
 }
@@ -47,7 +53,11 @@ interface ScanResult {
   digitable_line: string | null;
   nf_number: string | null;
   access_key: string | null;
-  items: { description: string; quantity: number | null; unit: string | null; unit_value: number | null; total_value: number | null }[];
+  items: {
+    description: string; quantity: number | null; unit: string | null;
+    pack_qty: number | null; pack_unit: string | null;
+    unit_value: number | null; total_value: number | null;
+  }[];
   notes: string | null;
   warnings: string | null;
   // Lançamentos parecidos já no sistema (mesma chave/boleto/NF, ou fornecedor
@@ -68,6 +78,9 @@ interface ItemRow {
   include: boolean;
   description: string;
   quantity: string;
+  unit: string;
+  packQty: string;
+  packUnit: string;
   unitValue: string;
   dest: string;
 }
@@ -326,6 +339,9 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
         include: true,
         description: it.description,
         quantity: numInput(qty),
+        unit: it.unit || "UN",
+        packQty: numInput(it.pack_qty),
+        packUnit: it.pack_unit || "UN",
         unitValue: numInput(unit),
         dest: "OUTROS",
       };
@@ -334,7 +350,7 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
       rows.push({
         key: ++itemSeq.current, include: true,
         description: r.supplier_name ? `Compra - ${r.supplier_name}` : "",
-        quantity: "1", unitValue: numInput(r.total_amount), dest: "OUTROS",
+        quantity: "1", unit: "UN", packQty: "", packUnit: "UN", unitValue: numInput(r.total_amount), dest: "OUTROS",
       });
     }
     setItems(rows);
@@ -394,12 +410,18 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
         accessKey: result?.access_key ?? null,
         notes: notes.trim() || null,
         shipId: shipId || null,
-        items: included.map((it) => ({
-          description: it.description.trim(),
-          quantity: parseDecimalBR(it.quantity) || 1,
-          unitValue: parseDecimalBR(it.unitValue),
-          dest: it.dest,
-        })),
+        items: included.map((it) => {
+          const packQty = isPackUnit(it.unit) ? parseDecimalBR(it.packQty) : 0;
+          return {
+            description: it.description.trim(),
+            quantity: parseDecimalBR(it.quantity) || 1,
+            unitValue: parseDecimalBR(it.unitValue),
+            unit: it.unit || "UN",
+            packQty: packQty > 0 ? packQty : null,
+            packUnit: packQty > 0 ? it.packUnit || "UN" : null,
+            dest: it.dest,
+          };
+        }),
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao salvar.");
@@ -619,13 +641,19 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
                         className={`${inputCls} flex-1 min-w-0`}
                       />
                     </div>
-                    <div className="grid grid-cols-3 gap-2 pl-7">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pl-7">
                       <label className="text-[11px] text-text-light">
                         Qtd
                         <input type="text" inputMode="decimal" value={it.quantity} onChange={(e) => updateItem(it.key, { quantity: e.target.value })} className={inputCls} />
                       </label>
                       <label className="text-[11px] text-text-light">
-                        Unit. (R$)
+                        Unidade
+                        <select value={it.unit} onChange={(e) => updateItem(it.key, { unit: e.target.value })} className={inputCls}>
+                          {STOCK_UNITS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+                        </select>
+                      </label>
+                      <label className="text-[11px] text-text-light">
+                        R$ por {unitShort(it.unit) || "un"}
                         <input type="text" inputMode="decimal" value={it.unitValue} onChange={(e) => updateItem(it.key, { unitValue: e.target.value })} className={inputCls} />
                       </label>
                       <div className="text-[11px] text-text-light">
@@ -633,6 +661,7 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
                         <div className="px-2 py-2.5 text-sm font-semibold text-primary truncate">{formatCurrency(rowTotal(it))}</div>
                       </div>
                     </div>
+                    {isPackUnit(it.unit) && <PackContent it={it} inputCls={inputCls} onChange={(patch) => updateItem(it.key, patch)} />}
                     <div className="pl-7">
                       <select value={it.dest} onChange={(e) => updateItem(it.key, { dest: e.target.value })} className={`${inputCls} !py-2 !text-sm`} aria-label="Destino no Almoxarifado">
                         {destinations.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
@@ -643,7 +672,7 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
                 <div className="flex flex-wrap gap-3 items-center">
                   <button
                     type="button"
-                    onClick={() => setItems((prev) => [...prev, { key: ++itemSeq.current, include: true, description: "", quantity: "1", unitValue: "", dest: "OUTROS" }])}
+                    onClick={() => setItems((prev) => [...prev, { key: ++itemSeq.current, include: true, description: "", quantity: "1", unit: "UN", packQty: "", packUnit: "UN", unitValue: "", dest: "OUTROS" }])}
                     className="text-xs font-medium text-primary hover:underline"
                   >
                     + Adicionar item
@@ -654,7 +683,7 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
                       onClick={() => setItems((prev) => [...prev, {
                         key: ++itemSeq.current, include: true,
                         description: diff > 0 ? "Frete/acréscimos" : "Desconto",
-                        quantity: "1", unitValue: numInput(diff), dest: "OUTROS",
+                        quantity: "1", unit: "UN", packQty: "", packUnit: "UN", unitValue: numInput(diff), dest: "OUTROS",
                       }])}
                       className="text-xs font-medium text-amber-700 hover:underline"
                     >
@@ -739,6 +768,50 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// "Cada caixa tem __ dúzias": conteúdo da embalagem e a conta por unidade de
+// dentro — é o que evita ler "1 CX de ovos a R$ 250" como um ovo a R$ 250. Sem
+// conteúdo, o Almoxarifado recebe a quantidade em embalagens.
+function PackContent({ it, inputCls, onChange }: {
+  it: ItemRow;
+  inputCls: string;
+  onChange: (patch: Partial<ItemRow>) => void;
+}) {
+  const pack = unitShort(it.unit);
+  const inner = unitShort(it.packUnit) || "un";
+  const packQty = parseDecimalBR(it.packQty);
+  const qty = parseDecimalBR(it.quantity) || 1;
+  const price = parseDecimalBR(it.unitValue);
+  const fmtN = (n: number) => (Math.round(n * 1000) / 1000).toLocaleString("pt-BR");
+  return (
+    <div className={`ml-7 rounded-lg px-3 py-2 space-y-1.5 ${packQty > 0 ? "bg-sky-50 border border-sky-200" : "bg-amber-50 border border-amber-200"}`}>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span>Cada {pack} tem</span>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={it.packQty}
+          onChange={(e) => onChange({ packQty: e.target.value })}
+          placeholder="?"
+          className={`${inputCls} !w-20 !py-1.5`}
+          aria-label={`Quantidade dentro de cada ${pack}`}
+        />
+        <select value={it.packUnit} onChange={(e) => onChange({ packUnit: e.target.value })} className={`${inputCls} !w-auto !py-1.5`} aria-label="Unidade de dentro da embalagem">
+          {STOCK_UNITS.filter((u) => u.value !== it.unit).map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+        </select>
+      </div>
+      {packQty > 0 ? (
+        <p className="text-xs text-sky-800">
+          = {fmtN(qty * packQty)} {inner} no total · {formatCurrency(price / packQty)} por {inner}
+        </p>
+      ) : (
+        <p className="text-xs text-amber-800">
+          ⚠️ O valor é de {pack} inteiro(a), não de uma unidade. Diga quanto vem dentro pra não confundir o preço — sem isso o estoque recebe {fmtN(qty)} {pack}.
+        </p>
+      )}
     </div>
   );
 }

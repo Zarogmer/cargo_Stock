@@ -42,3 +42,38 @@ export function unitShort(unit: string | null | undefined): string {
   if (!key) return "";
   return SHORT[key] ?? key.toLowerCase();
 }
+
+// Unidades que são EMBALAGEM — têm um conteúdo ("CX com 30 DZ", "ROLO de
+// 100 m", "GALÃO de 5 L"). Na compra, o valor unitário é da embalagem, não do
+// que vem dentro: o Controle de Compras pergunta o conteúdo pra não confundir
+// "1 caixa de ovos a R$ 250" com "1 ovo a R$ 250".
+export const PACK_UNITS = new Set(["CX", "PCT", "FARDO", "SACO", "KIT", "ROLO", "GALAO"]);
+
+export function isPackUnit(unit: string | null | undefined): boolean {
+  return !!unit && PACK_UNITS.has(unit.trim().toUpperCase());
+}
+
+// Abreviações que aparecem nas notas fiscais (coluna UN/UNID.) → código do
+// STOCK_UNITS. "PC"/"PÇ" é peça (= unidade); "PT"/"PCT"/"PAC" é pacote.
+const NF_UNIT_ALIASES: Record<string, string> = {
+  UN: "UN", UND: "UN", UNID: "UN", UNIDADE: "UN", U: "UN", PC: "UN", "PÇ": "UN", PECA: "UN", "PEÇA": "UN", PCS: "UN",
+  KG: "KG", KILO: "KG", QUILO: "KG",
+  FD: "FARDO", FARDO: "FARDO",
+  L: "L", LT: "L", LTS: "L", LITRO: "L",
+  CX: "CX", CXA: "CX", CAIXA: "CX",
+  PT: "PCT", PCT: "PCT", PAC: "PCT", PACOTE: "PCT",
+  DZ: "DZ", DUZIA: "DZ", "DÚZIA": "DZ",
+  SC: "SACO", SACO: "SACO",
+  RL: "ROLO", ROLO: "ROLO", BOB: "ROLO", BOBINA: "ROLO",
+  PR: "PAR", PAR: "PAR",
+  KIT: "KIT", JG: "KIT", JOGO: "KIT", CJ: "KIT", CONJ: "KIT",
+  GL: "GALAO", GAL: "GALAO", GALAO: "GALAO", "GALÃO": "GALAO",
+  M: "M", MT: "M", MTS: "M", METRO: "M", MTR: "M",
+};
+
+// Unidade lida da nota → código do STOCK_UNITS (ou null se não reconhece).
+export function normalizeStockUnit(raw: string | null | undefined): string | null {
+  const key = (raw || "").trim().toUpperCase().replace(/\.$/, "");
+  if (!key) return null;
+  return NF_UNIT_ALIASES[key] ?? null;
+}

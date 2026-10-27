@@ -21,6 +21,7 @@ import { EscanearCompraModal, type ScannedPurchaseDraft } from "@/components/com
 import { DuplicateWarning, checkPurchaseDuplicates, duplicateIds } from "@/components/compras/duplicate-warning";
 import type { DuplicateCheckInput, DuplicateMatch } from "@/lib/services/purchase-duplicates";
 import { chaveFields } from "@/lib/services/boleto/nfe-chave";
+import { unitShort } from "@/lib/stock-units";
 
 interface PurchaseOrder {
   id: string;
@@ -34,6 +35,11 @@ interface PurchaseOrder {
   unit_value: number;
   quantity: number;
   total_value: number;
+  // Unidade da nota (UN, CX, PCT, M...) e o conteúdo da embalagem ("CX com
+  // 30 DZ"): unit_value é o preço de UMA `unit`. Preenchidos pelo Escanear.
+  unit: string | null;
+  pack_qty: number | null;
+  pack_unit: string | null;
   payment_method: string | null;
   // Legado: prazo único do FATURADO (segue preenchido com a 1ª parcela).
   payment_term_days: number | null;
@@ -266,6 +272,11 @@ const STOCK_TEAM = "GALPAO";
 
 // Converte um valor de data do banco (ISO ou Date) para dd/mm/aaaa sem sofrer
 // o deslocamento de fuso (datas @db.Date voltam como meia-noite UTC).
+// Conteúdo da embalagem na lista: "2 cx (30 dz cada)".
+function packLabel(p: { pack_qty: number | null; pack_unit: string | null }): string {
+  return p.pack_qty && p.pack_qty > 0 ? ` (${formatQty(p.pack_qty)} ${unitShort(p.pack_unit) || "un"} cada)` : "";
+}
+
 function formatPurchaseDate(value: string | null): string {
   if (!value) return "—";
   const iso = String(value).slice(0, 10);
@@ -449,7 +460,7 @@ export default function SolicitacoesPage() {
   // mesmo nome, soma a quantidade (reposição); senão cria um material novo com a
   // categoria escolhida. Também registra um movimento de ENTRADA pro histórico.
   // É a "ponte" entre Solicitações de compra e o Estoque.
-  const storeInStock = useCallback(async (opts: { name: string; quantity: number; category: string; code?: string | null; team?: string; unitValue?: number }) => {
+  const storeInStock = useCallback(async (opts: { name: string; quantity: number; category: string; code?: string | null; team?: string; unitValue?: number; unit?: string }) => {
     const actor = profile?.full_name || "Sistema";
     const name = (opts.name || "").trim();
     const qty = opts.quantity > 0 ? opts.quantity : 1;
@@ -490,6 +501,8 @@ export default function SolicitacoesPage() {
         name,
         location: category,
         quantity: qty,
+        // Unidade da compra (metro de cabo, litro, dúzia...) — material novo.
+        ...(opts.unit ? { unit: opts.unit } : {}),
         // Compra NÃO decide lista de embarque: item novo nasce com padrão 0 —
         // quem define o "leva" é o usuário (kit oficial/extras na tela de
         // Embarque). Pedido de 2026-08-01.
@@ -561,7 +574,7 @@ export default function SolicitacoesPage() {
 
     // Estoque do galpão — reaproveita a ponte existente (stock_items team=GALPAO).
     if (dest === "ESTOQUE") {
-      const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code, unitValue: opts.unitValue });
+      const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code, unitValue: opts.unitValue, unit: opts.unit });
       if (opts.crewTeam && r.stockItemId) await allocateToTeam(r.stockItemId, opts.crewTeam, qty);
       return { created: r.created, where: `Estoque${r.category ? ` · ${r.category}` : ""}${opts.crewTeam ? ` → ${teamLbl(opts.crewTeam)}` : ""}`, quantity: r.quantity };
     }
@@ -649,7 +662,7 @@ export default function SolicitacoesPage() {
     // (reposição) em vez de duplicar — é o que faz o código único evitar
     // repetição mesmo quando a compra vem com nome diferente.
     if (dest === "FERRAMENTA" || dest === "ELETRICA" || dest === "FLUIDOS" || dest === "MAQUINARIO") {
-      const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code, team: dest, unitValue: opts.unitValue });
+      const r = await storeInStock({ name, quantity: qty, category: opts.category || "Outros", code: opts.code, team: dest, unitValue: opts.unitValue, unit: opts.unit });
       if (opts.crewTeam && r.stockItemId) await allocateToTeam(r.stockItemId, opts.crewTeam, qty);
       const label = dest === "FERRAMENTA" ? "Ferramenta" : dest === "ELETRICA" ? "Elétrica" : dest === "FLUIDOS" ? "Fluídos" : "Maquinário";
       return { created: r.created, where: `${label}${r.category && r.category !== "Outros" ? ` · ${r.category}` : ""}${opts.crewTeam ? ` → ${teamLbl(opts.crewTeam)}` : ""}`, quantity: r.quantity };
@@ -821,6 +834,9 @@ export default function SolicitacoesPage() {
         unit_value: it.unitValue,
         quantity: it.quantity,
         total_value: Math.round(it.unitValue * it.quantity * 100) / 100,
+        unit: it.unit,
+        pack_qty: it.packQty,
+        pack_unit: it.packUnit,
         payment_method: draft.paymentMethod,
         payment_terms: terms,
         payment_term_days: terms[0] ?? null,
@@ -841,8 +857,16 @@ export default function SolicitacoesPage() {
       if (id) ids.push(id);
       if (destStocks(dest)) {
         try {
+          // Embalagem com conteúdo ("2 CX com 30 DZ") entra no estoque pela
+          // unidade de dentro: 60 DZ, ao preço de cada DZ — não 2 "unidades"
+          // ao preço da caixa.
+          const pack = it.packQty && it.packQty > 0 ? it.packQty : null;
           const r = await storeInWarehouse(dest, {
-            name: it.description, quantity: it.quantity, code, unitValue: it.unitValue,
+            name: it.description,
+            quantity: pack ? Math.round(it.quantity * pack * 1000) / 1000 : it.quantity,
+            unit: (pack ? it.packUnit : it.unit) || undefined,
+            code,
+            unitValue: pack ? Math.round((it.unitValue / pack) * 10000) / 10000 : it.unitValue,
           });
           stockMsgs.push(`${r.created ? "criado" : "reposto"} "${it.description}" em ${r.where}`);
         } catch (err: any) {
@@ -1246,7 +1270,7 @@ export default function SolicitacoesPage() {
                         </td>
                         <td className="px-3 py-2.5 whitespace-nowrap">{formatPurchaseDate(p.purchase_date)}</td>
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">{formatCurrency(p.unit_value || 0)}</td>
-                        <td className="px-3 py-2.5 text-right">{formatQty(p.quantity)}</td>
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap">{formatQty(p.quantity)}{p.unit && p.unit !== "UN" ? ` ${unitShort(p.unit)}` : ""}{packLabel(p)}</td>
                         <td className="px-3 py-2.5 text-right font-semibold whitespace-nowrap">{formatCurrency(p.total_value || 0)}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap">{paymentLabel(p) || "—"}</td>
                         {canManagePurchases && (
@@ -1301,7 +1325,7 @@ export default function SolicitacoesPage() {
                           {p.ship_name && <span className="px-1.5 py-0.5 rounded-full font-medium bg-sky-100 text-sky-700">🚢 {p.ship_name}</span>}
                           {p.supplier && <span>{p.supplier}</span>}
                           <span>{formatPurchaseDate(p.purchase_date)}</span>
-                          <span>{formatQty(p.quantity)} × {formatCurrency(p.unit_value || 0)}</span>
+                          <span>{formatQty(p.quantity)}{p.unit && p.unit !== "UN" ? ` ${unitShort(p.unit)}` : ""}{packLabel(p)} × {formatCurrency(p.unit_value || 0)}</span>
                           {p.payment_method && <span>{paymentLabel(p)}</span>}
                         </div>
                         {p.notes && <p className="text-xs text-text-light mt-1 line-clamp-2 break-words">{p.notes}</p>}

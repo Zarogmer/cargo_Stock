@@ -1097,6 +1097,13 @@ model PurchaseOrder {
   unit_value     Float     @default(0) // VALOR unit. (R$)
   quantity       Float     @default(1) // QUANTIDADE
   total_value    Float     @default(0) // VALOR total (R$) = unit_value * quantity
+  // Unidade da compra como está na nota (UN, CX, PCT, FARDO, M, KG... — ver
+  // lib/stock-units.ts). Embalagem (CX/PCT/FARDO...) diz o que vem dentro:
+  // pack_qty de pack_unit por embalagem ("CX com 30 DZ"). Assim "1 CX a R$ 250"
+  // não passa por "1 unidade a R$ 250", e o Almoxarifado recebe 30 DZ.
+  unit           String?
+  pack_qty       Float?
+  pack_unit      String?
   payment_method String? // FORMA DE PAGAMENTO
   // Prazo em dias quando FORMA DE PAGAMENTO = FATURADO. O vencimento no Contas a
   // Pagar sai de purchase_date + payment_term_days (controle de meses futuros).

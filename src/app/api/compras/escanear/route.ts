@@ -6,6 +6,7 @@ import { COMPRAS_ROLES } from "@/lib/rbac";
 import type { Role } from "@/types/database";
 import { lookupCnpjReceita, companyNamesMatch, formatCnpj } from "@/lib/services/boleto/cnpj-receita";
 import { findDuplicatePurchases, type DuplicateMatch } from "@/lib/services/purchase-duplicates";
+import { STOCK_UNITS, normalizeStockUnit, isPackUnit } from "@/lib/stock-units";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -52,10 +53,12 @@ const RESULT_SCHEMA = {
           description: { type: "string" },
           quantity: nullableNumber,
           unit: nullableString,
+          pack_qty: nullableNumber,
+          pack_unit: nullableString,
           unit_value: nullableNumber,
           total_value: nullableNumber,
         },
-        required: ["description", "quantity", "unit", "unit_value", "total_value"],
+        required: ["description", "quantity", "unit", "pack_qty", "pack_unit", "unit_value", "total_value"],
         additionalProperties: false,
       },
     },
@@ -73,6 +76,8 @@ interface AiItem {
   description: string;
   quantity: number | null;
   unit: string | null;
+  pack_qty: number | null;
+  pack_unit: string | null;
   unit_value: number | null;
   total_value: number | null;
 }
@@ -107,7 +112,9 @@ Extraia:
 - due_dates: vencimentos das parcelas/duplicatas ou do boleto, em YYYY-MM-DD, em ordem. Vazio se não houver.
 - digitable_line: linha digitável do boleto (47 ou 48 dígitos, só dígitos), se aparecer legível.
 - nf_number e access_key (chave de acesso de 44 dígitos, só dígitos) quando for nota fiscal.
-- items: cada produto/serviço comprado, com a descrição como está no documento (pode corrigir abreviações óbvias), quantidade, unidade (UN, KG, CX, L...), valor unitário e valor total da linha. Boleto ou recibo sem itens: um item só descrevendo o que foi pago (ex.: "Boleto - <beneficiário>") com o valor total.
+- items: cada produto/serviço comprado, com a descrição como está no documento (pode corrigir abreviações óbvias), quantidade, unidade, valor unitário e valor total da linha. Boleto ou recibo sem itens: um item só descrevendo o que foi pago (ex.: "Boleto - <beneficiário>") com o valor total.
+  - unit: a unidade EM QUE a quantidade e o valor unitário estão na nota (coluna UN/UNID.), convertida para um destes códigos: ${STOCK_UNITS.map((u) => `${u.value} (${u.label})`).join(", ")}. Nas notas: PC/PÇ = UN (peça), PT/PCT = PCT (pacote), MT = M, LT = L, FD = FARDO, GL = GALAO, RL = ROLO, JG/CJ = KIT. Cupom sem coluna de unidade: deduza pela descrição.
+  - ATENÇÃO À EMBALAGEM: o valor unitário muitas vezes é de uma caixa/pacote/fardo, não de uma peça (ex.: "OVOS CX 30 DZ" a R$ 250 é UMA CAIXA, não um ovo; "TERMINAL C/100 PCS" vendido em PT é um pacote de 100). Quando a unidade for embalagem (CX, PCT, FARDO, SACO, KIT, ROLO, GALAO) e a descrição disser o conteúdo, preencha pack_qty (quantos vêm em CADA embalagem) e pack_unit (o código da unidade de dentro: UN, DZ, KG, L, M...). Exemplos: "CX C/100 PCS" → pack_qty 100, pack_unit UN; "FILME PVC 28CM X 100M" em rolo → 100, M; "LIMPA PEDRA GL 5 L" → unit GALAO, pack_qty 5, pack_unit L; "OVOS CX 30 DZ" → 30, DZ; "ÁGUA FD 12X500ML" → unit FARDO, 12, UN. Se a unidade não for embalagem ou o conteúdo não estiver escrito, pack_qty e pack_unit ficam null — não chute.
 - notes: curto, só o que importa para o financeiro (frete, desconto, nº do pedido). null se nada.
 - warnings: em português, o que ficou ilegível ou incerto (ex.: "valor unitário do item 3 cortado na foto"). null se tudo legível.
 
@@ -206,13 +213,20 @@ export async function POST(request: NextRequest) {
   const digitableLine = digits(result.digitable_line);
   const items = (Array.isArray(result.items) ? result.items : [])
     .filter((it) => it && typeof it.description === "string" && it.description.trim())
-    .map((it) => ({
-      description: it.description.trim(),
-      quantity: typeof it.quantity === "number" && it.quantity > 0 ? it.quantity : null,
-      unit: it.unit?.trim() || null,
-      unit_value: typeof it.unit_value === "number" ? it.unit_value : null,
-      total_value: typeof it.total_value === "number" ? it.total_value : null,
-    }));
+    .map((it) => {
+      const unit = normalizeStockUnit(it.unit);
+      const packQty = isPackUnit(unit) && typeof it.pack_qty === "number" && it.pack_qty > 0 ? it.pack_qty : null;
+      return {
+        description: it.description.trim(),
+        quantity: typeof it.quantity === "number" && it.quantity > 0 ? it.quantity : null,
+        unit,
+        // Conteúdo da embalagem ("CX com 30 DZ") — só pra unidade de embalagem.
+        pack_qty: packQty,
+        pack_unit: packQty != null ? normalizeStockUnit(it.pack_unit) || "UN" : null,
+        unit_value: typeof it.unit_value === "number" ? it.unit_value : null,
+        total_value: typeof it.total_value === "number" ? it.total_value : null,
+      };
+    });
 
   // Fornecedor: cadastro pelo CNPJ → (fora do cadastro) Receita, vinculando a
   // um cadastro de mesmo nome sem CNPJ ou cadastrando → por último, o nome
