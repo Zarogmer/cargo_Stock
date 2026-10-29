@@ -955,6 +955,9 @@ model ShipReportPhoto {
   caption     String?
   image_data  String?
   storage_key String? // chave do objeto no bucket (relatorios/<report_id>/<id>.jpg)
+  // UUID gerado no celular quando a foto é tirada sem internet (fila offline):
+  // reenvio com o mesmo id devolve esta linha em vez de duplicar.
+  client_id   String?    @unique
   mime_type   String     @default("image/jpeg")
   sort_order Int        @default(0)
   created_by String

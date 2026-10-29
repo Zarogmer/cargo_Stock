@@ -33,6 +33,21 @@ import { WhatsappPhotosModal, type WhatsappSendBlock } from "@/components/relato
 import { PlusIcon, TrashIcon } from "@/components/icons";
 import { processReportPhoto, sniffImageType } from "@/lib/watermark";
 import { shareOrDownloadBlob } from "@/lib/print";
+import { useSync } from "@/lib/offline/sync-context";
+import {
+  dropQueued,
+  enqueue,
+  isAuthFailure,
+  isNetworkFailure,
+  isOnline,
+  isRetryableStatus,
+  listOutbox,
+  patchOutboxBody,
+  removeFromOutbox,
+  subscribeSync,
+  type EnqueueInput,
+} from "@/lib/offline/sync";
+import { newClientId, readSnapshot, saveSnapshot, type OutboxItem } from "@/lib/offline/db";
 import {
   EVAL_CRITERIA,
   PHOTO_PLACES,
@@ -198,6 +213,61 @@ const STAGES = [
   { value: "DURANTE", label: "Durante" },
   { value: "DEPOIS", label: "Depois" },
 ];
+
+// ── Offline ──────────────────────────────────────────────────────────────────
+// A bordo não tem sinal. Toda gravação desta tela passa por sendOrQueue(): tenta
+// o servidor e, sem rede (ou com o Railway fora), guarda o lançamento na fila
+// do IndexedDB (src/lib/offline/sync.ts), que envia sozinha quando a internet
+// volta. A leitura usa a última cópia salva no celular (snapshot) e aplica por
+// cima o que ainda está na fila — o que o supervisor digitou offline continua
+// na tela mesmo depois de fechar e abrir o app.
+
+// Foto na tela: a do servidor (id > 0, imagem em /api/relatorios/fotos/[id])
+// ou uma que ainda está na fila (id < 0, imagem no próprio data URL; client_id
+// é o id do item da fila e vira a chave de idempotência no servidor).
+type LocalPhoto = PhotoMeta & { created_by?: string; client_id?: string; local_src?: string };
+
+let localPhotoSeq = 0;
+function nextLocalPhotoId(): number {
+  return -(++localPhotoSeq);
+}
+
+type SendResult =
+  | { status: "ok"; data: unknown }
+  | { status: "error"; error: string }
+  | { status: "queued"; item: OutboxItem };
+
+async function sendOrQueue(
+  req: { url: string; method: "PUT" | "POST" | "PATCH" | "DELETE"; body?: Record<string, unknown> },
+  queue: EnqueueInput
+): Promise<SendResult> {
+  if (!isOnline()) return { status: "queued", item: await enqueue(queue) };
+  try {
+    const res = await fetch(req.url, {
+      method: req.method,
+      headers: req.body ? { "Content-Type": "application/json" } : undefined,
+      body: req.body ? JSON.stringify(req.body) : undefined,
+    });
+    // Servidor fora (5xx de borda) ou sessão expirada (401): o lançamento não
+    // pode se perder — vai pra fila; a faixa de sincronização pede o login.
+    if (isRetryableStatus(res.status) || isAuthFailure(res)) return { status: "queued", item: await enqueue(queue) };
+    const json = (await res.json().catch(() => ({}))) as { data?: unknown; error?: string };
+    if (!res.ok) return { status: "error", error: json.error || `erro ${res.status}` };
+    // Deu certo direto: um pendente antigo igual (feito offline) não pode subir
+    // depois e desfazer isto.
+    if (queue.dedupe_key) await dropQueued(queue.dedupe_key);
+    return { status: "ok", data: json.data };
+  } catch (err) {
+    if (isNetworkFailure(err)) return { status: "queued", item: await enqueue(queue) };
+    return { status: "error", error: err instanceof Error ? err.message : "erro inesperado" };
+  }
+}
+
+const QUEUED_MSG = "📴 Salvo no celular — será enviado quando houver internet.";
+
+function formatSavedAt(iso: string): string {
+  return new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
 
 // O serviço no meio da frase: "Antes DA LAVAGEM", "Depois DA RASPAGEM".
 const KIND_WORK_NOUN: Record<Kind, string> = {
@@ -504,7 +574,7 @@ function PhotoLightbox({
   onIndex,
   onClose,
 }: {
-  photos: PhotoMeta[];
+  photos: LocalPhoto[];
   index: number;
   captions: Record<number, string>;
   onIndex: (i: number) => void;
@@ -569,7 +639,7 @@ function PhotoLightbox({
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         key={photo.id}
-        src={`/api/relatorios/fotos/${photo.id}`}
+        src={photo.local_src ?? `/api/relatorios/fotos/${photo.id}`}
         alt={caption || "Foto do relatório"}
         onClick={(e) => e.stopPropagation()}
         className="max-w-full max-h-[80vh] object-contain rounded-lg cursor-default shadow-2xl"
@@ -596,20 +666,34 @@ export default function RelatoriosPage() {
   const [search, setSearch] = useState("");
   const [showFinished, setShowFinished] = useState(false);
   const [selected, setSelected] = useState<{ jobId: string; kind: Kind } | null>(null);
+  // Lista veio do celular (sem internet): avisa de quando ela é.
+  const [offlineNote, setOfflineNote] = useState("");
+  // Lançamentos esperando envio, por navio — aparece no card.
+  const [pendingByJob, setPendingByJob] = useState<Record<string, number>>({});
+  const { online } = useSync();
 
   const loadNavios = useCallback(async () => {
     setLoading(true);
     setLoadError("");
+    setOfflineNote("");
     try {
       const res = await fetch("/api/relatorios/navios");
+      if (isRetryableStatus(res.status)) throw new TypeError("servidor indisponível");
       const json = await res.json();
       if (!res.ok) {
         setLoadError(json.error || "Erro ao carregar navios.");
         return;
       }
       setNavios(json.data || []);
+      saveSnapshot("navios", json.data || []);
     } catch {
-      setLoadError("Erro ao conectar com o servidor.");
+      const snap = await readSnapshot<NavioItem[]>("navios");
+      if (snap) {
+        setNavios(snap.data);
+        setOfflineNote(`📴 Sem internet — mostrando os navios salvos no celular em ${formatSavedAt(snap.saved_at)}.`);
+      } else {
+        setLoadError("Sem internet — e a lista de navios ainda não foi salva neste celular. Abra o app uma vez com sinal.");
+      }
     } finally {
       setLoading(false);
     }
@@ -618,6 +702,21 @@ export default function RelatoriosPage() {
   useEffect(() => {
     loadNavios();
   }, [loadNavios]);
+
+  useEffect(() => {
+    const count = () =>
+      listOutbox()
+        .then((items) => {
+          const by: Record<string, number> = {};
+          for (const it of items) by[it.job_id] = (by[it.job_id] || 0) + 1;
+          setPendingByJob(by);
+        })
+        .catch(() => {});
+    count();
+    return subscribeSync((e) => {
+      if (e.type === "change") count();
+    });
+  }, []);
 
   const filtered = useMemo(() => {
     return navios.filter((n) => {
@@ -678,6 +777,11 @@ export default function RelatoriosPage() {
           ⚠️ {loadError}
         </div>
       )}
+      {(offlineNote || !online) && !loadError && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+          {offlineNote || "📴 Sem internet — você pode abrir os navios já salvos no celular e lançar normalmente; tudo sobe quando o sinal voltar."}
+        </div>
+      )}
 
       {loading ? (
         <div className="bg-card rounded-xl border border-border p-10 text-center text-text-light text-sm animate-pulse">
@@ -705,11 +809,18 @@ export default function RelatoriosPage() {
                       {[n.ship!.port, n.ship!.cargo_type, n.ship!.client_name].filter(Boolean).join(" · ") || "—"}
                     </p>
                   </div>
-                  {chip && (
-                    <span className={`shrink-0 text-xs px-2 py-1 rounded-full font-medium ${chip.cls}`}>
-                      {chip.label}
-                    </span>
-                  )}
+                  <div className="shrink-0 flex flex-col items-end gap-1">
+                    {chip && (
+                      <span className={`text-xs px-2 py-1 rounded-full font-medium ${chip.cls}`}>
+                        {chip.label}
+                      </span>
+                    )}
+                    {pendingByJob[n.job_id] > 0 && (
+                      <span className="text-xs px-2 py-1 rounded-full font-medium bg-blue-100 text-blue-700" title="Lançamentos esperando envio">
+                        ☁️ {pendingByJob[n.job_id]} pendente{pendingByJob[n.job_id] > 1 ? "s" : ""}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -1203,7 +1314,7 @@ function ReportDetail({
   // A aba é montada em BLOCOS (locais do ciclo + porões + blocos criados à
   // mão). Cada bloco tem seu próprio botão de adicionar foto, sua legenda e —
   // nos porões — a fase da lavagem. Não existe mais um seletor global de local.
-  const [photos, setPhotos] = useState<(PhotoMeta & { created_by?: string })[]>([]);
+  const [photos, setPhotos] = useState<LocalPhoto[]>([]);
   const [sections, setSections] = useState<SectionRow[]>([]);
   // Fase escolhida em cada bloco de porão (default: Antes).
   const [blockStage, setBlockStage] = useState<Record<string, string>>({});
@@ -1214,8 +1325,13 @@ function ReportDetail({
   // Qual bloco está enviando agora (mostra o progresso no lugar certo).
   const [uploadingLabel, setUploadingLabel] = useState<string | null>(null);
   const [uploadErrors, setUploadErrors] = useState<string[]>([]);
-  const [deletePhoto, setDeletePhoto] = useState<PhotoMeta | null>(null);
-  const [lightbox, setLightbox] = useState<{ photos: PhotoMeta[]; index: number } | null>(null);
+  const [deletePhoto, setDeletePhoto] = useState<LocalPhoto | null>(null);
+  const [lightbox, setLightbox] = useState<{ photos: LocalPhoto[]; index: number } | null>(null);
+  // Fotos guardadas no celular nesta sessão de envio (sem internet).
+  const [photoNote, setPhotoNote] = useState("");
+  // Relatório veio do celular (sem internet): avisa de quando ele é.
+  const [offlineNote, setOfflineNote] = useState("");
+  const { online } = useSync();
   // Bloco escolhido pra mandar pro WhatsApp (abre o modal de destinatário).
   const [waBlock, setWaBlock] = useState<WhatsappSendBlock | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -1238,17 +1354,109 @@ function ReportDetail({
   // Destino do próximo arquivo escolhido — setado ao clicar no bloco.
   const uploadTargetRef = useRef<{ label: string; stage: string }>({ label: "", stage: "GERAL" });
 
+  // O que está na fila pra este relatório, aplicado por cima do que veio do
+  // servidor/snapshot: o último "Salvar" offline é o estado que vale.
+  const applyPending = useCallback(async () => {
+    let items: OutboxItem[] = [];
+    try {
+      items = await listOutbox(jobId, kind);
+    } catch {
+      return;
+    }
+    for (const it of items) {
+      const body = (it.body || {}) as Record<string, unknown>;
+      switch (it.op) {
+        case "report": {
+          const r = (body.report || {}) as Record<string, unknown>;
+          setHeader({
+            report_date: String(r.report_date || ""),
+            port: String(r.port || ""),
+            remarks: String(r.remarks || ""),
+            etc_date: String(r.etc_date || ""),
+            etc_time: String(r.etc_time || ""),
+          });
+          setHolds(Array.isArray(body.holds) ? (body.holds as HoldRow[]) : []);
+          setActivities(Array.isArray(body.activities) ? (body.activities as ActivityRow[]) : []);
+          setSavedStatus(r.status === "COMPLETO" ? "COMPLETO" : "EM_ANDAMENTO");
+          break;
+        }
+        case "evaluations": {
+          const list = Array.isArray(body.evaluations) ? (body.evaluations as EvaluationApi[]) : [];
+          setEvals((prev) => {
+            const next = new Map(prev);
+            for (const e of list) {
+              next.set(e.employee_id, toDraft(e));
+              dirtyEvalsRef.current.add(e.employee_id);
+            }
+            return next;
+          });
+          break;
+        }
+        case "section": {
+          const label = String(body.label || "");
+          const caption = body.caption ? String(body.caption) : null;
+          setSections((prev) => [...prev.filter((s) => s.label !== label), { id: nextLocalPhotoId(), label, caption, sort_order: 999 }]);
+          setBlockCaptions((prev) => ({ ...prev, [photoBlockKey(label)]: caption || "" }));
+          break;
+        }
+        case "section_delete": {
+          const label = String(it.hold_label || "");
+          setSections((prev) => prev.filter((s) => s.label !== label));
+          break;
+        }
+        case "photo": {
+          const id = nextLocalPhotoId();
+          const caption = body.caption ? String(body.caption) : null;
+          setPhotos((prev) => [
+            ...prev,
+            { id, hold_label: it.hold_label ?? null, stage: it.stage || "GERAL", caption, client_id: it.id, local_src: String(body.image_data || "") },
+          ]);
+          setPhotoCaptions((prev) => ({ ...prev, [id]: caption || "" }));
+          break;
+        }
+        case "photo_caption": {
+          const id = Number(it.url.split("/").pop());
+          const caption = body.caption ? String(body.caption) : null;
+          setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, caption } : p)));
+          setPhotoCaptions((prev) => ({ ...prev, [id]: caption || "" }));
+          break;
+        }
+        case "photo_delete": {
+          const id = Number(it.url.split("/").pop());
+          setPhotos((prev) => prev.filter((p) => p.id !== id));
+          break;
+        }
+      }
+    }
+  }, [jobId, kind]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
+    setOfflineNote("");
+    const snapKey = `report:${jobId}:${kind}`;
     try {
-      const res = await fetch(`/api/relatorios/${jobId}?kind=${kind}`);
-      const json = await res.json();
-      if (!res.ok) {
-        setError(json.error || "Erro ao carregar o relatório.");
-        return;
+      let d: DetailData;
+      try {
+        const res = await fetch(`/api/relatorios/${jobId}?kind=${kind}`);
+        if (isRetryableStatus(res.status)) throw new TypeError("servidor indisponível");
+        const json = await res.json();
+        if (!res.ok) {
+          setError(json.error || "Erro ao carregar o relatório.");
+          return;
+        }
+        d = json.data;
+        saveSnapshot(snapKey, d);
+      } catch {
+        // Sem rede: a última cópia que o celular viu deste relatório.
+        const snap = await readSnapshot<DetailData>(snapKey);
+        if (!snap) {
+          setError("Sem internet — e este relatório ainda não foi aberto neste celular. Abra ele uma vez com sinal pra ficar disponível offline.");
+          return;
+        }
+        d = snap.data;
+        setOfflineNote(`📴 Sem internet — mostrando o relatório salvo no celular em ${formatSavedAt(snap.saved_at)}. O que você salvar fica guardado e sobe quando o sinal voltar.`);
       }
-      const d: DetailData = json.data;
       setData(d);
 
       const r = d.report;
@@ -1276,16 +1484,38 @@ function ReportDetail({
       setEvals(map);
       dirtyEvalsRef.current.clear();
       evalsSyncRef.current++;
+      await applyPending();
     } catch {
       setError("Erro ao conectar com o servidor.");
     } finally {
       setLoading(false);
     }
-  }, [jobId, kind]);
+  }, [jobId, kind, applyPending]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // Foto da fila que acabou de subir: troca a cópia local pela do servidor
+  // (mesma posição, legenda preservada).
+  useEffect(() => {
+    return subscribeSync((e) => {
+      if (e.type !== "synced" || e.item.op !== "photo" || e.item.job_id !== jobId) return;
+      const server = e.data as LocalPhoto | undefined;
+      if (!server || typeof server.id !== "number") return;
+      const clientId = e.item.id;
+      setPhotos((prev) => {
+        const local = prev.find((p) => p.client_id === clientId);
+        if (!local) return prev;
+        setPhotoCaptions((caps) => {
+          const next = { ...caps, [server.id]: caps[local.id] ?? server.caption ?? "" };
+          delete next[local.id];
+          return next;
+        });
+        return prev.map((p) => (p.client_id === clientId ? { ...server, client_id: clientId } : p));
+      });
+    });
+  }, [jobId]);
 
   // Sincronização das avaliações: enquanto a aba Avaliações está aberta, busca
   // de tempos em tempos o que foi salvo por outra pessoa (ex.: a gestão vendo
@@ -1409,17 +1639,21 @@ function ReportDetail({
     setSavingReport(true);
     setSavedMsg("");
     try {
-      const res = await fetch(`/api/relatorios/${jobId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, report: { ...header, status: statusToSave }, holds, activities }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        setSavedMsg(`⚠️ ${json.error || "Erro ao salvar."}`);
+      const body = { kind, report: { ...header, status: statusToSave }, holds, activities };
+      const url = `/api/relatorios/${jobId}`;
+      const result = await sendOrQueue(
+        { url, method: "PUT", body },
+        { job_id: jobId, kind, op: "report", method: "PUT", url, body, dedupe_key: `report:${jobId}:${kind}` }
+      );
+      if (result.status === "error") {
+        setSavedMsg(`⚠️ ${result.error}`);
         return;
       }
       setSavedStatus(statusToSave);
+      if (result.status === "queued") {
+        setSavedMsg(QUEUED_MSG);
+        return;
+      }
       setSavedMsg(
         nextStatus === "COMPLETO"
           ? "✅ Relatório concluído! A partir de agora só a gestão consegue editar."
@@ -1441,14 +1675,20 @@ function ReportDetail({
     setSavedMsg("");
     try {
       const payload = evalTeam.map((m) => ({ employee_id: m.employee_id, ...(evals.get(m.employee_id) || EMPTY_EVAL) }));
-      const res = await fetch(`/api/relatorios/${jobId}/avaliacoes`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, evaluations: payload }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        setSavedMsg(`⚠️ ${json.error || "Erro ao salvar."}`);
+      const body = { kind, evaluations: payload };
+      const url = `/api/relatorios/${jobId}/avaliacoes`;
+      const result = await sendOrQueue(
+        { url, method: "PUT", body },
+        { job_id: jobId, kind, op: "evaluations", method: "PUT", url, body, dedupe_key: `evals:${jobId}:${kind}` }
+      );
+      if (result.status === "error") {
+        setSavedMsg(`⚠️ ${result.error}`);
+        return;
+      }
+      if (result.status === "queued") {
+        // As notas continuam "sujas" de propósito: o refresh automático não
+        // passa por cima delas até a fila subir.
+        setSavedMsg(QUEUED_MSG);
         return;
       }
       dirtyEvalsRef.current.clear();
@@ -1480,6 +1720,8 @@ function ReportDetail({
       return;
     }
     const errs: string[] = [];
+    let queued = 0;
+    setPhotoNote("");
 
     // O File que a galeria do celular entrega é só um ponteiro pra foto (no
     // iPhone, um item do Photos, às vezes ainda no iCloud). Esse ponteiro pode
@@ -1511,23 +1753,35 @@ function ReportDetail({
       }
       try {
         const dataUrl = await processReportPhoto(item.blob);
-        const res = await fetch(`/api/relatorios/${jobId}/fotos`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            kind,
-            hold_label: target.label,
-            // Fase de lavagem só em porão/área; locais do ciclo vão sem fase.
-            stage: target.stage,
-            image_data: dataUrl,
-          }),
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          errs.push(`${item.name}: ${json.error || `erro no envio (${res.status})`}`);
+        // UUID da foto nasce aqui: é o id do item na fila e a chave de
+        // idempotência no servidor (ship_report_photos.client_id).
+        const clientId = newClientId();
+        const url = `/api/relatorios/${jobId}/fotos`;
+        const body = {
+          kind,
+          hold_label: target.label,
+          // Fase de lavagem só em porão/área; locais do ciclo vão sem fase.
+          stage: target.stage,
+          image_data: dataUrl,
+          client_id: clientId,
+        };
+        const result = await sendOrQueue(
+          { url, method: "POST", body },
+          { id: clientId, job_id: jobId, kind, op: "photo", method: "POST", url, body, hold_label: target.label, stage: target.stage }
+        );
+        if (result.status === "error") {
+          errs.push(`${item.name}: ${result.error}`);
           continue;
         }
-        setPhotos((prev) => [...prev, json.data]);
+        if (result.status === "queued") {
+          queued++;
+          setPhotos((prev) => [
+            ...prev,
+            { id: nextLocalPhotoId(), hold_label: target.label, stage: target.stage, caption: null, client_id: clientId, local_src: dataUrl },
+          ]);
+          continue;
+        }
+        setPhotos((prev) => [...prev, result.data as LocalPhoto]);
       } catch (err) {
         errs.push(`${item.name}: ${err instanceof Error ? err.message : "não foi possível enviar"}`);
       }
@@ -1535,6 +1789,9 @@ function ReportDetail({
     setUploadProgress("");
     setUploadingLabel(null);
     setUploadErrors(errs);
+    if (queued > 0) {
+      setPhotoNote(`📴 ${queued} foto${queued > 1 ? "s" : ""} salva${queued > 1 ? "s" : ""} no celular — ${queued > 1 ? "serão enviadas" : "será enviada"} quando houver internet.`);
+    }
   }
 
   // ── Enviar bloco pro WhatsApp ─────────────────────────────────────────────
@@ -1576,57 +1833,59 @@ function ReportDetail({
     const current = sections.find((s) => s.label === label);
     if ((current?.caption || "") === caption) return;
     if (!current && !caption) return;
-    try {
-      const res = await fetch(`/api/relatorios/${jobId}/secoes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, label, caption }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setUploadErrors([json.error || "Não deu pra salvar a legenda do bloco."]);
-        return;
-      }
-      setSections((prev) => [...prev.filter((s) => s.label !== label), json.data]);
-    } catch {
-      setUploadErrors(["Erro ao conectar com o servidor."]);
+    const url = `/api/relatorios/${jobId}/secoes`;
+    const body = { kind, label, caption };
+    const result = await sendOrQueue(
+      { url, method: "POST", body },
+      { job_id: jobId, kind, op: "section", method: "POST", url, body, hold_label: label, dedupe_key: `section:${jobId}:${kind}:${label}` }
+    );
+    if (result.status === "error") {
+      setUploadErrors([result.error]);
+      return;
     }
+    const row: SectionRow =
+      result.status === "ok"
+        ? (result.data as SectionRow)
+        : { id: nextLocalPhotoId(), label, caption: caption || null, sort_order: current?.sort_order ?? 999 };
+    setSections((prev) => [...prev.filter((s) => s.label !== label), row]);
   }
 
   async function savePhotoCaption(id: number) {
     const caption = (photoCaptions[id] ?? "").trim();
     const current = photos.find((p) => p.id === id);
     if (!current || (current.caption || "") === caption) return;
-    try {
-      const res = await fetch(`/api/relatorios/fotos/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ caption }),
-      });
-      if (!res.ok) return;
+    // Foto ainda na fila: a legenda vai junto com ela, no mesmo envio.
+    if (id < 0 && current.client_id) {
+      await patchOutboxBody(current.client_id, { caption }).catch(() => {});
       setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, caption: caption || null } : p)));
-    } catch {
-      // legenda é detalhe: falhou, o texto continua na tela pra tentar de novo
+      return;
     }
+    const url = `/api/relatorios/fotos/${id}`;
+    const body = { caption };
+    const result = await sendOrQueue(
+      { url, method: "PATCH", body },
+      { job_id: jobId, kind, op: "photo_caption", method: "PATCH", url, body, dedupe_key: `caption:${id}` }
+    );
+    // legenda é detalhe: falhou, o texto continua na tela pra tentar de novo
+    if (result.status === "error") return;
+    setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, caption: caption || null } : p)));
   }
 
   // Bloco só some da tela quando está vazio: os fixos (ciclo + porões) nunca
   // saem, e sobrou remoção só pros rótulos livres de relatórios antigos.
   async function removeBlock(label: string) {
-    try {
-      const res = await fetch(
-        `/api/relatorios/${jobId}/secoes?kind=${kind}&label=${encodeURIComponent(label)}`,
-        { method: "DELETE" }
-      );
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setUploadErrors([json.error || "Não deu pra remover o bloco."]);
-        return;
-      }
-      setSections((prev) => prev.filter((s) => s.label !== label));
-    } catch {
-      setUploadErrors(["Erro ao conectar com o servidor."]);
+    const url = `/api/relatorios/${jobId}/secoes?kind=${kind}&label=${encodeURIComponent(label)}`;
+    // Legenda pendente desse bloco perde o sentido: sai da fila junto.
+    await dropQueued(`section:${jobId}:${kind}:${label}`).catch(() => {});
+    const result = await sendOrQueue(
+      { url, method: "DELETE" },
+      { job_id: jobId, kind, op: "section_delete", method: "DELETE", url, hold_label: label, dedupe_key: `section_delete:${jobId}:${kind}:${label}` }
+    );
+    if (result.status === "error") {
+      setUploadErrors([result.error]);
+      return;
     }
+    setSections((prev) => prev.filter((s) => s.label !== label));
   }
 
   async function confirmDeletePhoto() {
@@ -1634,12 +1893,23 @@ function ReportDetail({
     setDeleting(true);
     setUploadErrors([]);
     try {
-      const res = await fetch(`/api/relatorios/fotos/${deletePhoto.id}`, { method: "DELETE" });
-      if (!res.ok) {
+      // Foto que ainda não subiu: basta tirar da fila.
+      if (deletePhoto.id < 0 && deletePhoto.client_id) {
+        await removeFromOutbox(deletePhoto.client_id);
+        setPhotos((prev) => prev.filter((p) => p.id !== deletePhoto.id));
+        setDeletePhoto(null);
+        return;
+      }
+      const url = `/api/relatorios/fotos/${deletePhoto.id}`;
+      await dropQueued(`caption:${deletePhoto.id}`).catch(() => {});
+      const result = await sendOrQueue(
+        { url, method: "DELETE" },
+        { job_id: jobId, kind, op: "photo_delete", method: "DELETE", url, dedupe_key: `photo_delete:${deletePhoto.id}` }
+      );
+      if (result.status === "error") {
         // Pode ser foto de um bloco compartilhado guardada num relatório irmão
         // já concluído — o aviso do servidor diz qual é.
-        const json = await res.json().catch(() => ({}));
-        setUploadErrors([json.error || "Não deu pra excluir a foto."]);
+        setUploadErrors([result.error]);
         setDeletePhoto(null);
         return;
       }
@@ -1861,8 +2131,14 @@ function ReportDetail({
         ))}
       </div>
 
+      {(offlineNote || !online) && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-sm text-amber-800">
+          {offlineNote || "📴 Sem internet — o que você salvar fica guardado no celular e sobe sozinho quando o sinal voltar."}
+        </div>
+      )}
+
       {savedMsg && (
-        <div className={`rounded-lg p-2.5 text-sm ${savedMsg.startsWith("✅") ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-red-50 border border-red-200 text-red-700"}`}>
+        <div className={`rounded-lg p-2.5 text-sm ${savedMsg.startsWith("✅") ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : savedMsg.startsWith("📴") ? "bg-amber-50 border border-amber-200 text-amber-800" : "bg-red-50 border border-red-200 text-red-700"}`}>
           {savedMsg}
         </div>
       )}
@@ -2126,6 +2402,10 @@ function ReportDetail({
             }}
           />
 
+          {photoNote && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">{photoNote}</div>
+          )}
+
           {uploadErrors.length > 0 && (
             <div className="bg-danger/10 border border-danger/30 rounded-lg p-3 space-y-1">
               <p className="text-sm font-semibold text-danger">⚠️ Não deu pra enviar:</p>
@@ -2270,11 +2550,16 @@ function ReportDetail({
                         <button
                           type="button"
                           onClick={() => setLightbox({ photos: shown, index: shown.indexOf(p) })}
-                          className="block w-full cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-primary/40"
+                          className="relative block w-full cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-primary/40"
                           title="Ampliar foto"
                         >
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={`/api/relatorios/fotos/${p.id}`} alt={p.caption || b.label} className="w-full h-36 object-cover" loading="lazy" />
+                          <img src={p.local_src ?? `/api/relatorios/fotos/${p.id}`} alt={p.caption || b.label} className="w-full h-36 object-cover" loading="lazy" />
+                          {p.local_src && (
+                            <span className="absolute top-1.5 left-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                              ⏳ aguardando envio
+                            </span>
+                          )}
                         </button>
                         <div className="p-2 space-y-1.5">
                           {locked ? (

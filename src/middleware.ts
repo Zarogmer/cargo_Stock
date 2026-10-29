@@ -13,6 +13,6 @@ export const config = {
      * - favicon.ico (favicon file)
      * - public assets (icons, manifest, etc.)
      */
-    "/((?!_next/static|_next/image|favicon.ico|icons|manifest.json|sw.js).*)",
+    "/((?!_next/static|_next/image|favicon.ico|favicon.png|icons|manifest.json|sw.js|offline.html|cargo-logo.png).*)",
   ],
 };

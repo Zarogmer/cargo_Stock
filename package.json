@@ -1,6 +1,6 @@
 {
   "name": "cargo-stock",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "main": "electron/main.js",
   "author": "Cargo Stock",
@@ -28,6 +28,7 @@
     "@napi-rs/canvas": "^1.0.2",
     "@prisma/client": "^6.9.0",
     "bcryptjs": "^2.4.3",
+    "dexie": "^4.4.7",
     "docx": "^9.5.1",
     "docxtemplater": "^3.50.0",
     "libreoffice-convert": "^1.8.1",

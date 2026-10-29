@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { Sidebar } from "@/components/sidebar";
+import { OfflineBar } from "@/components/offline-bar";
+import { SyncProvider } from "@/lib/offline/sync-context";
 import { MenuIcon, ChevronLeftIcon } from "@/components/icons";
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
@@ -106,6 +108,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           <div className="w-10" />
         </header>
 
+        {/* Sem internet / lançamentos esperando envio (só aparece quando há o que dizer) */}
+        <OfflineBar />
+
         {/* Main content */}
         <main className="flex-1 p-4 md:p-8 pb-safe-4 md:pb-safe-8 overflow-y-auto animate-fade-in">
           {children}
@@ -118,7 +123,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider>
-      <DashboardShell>{children}</DashboardShell>
+      <SyncProvider>
+        <DashboardShell>{children}</DashboardShell>
+      </SyncProvider>
     </AuthProvider>
   );
 }

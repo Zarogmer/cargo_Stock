@@ -1,6 +1,14 @@
 import type { NextConfig } from "next";
 
+// Versão do build pro service worker (public/sw.js): no Railway é o commit do
+// deploy; fora dele, a hora do build. Vai inlined no bundle do cliente.
+const APP_VERSION = (process.env.RAILWAY_GIT_COMMIT_SHA || "").slice(0, 12) || String(Date.now());
+
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_APP_VERSION: APP_VERSION,
+  },
+
   // `ws` is a Node-only library — keep it external so Next.js doesn't try
   // to bundle it for any non-Node target. `pdfjs-dist` roda no servidor pra
   // ler boletos (src/lib/services/boleto/pdf.ts) — externalizar evita que o
@@ -33,6 +41,12 @@ const nextConfig: NextConfig = {
   // PWA headers
   async headers() {
     return [
+      {
+        // O service worker nunca pode ficar preso em cache (Cloudflare/navegador):
+        // o registro usa ?v=<build>, mas o arquivo em si também sai sem cache.
+        source: "/sw.js",
+        headers: [{ key: "Cache-Control", value: "no-cache, max-age=0, must-revalidate" }],
+      },
       {
         source: "/(.*)",
         headers: [
