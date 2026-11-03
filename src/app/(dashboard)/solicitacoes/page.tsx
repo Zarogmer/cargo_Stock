@@ -23,6 +23,7 @@ import type { DuplicateCheckInput, DuplicateMatch } from "@/lib/services/purchas
 import { chaveFields } from "@/lib/services/boleto/nfe-chave";
 import { STOCK_UNITS, isPackUnit, unitShort } from "@/lib/stock-units";
 import { PackContentFields } from "@/components/compras/pack-content-fields";
+import { fiscalSummary, pickFiscal, type NfTotals } from "@/lib/compras/nf-fiscal";
 
 interface PurchaseOrder {
   id: string;
@@ -55,6 +56,16 @@ interface PurchaseOrder {
   batch_id: string | null;
   nf_number: string | null;
   access_key: string | null;
+  // Colunas fiscais da linha na DANFE e rodapé da nota (lidos pelo Escanear).
+  ncm?: string | null;
+  cst?: string | null;
+  cfop?: string | null;
+  icms_base?: number | null;
+  icms_value?: number | null;
+  icms_rate?: number | null;
+  ipi_value?: number | null;
+  ipi_rate?: number | null;
+  nf_totals?: NfTotals | null;
   image_url: string | null;
   product_url: string | null;
   request_id: string | null;
@@ -852,6 +863,16 @@ export default function SolicitacoesPage() {
         digitable_line: draft.digitableLine,
         nf_number: draft.nfNumber,
         access_key: draft.accessKey,
+        // Colunas fiscais da linha (NCM, CST, CFOP, ICMS, IPI) e rodapé da nota.
+        ncm: it.fiscal?.ncm ?? null,
+        cst: it.fiscal?.cst ?? null,
+        cfop: it.fiscal?.cfop ?? null,
+        icms_base: it.fiscal?.icms_base ?? null,
+        icms_value: it.fiscal?.icms_value ?? null,
+        icms_rate: it.fiscal?.icms_rate ?? null,
+        ipi_value: it.fiscal?.ipi_value ?? null,
+        ipi_rate: it.fiscal?.ipi_rate ?? null,
+        nf_totals: draft.nfTotals,
         ship_id: ship?.id || null,
         ship_name: ship?.name || null,
         batch_id: batchId,
@@ -1262,6 +1283,7 @@ export default function SolicitacoesPage() {
                               <p className="font-medium text-text truncate max-w-[220px]">{p.description}</p>
                               {p.code && <span className="text-[10px] font-mono text-text-light">{p.code}</span>}
                               {p.nf_number && <span className={`text-[10px] text-text-light${p.code ? " ml-1.5" : ""}`} title="Nº da nota fiscal">NF {p.nf_number}</span>}
+                              {fiscalSummary(pickFiscal(p)) && <span className="block text-[10px] text-text-light truncate max-w-[220px]" title={fiscalSummary(pickFiscal(p))}>{fiscalSummary(pickFiscal(p))}</span>}
                             </div>
                           </div>
                         </td>
@@ -1329,6 +1351,7 @@ export default function SolicitacoesPage() {
                         <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-xs text-text-light items-center">
                           {p.code && <span className="font-mono">{p.code}</span>}
                           {p.nf_number && <span>NF {p.nf_number}</span>}
+                          {p.icms_value != null && <span title="ICMS da linha na nota">ICMS {formatCurrency(p.icms_value)}{p.icms_rate != null ? ` (${p.icms_rate}%)` : ""}</span>}
                           {p.department && <span className={`px-1.5 py-0.5 rounded-full font-medium ${DEPARTMENT_BADGE[p.department] || "bg-gray-100 text-gray-700"}`}>{departmentLabel(p.department)}</span>}
                           {p.ship_name && <span className="px-1.5 py-0.5 rounded-full font-medium bg-sky-100 text-sky-700">🚢 {p.ship_name}</span>}
                           {p.supplier && <span>{p.supplier}</span>}

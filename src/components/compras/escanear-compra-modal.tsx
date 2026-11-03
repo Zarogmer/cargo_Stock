@@ -6,6 +6,7 @@ import { DuplicateWarning, checkPurchaseDuplicates } from "@/components/compras/
 import type { DuplicateMatch } from "@/lib/services/purchase-duplicates";
 import { STOCK_UNITS, isPackUnit, unitShort } from "@/lib/stock-units";
 import { PackContentFields } from "@/components/compras/pack-content-fields";
+import { fiscalSummary, nfExtraItems, nfTotalsSummary, pickFiscal, type ItemFiscal, type NfTotals } from "@/lib/compras/nf-fiscal";
 
 // "Escanear" do Controle de Compras: a câmera abre direto, o usuário tira uma
 // ou mais fotos da MESMA compra (nota fiscal, cupom, boleto, recibo — frente,
@@ -25,6 +26,8 @@ export interface ScannedPurchaseItem {
   packUnit: string | null;
   // Destino no Almoxarifado (WarehouseDest da página) — "OUTROS" não lança.
   dest: string;
+  // Colunas fiscais da linha na DANFE (NCM, CST, CFOP, ICMS, IPI), se houver.
+  fiscal: ItemFiscal | null;
 }
 
 export interface ScannedPurchaseDraft {
@@ -40,6 +43,8 @@ export interface ScannedPurchaseDraft {
   notes: string | null;
   shipId: string | null;
   items: ScannedPurchaseItem[];
+  // Rodapé "CÁLCULO DO IMPOSTO" da nota — gravado em cada compra do lote.
+  nfTotals: NfTotals | null;
 }
 
 interface ScanResult {
@@ -54,11 +59,12 @@ interface ScanResult {
   digitable_line: string | null;
   nf_number: string | null;
   access_key: string | null;
-  items: {
+  items: ({
     description: string; quantity: number | null; unit: string | null;
     pack_qty: number | null; pack_unit: string | null;
     unit_value: number | null; total_value: number | null;
-  }[];
+  } & Partial<ItemFiscal>)[];
+  nf_totals: NfTotals | null;
   notes: string | null;
   warnings: string | null;
   // Lançamentos parecidos já no sistema (mesma chave/boleto/NF, ou fornecedor
@@ -84,6 +90,10 @@ interface ItemRow {
   packUnit: string;
   unitValue: string;
   dest: string;
+  // VALOR TOTAL impresso na linha da nota: se qtd × unitário não bater com
+  // ele, a linha fica destacada pro usuário conferir só esses dois campos.
+  nfTotal?: number | null;
+  fiscal?: ItemFiscal | null;
 }
 
 const DOC_LABEL: Record<string, string> = {
@@ -345,8 +355,21 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
         packUnit: it.pack_unit || "UN",
         unitValue: numInput(unit),
         dest: "OUTROS",
+        nfTotal: it.total_value,
+        fiscal: pickFiscal(it),
       };
     });
+    // Frete, seguro, outras despesas, IPI e desconto do rodapé entram como
+    // itens: a soma dos itens é o que vira título no Contas a Pagar, e tem
+    // que fechar com o VALOR TOTAL DA NOTA, não só com os produtos.
+    if (rows.length > 0) {
+      for (const extra of nfExtraItems(r.nf_totals)) {
+        rows.push({
+          key: ++itemSeq.current, include: true, description: extra.description,
+          quantity: "1", unit: "UN", packQty: "", packUnit: "UN", unitValue: numInput(extra.value), dest: "OUTROS",
+        });
+      }
+    }
     if (rows.length === 0) {
       rows.push({
         key: ++itemSeq.current, include: true,
@@ -367,6 +390,11 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
   const rowTotal = (it: ItemRow) => Math.round(parseDecimalBR(it.unitValue) * (parseDecimalBR(it.quantity) || 1) * 100) / 100;
   const included = items.filter((it) => it.include && it.description.trim());
   const itemsTotal = included.reduce((s, it) => s + rowTotal(it), 0);
+  // Linha lida da nota cujo qtd × unitário não dá o total impresso nela —
+  // quase sempre um dígito da quantidade ou do unitário lido errado.
+  const rowMismatch = (it: ItemRow) => it.nfTotal != null && Math.abs(rowTotal(it) - it.nfTotal) > 0.011;
+  const mismatched = included.filter(rowMismatch).length;
+  const checkedRows = included.filter((it) => it.nfTotal != null).length;
   const docTotal = result?.total_amount ?? null;
   const diff = docTotal != null ? Math.round((docTotal - itemsTotal) * 100) / 100 : 0;
 
@@ -424,8 +452,10 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
             packQty: packQty > 0 ? packQty : null,
             packUnit: packQty > 0 ? it.packUnit || "UN" : null,
             dest: it.dest,
+            fiscal: it.fiscal ?? null,
           };
         }),
+        nfTotals: result?.nf_totals ?? null,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao salvar.");
@@ -539,6 +569,14 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
                   ✨ <strong>{DOC_LABEL[result.document_type] || "Documento"}</strong> lido pela IA
                   {docTotal != null && <> · total {formatCurrency(docTotal)}</>}. Confira antes de salvar.
                 </p>
+                {mismatched > 0 && (
+                  <p className="text-amber-800 font-medium">
+                    ⚠️ {mismatched === 1 ? "1 item não fecha" : `${mismatched} itens não fecham`} com o total impresso na nota — confira só a quantidade e o valor dos itens em amarelo.
+                  </p>
+                )}
+                {mismatched === 0 && checkedRows > 0 && (
+                  <p>✅ Todas as {checkedRows} linhas fecham com a nota (quantidade × valor = total impresso).</p>
+                )}
                 {result.supplier_status === "novo" && <p>Fornecedor <strong>{supplier}</strong> cadastrado agora pelo CNPJ (Receita Federal).</p>}
                 {result.supplier_status === "vinculado" && <p>CNPJ da nota vinculado ao fornecedor <strong>{supplier}</strong>.</p>}
               </div>
@@ -628,7 +666,7 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
                   <p className="text-[11px] text-text-light">Cada item vira uma compra no Controle</p>
                 </div>
                 {items.map((it) => (
-                  <div key={it.key} className={`border rounded-xl p-3 space-y-2 ${it.include ? "border-border bg-white" : "border-dashed border-border bg-gray-50 opacity-60"}`}>
+                  <div key={it.key} className={`border rounded-xl p-3 space-y-2 ${!it.include ? "border-dashed border-border bg-gray-50 opacity-60" : rowMismatch(it) ? "border-amber-400 bg-amber-50" : "border-border bg-white"}`}>
                     <div className="flex items-start gap-2">
                       <input
                         type="checkbox"
@@ -665,6 +703,12 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
                         <div className="px-2 py-2.5 text-sm font-semibold text-primary truncate">{formatCurrency(rowTotal(it))}</div>
                       </div>
                     </div>
+                    {it.include && rowMismatch(it) && it.nfTotal != null && (
+                      <p className="pl-7 text-xs text-amber-800">
+                        Na nota esta linha fecha em <strong>{formatCurrency(it.nfTotal)}</strong> — confira a quantidade e o R$ por {unitShort(it.unit) || "un"}.
+                      </p>
+                    )}
+                    {it.fiscal && <p className="pl-7 text-[11px] text-text-light">{fiscalSummary(it.fiscal)}</p>}
                     {isPackUnit(it.unit) && <PackContentFields {...it} inputCls={inputCls} className="ml-7" onChange={(patch) => updateItem(it.key, patch)} />}
                     <div className="pl-7">
                       <select value={it.dest} onChange={(e) => updateItem(it.key, { dest: e.target.value })} className={`${inputCls} !py-2 !text-sm`} aria-label="Destino no Almoxarifado">
@@ -703,6 +747,9 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
                   <p className="text-xs text-amber-700">
                     O documento fecha em {formatCurrency(docTotal)} — diferença de {formatCurrency(diff)} (frete, desconto ou item faltando).
                   </p>
+                )}
+                {nfTotalsSummary(result.nf_totals) && (
+                  <p className="text-[11px] text-text-light">Rodapé da nota: {nfTotalsSummary(result.nf_totals)}</p>
                 )}
               </div>
 

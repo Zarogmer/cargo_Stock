@@ -45,6 +45,15 @@ const RESULT_SCHEMA = {
     digitable_line: nullableString,
     nf_number: nullableString,
     access_key: nullableString,
+    // Rodapé "CÁLCULO DO IMPOSTO" / "VALOR TOTAL DA NOTA" da DANFE.
+    products_total: nullableNumber,
+    freight: nullableNumber,
+    insurance: nullableNumber,
+    discount: nullableNumber,
+    other_expenses: nullableNumber,
+    ipi_total: nullableNumber,
+    icms_base_total: nullableNumber,
+    icms_total: nullableNumber,
     items: {
       type: "array",
       items: {
@@ -57,8 +66,21 @@ const RESULT_SCHEMA = {
           pack_unit: nullableString,
           unit_value: nullableNumber,
           total_value: nullableNumber,
+          // Colunas fiscais da linha da DANFE — um campo pra cada coluna, pra
+          // base/ICMS não irem parar em quantidade ou valor unitário.
+          ncm: nullableString,
+          cst: nullableString,
+          cfop: nullableString,
+          icms_base: nullableNumber,
+          icms_value: nullableNumber,
+          icms_rate: nullableNumber,
+          ipi_value: nullableNumber,
+          ipi_rate: nullableNumber,
         },
-        required: ["description", "quantity", "unit", "pack_qty", "pack_unit", "unit_value", "total_value"],
+        required: [
+          "description", "quantity", "unit", "pack_qty", "pack_unit", "unit_value", "total_value",
+          "ncm", "cst", "cfop", "icms_base", "icms_value", "icms_rate", "ipi_value", "ipi_rate",
+        ],
         additionalProperties: false,
       },
     },
@@ -67,7 +89,9 @@ const RESULT_SCHEMA = {
   },
   required: [
     "document_type", "supplier_name", "supplier_cnpj", "issue_date", "total_amount", "payment_method",
-    "due_dates", "digitable_line", "nf_number", "access_key", "items", "notes", "warnings",
+    "due_dates", "digitable_line", "nf_number", "access_key",
+    "products_total", "freight", "insurance", "discount", "other_expenses", "ipi_total", "icms_base_total", "icms_total",
+    "items", "notes", "warnings",
   ],
   additionalProperties: false,
 };
@@ -80,6 +104,14 @@ interface AiItem {
   pack_unit: string | null;
   unit_value: number | null;
   total_value: number | null;
+  ncm: string | null;
+  cst: string | null;
+  cfop: string | null;
+  icms_base: number | null;
+  icms_value: number | null;
+  icms_rate: number | null;
+  ipi_value: number | null;
+  ipi_rate: number | null;
 }
 interface AiResult {
   document_type: string;
@@ -92,9 +124,30 @@ interface AiResult {
   digitable_line: string | null;
   nf_number: string | null;
   access_key: string | null;
+  products_total: number | null;
+  freight: number | null;
+  insurance: number | null;
+  discount: number | null;
+  other_expenses: number | null;
+  ipi_total: number | null;
+  icms_base_total: number | null;
+  icms_total: number | null;
   items: AiItem[];
   notes: string | null;
   warnings: string | null;
+}
+
+// Rodapé da nota que vai junto de cada compra do lote (purchase_orders.nf_totals).
+export interface NfTotals {
+  products_total: number | null;
+  freight: number | null;
+  insurance: number | null;
+  discount: number | null;
+  other_expenses: number | null;
+  ipi_total: number | null;
+  icms_base_total: number | null;
+  icms_total: number | null;
+  total: number | null;
 }
 
 function buildPrompt(today: string): string {
@@ -107,20 +160,32 @@ Extraia:
 - supplier_name: o vendedor/emitente/beneficiário (nome fantasia se aparecer, senão razão social). Nunca a Cargo Ships Cleaning, que é a compradora.
 - supplier_cnpj: CNPJ (ou CPF) do vendedor, só dígitos.
 - issue_date: data da compra/emissão em YYYY-MM-DD.
-- total_amount: valor total a pagar do documento (com frete/desconto já aplicados), número em reais.
+- total_amount: valor total a pagar do documento (VALOR TOTAL DA NOTA, com frete/desconto já aplicados), número em reais.
+- Rodapé "CÁLCULO DO IMPOSTO" da DANFE, cada campo no seu lugar: BASE DE CÁLCULO DO ICMS → icms_base_total; VALOR DO ICMS → icms_total; VALOR TOTAL DOS PRODUTOS → products_total; VALOR DO FRETE → freight; VALOR DO SEGURO → insurance; DESCONTO → discount; OUTRAS DESPESAS ACESSÓRIAS → other_expenses; VALOR DO IPI → ipi_total; VALOR TOTAL DA NOTA → total_amount. Cupom/boleto/recibo sem esse quadro: null (products_total pode ser o subtotal dos itens se aparecer).
 - payment_method: um de ${PAYMENT_METHODS.join(", ")}; FATURADO quando a nota tem fatura/duplicatas a prazo. null se não der para saber.
 - due_dates: vencimentos das parcelas/duplicatas ou do boleto, em YYYY-MM-DD, em ordem. Vazio se não houver.
 - digitable_line: linha digitável do boleto (47 ou 48 dígitos, só dígitos), se aparecer legível.
 - nf_number e access_key (chave de acesso de 44 dígitos, só dígitos) quando for nota fiscal.
 - items: cada produto/serviço comprado, com a descrição como está no documento (pode corrigir abreviações óbvias), quantidade, unidade, valor unitário e valor total da linha. Copie quantidade, valor unitário e valor total EXATAMENTE como impressos na linha (quantidade pode ter 3 casas, ex.: 9.335 KG) — não recalcule nem arredonde. Boleto ou recibo sem itens: um item só descrevendo o que foi pago (ex.: "Boleto - <beneficiário>") com o valor total.
+  - Na DANFE, a tabela "DADOS DO PRODUTO / SERVIÇOS" tem as colunas NESTA ORDEM: DESCRIÇÃO DO PRODUTO/SERVIÇO | NCM/SH | CST | CFOP | UNID. | QUANTIDADE | VALOR UNITÁRIO | VALOR TOTAL | BASE CÁLC. ICMS | VALOR ICMS | VALOR IPI | ALÍQ. ICMS | ALÍQ. IPI. Leia a linha da esquerda pra direita e ponha cada coluna no seu campo: ncm, cst, cfop, unit, quantity, unit_value, total_value, icms_base, icms_value, ipi_value, icms_rate, ipi_rate. BASE CÁLC. ICMS e VALOR ICMS NUNCA são quantidade nem valor unitário: a base é menor ou igual ao VALOR TOTAL da linha e o ICMS é uma fração dela (ex.: 9.335 KG × 22.99 = 214.61, base 125.18, ICMS 15.02, alíquota 12). Linha sem alguma dessas colunas (cupom, recibo): null.
+  - Conferência de CADA linha: quantity × unit_value tem que dar total_value (tolerância 0.02). Se não der, releia a linha — você provavelmente pegou um número da coluna vizinha.
   - unit: a unidade EM QUE a quantidade e o valor unitário estão na nota (coluna UN/UNID.), convertida para um destes códigos: ${STOCK_UNITS.map((u) => `${u.value} (${u.label})`).join(", ")}. Nas notas: PC/PÇ = UN (peça), PT/PCT = PCT (pacote), MT = M, LT = L, FD = FARDO, GL = GALAO, RL = ROLO, JG/CJ = KIT. Cupom sem coluna de unidade: deduza pela descrição.
   - ATENÇÃO À EMBALAGEM: o valor unitário muitas vezes é de uma caixa/pacote/fardo, não de uma peça (ex.: "OVOS CX 30 DZ" a R$ 250 é UMA CAIXA, não um ovo; "TERMINAL C/100 PCS" vendido em PT é um pacote de 100). Quando a unidade for embalagem (CX, PCT, FARDO, SACO, KIT, ROLO, GALAO) e a descrição disser o conteúdo, preencha pack_qty (quantos vêm em CADA embalagem) e pack_unit (o código da unidade de dentro: UN, DZ, KG, L, M...). Exemplos: "CX C/100 PCS" → pack_qty 100, pack_unit UN; "FILME PVC 28CM X 100M" em rolo → 100, M; "LIMPA PEDRA GL 5 L" → unit GALAO, pack_qty 5, pack_unit L; "OVOS CX 30 DZ" → 30, DZ; "ÁGUA FD 12X500ML" → unit FARDO, 12, UN. Se a unidade não for embalagem ou o conteúdo não estiver escrito, pack_qty e pack_unit ficam null — não chute.
 - notes: curto, só o que importa para o financeiro (frete, desconto, nº do pedido). null se nada.
 - warnings: em português, o que ficou ilegível ou incerto (ex.: "valor unitário do item 3 cortado na foto"). null se tudo legível.
 
-CONFERÊNCIA OBRIGATÓRIA antes de responder: some os total_value dos itens e compare com o total dos produtos/do documento. Se não fechar (tolerância de 0.02), releia os dígitos das linhas — o erro costuma ser 1 ou 7, 3 ou 8, 0 ou 6 trocados, ou a vírgula no lugar errado — e corrija; se mesmo assim não fechar, explique em warnings qual linha ficou em dúvida.
+CONFERÊNCIA OBRIGATÓRIA antes de responder: some os total_value dos itens e compare com products_total (ou, sem ele, com o total do documento); e confira que products_total + freight + insurance + other_expenses + ipi_total − discount = total_amount. Se não fechar (tolerância de 0.02), releia os dígitos das linhas — o erro costuma ser 1 ou 7, 3 ou 8, 0 ou 6 trocados, ou a vírgula no lugar errado — e corrija; se mesmo assim não fechar, explique em warnings qual linha ficou em dúvida.
 
 Regras: números com ponto decimal (1234.56), nunca vírgula. Não invente: o que não estiver no documento fica null. Datas de 2 dígitos no ano são 20xx. Hoje é ${today}.`;
+}
+
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function str(v: unknown): string | null {
+  const t = typeof v === "string" ? v.trim() : "";
+  return t || null;
 }
 
 function digits(s: string | null | undefined): string {
@@ -226,10 +291,30 @@ export async function POST(request: NextRequest) {
         // Conteúdo da embalagem ("CX com 30 DZ") — só pra unidade de embalagem.
         pack_qty: packQty,
         pack_unit: packQty != null ? normalizeStockUnit(it.pack_unit) || "UN" : null,
-        unit_value: typeof it.unit_value === "number" ? it.unit_value : null,
-        total_value: typeof it.total_value === "number" ? it.total_value : null,
+        unit_value: num(it.unit_value),
+        total_value: num(it.total_value),
+        ncm: str(it.ncm),
+        cst: str(it.cst),
+        cfop: str(it.cfop),
+        icms_base: num(it.icms_base),
+        icms_value: num(it.icms_value),
+        icms_rate: num(it.icms_rate),
+        ipi_value: num(it.ipi_value),
+        ipi_rate: num(it.ipi_rate),
       };
     });
+  const totalAmount = num(result.total_amount);
+  const nfTotals: NfTotals = {
+    products_total: num(result.products_total),
+    freight: num(result.freight),
+    insurance: num(result.insurance),
+    discount: num(result.discount),
+    other_expenses: num(result.other_expenses),
+    ipi_total: num(result.ipi_total),
+    icms_base_total: num(result.icms_base_total),
+    icms_total: num(result.icms_total),
+    total: totalAmount,
+  };
 
   // Fornecedor: cadastro pelo CNPJ → (fora do cadastro) Receita, vinculando a
   // um cadastro de mesmo nome sem CNPJ ou cadastrando → por último, o nome
@@ -289,7 +374,6 @@ export async function POST(request: NextRequest) {
   // consulta não derruba a leitura.
   const nfNumber = result.nf_number?.trim() || null;
   const issueDate = isoOrNull(result.issue_date);
-  const totalAmount = typeof result.total_amount === "number" ? result.total_amount : null;
   let duplicates: DuplicateMatch[] = [];
   try {
     duplicates = await findDuplicatePurchases({
@@ -318,6 +402,7 @@ export async function POST(request: NextRequest) {
     nf_number: nfNumber,
     access_key: accessKey.length === 44 ? accessKey : null,
     items,
+    nf_totals: nfTotals,
     notes: result.notes?.trim() || null,
     warnings: result.warnings?.trim() || null,
     duplicates,

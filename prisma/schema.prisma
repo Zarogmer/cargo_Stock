@@ -1139,6 +1139,21 @@ model PurchaseOrder {
   // dígitos). Preenchidos pelo Escanear ou digitados no Nova Compra.
   nf_number      String?
   access_key     String?
+  // Colunas fiscais da linha da DANFE, lidas pelo Escanear: NCM/SH, CST, CFOP,
+  // base de cálculo e valor do ICMS, valor do IPI e alíquotas (%). Sem um campo
+  // pra cada coluna a IA misturava base/ICMS com quantidade e unitário.
+  ncm            String?
+  cst            String?
+  cfop           String?
+  icms_base      Float?
+  icms_value     Float?
+  icms_rate      Float?
+  ipi_value      Float?
+  ipi_rate       Float?
+  // Rodapé "CÁLCULO DO IMPOSTO" da nota, repetido em todos os itens do lote:
+  // { products_total, freight, insurance, discount, other_expenses, ipi_total,
+  //   icms_base_total, icms_total, total } (NfTotals no modal do Escanear).
+  nf_totals      Json?
   created_by     String
   created_at     DateTime  @default(now()) @db.Timestamptz()
   updated_at     DateTime  @default(now()) @db.Timestamptz()
