@@ -361,7 +361,10 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
     setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...patch } : it)));
   }
 
-  const rowTotal = (it: ItemRow) => parseDecimalBR(it.unitValue) * (parseDecimalBR(it.quantity) || 1);
+  // Total da linha em centavos, como a nota imprime e como a compra é gravada:
+  // 9,335 kg × 22,99 = 214,61165 vira 214,61. Somar sem arredondar dava
+  // R$ 0,01 de "diferença" contra o documento sem nada estar errado.
+  const rowTotal = (it: ItemRow) => Math.round(parseDecimalBR(it.unitValue) * (parseDecimalBR(it.quantity) || 1) * 100) / 100;
   const included = items.filter((it) => it.include && it.description.trim());
   const itemsTotal = included.reduce((s, it) => s + rowTotal(it), 0);
   const docTotal = result?.total_amount ?? null;

@@ -112,11 +112,13 @@ Extraia:
 - due_dates: vencimentos das parcelas/duplicatas ou do boleto, em YYYY-MM-DD, em ordem. Vazio se não houver.
 - digitable_line: linha digitável do boleto (47 ou 48 dígitos, só dígitos), se aparecer legível.
 - nf_number e access_key (chave de acesso de 44 dígitos, só dígitos) quando for nota fiscal.
-- items: cada produto/serviço comprado, com a descrição como está no documento (pode corrigir abreviações óbvias), quantidade, unidade, valor unitário e valor total da linha. Boleto ou recibo sem itens: um item só descrevendo o que foi pago (ex.: "Boleto - <beneficiário>") com o valor total.
+- items: cada produto/serviço comprado, com a descrição como está no documento (pode corrigir abreviações óbvias), quantidade, unidade, valor unitário e valor total da linha. Copie quantidade, valor unitário e valor total EXATAMENTE como impressos na linha (quantidade pode ter 3 casas, ex.: 9.335 KG) — não recalcule nem arredonde. Boleto ou recibo sem itens: um item só descrevendo o que foi pago (ex.: "Boleto - <beneficiário>") com o valor total.
   - unit: a unidade EM QUE a quantidade e o valor unitário estão na nota (coluna UN/UNID.), convertida para um destes códigos: ${STOCK_UNITS.map((u) => `${u.value} (${u.label})`).join(", ")}. Nas notas: PC/PÇ = UN (peça), PT/PCT = PCT (pacote), MT = M, LT = L, FD = FARDO, GL = GALAO, RL = ROLO, JG/CJ = KIT. Cupom sem coluna de unidade: deduza pela descrição.
   - ATENÇÃO À EMBALAGEM: o valor unitário muitas vezes é de uma caixa/pacote/fardo, não de uma peça (ex.: "OVOS CX 30 DZ" a R$ 250 é UMA CAIXA, não um ovo; "TERMINAL C/100 PCS" vendido em PT é um pacote de 100). Quando a unidade for embalagem (CX, PCT, FARDO, SACO, KIT, ROLO, GALAO) e a descrição disser o conteúdo, preencha pack_qty (quantos vêm em CADA embalagem) e pack_unit (o código da unidade de dentro: UN, DZ, KG, L, M...). Exemplos: "CX C/100 PCS" → pack_qty 100, pack_unit UN; "FILME PVC 28CM X 100M" em rolo → 100, M; "LIMPA PEDRA GL 5 L" → unit GALAO, pack_qty 5, pack_unit L; "OVOS CX 30 DZ" → 30, DZ; "ÁGUA FD 12X500ML" → unit FARDO, 12, UN. Se a unidade não for embalagem ou o conteúdo não estiver escrito, pack_qty e pack_unit ficam null — não chute.
 - notes: curto, só o que importa para o financeiro (frete, desconto, nº do pedido). null se nada.
 - warnings: em português, o que ficou ilegível ou incerto (ex.: "valor unitário do item 3 cortado na foto"). null se tudo legível.
+
+CONFERÊNCIA OBRIGATÓRIA antes de responder: some os total_value dos itens e compare com o total dos produtos/do documento. Se não fechar (tolerância de 0.02), releia os dígitos das linhas — o erro costuma ser 1 ou 7, 3 ou 8, 0 ou 6 trocados, ou a vírgula no lugar errado — e corrija; se mesmo assim não fechar, explique em warnings qual linha ficou em dúvida.
 
 Regras: números com ponto decimal (1234.56), nunca vírgula. Não invente: o que não estiver no documento fica null. Datas de 2 dígitos no ano são 20xx. Hoje é ${today}.`;
 }
@@ -168,8 +170,9 @@ export async function POST(request: NextRequest) {
   let result: AiResult;
   try {
     const response = await client.beta.messages.create({
-      // Haiku: leitura de NF/cupom/boleto é extração simples — ~40x mais barato que o Opus.
-      model: "claude-haiku-5-5",
+      // Sonnet 5.5: o Haiku errava dígitos em foto de DANFE (valores que não
+      // fechavam com o total). Sonnet lê melhor e ainda custa ~5x menos que o Opus.
+      model: "claude-sonnet-5-5",
       max_tokens: 16000,
       output_config: {
         effort: "medium",
