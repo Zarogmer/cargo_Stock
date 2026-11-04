@@ -1,5 +1,6 @@
 // Texto editável dos avisos automáticos do WhatsApp (cards "Lista de embarque",
-// "Retorno de material" e "Compras registradas" em Mensagens). O modelo fica em
+// "Retorno de material" e "Compras registradas" em Mensagens — este último tem
+// dois textos: um com valores pras pessoas e um sem valores pros grupos). O modelo fica em
 // app_settings junto com o resto da config (NotifyConfig.<aviso>.template);
 // null = usa o padrão daqui, que reproduz o texto que as rotas montavam fixo.
 //
@@ -14,7 +15,7 @@
 //     dele estiver vazia; senão sai sem os colchetes.
 //   • Linhas em branco repetidas viram uma só.
 
-export type NotifyTemplateKind = "embarqueLista" | "retornoMaterial" | "compraRegistrada";
+export type NotifyTemplateKind = "embarqueLista" | "retornoMaterial" | "compraRegistrada" | "compraRegistradaGrupo";
 
 export interface TemplateVar {
   key: string;
@@ -177,7 +178,8 @@ export const NOTIFY_TEMPLATES: Record<NotifyTemplateKind, TemplateSpec> = {
       { key: "data", desc: "data da compra (DD/MM/AAAA)" },
       { key: "navio", desc: "navio da compra, se tiver" },
       { key: "pagamento", desc: "PIX, CARTÃO, FATURADO com os vencimentos..." },
-      { key: "itens", desc: "lista dos itens com valor (uma linha por item)" },
+      { key: "itens", desc: "lista dos itens com quantidade e valor (uma linha por item)" },
+      { key: "itens_sem_valor", desc: "lista dos itens só com a quantidade, sem valor" },
       { key: "qtd_itens", desc: "quantos itens" },
       { key: "total", desc: "valor total (R$)" },
       { key: "registrado_por", desc: "quem salvou a compra" },
@@ -192,6 +194,7 @@ export const NOTIFY_TEMPLATES: Record<NotifyTemplateKind, TemplateSpec> = {
           navio: "",
           pagamento: "FATURADO 19/11, 19/12",
           itens: "• LUVA NITRÍLICA — 10 × R$ 12,50 = R$ 125,00\n• FITA ISOLANTE — R$ 8,90\n• DISCO DE CORTE — 5 × R$ 7,00 = R$ 35,00",
+          itens_sem_valor: "• LUVA NITRÍLICA — 10 PAR\n• FITA ISOLANTE — 1\n• DISCO DE CORTE — 5",
           qtd_itens: "3",
           total: "R$ 168,90",
           registrado_por: "Guilherme",
@@ -199,7 +202,28 @@ export const NOTIFY_TEMPLATES: Record<NotifyTemplateKind, TemplateSpec> = {
       },
     ],
   },
+  // Mesmo aviso, versão dos GRUPOS: só o que foi comprado e a quantidade, sem
+  // valor nem total (os valores vão só por DM pras pessoas marcadas no card).
+  // Mesmas variáveis do de cima — quem quiser pode pôr {total} aqui também.
+  compraRegistradaGrupo: {
+    defaultTemplate: [
+      "🛒 *{titulo}*",
+      "",
+      "🏪 Fornecedor: *{fornecedor}*",
+      "📅 Data: {data}",
+      "🚢 Navio: {navio}",
+      "",
+      "{itens_sem_valor}",
+      "",
+      "👤 Registrado por: {registrado_por}",
+    ].join("\n"),
+    vars: [],
+    samples: [],
+  },
 };
+// Grupo usa as mesmas variáveis e o mesmo exemplo da versão com valores.
+NOTIFY_TEMPLATES.compraRegistradaGrupo.vars = NOTIFY_TEMPLATES.compraRegistrada.vars;
+NOTIFY_TEMPLATES.compraRegistradaGrupo.samples = NOTIFY_TEMPLATES.compraRegistrada.samples;
 
 // Valor da variável (vazio quando não existe ou é só espaço).
 function valueOf(vars: Record<string, string | null | undefined>, key: string): string {

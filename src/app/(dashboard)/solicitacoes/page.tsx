@@ -716,7 +716,13 @@ export default function SolicitacoesPage() {
         body: JSON.stringify({ purchaseIds }),
       });
       const b = await r.json().catch(() => ({}));
-      if (b.status === "ok") return ` 📲 Enviado no WhatsApp${b.group ? ` (${b.group})` : ""}.`;
+      if (b.status === "ok") {
+        const dms = Array.isArray(b.dmResults)
+          ? (b.dmResults as { target: string; ok: boolean }[]).filter((d) => d.ok).map((d) => d.target.replace(/^dm:/, ""))
+          : [];
+        const targets = [b.group, ...dms].filter(Boolean).join(", ");
+        return ` 📲 Enviado no WhatsApp${targets ? ` (${targets})` : ""}.`;
+      }
       if (b.status === "error") return " ⚠️ Falhou ao enviar no WhatsApp.";
       return "";
     } catch {

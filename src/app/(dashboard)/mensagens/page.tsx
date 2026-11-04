@@ -40,7 +40,13 @@ type Mode = "colaboradores" | "manual" | "grupo";
 interface NotifyGroup { jid: string; label: string | null }
 interface NotifyTarget { groups: NotifyGroup[]; functions: string[] }
 interface RetornoNotifyTarget extends NotifyTarget { enabled: boolean; dmAdmin: boolean; template: string | null }
-interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget; retornoMaterial: RetornoNotifyTarget; embarqueLista: RetornoNotifyTarget; compraRegistrada: RetornoNotifyTarget }
+// Pessoa que recebe por DM (employeeId null = número digitado à mão).
+interface NotifyPerson { employeeId: number | null; name: string; phone: string }
+// Compras registradas: pessoas recebem COM valores (template); grupos recebem
+// SEM valores (groupTemplate).
+interface CompraNotifyTarget extends RetornoNotifyTarget { people: NotifyPerson[]; groupTemplate: string | null }
+interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget; retornoMaterial: RetornoNotifyTarget; embarqueLista: RetornoNotifyTarget; compraRegistrada: CompraNotifyTarget }
+const EMPTY_COMPRA_TARGET: CompraNotifyTarget = { groups: [], functions: [], enabled: true, dmAdmin: false, template: null, people: [], groupTemplate: null };
 interface EmployeeRoleLite { id: number; name: string; phone: string | null; role: string | null; status: string | null; sector: string | null }
 
 // Templates de dados ao vivo que o usuário pode inserir no texto antes de enviar
@@ -196,6 +202,162 @@ function renderWhatsappInline(text: string): React.ReactNode[] {
   return out;
 }
 
+// Pessoas que recebem o aviso por DM: escolhe da lista de colaboradores (com
+// telefone) ou digita nome + número à mão (pra quem não está no cadastro).
+function PeopleMultiSelect({
+  selected,
+  onChange,
+  employees,
+  disabled,
+  label,
+  hint,
+}: {
+  selected: NotifyPerson[];
+  onChange: (people: NotifyPerson[]) => void;
+  employees: EmployeeRoleLite[];
+  disabled: boolean;
+  label: string;
+  hint: string;
+}) {
+  const [search, setSearch] = useState("");
+  const [manualName, setManualName] = useState("");
+  const [manualPhone, setManualPhone] = useState("");
+  const digits = (p: string) => p.replace(/\D/g, "");
+  const selectedIds = new Set(selected.map((p) => p.employeeId).filter((id): id is number => id != null));
+  const selectedDigits = new Set(selected.map((p) => digits(p.phone)));
+
+  const candidates = search.trim()
+    ? employees.filter(
+        (e) =>
+          e.status !== "INATIVO" &&
+          !!e.phone && e.phone.trim().length >= 10 &&
+          !selectedIds.has(e.id) && !selectedDigits.has(digits(e.phone)) &&
+          matchSearch(e.name, search),
+      ).slice(0, 8)
+    : [];
+
+  function addEmployee(e: EmployeeRoleLite) {
+    onChange([...selected, { employeeId: e.id, name: e.name, phone: (e.phone || "").trim() }]);
+    setSearch("");
+  }
+
+  function addManual() {
+    const phone = manualPhone.trim();
+    const name = manualName.trim();
+    if (digits(phone).length < 10 || selectedDigits.has(digits(phone))) return;
+    onChange([...selected, { employeeId: null, name: name || phone, phone }]);
+    setManualName("");
+    setManualPhone("");
+  }
+
+  const manualOk = digits(manualPhone).length >= 10 && !selectedDigits.has(digits(manualPhone));
+
+  return (
+    <div>
+      <label className="block text-xs font-medium mb-1 text-text-light">
+        {label}{selected.length > 0 ? ` · ${selected.length} pessoa${selected.length === 1 ? "" : "s"}` : ""}
+      </label>
+      <div className="border border-border rounded-lg divide-y divide-border">
+        {selected.length === 0 ? (
+          <p className="text-xs text-text-light p-3">Ninguém ainda. Busque um colaborador ou digite um número abaixo.</p>
+        ) : (
+          selected.map((p) => {
+            const emp = p.employeeId != null ? employees.find((e) => e.id === p.employeeId) : null;
+            return (
+              <div key={`${p.employeeId ?? "m"}-${p.phone}`} className="flex items-center gap-2 px-3 py-2 text-sm">
+                <span className="flex-1 truncate">
+                  👤 {emp?.name || p.name}
+                  {emp?.sector || emp?.role ? (
+                    <span className="ml-1.5 text-[11px] text-text-light">{[emp.sector, emp.role].filter(Boolean).join(" · ")}</span>
+                  ) : p.employeeId == null ? (
+                    <span className="ml-1.5 text-[11px] text-text-light">número avulso</span>
+                  ) : null}
+                </span>
+                <span className="font-mono text-xs text-text-light">{formatPhone(emp?.phone || p.phone)}</span>
+                <button
+                  type="button"
+                  onClick={() => onChange(selected.filter((x) => x !== p))}
+                  disabled={disabled}
+                  className="text-xs text-red-600 hover:underline"
+                  title="Remover"
+                >
+                  remover
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <div className="mt-2 relative">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          disabled={disabled}
+          placeholder="🔍 Buscar colaborador pelo nome..."
+          className="w-full px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+        />
+        {search.trim() && (
+          <div className="absolute z-10 left-0 right-0 mt-1 bg-card border border-border rounded-lg shadow-lg max-h-56 overflow-y-auto divide-y divide-border">
+            {candidates.length === 0 ? (
+              <p className="text-xs text-text-light p-3">Nenhum colaborador ativo com telefone bate com a busca.</p>
+            ) : (
+              candidates.map((e) => (
+                <button
+                  key={e.id}
+                  type="button"
+                  onClick={() => addEmployee(e)}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-50"
+                >
+                  <span className="flex-1 truncate">
+                    {e.name}
+                    {(e.sector || e.role) && (
+                      <span className="ml-1.5 text-[11px] text-text-light">{[e.sector, e.role].filter(Boolean).join(" · ")}</span>
+                    )}
+                  </span>
+                  <span className="font-mono text-xs text-text-light">{formatPhone(e.phone || "")}</span>
+                  <span className="text-xs text-primary font-medium">+ adicionar</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <span className="text-[11px] text-text-light">Outro número:</span>
+        <input
+          type="text"
+          value={manualName}
+          onChange={(e) => setManualName(e.target.value)}
+          disabled={disabled}
+          placeholder="Nome"
+          className="flex-1 min-w-[120px] px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none"
+        />
+        <input
+          type="tel"
+          value={manualPhone}
+          onChange={(e) => setManualPhone(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }}
+          disabled={disabled}
+          placeholder="(13) 99999-9999"
+          className="w-40 px-3 py-1.5 border border-border rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none font-mono"
+        />
+        <button
+          type="button"
+          onClick={addManual}
+          disabled={disabled || !manualOk}
+          className="text-xs font-medium px-3 py-1.5 rounded-lg border border-border hover:bg-gray-50 disabled:opacity-50"
+        >
+          Adicionar
+        </button>
+      </div>
+      <p className="text-[11px] text-text-light mt-1">{hint}</p>
+    </div>
+  );
+}
+
 // Texto do aviso automático: prévia (com dados de exemplo) do que vai pro
 // WhatsApp e, ao clicar em "Editar texto", o modelo com as variáveis. null =
 // texto padrão; salva junto com o botão "Salvar configuração" da seção.
@@ -204,11 +366,14 @@ function NotifyTemplateEditor({
   value,
   onChange,
   disabled,
+  title = "Mensagem enviada",
 }: {
   kind: NotifyTemplateKind;
   value: string | null;
   onChange: (template: string | null) => void;
   disabled: boolean;
+  // Rótulo acima da prévia (o card de compras tem dois textos).
+  title?: string;
 }) {
   const spec = NOTIFY_TEMPLATES[kind];
   const [editing, setEditing] = useState(false);
@@ -240,7 +405,7 @@ function NotifyTemplateEditor({
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-xs font-medium text-text-light">
-          Mensagem enviada{value != null && (
+          {title}{value != null && (
             <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold">personalizada</span>
           )}
         </p>
@@ -1424,7 +1589,8 @@ export default function MensagensPage() {
                 <p className="text-sm font-semibold">🛒 Compras registradas</p>
                 <p className="text-[11px] text-text-light">
                   Disparado ao salvar compra(s) no Controle › Controle de Compras (Nova Compra, Escanear
-                  ou Importar PDF) — posta fornecedor, data, pagamento e a lista de itens com o total.
+                  ou Importar PDF). Os <strong>grupos</strong> recebem só o que foi comprado e a quantidade;
+                  as <strong>pessoas</strong> marcadas abaixo recebem no WhatsApp delas a versão com valores e total.
                 </p>
               </div>
 
@@ -1434,7 +1600,7 @@ export default function MensagensPage() {
                   checked={notifyCfg.compraRegistrada?.enabled !== false}
                   onChange={(e) => setNotifyCfg((c) => {
                     if (!c) return c;
-                    const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
+                    const prev = c.compraRegistrada ?? EMPTY_COMPRA_TARGET;
                     return { ...c, compraRegistrada: { ...prev, enabled: e.target.checked } };
                   })}
                   disabled={savingCfg}
@@ -1447,21 +1613,47 @@ export default function MensagensPage() {
                 selected={notifyCfg.compraRegistrada?.groups ?? []}
                 onChange={(gs) => setNotifyCfg((c) => {
                   if (!c) return c;
-                  const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
+                  const prev = c.compraRegistrada ?? EMPTY_COMPRA_TARGET;
                   return { ...c, compraRegistrada: { ...prev, groups: gs } };
                 })}
                 groups={groups}
                 disabled={savingCfg || notifyCfg.compraRegistrada?.enabled === false}
-                label="Grupos de destino"
-                hint="A lista vai pra cada grupo marcado. Sem grupo (e sem a caixinha abaixo) a compra é salva sem aviso."
+                label="Grupos de destino (sem valores)"
+                hint="Cada grupo marcado recebe só o item e a quantidade, sem valor nem total. Sem grupo, sem pessoa e sem a caixinha do Administrativo, a compra é salva sem aviso."
+              />
+
+              <NotifyTemplateEditor
+                kind="compraRegistradaGrupo"
+                title="Mensagem pros grupos (sem valores)"
+                value={notifyCfg.compraRegistrada?.groupTemplate ?? null}
+                onChange={(t) => setNotifyCfg((c) => {
+                  if (!c) return c;
+                  const prev = c.compraRegistrada ?? EMPTY_COMPRA_TARGET;
+                  return { ...c, compraRegistrada: { ...prev, groupTemplate: t } };
+                })}
+                disabled={savingCfg}
+              />
+
+              <PeopleMultiSelect
+                selected={notifyCfg.compraRegistrada?.people ?? []}
+                onChange={(people) => setNotifyCfg((c) => {
+                  if (!c) return c;
+                  const prev = c.compraRegistrada ?? EMPTY_COMPRA_TARGET;
+                  return { ...c, compraRegistrada: { ...prev, people } };
+                })}
+                employees={cfgEmployees}
+                disabled={savingCfg || notifyCfg.compraRegistrada?.enabled === false}
+                label="Pessoas que recebem com valores e total"
+                hint="Cada pessoa recebe no WhatsApp dela a mensagem abaixo, com os valores e o total (ex.: Rose, do Executivo). Quem veio da lista usa o telefone do cadastro."
               />
 
               <NotifyTemplateEditor
                 kind="compraRegistrada"
+                title="Mensagem pras pessoas (com valores e total)"
                 value={notifyCfg.compraRegistrada?.template ?? null}
                 onChange={(t) => setNotifyCfg((c) => {
                   if (!c) return c;
-                  const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
+                  const prev = c.compraRegistrada ?? EMPTY_COMPRA_TARGET;
                   return { ...c, compraRegistrada: { ...prev, template: t } };
                 })}
                 disabled={savingCfg}
@@ -1473,13 +1665,13 @@ export default function MensagensPage() {
                   checked={notifyCfg.compraRegistrada?.dmAdmin === true}
                   onChange={(e) => setNotifyCfg((c) => {
                     if (!c) return c;
-                    const prev = c.compraRegistrada ?? { groups: [], functions: [], enabled: true, dmAdmin: false, template: null };
+                    const prev = c.compraRegistrada ?? EMPTY_COMPRA_TARGET;
                     return { ...c, compraRegistrada: { ...prev, dmAdmin: e.target.checked } };
                   })}
                   disabled={savingCfg || notifyCfg.compraRegistrada?.enabled === false}
                   className="w-4 h-4"
                 />
-                <span>Mandar também pro <strong>Administrativo</strong> (WhatsApp de cada um)</span>
+                <span>Mandar também pro <strong>Administrativo</strong> (WhatsApp de cada um, com valores)</span>
               </label>
               {notifyCfg.compraRegistrada?.dmAdmin === true && (
                 <div className="bg-gray-50 border border-border rounded-lg px-3 py-2">

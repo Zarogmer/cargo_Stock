@@ -39,6 +39,23 @@ export interface RetornoNotifyTarget extends NotifyTarget {
   template: string | null;
 }
 
+// Uma pessoa que recebe o aviso por DM (WhatsApp direto). employeeId aponta
+// pro colaborador quando foi escolhida da lista; null = número digitado à mão.
+export interface NotifyPerson {
+  employeeId: number | null;
+  name: string;
+  phone: string;
+}
+
+// Destino do aviso "Compras registradas": além do grupo/Administrativo, uma
+// lista de PESSOAS que recebem a versão COM valores e total por DM (a Rose do
+// Executivo, por ex.). Os grupos recebem o groupTemplate (sem valores).
+export interface CompraNotifyTarget extends RetornoNotifyTarget {
+  people: NotifyPerson[];
+  // Texto que vai pros GRUPOS (sem valores); null = padrão do código.
+  groupTemplate: string | null;
+}
+
 export interface NotifyConfig {
   // Disparado quando uma nova solicitação é criada (/api/solicitacoes/notify).
   novaSolicitacao: NotifyTarget;
@@ -51,8 +68,9 @@ export interface NotifyConfig {
   // (/api/embarque/notify) — posta a lista de materiais + rancho no grupo.
   embarqueLista: RetornoNotifyTarget;
   // Disparado ao salvar compra(s) no Controle de Compras (Nova Compra,
-  // Escanear, Importar PDF) — /api/compras/notify posta a lista no grupo.
-  compraRegistrada: RetornoNotifyTarget;
+  // Escanear, Importar PDF) — /api/compras/notify posta a lista SEM valores
+  // nos grupos e manda a versão COM valores por DM pras pessoas marcadas.
+  compraRegistrada: CompraNotifyTarget;
 }
 
 // Defaults = comportamento legado. Nova solicitação avisa os SUPERVISOR por DM;
@@ -63,7 +81,7 @@ export function defaultNotifyConfig(): NotifyConfig {
     compraConcluida: { groups: [], functions: [] },
     retornoMaterial: { groups: [], functions: [], enabled: true, dmAdmin: false, template: null },
     embarqueLista: { groups: [], functions: [], enabled: true, dmAdmin: false, template: null },
-    compraRegistrada: { groups: [], functions: [], enabled: true, dmAdmin: false, template: null },
+    compraRegistrada: { groups: [], functions: [], enabled: true, dmAdmin: false, template: null, people: [], groupTemplate: null },
   };
 }
 
@@ -125,6 +143,29 @@ function sanitizeTarget(raw: unknown, fallback: NotifyTarget): NotifyTarget {
   return { groups, functions };
 }
 
+// Pessoas (DM com valores): nome + telefone com pelo menos 10 dígitos, sem
+// repetir número. employeeId só quando for inteiro positivo.
+function sanitizePeople(raw: unknown): NotifyPerson[] {
+  const out: NotifyPerson[] = [];
+  const seen = new Set<string>();
+  const list = raw && typeof raw === "object" ? (raw as Record<string, unknown>).people : null;
+  if (!Array.isArray(list)) return out;
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const phone = typeof o.phone === "string" ? o.phone.trim() : "";
+    const digits = phone.replace(/\D/g, "");
+    if (digits.length < 10 || seen.has(digits)) continue;
+    seen.add(digits);
+    const name = typeof o.name === "string" && o.name.trim() ? o.name.trim().slice(0, 80) : phone;
+    const employeeId = typeof o.employeeId === "number" && Number.isInteger(o.employeeId) && o.employeeId > 0
+      ? o.employeeId
+      : null;
+    out.push({ employeeId, name, phone });
+  }
+  return out;
+}
+
 // Valida/normaliza um payload arbitrário no formato NotifyConfig, caindo nos
 // defaults pro que estiver faltando ou inválido. Usado tanto na leitura
 // (parse do banco) quanto no PUT (sanitiza o que o front mandou).
@@ -139,8 +180,8 @@ export function sanitizeNotifyConfig(raw: unknown): NotifyConfig {
   const dmAdminOf = (raw: unknown) =>
     !!(raw && typeof raw === "object" && (raw as Record<string, unknown>).dmAdmin === true);
   // template: texto não-vazio (cortado no limite); vazio/ausente = padrão.
-  const templateOf = (raw: unknown) => {
-    const t = raw && typeof raw === "object" ? (raw as Record<string, unknown>).template : null;
+  const templateOf = (raw: unknown, field = "template") => {
+    const t = raw && typeof raw === "object" ? (raw as Record<string, unknown>)[field] : null;
     if (typeof t !== "string" || !t.trim()) return null;
     return t.replace(/\r\n?/g, "\n").slice(0, MAX_TEMPLATE_LENGTH);
   };
@@ -164,6 +205,8 @@ export function sanitizeNotifyConfig(raw: unknown): NotifyConfig {
       enabled: enabledOf(r.compraRegistrada),
       dmAdmin: dmAdminOf(r.compraRegistrada),
       template: templateOf(r.compraRegistrada),
+      people: sanitizePeople(r.compraRegistrada),
+      groupTemplate: templateOf(r.compraRegistrada, "groupTemplate"),
     },
   };
 }
