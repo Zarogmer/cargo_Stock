@@ -265,6 +265,13 @@ export const FORNECEDORES_ROLES: Role[] = ["GESTOR", "EXECUTIVO", "COMERCIAL", "
 // do item Checklist em NAV_ITEMS.
 export const CHECKLIST_ROLES: Role[] = ["EXECUTIVO", "COMERCIAL", "FINANCEIRO", "RH", "TECNOLOGIA", "ESTAGIO", "MANUTENCAO"];
 
+// Papéis que podem CORRIGIR o Retorno de um navio já concluído (Checklist ›
+// Retorno). Pros demais o retorno fechado fica só pra consulta. 2026-11:
+// pedido do Guilherme — a Manutenção confere o material e precisa consertar
+// erro de digitação depois de fechado; Tecnologia entra como suporte. Salvar
+// de novo ajusta o Estoque pela diferença e refaz a despesa de material perdido.
+export const RETORNO_FIX_ROLES: Role[] = ["MANUTENCAO", "TECNOLOGIA"];
+
 // Papéis que acessam o módulo bancário do Financeiro (Contas a Pagar,
 // Conciliação Bancária e o Painel financeiro). Dados de
 // banco/saldo/extrato são sensíveis — só Executivo, Financeiro e Tecnologia.

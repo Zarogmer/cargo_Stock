@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { db } from "@/lib/db";
 import { sortShipsNewestFirst } from "@/lib/ship-order";
 import { releaseShipAllocationsNow } from "@/lib/release-finished-ships";
-import { hasPermission, canViewStockValue, type Module } from "@/lib/rbac";
+import { hasPermission, canViewStockValue, RETORNO_FIX_ROLES, type Module } from "@/lib/rbac";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -799,8 +799,12 @@ export function EscalacaoEstoquePage() {
   }
 
   // ── Escanear folha (IA) ─────────────────────────────────────────────────
-  // Navio com retorno fechado (Concluído + retorno, ou Cancelado) não edita.
-  const returnConcluded = !!currentShip && (currentShip.status === "CANCELADO" || (currentShip.status === "CONCLUIDO" && !!existingReturn));
+  // Navio com retorno fechado (Concluído + retorno, ou Cancelado) não edita —
+  // salvo pra quem pode corrigir retorno fechado (RETORNO_FIX_ROLES, ex.: a
+  // Manutenção consertando erro de digitação). Cancelado trava pra todo mundo.
+  const returnClosed = !!currentShip && currentShip.status === "CONCLUIDO" && !!existingReturn;
+  const fixingClosedReturn = returnClosed && canEmbarcar && RETORNO_FIX_ROLES.includes(role);
+  const returnConcluded = !!currentShip && (currentShip.status === "CANCELADO" || (returnClosed && !fixingClosedReturn));
   const canScan = !!selectedTeam && (tab === "embarque" ? canEditEmbark : canEmbarcar && !returnConcluded);
 
   // Itens que a IA pode casar com as linhas da folha. Embarque: kit (inclusive
@@ -1484,6 +1488,7 @@ export function EscalacaoEstoquePage() {
           sending={sendingWhats}
           canEdit={canEmbarcar}
           concluded={returnConcluded}
+          fixingClosed={fixingClosedReturn}
           closedPendingReturn={!!currentShip && currentShip.status === "CONCLUIDO" && !existingReturn}
           message={returnMsg}
           history={existingReturn ? [existingReturn] : []}
@@ -1858,8 +1863,14 @@ export function EscalacaoEstoquePage() {
 
       {/* Confirmar retorno: confere o material, manda o resumo no WhatsApp e
           fecha o Checklist. Se o navio ainda estiver aberto, fecha ele também. */}
-      <Modal open={confirmReturnOpen} onClose={() => setConfirmReturnOpen(false)} title="Confirmar Retorno" maxWidth="max-w-md">
+      <Modal open={confirmReturnOpen} onClose={() => setConfirmReturnOpen(false)} title={fixingClosedReturn ? "Salvar correção do Retorno" : "Confirmar Retorno"} maxWidth="max-w-md">
         <div className="space-y-4">
+          {fixingClosedReturn && (
+            <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              ✏️ Este navio já está concluído — você está <strong>corrigindo</strong> o retorno fechado. O Estoque é
+              ajustado só pela diferença e a despesa de material perdido do navio é recalculada.
+            </p>
+          )}
           <p className="text-sm text-text-light">
             Confirmar o retorno de <strong>{selectedTeam ? TEAM_LABELS[selectedTeam] : "a equipe"}</strong> no
             navio <strong>{currentShip?.name}</strong>. O que voltou bom volta pro Estoque; o resumo com
@@ -1884,7 +1895,7 @@ export function EscalacaoEstoquePage() {
               Cancelar
             </Button>
             <Button size="sm" onClick={() => handleSaveReturn()} disabled={savingReturn || (shipOpenForClose && !returnCloseDate)}>
-              {savingReturn ? "Confirmando..." : "✅ Confirmar Retorno"}
+              {savingReturn ? "Confirmando..." : fixingClosedReturn ? "✏️ Salvar correção" : "✅ Confirmar Retorno"}
             </Button>
           </div>
         </div>
@@ -1901,7 +1912,7 @@ interface ReturnKitRow { id: number; stock_item_id: number; estName: string; nee
 
 function RetornoSection({
   shipName, team, teamKit, ranchoKit, draft, setDraft, notes, setNotes,
-  onSave, onSend, onDownload, downloading, saving, sending, canEdit, concluded, closedPendingReturn, message, history, editing,
+  onSave, onSend, onDownload, downloading, saving, sending, canEdit, concluded, fixingClosed, closedPendingReturn, message, history, editing,
   renamingId, renameValue, savingRename, onStartRename, onChangeRename, onCancelRename, onSaveRename,
 }: {
   shipName: string;
@@ -1923,6 +1934,9 @@ function RetornoSection({
   // Cancelado): campos travados e sem reconfirmar (um retorno por navio).
   // Navio ainda aberto (mesmo com retorno salvo) segue editável.
   concluded: boolean;
+  // true = ciclo encerrado, mas este papel pode corrigir (RETORNO_FIX_ROLES):
+  // os campos seguem editáveis e o botão vira "Salvar correção".
+  fixingClosed: boolean;
   // true = navio fechado direto na aba Navios (Concluído) mas ainda SEM
   // Retorno: os campos seguem editáveis pra fazer o Retorno depois.
   closedPendingReturn: boolean;
@@ -2121,6 +2135,11 @@ function RetornoSection({
             ✅ Navio concluído — o retorno já foi fechado (aparece em &ldquo;Mostrar concluídos&rdquo;).
             Os campos ficam só pra consulta.
           </p>
+        ) : fixingClosed ? (
+          <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+            ✅ Navio concluído — o retorno já foi fechado. Achou erro? Ajuste os campos e clique em{" "}
+            <strong>Salvar correção</strong>: o Estoque é corrigido pela diferença e o resumo vai de novo pro WhatsApp.
+          </p>
         ) : closedPendingReturn ? (
           <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
             🏁 Navio já fechado (<strong>Concluído</strong>) — falta o <strong>Retorno</strong> do material.
@@ -2191,7 +2210,7 @@ function RetornoSection({
               {sending ? "Enviando..." : "📨 Enviar ocorrências pro WhatsApp"}
             </Button>
             <Button size="sm" onClick={onSave} disabled={saving || sending || concluded}>
-              {saving ? "Confirmando..." : concluded ? "✅ Retorno concluído" : "✅ Confirmar Retorno"}
+              {saving ? (fixingClosed ? "Salvando..." : "Confirmando...") : concluded ? "✅ Retorno concluído" : fixingClosed ? "✏️ Salvar correção" : "✅ Confirmar Retorno"}
             </Button>
           </div>
         )}
@@ -2221,50 +2240,69 @@ function RetornoSection({
                     </span>
                     <span className="text-xs text-text-light">por {r.created_by}</span>
                   </div>
-                  {returned.length > 0 && (
-                    <p className="text-xs text-emerald-700 mt-1">
-                      ✓ Voltou: {returned.map((it) => `${it.item_name} (${it.returned_qty})`).join(", ")}
-                    </p>
-                  )}
-                  {(broken.length > 0 || noteOnly.length > 0) && (
-                    <ul className="mt-1 space-y-0.5">
-                      {broken.map((it) => (
-                        <li key={`b${it.id}`} className="text-xs text-amber-700">
-                          🔧 Avariado: {it.item_name} ({it.broken_qty}){it.note ? ` — ${it.note}` : ""}
-                        </li>
-                      ))}
-                      {noteOnly.map((it) => (
-                        <li key={`n${it.id}`} className="text-xs text-text-light">
-                          📝 {it.item_name} — {it.note}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {lost.length > 0 && (
-                    <ul className="mt-1 space-y-0.5">
-                      {lost.map((it) => (
-                        <li key={`l${it.id}`} className="text-xs text-red-700 font-medium">
-                          ❌ Perdido: {it.item_name} ({it.lost_qty}){it.note ? ` — ${it.note}` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {consumed.length > 0 && (
-                    <ul className="mt-1 space-y-0.5">
-                      {consumed.map((it) => (
-                        <li key={`c${it.id}`} className="text-xs text-sky-700">
-                          🛢️ Insumo: {it.item_name} ({it.consumed_qty}){it.note ? ` — ${it.note}` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {r.notes && <p className="text-xs text-text-light mt-1 italic">📝 {r.notes}</p>}
+                  {/* Cada destino vira um bloco com título e os itens em tópicos
+                      lado a lado (colunas) — antes o "Voltou" era um parágrafo
+                      corrido e os demais, um item por linha. */}
+                  <ReturnSummaryGroup
+                    icon="✓" title="Voltou" tone="text-emerald-700"
+                    rows={returned.map((it) => ({ key: `r${it.id}`, name: it.item_name, qty: it.returned_qty, note: null }))}
+                  />
+                  <ReturnSummaryGroup
+                    icon="🔧" title="Avariado" tone="text-amber-700"
+                    rows={broken.map((it) => ({ key: `b${it.id}`, name: it.item_name, qty: it.broken_qty, note: it.note }))}
+                  />
+                  <ReturnSummaryGroup
+                    icon="📝" title="Observações" tone="text-text-light"
+                    rows={noteOnly.map((it) => ({ key: `n${it.id}`, name: it.item_name, qty: null, note: it.note }))}
+                  />
+                  <ReturnSummaryGroup
+                    icon="❌" title="Perdido" tone="text-red-700"
+                    rows={lost.map((it) => ({ key: `l${it.id}`, name: it.item_name, qty: it.lost_qty || 0, note: it.note }))}
+                  />
+                  <ReturnSummaryGroup
+                    icon="🛢️" title="Insumo" tone="text-sky-700"
+                    rows={consumed.map((it) => ({ key: `c${it.id}`, name: it.item_name, qty: it.consumed_qty || 0, note: it.note }))}
+                  />
+                  {r.notes && <p className="text-xs text-text-light mt-2 italic">📝 {r.notes}</p>}
                 </div>
               );
             })}
           </div>
         </section>
       )}
+    </div>
+  );
+}
+
+// Bloco do resumo do retorno confirmado: título com a contagem e os itens em
+// tópicos lado a lado (1 coluna no celular, até 4 no desktop). O nome quebra
+// linha em vez de cortar — nada some da conferência.
+function ReturnSummaryGroup({
+  icon, title, tone, rows,
+}: {
+  icon: string;
+  title: string;
+  tone: string;
+  rows: Array<{ key: string; name: string; qty: number | null; note: string | null }>;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div className={`mt-2.5 ${tone}`}>
+      <p className="text-xs font-semibold uppercase tracking-wide">
+        {icon} {title} <span className="font-normal opacity-70">({rows.length})</span>
+      </p>
+      <ul className="mt-1 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-x-5 gap-y-0.5">
+        {rows.map((row) => (
+          <li key={row.key} className="text-xs flex gap-1.5 min-w-0">
+            <span className="shrink-0 opacity-60">•</span>
+            <span className="min-w-0 break-words">
+              {row.name}
+              {row.qty != null && <strong className="font-semibold tabular-nums"> ({row.qty})</strong>}
+              {row.note ? <span className="opacity-80"> — {row.note}</span> : null}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
