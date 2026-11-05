@@ -44,17 +44,28 @@ export function printPdfBlob(blob: Blob): void {
   iframe.src = url;
 }
 
+function isMobileDevice(): boolean {
+  const nav = navigator as Navigator & { userAgentData?: { mobile?: boolean } };
+  if (nav.userAgentData?.mobile) return true;
+  if (/Android|iPhone|iPad|iPod/i.test(nav.userAgent)) return true;
+  // iPadOS se apresenta como "Macintosh"; o toque é o que entrega.
+  return /Macintosh/i.test(nav.userAgent) && nav.maxTouchPoints > 1;
+}
+
 // Entrega um documento gerado (PDF/Word) ao usuário. No CELULAR usa a Web Share
 // API passando SÓ o arquivo — assim, ao mandar pro WhatsApp, anexa apenas o PDF/
 // Word, sem vazar o link `blob:` como texto (era o que acontecia com o download).
-// No desktop (ou quando o navegador não sabe compartilhar arquivos), baixa normal.
+// No desktop baixa normal — no app instalado (Electron) isso abre o "Salvar como"
+// pra escolher a pasta.
 export async function shareOrDownloadBlob(blob: Blob, fileName: string): Promise<void> {
   const file = new File([blob], fileName, { type: blob.type || "application/octet-stream" });
 
-  // navigator.canShare/share com `files` existe basicamente só em mobile. Passar
-  // apenas { files } (sem title/text/url) faz o WhatsApp receber só o arquivo.
+  // Passar apenas { files } (sem title/text/url) faz o WhatsApp receber só o arquivo.
+  // O teste de celular é obrigatório: o Windows 11 também diz que sabe compartilhar
+  // arquivo (canShare = true) e abria o painel "Compartilhar" do sistema no lugar
+  // do download — a pessoa tinha que clicar em Copiar e colar numa pasta.
   const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
-  if (typeof nav.share === "function" && nav.canShare?.({ files: [file] })) {
+  if (isMobileDevice() && typeof nav.share === "function" && nav.canShare?.({ files: [file] })) {
     try {
       await nav.share({ files: [file] });
       return;
