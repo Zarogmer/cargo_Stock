@@ -44,9 +44,9 @@ interface RetornoNotifyTarget extends NotifyTarget { enabled: boolean; dmAdmin: 
 interface NotifyPerson { employeeId: number | null; name: string; phone: string }
 // Compras registradas: pessoas recebem COM valores (template); grupos recebem
 // SEM valores (groupTemplate).
-interface CompraNotifyTarget extends RetornoNotifyTarget { people: NotifyPerson[]; groupTemplate: string | null }
+interface CompraNotifyTarget extends RetornoNotifyTarget { people: NotifyPerson[]; groupTemplate: string | null; photoToGroups: boolean }
 interface NotifyConfig { novaSolicitacao: NotifyTarget; compraConcluida: NotifyTarget; retornoMaterial: RetornoNotifyTarget; embarqueLista: RetornoNotifyTarget; compraRegistrada: CompraNotifyTarget }
-const EMPTY_COMPRA_TARGET: CompraNotifyTarget = { groups: [], functions: [], enabled: true, dmAdmin: false, template: null, people: [], groupTemplate: null };
+const EMPTY_COMPRA_TARGET: CompraNotifyTarget = { groups: [], functions: [], enabled: true, dmAdmin: false, template: null, people: [], groupTemplate: null, photoToGroups: false };
 interface EmployeeRoleLite { id: number; name: string; phone: string | null; role: string | null; status: string | null; sector: string | null }
 
 // Templates de dados ao vivo que o usuário pode inserir no texto antes de enviar
@@ -1591,6 +1591,7 @@ export default function MensagensPage() {
                   Disparado ao salvar compra(s) no Controle › Controle de Compras (Nova Compra, Escanear
                   ou Importar PDF). Os <strong>grupos</strong> recebem só o que foi comprado e a quantidade;
                   as <strong>pessoas</strong> marcadas abaixo recebem no WhatsApp delas a versão com valores e total.
+                  No Escanear, a <strong>foto da nota</strong> vai junto pras pessoas (e pros grupos, se a caixinha abaixo estiver marcada).
                 </p>
               </div>
 
@@ -1633,6 +1634,26 @@ export default function MensagensPage() {
                 })}
                 disabled={savingCfg}
               />
+
+              <label className="flex items-start gap-2 text-sm cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={notifyCfg.compraRegistrada?.photoToGroups === true}
+                  onChange={(e) => setNotifyCfg((c) => {
+                    if (!c) return c;
+                    const prev = c.compraRegistrada ?? EMPTY_COMPRA_TARGET;
+                    return { ...c, compraRegistrada: { ...prev, photoToGroups: e.target.checked } };
+                  })}
+                  disabled={savingCfg || notifyCfg.compraRegistrada?.enabled === false}
+                  className="w-4 h-4 mt-0.5"
+                />
+                <span>
+                  Mandar a <strong>foto da nota</strong> (Escanear) também nos grupos
+                  <span className="block text-[11px] text-text-light">
+                    Atenção: a foto mostra os valores da nota. Desmarcado, só as pessoas abaixo (e o Administrativo) recebem a foto.
+                  </span>
+                </span>
+              </label>
 
               <PeopleMultiSelect
                 selected={notifyCfg.compraRegistrada?.people ?? []}

@@ -707,21 +707,38 @@ export default function SolicitacoesPage() {
   // Posta a(s) compra(s) recém-salvas no WhatsApp (grupos do card "Compras
   // registradas" em Mensagens). Best-effort: devolve o trecho pro toast, ou ""
   // quando o aviso está desligado/sem grupo; falha nunca desfaz a compra.
-  async function notifyPurchasesWhatsapp(purchaseIds: string[]): Promise<string> {
+  // `files` = fotos/PDFs do Escanear: vão junto, depois do texto (multipart).
+  async function notifyPurchasesWhatsapp(
+    purchaseIds: string[],
+    files: { blob: Blob; name: string }[] = [],
+  ): Promise<string> {
     if (purchaseIds.length === 0) return "";
     try {
-      const r = await fetch("/api/compras/notify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ purchaseIds }),
-      });
+      let init: RequestInit;
+      if (files.length > 0) {
+        const fd = new FormData();
+        fd.append("purchaseIds", JSON.stringify(purchaseIds));
+        files.forEach((f) => fd.append("files", f.blob, f.name));
+        init = { method: "POST", body: fd };
+      } else {
+        init = {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ purchaseIds }),
+        };
+      }
+      const r = await fetch("/api/compras/notify", init);
       const b = await r.json().catch(() => ({}));
       if (b.status === "ok") {
         const dms = Array.isArray(b.dmResults)
           ? (b.dmResults as { target: string; ok: boolean }[]).filter((d) => d.ok).map((d) => d.target.replace(/^dm:/, ""))
           : [];
         const targets = [b.group, ...dms].filter(Boolean).join(", ");
-        return ` 📲 Enviado no WhatsApp${targets ? ` (${targets})` : ""}.`;
+        const photoFails = Array.isArray(b.photoErrors) ? (b.photoErrors as string[]) : [];
+        const photoMsg = photoFails.length > 0
+          ? ` ⚠️ A foto não foi pra: ${photoFails.join(", ")}.`
+          : b.photoTargets > 0 ? " 📷 Foto enviada junto." : "";
+        return ` 📲 Enviado no WhatsApp${targets ? ` (${targets})` : ""}.${photoMsg}`;
       }
       if (b.status === "error") return " ⚠️ Falhou ao enviar no WhatsApp.";
       return "";
@@ -924,7 +941,7 @@ export default function SolicitacoesPage() {
         contasMsg = " ⚠️ Falhou ao lançar no Contas a Pagar — será lançado sozinho ao abrir a tela.";
       }
     }
-    const waMsg = await notifyPurchasesWhatsapp(ids);
+    const waMsg = await notifyPurchasesWhatsapp(ids, draft.files);
     setScanOpen(false);
     setScanFiles(null);
     setSaveOk(

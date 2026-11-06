@@ -45,6 +45,8 @@ export interface ScannedPurchaseDraft {
   items: ScannedPurchaseItem[];
   // Rodapé "CÁLCULO DO IMPOSTO" da nota — gravado em cada compra do lote.
   nfTotals: NfTotals | null;
+  // Fotos/PDFs escaneados (já reduzidos) — vão junto no aviso do WhatsApp.
+  files: { blob: Blob; name: string }[];
 }
 
 interface ScanResult {
@@ -456,6 +458,7 @@ export function EscanearCompraModal({ open, onClose, onSave, suppliers, ships, d
           };
         }),
         nfTotals: result?.nf_totals ?? null,
+        files: shots.map((s) => ({ blob: s.blob, name: s.name })),
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao salvar.");

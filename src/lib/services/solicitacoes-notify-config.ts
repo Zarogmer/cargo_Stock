@@ -54,6 +54,9 @@ export interface CompraNotifyTarget extends RetornoNotifyTarget {
   people: NotifyPerson[];
   // Texto que vai pros GRUPOS (sem valores); null = padrão do código.
   groupTemplate: string | null;
+  // Foto da nota (Escanear): as pessoas sempre recebem; os grupos só com esta
+  // caixinha ligada — a foto mostra os valores que o texto do grupo esconde.
+  photoToGroups: boolean;
 }
 
 export interface NotifyConfig {
@@ -81,7 +84,7 @@ export function defaultNotifyConfig(): NotifyConfig {
     compraConcluida: { groups: [], functions: [] },
     retornoMaterial: { groups: [], functions: [], enabled: true, dmAdmin: false, template: null },
     embarqueLista: { groups: [], functions: [], enabled: true, dmAdmin: false, template: null },
-    compraRegistrada: { groups: [], functions: [], enabled: true, dmAdmin: false, template: null, people: [], groupTemplate: null },
+    compraRegistrada: { groups: [], functions: [], enabled: true, dmAdmin: false, template: null, people: [], groupTemplate: null, photoToGroups: false },
   };
 }
 
@@ -207,6 +210,9 @@ export function sanitizeNotifyConfig(raw: unknown): NotifyConfig {
       template: templateOf(r.compraRegistrada),
       people: sanitizePeople(r.compraRegistrada),
       groupTemplate: templateOf(r.compraRegistrada, "groupTemplate"),
+      // Só o true explícito manda a foto da nota nos grupos.
+      photoToGroups: !!(r.compraRegistrada && typeof r.compraRegistrada === "object"
+        && (r.compraRegistrada as Record<string, unknown>).photoToGroups === true),
     },
   };
 }

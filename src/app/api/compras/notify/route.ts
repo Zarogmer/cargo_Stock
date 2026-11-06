@@ -5,6 +5,10 @@ import {
   isEvolutionConfigured,
   sendWhatsappTextToGroup,
   sendWhatsappText,
+  sendWhatsappMediaToGroup,
+  sendWhatsappMediaToNumber,
+  sendWhatsappDocumentToGroup,
+  sendWhatsappDocumentToNumber,
   extractSentMessageId,
 } from "@/lib/services/evolution-api";
 import { readNotifyConfig } from "@/lib/services/solicitacoes-notify-config";
@@ -12,8 +16,46 @@ import { notifyTemplateFor, renderNotifyTemplate } from "@/lib/notify-message-te
 import { formatCurrency, formatQty } from "@/lib/utils";
 import { unitShort } from "@/lib/stock-units";
 
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+// Com fotos são vários envios de mídia em sequência (um por foto e destino).
+export const maxDuration = 120;
+
 interface NotifyBody {
   purchaseIds: string[];
+}
+
+// Foto/PDF do Escanear que acompanha o aviso (mesmos limites da leitura).
+const MAX_FILES = 8;
+const MAX_BYTES = 20 * 1024 * 1024;
+
+interface NotifyMedia {
+  kind: "image" | "document";
+  mime: string;
+  dataUrl: string;
+  fileName: string;
+}
+
+// Lê os arquivos do multipart: imagem vai como foto, PDF como documento; o
+// resto (e o que passar do limite) é ignorado — o aviso de texto sai igual.
+async function readMedia(form: FormData): Promise<NotifyMedia[]> {
+  const files = form.getAll("files").filter((f): f is File => f instanceof File && f.size > 0);
+  const out: NotifyMedia[] = [];
+  for (const f of files.slice(0, MAX_FILES)) {
+    if (f.size > MAX_BYTES) continue;
+    const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+    const isImage = f.type.startsWith("image/");
+    if (!isPdf && !isImage) continue;
+    const mime = isPdf ? "application/pdf" : f.type;
+    const base64 = Buffer.from(await f.arrayBuffer()).toString("base64");
+    out.push({
+      kind: isPdf ? "document" : "image",
+      mime,
+      dataUrl: `data:${mime};base64,${base64}`,
+      fileName: f.name || (isPdf ? "nota.pdf" : "nota.jpg"),
+    });
+  }
+  return out;
 }
 
 type Purchase = {
@@ -95,6 +137,11 @@ function buildMessage(
 // pessoas marcadas no card (ex.: Rose do Executivo) e, com a caixinha ligada,
 // pro setor ADMINISTRATIVO. Best-effort: sempre 200, nunca fatal (a compra já
 // foi salva).
+//
+// Body: JSON { purchaseIds } ou, no Escanear, multipart { purchaseIds (JSON),
+// files (fotos/PDF da nota) }. As fotos vão logo depois do texto: sempre pras
+// pessoas/Administrativo; pros grupos só com a caixinha "foto da nota nos
+// grupos" do card (a foto mostra os valores que o texto do grupo esconde).
 export async function POST(request: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -104,10 +151,17 @@ export async function POST(request: NextRequest) {
   }
 
   let body: NotifyBody;
+  let media: NotifyMedia[] = [];
   try {
-    body = (await request.json()) as NotifyBody;
+    if ((request.headers.get("content-type") || "").includes("multipart/form-data")) {
+      const form = await request.formData();
+      body = { purchaseIds: JSON.parse(String(form.get("purchaseIds") || "[]")) };
+      media = await readMedia(form);
+    } else {
+      body = (await request.json()) as NotifyBody;
+    }
   } catch {
-    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+    return NextResponse.json({ error: "Corpo inválido" }, { status: 400 });
   }
   const ids = Array.isArray(body.purchaseIds) ? body.purchaseIds.filter((x) => typeof x === "string") : [];
   if (ids.length === 0) {
@@ -127,7 +181,7 @@ export async function POST(request: NextRequest) {
     select: {
       id: true, description: true, supplier: true, purchase_date: true, unit_value: true,
       quantity: true, total_value: true, payment_method: true, payment_terms: true,
-      payment_term_days: true, ship_name: true, created_by: true, unit: true,
+      payment_term_days: true, ship_name: true, created_by: true, unit: true, nf_number: true,
     },
   });
   if (rows.length === 0) {
@@ -141,21 +195,47 @@ export async function POST(request: NextRequest) {
   const groupMessage = buildMessage(rows, "compraRegistradaGrupo", cfg.groupTemplate);
   const message = buildMessage(rows, "compraRegistrada", cfg.template);
   const groupResults: { name: string; ok: boolean; error?: string }[] = [];
+
+  // Fotos da nota (Escanear), mandadas logo depois do texto de cada destino.
+  // Legenda curta e sem valores (serve pra grupo e pra DM). Falha de foto não
+  // derruba o aviso: o destino entra em photoErrors e o texto já foi.
+  const head = rows[0];
+  const captionBase = `📷 Nota da compra${head.supplier ? ` — ${head.supplier}` : ""}${head.nf_number ? ` · NF ${head.nf_number}` : ""}`;
+  const captionOf = (i: number) => (media.length > 1 ? `${captionBase} (${i + 1}/${media.length})` : captionBase);
+  let photoTargets = 0;
+  const photoErrors: string[] = [];
+  async function sendPhotos(
+    name: string,
+    send: (m: NotifyMedia, caption: string) => Promise<unknown>,
+    onSent?: (m: NotifyMedia, caption: string, result: unknown, index: number) => Promise<void>,
+  ) {
+    if (media.length === 0) return;
+    let failed = false;
+    for (let i = 0; i < media.length; i++) {
+      try {
+        const result = await send(media[i], captionOf(i));
+        if (onSent) await onSent(media[i], captionOf(i), result, i);
+      } catch (err) {
+        failed = true;
+        console.warn(`[compras/notify] foto ${i + 1} não enviada pra ${name}:`, (err as Error).message);
+      }
+    }
+    if (failed) photoErrors.push(name);
+    else photoTargets++;
+  }
+
   for (const g of cfg.groups) {
     const groupName = g.label || g.jid;
-    try {
-      const sentResult = await sendWhatsappTextToGroup(g.jid, groupMessage);
-      groupResults.push({ name: groupName, ok: true });
+    // Grava na aba Conversas (não-fatal: a mensagem já saiu).
+    const stub = async (data: { message_id: string; message_type: string; text: string; media_mimetype?: string }) => {
       try {
         await prisma.whatsappMessage.create({
           data: {
-            message_id: extractSentMessageId(sentResult) ?? `compras-${g.jid}-${Date.now()}`,
+            ...data,
             instance_name: process.env.EVOLUTION_INSTANCE || "default",
             remote_jid: g.jid,
             from_me: true,
             push_name: groupName,
-            message_type: "conversation",
-            text: groupMessage,
             timestamp_ms: BigInt(Date.now()),
             sent_by_user_id: session.user.id || null,
             raw_event: { source: "compras-registradas", purchaseIds: ids },
@@ -164,10 +244,40 @@ export async function POST(request: NextRequest) {
       } catch (stubErr) {
         console.warn("[compras/notify] stub insert failed:", (stubErr as Error).message);
       }
+    };
+    try {
+      const sentResult = await sendWhatsappTextToGroup(g.jid, groupMessage);
+      groupResults.push({ name: groupName, ok: true });
+      await stub({
+        message_id: extractSentMessageId(sentResult) ?? `compras-${g.jid}-${Date.now()}`,
+        message_type: "conversation",
+        text: groupMessage,
+      });
     } catch (err) {
       groupResults.push({ name: groupName, ok: false, error: (err as Error).message });
+      continue;
+    }
+    if (cfg.photoToGroups) {
+      await sendPhotos(
+        groupName,
+        (m, caption) => m.kind === "document"
+          ? sendWhatsappDocumentToGroup(g.jid, m.dataUrl, caption, m.fileName, m.mime)
+          : sendWhatsappMediaToGroup(g.jid, m.dataUrl, caption, m.fileName),
+        (m, caption, result, i) => stub({
+          message_id: extractSentMessageId(result) ?? `compras-foto-${g.jid}-${Date.now()}-${i}`,
+          message_type: m.kind === "document" ? "documentMessage" : "imageMessage",
+          text: caption,
+          media_mimetype: m.mime,
+        }),
+      );
     }
   }
+  const sendPhotosToNumber = (name: string, phone: string) => sendPhotos(
+    name,
+    (m, caption) => m.kind === "document"
+      ? sendWhatsappDocumentToNumber(phone, m.dataUrl, caption, m.fileName, m.mime)
+      : sendWhatsappMediaToNumber(phone, m.dataUrl, caption, m.fileName),
+  );
 
   const admins = cfg.dmAdmin
     ? (
@@ -202,7 +312,9 @@ export async function POST(request: NextRequest) {
       dmResults.push({ target: `dm:${name}`, ok: true });
     } catch (err) {
       dmResults.push({ target: `dm:${name}`, ok: false, error: (err as Error).message });
+      continue;
     }
+    await sendPhotosToNumber(name, phone);
   }
   for (const emp of admins) {
     if (!emp.phone || emp.phone.trim().length < 10) {
@@ -216,7 +328,9 @@ export async function POST(request: NextRequest) {
       dmResults.push({ target: `dm:${emp.name}`, ok: true });
     } catch (err) {
       dmResults.push({ target: `dm:${emp.name}`, ok: false, error: (err as Error).message });
+      continue;
     }
+    await sendPhotosToNumber(emp.name, emp.phone);
   }
 
   const sent = groupResults.filter((r) => r.ok).length;
@@ -228,5 +342,8 @@ export async function POST(request: NextRequest) {
     results: groupResults,
     dmSent,
     dmResults,
+    // Destinos que receberam todas as fotos / que ficaram sem alguma.
+    photoTargets,
+    photoErrors,
   }, { status: 200 });
 }
