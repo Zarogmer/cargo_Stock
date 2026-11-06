@@ -440,19 +440,25 @@ export function PeticaoSubTab({ employees }: { employees: Employee[] }) {
             </select>
           </div>
 
-          {/* Navio — dropdown dos navios no ciclo ativo (igual ao campo Equipe) */}
+          {/* Navio — campo livre: dá pra digitar qualquer nome (navio ainda não
+              cadastrado) ou escolher nas sugestões, que são os navios no ciclo
+              ativo. Maiúsculas, como a aba Navios grava. */}
           <div>
             <label className="text-xs font-semibold text-text-light uppercase tracking-wider">Navio</label>
-            <select
+            <input
+              type="text"
               value={navioName}
-              onChange={(e) => setNavioName(e.target.value)}
+              onChange={(e) => setNavioName(e.target.value.toUpperCase())}
+              list="peticao-navios"
+              placeholder="Digite o nome ou escolha da lista…"
+              autoComplete="off"
               className={fieldCls}
-            >
-              <option value="">Selecione o navio…</option>
+            />
+            <datalist id="peticao-navios">
               {activeShips.map((s) => (
-                <option key={s.id} value={s.name}>{s.name}</option>
+                <option key={s.id} value={s.name} />
               ))}
-            </select>
+            </datalist>
           </div>
 
           {/* Bandeira + IMO */}
